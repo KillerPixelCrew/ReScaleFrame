@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// C declarations only: the internal boundary between the native renderer (native_renderer.rs) and
-// the owners of the exact-build code sites, the renderer transaction and the TrueSky plugin patches
-// (sites.rs, patches.rs, guards.rs, renderer.rs, truesky.rs), all in the rsf-ac7 crate, and the
-// export plugin.c reaches. Not a DLL ABI: everything links into ReScaleFrame.Game.AC7.dll and the
+// C declarations only: the site and patch records of the native renderer (rsf-ac7-plugin) that the
+// native graph fixture (in rsf-ac7) reads, the fixture's patch entries, and the call table plugin.c
+// binds. Not a DLL ABI: everything links into ReScaleFrame.Game.AC7.dll and the
 // native graph fixture. build.rs binds it into the crate's sys module.
 #include <stdbool.h>
 #include <stddef.h>
@@ -25,18 +24,6 @@ extern "C" {
 #define RSF_AC7_SITE_BYTES 16u
 #define RSF_AC7_VELOCITY_PATCHES 3u
 
-// Native code leaves lent to the Rust owner for one call.
-typedef struct rsf_ac7_code_leaves {
-    // True when `count` bytes of live code at `address` equal `expected`. Unreadable memory differs.
-    bool (*matches)(const unsigned char* address, const unsigned char* expected, size_t count);
-    // Replaces `count` bytes at `site` that equal `expected` under code protection and flushes the
-    // instruction cache. False leaves the code unchanged.
-    bool (*write)(unsigned char* site, const unsigned char* expected, const unsigned char* replacement,
-        size_t count);
-    rsf_ac7_renderer_log_fn log; // may be null
-    void* user;
-} rsf_ac7_code_leaves;
-
 // One engine code patch: `size` bytes at `rva`, native and patched.
 typedef struct rsf_ac7_code_patch {
     uint32_t rva;
@@ -45,24 +32,22 @@ typedef struct rsf_ac7_code_patch {
     unsigned char replacement[16];
 } rsf_ac7_code_patch;
 
-// Engine patch ownership kept in the native renderer and changed only by the Rust owner.
+// Engine patch ownership kept in the native renderer and changed only by patches.rs.
 typedef struct rsf_ac7_code_patches {
     unsigned char* velocity_module; // module the applied velocity patches belong to
     uint32_t velocity_applied;      // velocity patches applied, in table order
     unsigned char* scene_precision_site; // patched scene-precision site, or null
 } rsf_ac7_code_patches;
 
-// The temporal velocity patch at `index`; false out of range.
+// Native graph fixture entries (warp-fixture). The temporal velocity patch at `index`; false out
+// of range.
 bool rsf_ac7_velocity_patch(uint32_t index, rsf_ac7_code_patch* out);
 // All-or-nothing temporal velocity group at `base`: preflight, write, roll back on failure.
-bool rsf_ac7_velocity_apply(rsf_ac7_code_patches* patches, unsigned char* base,
-    const rsf_ac7_code_leaves* leaves);
+bool rsf_ac7_velocity_apply(rsf_ac7_code_patches* patches, unsigned char* base);
 // Restores owned velocity patches in reverse; false keeps the unrestored ones owned.
-bool rsf_ac7_velocity_restore(rsf_ac7_code_patches* patches, const rsf_ac7_code_leaves* leaves);
+bool rsf_ac7_velocity_restore(rsf_ac7_code_patches* patches);
 
-// TrueSky plugin (TrueSkyPluginRender_MT.dll) patches and call relays (truesky.rs). The sites,
-// expected bytes, effect fingerprint and the install, rollback and restore order are Rust's; the
-// module lookup, relay memory, D3D11 state and protected writes stay native.
+// TrueSky plugin (TrueSkyPluginRender_MT.dll) patches and call relays (truesky.rs).
 #define RSF_AC7_RELAY_BYTES 7u
 
 // A `call [reg+disp]` in TrueSky's code redirected through a pointer slot within reach of its

@@ -11,14 +11,10 @@
 //!
 //! The ownership record (`rsf_ac7_truesky_patches`) lives in the native renderer. Only this module
 //! changes it, always under the renderer's cloud resolution lock. native_renderer/sky.rs keeps the
-//! relay handlers with their D3D11 binding checks and one-to-one depth shader, the module lookup,
-//! the relay memory and the protected code writes, which `NativePlugin` calls.
-use crate::native_renderer::sky;
-use crate::sites::{Code, CodeView, NativeCode};
-use crate::sys::rsf_ac7_native_renderer;
-use crate::sys::{
-    RSF_AC7_RELAY_BYTES, rsf_ac7_call_relay, rsf_ac7_code_leaves, rsf_ac7_truesky_patches,
-};
+//! relay handlers with their D3D11 binding checks and one-to-one depth shader, the module lookup
+//! and the relay memory.
+use crate::native_renderer::{Renderer, code_matches, sky, write_code};
+use crate::sys::{RSF_AC7_RELAY_BYTES, rsf_ac7_call_relay, rsf_ac7_truesky_patches};
 use rsf_game_sys::{checksum::crc32_ieee, ffi_util::ascii_wide};
 use std::ffi::c_void;
 use std::io::Read;
@@ -112,31 +108,6 @@ pub(crate) const DEPTH_BRANCH_KEPT: &str =
     "native TrueSky depth pass selector could not restore; renderer retained";
 pub(crate) const RELAY_RUNNING: &str = "native TrueSky relays restored while a relay call was still running; relay memory and cloud resources retained for the next stop";
 
-/// The native handler a relay reaches.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Handler {
-    DepthDispatch,
-    CompositeDraw,
-}
-
-/// The native side of one TrueSky call. `Code` compares and writes plugin code and logs to the
-/// renderer's host log.
-pub(crate) trait Plugin: Code {
-    /// Base of TrueSkyPluginRender_MT.dll, or null while it is not loaded.
-    fn module(&self) -> *mut u8;
-    /// Whether mixed_resolution.fxo has the fingerprinted size and CRC.
-    fn effect(&self) -> bool;
-    /// Relay memory within rel32 search range of `call` holding `handler`, or null.
-    fn relay_allocate(&self, call: *mut u8, handler: Handler) -> *mut c_void;
-    fn relay_release(&self, slot: *mut c_void);
-    /// Whether the depth relay verified its one-to-one shader and bindings on the device.
-    fn depth_ready(&self) -> bool;
-    fn motion_release(&self);
-    fn depth_release(&self);
-    /// Hook and relay bodies running, entry and outer guards (guards.rs).
-    fn guards_held(&self) -> u32;
-}
-
 pub(crate) const EMPTY_RELAY: rsf_ac7_call_relay = rsf_ac7_call_relay {
     call: null_mut(),
     slot: null_mut(),
@@ -176,23 +147,18 @@ fn relay_bytes(relay: &rsf_ac7_call_relay) -> (&[u8], &[u8]) {
 
 /// The relay for the `native` call (6 or 7 bytes) at `call`: a slot holding the handler and the
 /// `call [rip+rel32]` that reaches it, padded with `nop`. Writes nothing to the code yet.
-fn prepare_relay(
-    plugin: &impl Plugin,
-    call: *mut u8,
-    native: &[u8],
-    handler: Handler,
-) -> Option<rsf_ac7_call_relay> {
+fn prepare_relay(call: *mut u8, native: &[u8], handler: *mut c_void) -> Option<rsf_ac7_call_relay> {
     if !(6..=RELAY).contains(&native.len()) {
         return None;
     }
-    let slot = plugin.relay_allocate(call, handler);
+    let slot = sky::relay_allocate(call, handler);
     if slot.is_null() {
         return None;
     }
     // rel32 counts from the end of the 6-byte `ff 15` form.
     let distance = slot.addr() as i128 - (call.addr() as i128 + 6);
     let Ok(relative) = i32::try_from(distance) else {
-        plugin.relay_release(slot);
+        sky::relay_release(slot);
         return None;
     };
     let mut relay = rsf_ac7_call_relay {
@@ -209,23 +175,23 @@ fn prepare_relay(
 }
 
 /// Redirects the call. A refused write releases the slot.
-fn patch_relay(plugin: &impl Plugin, relay: &rsf_ac7_call_relay) -> bool {
+fn patch_relay(relay: &rsf_ac7_call_relay) -> bool {
     let (native, relayed) = relay_bytes(relay);
-    if plugin.write(relay.call, native, relayed) {
+    if write_code(relay.call, native, relayed) {
         return true;
     }
-    plugin.relay_release(relay.slot);
+    sky::relay_release(relay.slot);
     false
 }
 
 /// Puts the native call back and forgets it. The slot stays until no relay call can still be
 /// running (`restore`).
-fn restore_call(plugin: &impl Plugin, relay: &mut rsf_ac7_call_relay) -> bool {
+fn restore_call(relay: &mut rsf_ac7_call_relay) -> bool {
     if relay.call.is_null() {
         return true;
     }
     let (native, relayed) = relay_bytes(relay);
-    if !plugin.write(relay.call, relayed, native) {
+    if !write_code(relay.call, relayed, native) {
         return false;
     }
     relay.call = null_mut();
@@ -233,80 +199,74 @@ fn restore_call(plugin: &impl Plugin, relay: &mut rsf_ac7_call_relay) -> bool {
 }
 
 /// Frees an owned slot and forgets the relay; false when there was none.
-fn release_slot(plugin: &impl Plugin, relay: &mut rsf_ac7_call_relay) -> bool {
+fn release_slot(relay: &mut rsf_ac7_call_relay) -> bool {
     if relay.slot.is_null() {
         return false;
     }
-    plugin.relay_release(relay.slot);
+    sky::relay_release(relay.slot);
     *relay = EMPTY_RELAY;
     true
 }
 
 /// The composite_tile draw relay supplies cloud motion depth independently of the depth route.
 /// Only a fingerprint mismatch is terminal. Allocation and guarded writes can be retried.
-fn install_motion(state: &mut rsf_ac7_truesky_patches, module: *mut u8, plugin: &impl Plugin) {
+fn install_motion(state: &mut rsf_ac7_truesky_patches, module: *mut u8, owner: &Renderer) {
     let call = module.wrapping_add(MOTION_CALL_RVA as usize);
-    if !plugin.matches(call.wrapping_sub(MOTION_BEFORE.len()), &MOTION_BEFORE)
-        || !plugin.matches(call, &MOTION_CALL_EXPECTED)
+    if !code_matches(call.wrapping_sub(MOTION_BEFORE.len()), &MOTION_BEFORE)
+        || !code_matches(call, &MOTION_CALL_EXPECTED)
     {
         state.motion_refused = true;
-        plugin.log(MOTION_REFUSED);
+        owner.log_text(MOTION_REFUSED);
         return;
     }
     let Some(relay) = prepare_relay(
-        plugin,
         call,
         &MOTION_CALL_EXPECTED[..MOTION_CALL_BYTES],
-        Handler::CompositeDraw,
+        sky::native_cloud_composite_draw as *mut c_void,
     ) else {
         return;
     };
-    if !patch_relay(plugin, &relay) {
+    if !patch_relay(&relay) {
         return;
     }
     state.motion_call = relay;
-    plugin.log(MOTION_INSTALLED);
+    owner.log_text(MOTION_INSTALLED);
 }
 
 /// The guarded one-to-one depth route: code and effect fingerprint, then the pass selector, the
 /// dispatch relay and the precise format. True once all three are owned.
-fn install_depth(
-    state: &mut rsf_ac7_truesky_patches,
-    module: *mut u8,
-    plugin: &impl Plugin,
-) -> bool {
+fn install_depth(state: &mut rsf_ac7_truesky_patches, module: *mut u8, owner: &Renderer) -> bool {
     if !state.depth_call.slot.is_null() {
         return !state.depth_format_site.is_null();
     }
     let call = module.wrapping_add(DEPTH_CALL_RVA as usize);
     let branch = module.wrapping_add(DEPTH_BRANCH_RVA as usize);
     let format = module.wrapping_add(DEPTH_FORMAT_RVA as usize);
-    if !plugin.matches(call, &DEPTH_CALL_EXPECTED)
-        || !plugin.matches(
+    if !code_matches(call, &DEPTH_CALL_EXPECTED)
+        || !code_matches(
             branch.wrapping_sub(DEPTH_BRANCH_LEAD),
             &DEPTH_BRANCH_EXPECTED,
         )
-        || !plugin.matches(format, &DEPTH_FORMAT_EXPECTED)
-        || !plugin.effect()
+        || !code_matches(format, &DEPTH_FORMAT_EXPECTED)
+        || !effect_file()
     {
         return false;
     }
     let Some(relay) = prepare_relay(
-        plugin,
         call,
         &DEPTH_CALL_EXPECTED[..DEPTH_CALL_BYTES],
-        Handler::DepthDispatch,
+        sky::native_cloud_depth_dispatch as *mut c_void,
     ) else {
         return false;
     };
-    if !plugin.write(branch, &NATIVE_BRANCH, &SUPPORTED_BRANCH) {
-        plugin.relay_release(relay.slot);
+    if !write_code(branch, &NATIVE_BRANCH, &SUPPORTED_BRANCH) {
+        sky::relay_release(relay.slot);
         return false;
     }
-    if !patch_relay(plugin, &relay) {
+    if !patch_relay(&relay) {
         // The former rollback ignored a refused selector restore and left it patched and unowned.
         // Keep it owned so stop restores it.
-        if !plugin.write(branch, &SUPPORTED_BRANCH, &NATIVE_BRANCH) {
+        if !write_code(branch, &SUPPORTED_BRANCH, &NATIVE_BRANCH) {
             state.depth_branch = branch;
         }
         return false;
@@ -314,104 +274,104 @@ fn install_depth(
     state.depth_call = relay;
     state.depth_branch = branch;
     let site = format.wrapping_add(DEPTH_FORMAT_IMMEDIATE);
-    if !plugin.write(site, &NATIVE_DEPTH_FORMAT, &PRECISE_DEPTH_FORMAT) {
-        plugin.log(DEPTH_FORMAT_REFUSED);
+    if !write_code(site, &NATIVE_DEPTH_FORMAT, &PRECISE_DEPTH_FORMAT) {
+        owner.log_text(DEPTH_FORMAT_REFUSED);
         return false;
     }
     state.depth_format_site = site;
-    plugin.log(DEPTH_FORMAT);
-    plugin.log(DEPTH_INSTALLED);
+    owner.log_text(DEPTH_FORMAT);
+    owner.log_text(DEPTH_INSTALLED);
     true
 }
 
 /// Per sky render while active. The first depth pass runs at its supported native divisor; the
 /// full grid is enabled only after the replacement kernel has compiled and its bindings were
 /// verified on the actual device. A refusal keeps stock cloud resolution for this renderer.
-pub(crate) fn apply(state: &mut rsf_ac7_truesky_patches, plugin: &impl Plugin) {
+pub(crate) fn apply(state: &mut rsf_ac7_truesky_patches, owner: &Renderer) {
     let grid_pending = state.resolution_site.is_null() && !state.resolution_refused;
     let motion_pending = state.motion_call.slot.is_null() && !state.motion_refused;
     if !grid_pending && !motion_pending {
         return;
     }
-    let module = plugin.module();
+    let module = sky::module(MODULE.as_ptr());
     if module.is_null() {
         return;
     }
     if motion_pending {
-        install_motion(state, module, plugin);
+        install_motion(state, module, owner);
     }
     if !grid_pending {
         return;
     }
-    if !install_depth(state, module, plugin) {
+    if !install_depth(state, module, owner) {
         state.resolution_refused = true;
-        plugin.log(DEPTH_REFUSED);
+        owner.log_text(DEPTH_REFUSED);
         return;
     }
-    if !plugin.depth_ready() {
+    if !sky::depth_ready(owner) {
         return;
     }
     let site = module.wrapping_add(RESOLUTION_RVA as usize);
-    if !plugin.matches(site, &RESOLUTION_EXPECTED)
-        || !plugin.write(site, &NATIVE_DIVISOR, &FULL_DIVISOR)
+    if !code_matches(site, &RESOLUTION_EXPECTED)
+        || !write_code(site, &NATIVE_DIVISOR, &FULL_DIVISOR)
     {
         state.resolution_refused = true;
-        plugin.log(RESOLUTION_REFUSED);
+        owner.log_text(RESOLUTION_REFUSED);
         return;
     }
     state.resolution_site = site;
-    plugin.log(RESOLUTION);
+    owner.log_text(RESOLUTION);
 }
 
 /// Readiness of an earlier frame does not authorize x2 on this frame's x1 targets. Full-grid mode
 /// retires for the next native allocation; the caller rejects the unverified dispatch and the
 /// enclosing native function still performs its balanced Unapply.
-pub(crate) fn refuse_full_grid(state: &mut rsf_ac7_truesky_patches, plugin: &impl Plugin) {
+pub(crate) fn refuse_full_grid(state: &mut rsf_ac7_truesky_patches, owner: &Renderer) {
     state.resolution_refused = true;
     if state.resolution_site.is_null() {
         return;
     }
-    if plugin.write(state.resolution_site, &FULL_DIVISOR, &NATIVE_DIVISOR) {
+    if write_code(state.resolution_site, &FULL_DIVISOR, &NATIVE_DIVISOR) {
         state.resolution_site = null_mut();
-        plugin.log(FULL_GRID_RETIRED);
+        owner.log_text(FULL_GRID_RETIRED);
     } else {
-        plugin.log(FULL_GRID_RETAINED);
+        owner.log_text(FULL_GRID_RETAINED);
     }
 }
 
 /// Retirement in the former order: divisor, motion relay, depth relay, format, selector. Each
 /// step forgets only what it restored, so a refused stop continues on the next one. The relay
 /// memory and the cloud resources go last, once no relay call can still be using them.
-pub(crate) fn restore(state: &mut rsf_ac7_truesky_patches, plugin: &impl Plugin) -> bool {
+pub(crate) fn restore(state: &mut rsf_ac7_truesky_patches, owner: &Renderer) -> bool {
     if !state.resolution_site.is_null() {
-        if !plugin.write(state.resolution_site, &FULL_DIVISOR, &NATIVE_DIVISOR) {
-            plugin.log(RESOLUTION_KEPT);
+        if !write_code(state.resolution_site, &FULL_DIVISOR, &NATIVE_DIVISOR) {
+            owner.log_text(RESOLUTION_KEPT);
             return false;
         }
         state.resolution_site = null_mut();
     }
-    if !restore_call(plugin, &mut state.motion_call) {
-        plugin.log(MOTION_KEPT);
+    if !restore_call(&mut state.motion_call) {
+        owner.log_text(MOTION_KEPT);
         return false;
     }
-    if !restore_call(plugin, &mut state.depth_call) {
-        plugin.log(DEPTH_CALL_KEPT);
+    if !restore_call(&mut state.depth_call) {
+        owner.log_text(DEPTH_CALL_KEPT);
         return false;
     }
     if !state.depth_format_site.is_null() {
-        if !plugin.write(
+        if !write_code(
             state.depth_format_site,
             &PRECISE_DEPTH_FORMAT,
             &NATIVE_DEPTH_FORMAT,
         ) {
-            plugin.log(DEPTH_FORMAT_KEPT);
+            owner.log_text(DEPTH_FORMAT_KEPT);
             return false;
         }
         state.depth_format_site = null_mut();
     }
     if !state.depth_branch.is_null() {
-        if !plugin.write(state.depth_branch, &SUPPORTED_BRANCH, &NATIVE_BRANCH) {
-            plugin.log(DEPTH_BRANCH_KEPT);
+        if !write_code(state.depth_branch, &SUPPORTED_BRANCH, &NATIVE_BRANCH) {
+            owner.log_text(DEPTH_BRANCH_KEPT);
             return false;
         }
         state.depth_branch = null_mut();
@@ -419,118 +379,16 @@ pub(crate) fn restore(state: &mut rsf_ac7_truesky_patches, plugin: &impl Plugin)
     // The relays are not MinHook hooks, so stop's disable did not stop them, and the depth
     // handler does not check activity. A handler that took its relay before the call was
     // restored may still read its slot, the depth shader or the motion resources.
-    if plugin.guards_held() != 0 {
-        plugin.log(RELAY_RUNNING);
+    if crate::guards::held(true) != 0 {
+        owner.log_text(RELAY_RUNNING);
         return false;
     }
-    if release_slot(plugin, &mut state.motion_call) {
-        plugin.motion_release();
+    if release_slot(&mut state.motion_call) {
+        sky::motion_release(owner);
     }
-    release_slot(plugin, &mut state.depth_call);
-    plugin.depth_release();
+    release_slot(&mut state.depth_call);
+    sky::depth_release(owner);
     true
-}
-
-/// The TrueSky leaves of native_renderer/sky.rs for one live renderer, logging to its host log.
-pub(crate) struct NativePlugin {
-    code: NativeCode,
-    renderer: *mut rsf_ac7_native_renderer,
-}
-
-impl NativePlugin {
-    /// # Safety
-    /// `code` keeps the contracts of ac7_sites.h; a nonnull `renderer` is live for the call.
-    pub(crate) unsafe fn new(
-        code: &rsf_ac7_code_leaves,
-        renderer: *mut rsf_ac7_native_renderer,
-    ) -> Option<Self> {
-        if renderer.is_null() {
-            return None;
-        }
-        Some(Self {
-            code: unsafe { NativeCode::new(code) }?,
-            renderer,
-        })
-    }
-}
-
-impl CodeView for NativePlugin {
-    fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
-        self.code.matches(address, expected)
-    }
-    fn log(&self, message: &str) {
-        self.code.log(message);
-    }
-}
-
-impl Code for NativePlugin {
-    fn write(&self, site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
-        self.code.write(site, expected, replacement)
-    }
-}
-
-// SAFETY, for every call below: the leaves keep the contracts of native_renderer/sky.rs, and the
-// renderer is the live one whose record is being changed.
-impl Plugin for NativePlugin {
-    fn module(&self) -> *mut u8 {
-        unsafe { sky::module(MODULE.as_ptr()) }
-    }
-    fn effect(&self) -> bool {
-        effect_file()
-    }
-    fn relay_allocate(&self, call: *mut u8, handler: Handler) -> *mut c_void {
-        let handler = match handler {
-            Handler::DepthDispatch => sky::native_cloud_depth_dispatch as *mut c_void,
-            Handler::CompositeDraw => sky::native_cloud_composite_draw as *mut c_void,
-        };
-        unsafe { sky::relay_allocate(call, handler) }
-    }
-    fn relay_release(&self, slot: *mut c_void) {
-        unsafe { sky::relay_release(slot) }
-    }
-    fn depth_ready(&self) -> bool {
-        unsafe { sky::depth_ready(self.renderer) }
-    }
-    fn motion_release(&self) {
-        unsafe { sky::motion_release(self.renderer) }
-    }
-    fn depth_release(&self) {
-        unsafe { sky::depth_release(self.renderer) }
-    }
-    fn guards_held(&self) -> u32 {
-        crate::guards::held(true)
-    }
-}
-
-/// Installs the relays and, once the depth relay is ready, the full cloud grid.
-///
-/// # Safety
-/// `patches` is null or valid for the call, and the caller holds the renderer's cloud resolution
-/// lock, so nothing else uses `patches` during it.
-pub(crate) unsafe fn apply_native(patches: *mut rsf_ac7_truesky_patches, plugin: &NativePlugin) {
-    if let Some(patches) = unsafe { patches.as_mut() } {
-        apply(patches, plugin);
-    }
-}
-
-/// # Safety
-/// As `apply_native`.
-pub(crate) unsafe fn refuse_full_grid_native(
-    patches: *mut rsf_ac7_truesky_patches,
-    plugin: &NativePlugin,
-) {
-    if let Some(patches) = unsafe { patches.as_mut() } {
-        refuse_full_grid(patches, plugin);
-    }
-}
-
-/// # Safety
-/// As `apply_native`.
-pub(crate) unsafe fn restore_native(
-    patches: *mut rsf_ac7_truesky_patches,
-    plugin: &NativePlugin,
-) -> bool {
-    unsafe { patches.as_mut() }.is_some_and(|patches| restore(patches, plugin))
 }
 
 #[cfg(test)]

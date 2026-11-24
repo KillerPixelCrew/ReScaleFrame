@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! The AC7 native renderer, formerly native_renderer.cpp: the renderer object, the detours on the
 //! exact-build engine sites (sites.rs) and their engine relays, the queued pass leases and the
-//! TrueSky relay handlers. renderer.rs owns the prepare/start/quiesce/stop transaction and reaches
-//! the leaves of native_renderer/leaves.rs directly.
+//! TrueSky relay handlers. native_renderer/transaction.rs is the prepare/start/quiesce/stop
+//! transaction.
 //!
 //! Every detour keeps the former signature, guard kind, engine offsets, refusals and log text.
 //! Engine memory is read through the SEH-guarded C leaf (ac7_memory.c) exactly where the former
@@ -39,11 +39,11 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 mod evidence;
 mod frame;
 mod graph;
-pub(crate) mod leaves;
 mod particles;
 mod shaders;
 pub(crate) mod sky;
 mod slate;
+pub(crate) mod transaction;
 mod translucency;
 mod views;
 mod widgets;
@@ -295,6 +295,43 @@ fn bytes_match(address: *const c_void, expected: *const c_void, count: usize) ->
         && copy(actual.as_mut_ptr().cast(), address, count)
         && actual[..count]
             == unsafe { std::slice::from_raw_parts(expected.cast::<u8>(), count) }[..]
+}
+
+/// True when the live code at `address` equals `expected` (at most 16 bytes).
+pub(crate) fn code_matches(address: *const u8, expected: &[u8]) -> bool {
+    bytes_match(address.cast(), expected.as_ptr().cast(), expected.len())
+}
+
+/// Replaces the bytes at `site` that equal `expected` under code protection and flushes the
+/// instruction cache. False leaves the code unchanged.
+pub(crate) fn write_code(site: *mut u8, expected: &[u8], replacement: &[u8]) -> bool {
+    use windows::Win32::System::Diagnostics::Debug::FlushInstructionCache;
+    use windows::Win32::System::Memory::{
+        PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS, VirtualProtect,
+    };
+    use windows::Win32::System::Threading::GetCurrentProcess;
+    let size = expected.len();
+    if size == 0 || replacement.len() != size || !code_matches(site, expected) {
+        return false;
+    }
+    let mut protection = PAGE_PROTECTION_FLAGS(0);
+    if unsafe { VirtualProtect(site.cast(), size, PAGE_EXECUTE_READWRITE, &mut protection) }
+        .is_err()
+    {
+        return false;
+    }
+    unsafe { std::ptr::copy_nonoverlapping(replacement.as_ptr(), site, size) };
+    let _ = unsafe { FlushInstructionCache(GetCurrentProcess(), Some(site.cast()), size) };
+    let mut ignored = PAGE_PROTECTION_FLAGS(0);
+    let _ = unsafe { VirtualProtect(site.cast(), size, protection, &mut ignored) };
+    true
+}
+
+/// Logs `message` to the host log of `options`.
+pub(crate) fn log_to(options: &rsf_ac7_native_renderer_options, message: &str) {
+    if let (Some(log), Ok(text)) = (options.log, CString::new(message)) {
+        unsafe { log(options.user, text.as_ptr()) };
+    }
 }
 
 /// The engine singleton (GEngine), or 0 when it cannot be read.
@@ -625,10 +662,8 @@ impl Renderer {
         }
     }
 
-    fn log_text(&self, message: &str) {
-        if let Ok(text) = CString::new(message) {
-            self.log(&text);
-        }
+    pub(crate) fn log_text(&self, message: &str) {
+        log_to(&self.options, message);
     }
 
     /// Logs at most `capacity - 1` bytes, as the former fixed snprintf buffer of `capacity`.

@@ -2,12 +2,11 @@
 //! Engine code patches the native renderer applies at activation and restores at retirement:
 //! scene-colour precision (+1095620) and the temporal velocity group (+118A4E3, +10FDD0C,
 //! +11838C4). The ownership record lives in the native renderer (`rsf_ac7_code_patches`); only
-//! this module changes it. Writes go through the native code leaf, which checks the expected
-//! bytes again under code protection.
+//! this module changes it. `write_code` checks the expected bytes again under code protection.
 //!
 //! The TrueSky plugin patches and call relays (TrueSkyPluginRender_MT.dll) are truesky.rs; their
 //! device-dependent readiness stays in native_renderer/sky.rs.
-use crate::sites::Code;
+use crate::native_renderer::{code_matches, write_code};
 use crate::sys::{RSF_AC7_VELOCITY_PATCHES, rsf_ac7_code_patches};
 use std::ptr::null_mut;
 
@@ -59,16 +58,16 @@ pub(crate) const PRECISE_SCENE_FORMAT: [u8; 13] =
 pub(crate) fn velocity_apply(
     state: &mut rsf_ac7_code_patches,
     base: *mut u8,
-    code: &impl Code,
+    log: &impl Fn(&str),
 ) -> bool {
     if state.velocity_applied != 0 {
         return state.velocity_applied as usize == VELOCITY.len();
     }
     if let Some(patch) = VELOCITY
         .iter()
-        .find(|patch| !code.matches(base.wrapping_add(patch.rva as usize), patch.native))
+        .find(|patch| !code_matches(base.wrapping_add(patch.rva as usize), patch.native))
     {
-        code.log(&format!(
+        log(&format!(
             "AC7 temporal velocity refused: expected bytes differ at RVA 0x{:x}",
             patch.rva
         ));
@@ -76,31 +75,31 @@ pub(crate) fn velocity_apply(
     }
     state.velocity_module = base;
     for patch in &VELOCITY {
-        if !code.write(
+        if !write_code(
             base.wrapping_add(patch.rva as usize),
             patch.native,
             patch.replacement,
         ) {
-            if !velocity_restore(state, code) {
-                code.log("AC7 temporal velocity rollback refused; patched module retained");
+            if !velocity_restore(state) {
+                log("AC7 temporal velocity rollback refused; patched module retained");
             }
             return false;
         }
         state.velocity_applied += 1;
     }
-    code.log(
+    log(
         "AC7 temporal velocity: native pass enabled without TAA; small and fixed-root movable opaque geometry retained with native history, camera-cut and shader checks",
     );
     true
 }
 
 /// Restores in reverse order. A failed write keeps that patch and those before it owned.
-pub(crate) fn velocity_restore(state: &mut rsf_ac7_code_patches, code: &impl Code) -> bool {
+pub(crate) fn velocity_restore(state: &mut rsf_ac7_code_patches) -> bool {
     while state.velocity_applied != 0 {
         let Some(patch) = VELOCITY.get(state.velocity_applied as usize - 1) else {
             return false;
         };
-        if !code.write(
+        if !write_code(
             state.velocity_module.wrapping_add(patch.rva as usize),
             patch.replacement,
             patch.native,
@@ -115,40 +114,40 @@ pub(crate) fn velocity_restore(state: &mut rsf_ac7_code_patches, code: &impl Cod
 
 /// Allocate compares the effective format to its cache before UpdateRHI, so existing packed
 /// targets retire through the engine's own reallocation path on the next family.
-pub(crate) fn scene_precision_apply(
+fn scene_precision_apply(
     state: &mut rsf_ac7_code_patches,
     base: *mut u8,
-    code: &impl Code,
+    log: &impl Fn(&str),
 ) -> bool {
     if !state.scene_precision_site.is_null() {
         return true;
     }
     let site = base.wrapping_add(SCENE_PRECISION_RVA as usize);
-    if !code.matches(site, &SCENE_PRECISION_EXPECTED)
-        || !code.write(site, &NATIVE_SCENE_FORMAT, &PRECISE_SCENE_FORMAT)
+    if !code_matches(site, &SCENE_PRECISION_EXPECTED)
+        || !write_code(site, &NATIVE_SCENE_FORMAT, &PRECISE_SCENE_FORMAT)
     {
-        code.log(
+        log(
             "native scene-precision patch refused: expected bytes differ or code protection failed at RVA 0x1095620",
         );
         return false;
     }
     state.scene_precision_site = site;
-    code.log(
+    log(
         "native scene precision: allocation format policy 4 at RVA 0x1095620; engine owns FP16 resource rebuild",
     );
     true
 }
 
-pub(crate) fn scene_precision_restore(state: &mut rsf_ac7_code_patches, code: &impl Code) -> bool {
+fn scene_precision_restore(state: &mut rsf_ac7_code_patches, log: &impl Fn(&str)) -> bool {
     if state.scene_precision_site.is_null() {
         return true;
     }
-    if !code.write(
+    if !write_code(
         state.scene_precision_site,
         &PRECISE_SCENE_FORMAT,
         &NATIVE_SCENE_FORMAT,
     ) {
-        code.log("native scene-precision patch could not restore; renderer retained");
+        log("native scene-precision patch could not restore; renderer retained");
         return false;
     }
     state.scene_precision_site = null_mut();
@@ -156,39 +155,25 @@ pub(crate) fn scene_precision_restore(state: &mut rsf_ac7_code_patches, code: &i
 }
 
 /// Activation order of the former start: scene precision, then temporal velocity.
-pub(crate) fn apply(state: &mut rsf_ac7_code_patches, base: *mut u8, code: &impl Code) -> bool {
-    scene_precision_apply(state, base, code) && velocity_apply(state, base, code)
+pub(crate) fn apply(state: &mut rsf_ac7_code_patches, base: *mut u8, log: impl Fn(&str)) -> bool {
+    scene_precision_apply(state, base, &log) && velocity_apply(state, base, &log)
 }
 
 /// Retirement order of the former stop: temporal velocity, then scene precision.
-pub(crate) fn restore(state: &mut rsf_ac7_code_patches, code: &impl Code) -> bool {
-    if !velocity_restore(state, code) {
-        code.log("AC7 temporal velocity patch could not restore; renderer retained");
+pub(crate) fn restore(state: &mut rsf_ac7_code_patches, log: impl Fn(&str)) -> bool {
+    if !velocity_restore(state) {
+        log("AC7 temporal velocity patch could not restore; renderer retained");
         return false;
     }
-    scene_precision_restore(state, code)
+    scene_precision_restore(state, &log)
 }
 
 /// The C entries of the native graph fixture (tests/ac7_view_fixture.rs, through ac7_sites.h).
+/// They log nowhere.
 #[cfg(feature = "warp-fixture")]
 mod fixture {
     use super::{VELOCITY, velocity_apply, velocity_restore};
-    use crate::sites::NativeCode;
-    use crate::sys::{rsf_ac7_code_leaves, rsf_ac7_code_patch, rsf_ac7_code_patches};
-
-    /// The ownership record and leaves of one native call.
-    ///
-    /// # Safety
-    /// `patches` and `leaves` are null or valid for the call, and nothing else uses `patches`
-    /// during it.
-    unsafe fn native<'a>(
-        patches: *mut rsf_ac7_code_patches,
-        leaves: *const rsf_ac7_code_leaves,
-    ) -> Option<(&'a mut rsf_ac7_code_patches, NativeCode)> {
-        let patches = unsafe { patches.as_mut() }?;
-        let code = unsafe { NativeCode::new(leaves) }?;
-        Some((patches, code))
-    }
+    use crate::sys::{rsf_ac7_code_patch, rsf_ac7_code_patches};
 
     /// # Safety
     /// `out` is null or writable.
@@ -210,28 +195,37 @@ mod fixture {
     }
 
     /// # Safety
-    /// See `native`. The leaves receive `base` plus each patch RVA.
+    /// `patches` is null or valid for the call and used by nothing else during it; `base` plus
+    /// each patch RVA is the borrowed fixture image.
     #[unsafe(no_mangle)]
     unsafe extern "C" fn rsf_ac7_velocity_apply(
         patches: *mut rsf_ac7_code_patches,
         base: *mut u8,
-        leaves: *const rsf_ac7_code_leaves,
     ) -> bool {
-        unsafe { native(patches, leaves) }
-            .is_some_and(|(patches, code)| velocity_apply(patches, base, &code))
+        unsafe { patches.as_mut() }.is_some_and(|patches| velocity_apply(patches, base, &|_| {}))
     }
 
     /// # Safety
-    /// See `native`.
+    /// As `rsf_ac7_velocity_apply`.
     #[unsafe(no_mangle)]
-    unsafe extern "C" fn rsf_ac7_velocity_restore(
-        patches: *mut rsf_ac7_code_patches,
-        leaves: *const rsf_ac7_code_leaves,
-    ) -> bool {
-        unsafe { native(patches, leaves) }
-            .is_some_and(|(patches, code)| velocity_restore(patches, &code))
+    unsafe extern "C" fn rsf_ac7_velocity_restore(patches: *mut rsf_ac7_code_patches) -> bool {
+        unsafe { patches.as_mut() }.is_some_and(|patches| velocity_restore(patches))
     }
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_matches_the_former_patches() {
+        let rvas: Vec<u32> = VELOCITY.iter().map(|patch| patch.rva).collect();
+        assert_eq!(rvas, [0x118a4e3, 0x10fdd0c, 0x11838c4]);
+        assert!(
+            VELOCITY
+                .iter()
+                .all(|patch| patch.native.len() == 2 && patch.replacement.len() == 2)
+        );
+        assert_eq!(NATIVE_SCENE_FORMAT, SCENE_PRECISION_EXPECTED[..13]);
+    }
+}

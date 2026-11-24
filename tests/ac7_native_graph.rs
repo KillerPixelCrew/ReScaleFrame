@@ -18,8 +18,7 @@ use super::{
 };
 use crate::sys::RSF_AC7_VIEW_BUFFER_BYTES;
 use crate::sys::{
-    RSF_AC7_ROLE_OUTPUT, RSF_AC7_ROLE_SR, rsf_ac7_code_leaves, rsf_ac7_native_calls,
-    rsf_ac7_truesky_patches,
+    RSF_AC7_ROLE_OUTPUT, RSF_AC7_ROLE_SR, rsf_ac7_native_calls, rsf_ac7_truesky_patches,
 };
 use crate::sys::{rsf_ac7_native_renderer_options, rsf_ac7_render_scope, rsf_ac7_render_scope_fn};
 use rsf_game_sys::rsf_game_render_config;
@@ -67,7 +66,7 @@ pub(super) struct Calls {
         rsf_ac7_graph_check_fn,
     ),
     fixture_view: unsafe extern "C" fn(*mut f32, usize) -> bool,
-    velocity_patches: unsafe extern "C" fn(*mut u8, usize, *const rsf_ac7_code_leaves) -> bool,
+    velocity_patches: unsafe extern "C" fn(*mut u8, usize) -> bool,
     fixture_hooks: unsafe extern "C" fn(*const u32, usize, u32) -> bool,
     native_sr_evaluate: unsafe extern "C" fn(*mut c_void, *const rsf_ac7_render_scope) -> i32,
     /// rsf_ac7_render_scopes_create (render_scope_entry.c).
@@ -855,9 +854,8 @@ unsafe extern "C" fn rsf_ac7_native_graph_fixture(calls: *const Calls) -> c_int 
     if patch_image.is_null() {
         return 1;
     }
-    let patch_leaves = super::leaves::code_leaves(None, null_mut());
     verify(
-        unsafe { (calls.velocity_patches)(patch_image, PATCH_IMAGE_SIZE, &patch_leaves) },
+        unsafe { (calls.velocity_patches)(patch_image, PATCH_IMAGE_SIZE) },
         c"temporal gate preflight, idempotence and guarded retirement",
     );
     free(patch_image);
@@ -1201,7 +1199,7 @@ fn replay_graph(calls: &Calls, device: &ID3D11Device, immediate: &ID3D11DeviceCo
         );
     }
     verify(held(true) == 0, c"guards release their slot");
-    // TrueSky relays (truesky.rs) through the native leaves on a writable plugin image. The depth
+    // TrueSky relays (truesky.rs) through sky.rs on a writable plugin image. The depth
     // route's code and the shipped effect are absent, so it refuses and only the composite_tile
     // relay installs; restore puts the native call back and releases the relay memory.
     const PLUGIN_SIZE: usize = 0xd_0000;

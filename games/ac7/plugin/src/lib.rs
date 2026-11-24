@@ -2,7 +2,7 @@
 //! `ReScaleFrame.Game.AC7.dll`'s Rust: the exact recognized build, the GameSDK table and the
 //! renderer lifecycle (`lifecycle.rs`), and the native renderer: the scene-precision and temporal
 //! velocity patch transactions (`patches.rs`), the hook body guards (`guards.rs`), the
-//! prepare/start/quiesce/stop transaction with its retirement admission (`renderer.rs`), the
+//! prepare/start/quiesce/stop transaction with its retirement admission (`native_renderer/transaction.rs`), the
 //! TrueSky plugin patches and call relays (`truesky.rs`), the renderer object, detours, engine
 //! relays and pass leases (`native_renderer.rs`), the queued RHI render scopes of
 //! ac7_render_scope.h (`render_scope.rs`), the scoped primary-view facts and TrueSky's D3D11
@@ -28,16 +28,11 @@ mod lifecycle;
 mod native_renderer;
 mod patches;
 mod render_scope;
-mod renderer;
 mod scope_facts;
 mod sites;
 mod truesky;
 
-#[cfg(test)]
-mod fake_code;
-
-use lifecycle::{Leaves, Lifecycle, Renderer};
-use rsf_ac7::sys::rsf_ac7_native_renderer_options;
+use lifecycle::Lifecycle;
 use rsf_game_sys::call_header::validate;
 use rsf_game_sys::session::{Probe, publish_api};
 use rsf_game_sys::{
@@ -60,31 +55,6 @@ const STATUS: &CStr =
 
 static LIFECYCLE: Lifecycle = Lifecycle::new();
 
-/// The native renderer (renderer.rs over native_renderer/leaves.rs).
-struct Native;
-
-impl Leaves for Native {
-    fn prepare(&self, options: &rsf_ac7_native_renderer_options) -> (Renderer, bool) {
-        renderer::rsf_ac7_renderer_prepare(options)
-    }
-
-    fn start(&self, renderer: Renderer) -> bool {
-        unsafe { renderer::rsf_ac7_renderer_start(renderer) }
-    }
-
-    fn is_active(&self, renderer: Renderer) -> bool {
-        unsafe { renderer::rsf_ac7_renderer_is_active(renderer) }
-    }
-
-    fn quiesce(&self, renderer: Renderer) {
-        unsafe { renderer::rsf_ac7_renderer_quiesce(renderer) };
-    }
-
-    fn stop(&self, renderer: Renderer) -> bool {
-        unsafe { renderer::rsf_ac7_renderer_stop(renderer) }
-    }
-}
-
 /// Exact-build identity: the AMD64 executable name and its SHA-256, both ASCII case-insensitive.
 unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> rsf_detection {
     unsafe { Probe::detect(probe, |probe| probe.matches(EXECUTABLE, EXECUTABLE_SHA256)) }
@@ -104,7 +74,7 @@ unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> rsf_result {
     if host.session_id == 0 {
         return RSF_ERROR_INVALID_ARGUMENT;
     }
-    LIFECYCLE.prepare(&Native, host)
+    LIFECYCLE.prepare(host)
 }
 
 unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_result {
@@ -112,7 +82,7 @@ unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_result {
     if valid != RSF_OK {
         return valid;
     }
-    LIFECYCLE.start(&Native)
+    LIFECYCLE.start()
 }
 
 unsafe extern "C" fn quiesce(args: *const rsf_game_control_args) -> rsf_result {
@@ -120,7 +90,7 @@ unsafe extern "C" fn quiesce(args: *const rsf_game_control_args) -> rsf_result {
     if valid != RSF_OK {
         return valid;
     }
-    LIFECYCLE.quiesce(&Native)
+    LIFECYCLE.quiesce()
 }
 
 unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_result {
@@ -128,7 +98,7 @@ unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_result {
     if valid != RSF_OK {
         return valid;
     }
-    LIFECYCLE.stop(&Native)
+    LIFECYCLE.stop()
 }
 
 unsafe extern "C" fn status(output: *mut rsf_game_renderer_status) -> rsf_result {
@@ -136,7 +106,7 @@ unsafe extern "C" fn status(output: *mut rsf_game_renderer_status) -> rsf_result
     if valid != RSF_OK {
         return valid;
     }
-    LIFECYCLE.status(&Native, unsafe { &mut *output })
+    LIFECYCLE.status(unsafe { &mut *output })
 }
 
 /// Publishes the GameSDK table for the exported rsf_get_game_plugin_api (plugin.c).

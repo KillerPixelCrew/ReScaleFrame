@@ -11,8 +11,7 @@
 #include <rescaleframe/native_sr.h>
 
 bool rsf_ac7_graph_fixture_view(float* output, size_t size);
-bool rsf_ac7_graph_fixture_velocity_patches(
-    unsigned char* image, size_t size, const rsf_ac7_code_leaves* leaves);
+bool rsf_ac7_graph_fixture_velocity_patches(unsigned char* image, size_t size);
 bool rsf_ac7_graph_fixture_hooks(const uint32_t* hooks, size_t count, uint32_t output_role);
 
 /* Mirrored by `Calls` in tests/ac7_native_graph.rs. */
@@ -25,7 +24,7 @@ typedef struct rsf_ac7_native_graph_calls {
         rsf_ac7_graph_sky_apply_fn apply, rsf_ac7_graph_sky_restore_fn restore,
         rsf_ac7_graph_check_fn check);
     bool (*fixture_view)(float* output, size_t size);
-    bool (*velocity_patches)(unsigned char* image, size_t size, const rsf_ac7_code_leaves* leaves);
+    bool (*velocity_patches)(unsigned char* image, size_t size);
     bool (*fixture_hooks)(const uint32_t* hooks, size_t count, uint32_t output_role);
     rsf_dlss_pipeline_result (*native_sr_evaluate)(void* context, const rsf_game_render_pass* pass);
     int (*scopes_create)(uint64_t session_id, uint32_t capacity, rsf_ac7_render_scope_fn callback,

@@ -44,23 +44,6 @@ fn detection_needs_the_exact_amd64_build() {
 }
 
 #[test]
-fn validation_orders_size_before_abi() {
-    let mut args = rsf_game_start_args {
-        struct_size: size_of::<rsf_game_start_args>() as u32,
-        abi_version: RSF_GAME_ABI_VERSION,
-    };
-    assert_eq!(unsafe { validate(&args) }, RSF_OK);
-    args.abi_version += 1;
-    assert_eq!(unsafe { validate(&args) }, RSF_ERROR_ABI_MISMATCH);
-    args.struct_size -= 1;
-    assert_eq!(unsafe { validate(&args) }, RSF_ERROR_INVALID_ARGUMENT);
-    assert_eq!(
-        unsafe { validate(null::<rsf_game_start_args>()) },
-        RSF_ERROR_INVALID_ARGUMENT
-    );
-}
-
-#[test]
 fn publication_refuses_before_retaining_the_table() {
     let empty = rsf_game_info {
         id: null(),

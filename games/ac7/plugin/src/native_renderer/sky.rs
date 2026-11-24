@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! TrueSky: the depth producer dispatch relay and its one-to-one depth shader, the composite_tile
-//! draw relay that reports cloud depth, the relay memory, the leaves lent to the TrueSky owner
-//! (truesky.rs) and the sky render and projection hooks.
-use super::leaves::code_leaves;
+//! draw relay that reports cloud depth, the relay memory and module lookup the TrueSky owner
+//! (truesky.rs) uses, and the sky render and projection hooks.
 use super::{Guard, Renderer, hook, installed, key, original, primary_view, read, scope};
 use crate::cloud_depth::d3d11::{CloudDepth, depth_shader};
-use crate::sys::rsf_ac7_native_renderer;
-use crate::truesky::{NativePlugin, apply_native, refuse_full_grid_native, restore_native};
+use crate::truesky;
 use rsf_game_sys::RSF_GAME_RENDER_CLOUD_DEPTH;
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -207,9 +205,7 @@ pub(crate) unsafe extern "system" fn native_cloud_depth_dispatch(
         let _lock = owner.cloud_guard();
         if !unsafe { (*owner.truesky.get()).resolution_site }.is_null() {
             owner.cloud_depth_ready.store(false, Ordering::Release);
-            if let Some(plugin) = truesky_plugin(owner) {
-                unsafe { refuse_full_grid_native(owner.truesky.get(), &plugin) };
-            }
+            truesky::refuse_full_grid(unsafe { &mut *owner.truesky.get() }, owner);
             return;
         }
     }
@@ -337,7 +333,7 @@ pub(crate) unsafe extern "C" fn native_cloud_composite_draw(
     }
 }
 
-pub(crate) unsafe fn module(name: *const u16) -> *mut u8 {
+pub(crate) fn module(name: *const u16) -> *mut u8 {
     #[cfg(feature = "warp-fixture")]
     {
         let module = super::TEST_TRUESKY_MODULE.load(Ordering::Relaxed);
@@ -348,7 +344,7 @@ pub(crate) unsafe fn module(name: *const u16) -> *mut u8 {
     unsafe { GetModuleHandleW(PCWSTR(name)) }.map_or(null_mut(), |module| module.0.cast())
 }
 
-pub(crate) unsafe fn relay_allocate(call: *mut u8, handler: *mut c_void) -> *mut c_void {
+pub(crate) fn relay_allocate(call: *mut u8, handler: *mut c_void) -> *mut c_void {
     let slot = allocate_depth_relay(call);
     if !slot.is_null() {
         unsafe { slot.cast::<*mut c_void>().write(handler) };
@@ -356,25 +352,23 @@ pub(crate) unsafe fn relay_allocate(call: *mut u8, handler: *mut c_void) -> *mut
     slot
 }
 
-pub(crate) unsafe fn relay_release(slot: *mut c_void) {
+pub(crate) fn relay_release(slot: *mut c_void) {
     if !slot.is_null() {
         let _ = unsafe { VirtualFree(slot, 0, MEM_RELEASE) };
     }
 }
 
-pub(crate) unsafe fn depth_ready(renderer: *mut rsf_ac7_native_renderer) -> bool {
-    unsafe { Renderer::from_handle(renderer) }
-        .cloud_depth_ready
-        .load(Ordering::Acquire)
+pub(crate) fn depth_ready(owner: &Renderer) -> bool {
+    owner.cloud_depth_ready.load(Ordering::Acquire)
 }
 
-pub(crate) unsafe fn motion_release(renderer: *mut rsf_ac7_native_renderer) {
-    unsafe { *Renderer::from_handle(renderer).cloud_motion.get() = CloudDepth::default() };
+/// Called by truesky.rs with `cloud_lock` held, once no relay call runs.
+pub(crate) fn motion_release(owner: &Renderer) {
+    unsafe { *owner.cloud_motion.get() = CloudDepth::default() };
 }
 
 /// Called by truesky.rs with `cloud_lock` held.
-pub(crate) unsafe fn depth_release(renderer: *mut rsf_ac7_native_renderer) {
-    let owner = unsafe { Renderer::from_handle(renderer) };
+pub(crate) fn depth_release(owner: &Renderer) {
     let cloud = owner.cloud.get();
     unsafe {
         (*cloud).shader = None;
@@ -383,29 +377,18 @@ pub(crate) unsafe fn depth_release(renderer: *mut rsf_ac7_native_renderer) {
     owner.cloud_depth_ready.store(false, Ordering::SeqCst);
 }
 
-/// The TrueSky owner's leaves (truesky.rs) for one call under `cloud_lock`. It owns the sites,
-/// bytes, effect fingerprint and the install, rollback and restore order; this module keeps the
-/// module lookup, relay memory, both relay handlers and their D3D11 state.
-fn truesky_plugin(owner: &Renderer) -> Option<NativePlugin> {
-    let code = code_leaves(owner.options.log, owner.options.user);
-    unsafe { NativePlugin::new(&code, owner.handle()) }
-}
-
 /// Installs the TrueSky relays and, once the depth relay is ready, the full cloud grid
 /// (truesky.rs).
 pub(super) fn apply_cloud_resolution_patch(owner: &Renderer) {
     let _lock = owner.cloud_guard();
-    if let Some(plugin) = truesky_plugin(owner) {
-        unsafe { apply_native(owner.truesky.get(), &plugin) };
-    }
+    truesky::apply(unsafe { &mut *owner.truesky.get() }, owner);
 }
 
 /// Restores the TrueSky plugin patches and relays (truesky.rs) under the lock every change of
 /// them holds, so the depth relay cannot retire the full grid while stop restores it.
 pub(super) fn restore_truesky(owner: &Renderer) -> bool {
     let _lock = owner.cloud_guard();
-    truesky_plugin(owner)
-        .is_some_and(|plugin| unsafe { restore_native(owner.truesky.get(), &plugin) })
+    truesky::restore(unsafe { &mut *owner.truesky.get() }, owner)
 }
 
 thread_local! {

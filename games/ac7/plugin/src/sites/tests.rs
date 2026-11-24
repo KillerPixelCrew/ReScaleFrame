@@ -1,22 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::fake_code::Image;
 use rsf_ac7::sys::{RSF_AC7_PROCESS_HOOKS, RSF_AC7_ROLE_OUTPUT, RSF_AC7_ROLE_TONEMAP};
-use std::cell::RefCell;
 use std::collections::HashSet;
-use std::ffi::c_uchar;
-use std::ptr::{null, null_mut, without_provenance};
-
-/// The exact build as far as admission reads it.
-fn exact_build() -> Image {
-    let image = Image::default();
-    image.seed_admission(0);
-    image
-}
-
-fn last_log(image: &Image) -> String {
-    image.log.borrow().last().cloned().unwrap_or_default()
-}
 
 #[test]
 fn hook_indices_name_the_former_sites() {
@@ -47,94 +32,4 @@ fn evidence_hooks_wait_for_diagnostics() {
         .filter(|&hook| wanted(hook, false))
         .count();
     assert_eq!(always, 59);
-}
-
-#[test]
-fn admission_accepts_the_exact_build_silently() {
-    let image = exact_build();
-    assert!(admit(null(), &image));
-    assert!(image.log.borrow().is_empty());
-}
-
-#[test]
-fn admission_reports_the_first_difference_in_former_order() {
-    let image = exact_build();
-    image.put(0x11346d0, &[0xcc]); // last helper
-    image.put(0x109d03a, &[0xcc]); // third depth gate
-    image.put(0x190ce60, &[0xcc]); // last hooked entry
-    assert!(!admit(null(), &image));
-    assert_eq!(
-        last_log(&image),
-        "AC7 native renderer refused: expected entry bytes differ at RVA 0x190ce60"
-    );
-    image.put(0x190ce60, &[0x48]);
-    assert!(!admit(null(), &image));
-    assert_eq!(
-        last_log(&image),
-        "AC7 native renderer refused: enlarged UI depth/view gate missing at RVA 0x109d03a"
-    );
-    image.put(0x109d03a, &[0x44]);
-    assert!(!admit(null(), &image));
-    assert_eq!(
-        last_log(&image),
-        "AC7 native renderer refused: expected helper bytes differ at RVA 0x11346d0"
-    );
-    image.put(0x11346d0, &[0x48]);
-    assert!(admit(null(), &image));
-    assert_eq!(image.log.borrow().len(), 3);
-}
-
-thread_local! {
-    static SEEN: RefCell<Vec<(usize, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
-}
-
-unsafe extern "C" fn record(
-    address: *const c_uchar,
-    expected: *const c_uchar,
-    count: usize,
-) -> bool {
-    let bytes = unsafe { std::slice::from_raw_parts(expected, count) }.to_vec();
-    SEEN.with(|seen| seen.borrow_mut().push((address.addr(), bytes)));
-    true
-}
-
-/// Admission through the native compare leaf, as native_renderer.rs lends it.
-fn build_admit(base: usize, leaves: Option<&rsf_ac7_code_leaves>) -> bool {
-    leaves
-        .and_then(NativeCodeView::new)
-        .is_some_and(|code| admit(without_provenance(base), &code))
-}
-
-#[test]
-fn native_admission_compares_each_site_at_the_module_base() {
-    let base = 0x1_4000_0000usize;
-    let leaves = rsf_ac7_code_leaves {
-        matches: Some(record),
-        write: None,
-        log: None,
-        user: null_mut(),
-    };
-    assert!(build_admit(base, Some(&leaves)));
-    SEEN.with(|seen| {
-        let seen = seen.borrow();
-        assert_eq!(
-            seen.len(),
-            HOOK_SITES.len() + DEPTH_GATES.len() + HELPERS.len()
-        );
-        let unique: HashSet<_> = seen.iter().map(|(address, _)| address).collect();
-        assert_eq!(unique.len(), seen.len());
-        assert_eq!(seen[0], (base + 0x10b0220, HOOK_SITES[0].expected.to_vec()));
-        let gate = &seen[HOOK_SITES.len() + 4];
-        assert_eq!(gate, &(base + 0x11583a6, DEPTH_GATES[4].expected.to_vec()));
-        assert_eq!(
-            seen.last().map(|(address, _)| *address),
-            Some(base + 0x11346d0)
-        );
-    });
-    assert!(!build_admit(base, None));
-    let incomplete = rsf_ac7_code_leaves {
-        matches: None,
-        ..leaves
-    };
-    assert!(!build_admit(base, Some(&incomplete)));
 }

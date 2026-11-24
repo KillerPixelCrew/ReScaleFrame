@@ -98,16 +98,9 @@ unsafe extern "C" fn rsf_ac7_graph_fixture_hooks(
         && !evidence(9)
 }
 
-/// The image is borrowed writable memory. The leaves exercise the production compare and writer.
+/// The image is borrowed writable memory. The patches use the production compare and writer.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_graph_fixture_velocity_patches(
-    image: *mut u8,
-    size: usize,
-    leaves: *const rsf_ac7_code_leaves,
-) -> bool {
-    let Some(matches) = (unsafe { leaves.as_ref() }).and_then(|leaves| leaves.matches) else {
-        return false;
-    };
+unsafe extern "C" fn rsf_ac7_graph_fixture_velocity_patches(image: *mut u8, size: usize) -> bool {
     if image.is_null() {
         return false;
     }
@@ -145,32 +138,28 @@ unsafe extern "C" fn rsf_ac7_graph_fixture_velocity_patches(
             } else {
                 &site.native
             };
-            unsafe {
-                matches(
-                    image.add(site.rva as usize),
-                    expected.as_ptr(),
-                    site.size as usize,
-                )
-            }
+            let live = unsafe {
+                std::slice::from_raw_parts(image.add(site.rva as usize), site.size as usize)
+            };
+            live == &expected[..site.size as usize]
         })
     };
     let history_gate = unsafe { image.add(sites[2].rva as usize) };
     unsafe { history_gate.write(0xcc) };
-    let refused = !unsafe { rsf_ac7_velocity_apply(&mut owner, image, leaves) };
+    let refused = !unsafe { rsf_ac7_velocity_apply(&mut owner, image) };
     unsafe { history_gate.write(0x77) };
     if !refused || owner.velocity_applied != 0 || !matches_all(false) {
         return false;
     }
-    if !unsafe { rsf_ac7_velocity_apply(&mut owner, image, leaves) }
-        || !unsafe { rsf_ac7_velocity_apply(&mut owner, image, leaves) }
+    if !unsafe { rsf_ac7_velocity_apply(&mut owner, image) }
+        || !unsafe { rsf_ac7_velocity_apply(&mut owner, image) }
         || !matches_all(true)
     {
         return false;
     }
     unsafe { history_gate.write(0xcc) };
-    let retained =
-        !unsafe { rsf_ac7_velocity_restore(&mut owner, leaves) } && owner.velocity_applied == 3;
+    let retained = !unsafe { rsf_ac7_velocity_restore(&mut owner) } && owner.velocity_applied == 3;
     unsafe { history_gate.write(0xeb) };
-    let restored = unsafe { rsf_ac7_velocity_restore(&mut owner, leaves) };
+    let restored = unsafe { rsf_ac7_velocity_restore(&mut owner) };
     retained && restored && matches_all(false)
 }
