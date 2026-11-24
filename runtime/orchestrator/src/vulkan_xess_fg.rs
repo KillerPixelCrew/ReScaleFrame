@@ -117,9 +117,7 @@ unsafe extern "C" fn rsf_core_xessvk_interop_create(
     status_result(unsafe { (ops.create)(setup, &callbacks, timeline_enabled, output) })
 }
 
-use crate::dx12_vulkan_interop::{
-    rsf_dx12vk_interop_destroy, rsf_dx12vk_interop_image, rsf_dx12vk_interop_timeline,
-};
+use crate::dx12_vulkan_interop::{rsf_dx12vk_interop_destroy, rsf_dx12vk_interop_image};
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_xessvk_interop_image(
@@ -130,11 +128,6 @@ unsafe extern "C" fn rsf_xessvk_interop_image(
     output: *mut InteropImage,
 ) -> i32 {
     status_result(unsafe { rsf_dx12vk_interop_image(owner, format, width, height, output) })
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_xessvk_interop_timeline(owner: *const c_void) -> u64 {
-    unsafe { rsf_dx12vk_interop_timeline(owner.cast_mut()) }
 }
 
 #[unsafe(no_mangle)]
@@ -597,16 +590,14 @@ pub(crate) unsafe extern "C" fn rsf_xessgvk_submitted(
 pub(crate) unsafe extern "C" fn rsf_xessgvk_enable(owner: *mut Owner, enabled: u32) -> i32 {
     status_result(unsafe { shared::enable(owner, enabled, None) })
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_xessgvk_enable_options(
+pub(crate) unsafe fn rsf_xessgvk_enable_options(
     owner: *mut Owner,
     enabled: u32,
     count: u32,
 ) -> i32 {
     status_result(unsafe { shared::enable_options(owner, enabled, count) })
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_xessgvk_max_generated(owner: *const Owner) -> u32 {
+pub(crate) unsafe fn rsf_xessgvk_max_generated(owner: *const Owner) -> u32 {
     unsafe { owner.as_ref() }.map_or(0, |owner| unsafe {
         (owner.vendor.ops.max_generated)(owner.vendor.bridge)
     })
@@ -644,8 +635,7 @@ pub(crate) unsafe extern "C" fn rsf_xessgvk_present(owner: *mut Owner, info: *co
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_xessgvk_present_source(
+pub(crate) unsafe fn rsf_xessgvk_present_source(
     owner: *mut Owner,
     info: *const c_void,
     source: *const Record,
@@ -696,16 +686,14 @@ pub(crate) unsafe extern "C" fn rsf_xessgvk_latency(
 ) -> i32 {
     unsafe { owner.as_ref() }.map_or(XESS_INVALID, |owner| owner.vendor.marker(id, marker))
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_xessgvk_latency_options(
+pub(crate) unsafe fn rsf_xessgvk_latency_options(
     owner: *const Owner,
     mode: u32,
     interval: u32,
 ) -> i32 {
     unsafe { owner.as_ref() }.map_or(XESS_INVALID, |owner| owner.vendor.options(mode, interval))
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_xessgvk_latency_status(
+pub(crate) unsafe fn rsf_xessgvk_latency_status(
     owner: *const Owner,
     status: *mut LatencyStatus,
 ) -> i32 {

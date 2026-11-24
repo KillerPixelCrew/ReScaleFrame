@@ -138,9 +138,7 @@ fn bindings() {
     )
     // The Vulkan FSR 4 owner stays an untyped handle on the Rust side, as before.
     // Declared by hand where they are called, with Rust reference or handle types.
-    .blocklist_function(
-        "RsfFsr4Fg.*|rsf_dx12vk_interop_(image|timeline|destroy|release_guides)|rsf_sharpening_requested",
-    )
+    .blocklist_function("RsfFsr4Fg.*|rsf_sharpening_requested")
     .blocklist_type("rsf_fsr4vk")
     .raw_line("pub type rsf_fsr4vk = ::core::ffi::c_void;");
     rsf_bindgen::write(builder, "sys.rs");

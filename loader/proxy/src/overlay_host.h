@@ -26,23 +26,9 @@ typedef void (*rsf_overlay_host_log_fn)(void* user, const char* message);
    without the Rust half is a normal thing to be running. */
 int rsf_overlay_host_start(void* swapchain, rsf_overlay_host_log_fn log,
                            void* log_user);
-/* Shared UI host endpoints for renderers which already own a device, window and target.
-   Once layout succeeds, draw_target returns the intent even if rendering fails. */
-int rsf_overlay_host_start_device(void* d3d11_device, void* hwnd, rsf_overlay_host_log_fn log, void* user);
-void rsf_overlay_host_stop_device(void* d3d11_device);
-int rsf_overlay_host_draw_target(void* d3d11_context, void* render_target_view, uint32_t width,
-    uint32_t height, const rsf_overlay_stats*, rsf_overlay_intent*);
-/* Snapshot one host draw decision before acquiring a wrapped target. */
-int rsf_overlay_host_admit_target(uint32_t show_hud, uint32_t* visible, float* hint);
-int rsf_overlay_host_draw_admitted_target(void* d3d11_context, void* render_target_view,
-    uint32_t width, uint32_t height, const rsf_overlay_stats*, rsf_overlay_intent*,
-    uint32_t visible, float hint);
 
 /* Whether the panel is currently open. */
 unsigned int rsf_overlay_host_visible(void);
-
-/* Open or close it from a hotkey, rather than from the key the input module watches for. */
-void rsf_overlay_host_toggle(void);
 
 /* Lay out and draw one frame, from inside the Present hook and on the render thread.
 

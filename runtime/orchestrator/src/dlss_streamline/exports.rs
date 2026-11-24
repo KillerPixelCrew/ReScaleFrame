@@ -17,8 +17,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_set_device(device: Handle) -> i32 {
     unsafe { rsf_core_dlss_streamline_set_device(device) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native_present(
+pub(crate) unsafe fn rsf_dlss_native_present(
     chain: Handle,
     interval: u32,
     flags: u32,
@@ -32,8 +31,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_query_support(support: *mut Support) ->
     unsafe { rsf_core_dlss_streamline_support(support) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_plan_render_size(plan: *mut Plan) -> i32 {
+pub(crate) unsafe fn rsf_dlss_plan_render_size(plan: *mut Plan) -> i32 {
     unsafe { rsf_core_dlss_streamline_plan(plan) }
 }
 
@@ -42,8 +40,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_evaluate(context: Handle, frame: *const
     unsafe { rsf_core_dlss_streamline_evaluate(context, frame, 0) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_evaluate_shared(
+pub(crate) unsafe fn rsf_dlss_evaluate_shared(
     list: Handle,
     frame: *const Frame,
     id: u64,
@@ -59,8 +56,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_share_host(host: Handle, log: Log, user
     unsafe { rsf_core_dlss_streamline_share_host(host, log, user) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_release_viewport(viewport: u32) -> i32 {
+pub(crate) unsafe fn rsf_dlss_release_viewport(viewport: u32) -> i32 {
     unsafe { rsf_core_dlss_streamline_release(viewport) }
 }
 

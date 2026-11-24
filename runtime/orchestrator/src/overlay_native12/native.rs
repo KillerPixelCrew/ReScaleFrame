@@ -641,13 +641,11 @@ static PLATFORM: Platform = Platform {
     signal,
 };
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_overlay_native12_visible() -> u32 {
+pub(crate) fn rsf_overlay_native12_visible() -> u32 {
     panel_visible(&PLATFORM)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_overlay_native12_toggle() {
+pub(crate) fn rsf_overlay_native12_toggle() {
     panel_toggle(&PLATFORM);
 }
 

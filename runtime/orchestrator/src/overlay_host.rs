@@ -835,15 +835,6 @@ fn rsf_core_overlay_host_visible() -> u32 {
     leaf::input_visible()
 }
 
-fn rsf_core_overlay_host_toggle() {
-    if !STARTED.load(Ordering::Acquire) {
-        say("overlay: not running, so there is nothing to open");
-        return;
-    }
-    let visible = leaf::input_visible();
-    leaf::input_set_visible((visible == 0) as u32);
-}
-
 unsafe fn rsf_core_overlay_host_present(
     chain: Handle,
     stats: *const rsf_overlay_stats,

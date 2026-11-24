@@ -801,11 +801,6 @@ fn frame_time_defaults_to_sixty_hertz_outside_a_plausible_frame() {
 fn the_exported_entry_points_share_one_host() {
     let scene = Scene::new();
     unsafe {
-        rsf_core_overlay_host_toggle();
-        assert_eq!(
-            logs(),
-            ["overlay: not running, so there is nothing to open"]
-        );
         assert_eq!(
             rsf_core_overlay_host_start(CHAIN, Some(capture), null_mut()),
             1
@@ -817,7 +812,7 @@ fn the_exported_entry_points_share_one_host() {
         );
         assert_eq!(calls().iter().filter(|call| *call == "create").count(), 1);
         assert_eq!(rsf_core_overlay_host_visible(), 0);
-        rsf_core_overlay_host_toggle();
+        input_set_visible(1);
         assert_eq!(rsf_core_overlay_host_visible(), 1);
         let hud = stats(true);
         assert_eq!(rsf_core_overlay_host_present(CHAIN, &hud, null_mut()), 1);

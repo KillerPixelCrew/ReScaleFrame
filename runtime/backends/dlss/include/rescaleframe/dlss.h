@@ -92,11 +92,6 @@ rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup);
 /* Hand over the game's `ID3D11Device*`. D3D11 has no device proxy in Streamline, so this is the
    native device and stays the one the game uses. */
 rsf_dlss_result rsf_dlss_set_device(void* d3d11_device);
-/* Graphics owner, paired around actual Present on an unwrapped native D3D11 chain.
-   Standalone SR needs common-plugin bookkeeping even when it does not replace Present.
-   Do not call for a Streamline proxy chain. Shared-host owners already provide this.
-   This SR-only notification refuses a request to skip the native call. */
-rsf_dlss_result rsf_dlss_native_present(void* swapchain, uint32_t sync_interval, uint32_t flags, uint32_t begin);
 /* Borrow the existing D3D12 Streamline owner. The host outlives SR and owns shutdown. */
 rsf_dlss_result rsf_dlss_share_host(void* streamline_host, rsf_dlss_log_fn log, void* user);
 
@@ -141,12 +136,6 @@ typedef struct rsf_dlss_plan {
     uint32_t render_width_max;
     uint32_t render_height_max;
 } rsf_dlss_plan;
-
-/* Ask DLSS what render size a quality level means at this output size.
-   The answer comes from the SDK rather than from a ratio computed here, because DLSS is entitled
-   to change it and a mismatch between the size we render and the size it expects is a rejected
-   evaluate at best. */
-rsf_dlss_result rsf_dlss_plan_render_size(rsf_dlss_plan* plan);
 
 /* Everything one frame needs. Textures are `ID3D11Texture2D*`.
 
@@ -248,17 +237,10 @@ typedef struct rsf_dlss_frame {
    Streamline does not restore pipeline state, so the caller owns saving and restoring whatever it
    cares about around this call. */
 rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss_frame* frame);
-/* D3D12 resources and command list on the borrowed host, with its already minted CPU token.
-   Inputs are NON_PIXEL_SHADER_RESOURCE; output is UNORDERED_ACCESS. */
-rsf_dlss_result rsf_dlss_evaluate_shared(void* d3d12_list, const rsf_dlss_frame* frame,
-                                       uint64_t source_frame_id);
 
 /* Release DLSS resources for the viewport while leaving Streamline loaded. Worth doing when the
    render size changes, since the feature is built for a specific pair of sizes. */
 rsf_dlss_result rsf_dlss_release_resources(void);
-
-/* The same for one viewport by number. */
-rsf_dlss_result rsf_dlss_release_viewport(uint32_t viewport);
 
 /* Shut Streamline down and unload the interposer. Must happen before the game's device goes. */
 rsf_dlss_result rsf_dlss_shutdown(void);

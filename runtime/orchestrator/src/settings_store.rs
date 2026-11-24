@@ -511,8 +511,7 @@ pub(crate) unsafe extern "C" fn rsf_settings_store_read_layout(
 
 /// # Safety
 /// `ini` and `section` are terminated UTF-16 strings.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_settings_store_write_layout(
+pub(crate) unsafe fn rsf_settings_store_write_layout(
     ini: PCWSTR,
     section: PCWSTR,
     value: u32,

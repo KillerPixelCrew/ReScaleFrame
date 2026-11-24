@@ -39,9 +39,7 @@ typedef struct rsf_sharpening_options {
 extern "C" {
 #endif
 rsf_sharpening_options rsf_sharpening_core_defaults(void);
-rsf_sharpening_options rsf_sharpening_core_sanitize(rsf_sharpening_options options);
 uint32_t rsf_sharpening_core_valid(rsf_sharpening_options options);
-float rsf_sharpening_core_vendor_sharpness(rsf_sharpening_options options, uint32_t backend);
 #ifdef __cplusplus
 }
 #endif
@@ -64,12 +62,6 @@ static inline rsf_sharpening_options rsf_sharpening_defaults(void) {
 #endif
 #ifdef __cplusplus
 namespace rsf::sharpening_settings {
-inline float vendor_sharpness(const rsf_sharpening_options& o, uint32_t backend) {
-    return rsf_sharpening_core_vendor_sharpness(o, backend);
-}
-inline rsf_sharpening_options sanitize(rsf_sharpening_options o) {
-    return rsf_sharpening_core_sanitize(o);
-}
 inline bool valid(const rsf_sharpening_options& o) {
     return o.struct_size >= sizeof(o) && rsf_sharpening_core_valid(o) != 0;
 }

@@ -90,14 +90,20 @@ mod depth_scale;
 #[cfg(windows)]
 mod diagnostic_output;
 #[cfg(windows)]
+// Production leaves that unit tests replace with fakes: only the shipping build reaches them.
+#[cfg_attr(test, allow(dead_code))]
 mod dlss_native12;
 #[cfg(windows)]
 mod dlss_pipeline;
 #[cfg(windows)]
 mod dlss_pipeline_abi;
 #[cfg(windows)]
+// Production leaves that unit tests replace with fakes: only the shipping build reaches them.
+#[cfg_attr(test, allow(dead_code))]
 mod dlss_streamline;
 #[cfg(windows)]
+// Production leaves that unit tests replace with fakes: only the shipping build reaches them.
+#[cfg_attr(test, allow(dead_code))]
 mod dlss_vulkan_capture;
 #[cfg(windows)]
 mod dlss_vulkan_capture_ledger;
@@ -127,6 +133,8 @@ mod native_composition;
 #[cfg(windows)]
 mod native_cpu;
 #[cfg(windows)]
+// Production leaves that unit tests replace with fakes: only the shipping build reaches them.
+#[cfg_attr(test, allow(dead_code))]
 mod native_exposure;
 #[cfg(windows)]
 mod native_fg;
@@ -173,6 +181,8 @@ mod fixture_checks;
 mod frame_assembly;
 #[cfg(windows)]
 mod frame_capture12;
+// Production leaves that unit tests replace with fakes: only the shipping build reaches them.
+#[cfg_attr(test, allow(dead_code))]
 mod frame_capture_vk;
 #[cfg(windows)]
 mod frame_limit;
@@ -280,8 +290,12 @@ mod streamline_host;
 mod streamline_log;
 #[cfg(windows)]
 mod streamline_policy;
+// Production leaves that unit tests replace with fakes: only the shipping build reaches them.
+#[cfg_attr(test, allow(dead_code))]
 mod streamline_sdk;
 #[cfg(windows)]
+// Production leaves that unit tests replace with fakes: only the shipping build reaches them.
+#[cfg_attr(test, allow(dead_code))]
 mod streamline_sr;
 #[cfg(all(windows, test))]
 mod temporary_ini;
@@ -294,12 +308,16 @@ mod vulkan_capture_commands;
 #[cfg(windows)]
 mod vulkan_dispatch;
 #[cfg(windows)]
+// Production leaves that unit tests replace with fakes: only the shipping build reaches them.
+#[cfg_attr(test, allow(dead_code))]
 mod vulkan_dlss_fg;
 #[cfg(windows)]
 mod vulkan_dlss_fg_abi;
 #[cfg(windows)]
 mod vulkan_dlss_sr;
 #[cfg(windows)]
+// Production leaves that unit tests replace with fakes: only the shipping build reaches them.
+#[cfg_attr(test, allow(dead_code))]
 mod vulkan_dx12_fg;
 #[cfg(windows)]
 mod vulkan_external_copy;
@@ -319,6 +337,8 @@ mod vulkan_fg_resources;
 #[cfg(windows)]
 mod vulkan_fg_wsi;
 #[cfg(windows)]
+// Production leaves that unit tests replace with fakes: only the shipping build reaches them.
+#[cfg_attr(test, allow(dead_code))]
 mod vulkan_fsr4_fg;
 #[cfg(windows)]
 mod vulkan_fsr4_sr;
@@ -372,6 +392,8 @@ mod vulkan_streamline_camera;
 #[cfg(windows)]
 mod vulkan_timing;
 #[cfg(windows)]
+// Bound only with xess-fg-vk; unit tests replace it with fakes.
+#[cfg_attr(any(test, not(feature = "xess-fg-vk")), allow(dead_code))]
 mod vulkan_xess_fg;
 #[cfg(windows)]
 mod win32_diagnostics;

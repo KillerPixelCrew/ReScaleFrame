@@ -8,7 +8,7 @@ use crate::d3d11_host_abi::{
     RSF_D3D11_DISPATCH_PRESENT, RSF_D3D11_DISPATCH_PRESENT1, RSF_D3D11_DISPATCH_RELEASE,
     RSF_D3D11_DISPATCH_RESIZE_BUFFERS, RSF_D3D11_DISPATCH_RESIZE_BUFFERS1,
     RSF_D3D11_DISPATCH_SET_COLOR_SPACE1, RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE,
-    rsf_d3d11_chain_dispatch, rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_1,
+    rsf_d3d11_chain_dispatch,
 };
 use crate::d3d11_present_abi::*;
 use crate::fg_choice::known;
@@ -2793,11 +2793,6 @@ unsafe extern "C" fn rsf_d3d11_present_creation_begin(window: Raw, token: *mut u
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_d3d11_present_pace(id: u64, owner: u32, generation: *mut u64) -> i32 {
-    unsafe { rsf_core_d3d11p_pace(id, owner, ptr::null(), generation) }
-}
-
 pub(crate) unsafe extern "C" fn rsf_d3d11_present_pace_for_generation(
     id: u64,
     owner: u32,
@@ -2835,8 +2830,7 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_queue() -> Raw {
         .map_or(null_mut(), |physical| physical.queue.as_raw())
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_d3d11_present_source_queue() -> Raw {
+pub(crate) unsafe fn rsf_d3d11_present_source_queue() -> Raw {
     // The same lock fences owner unpublication. A transition must not block the producer.
     let Some(_guard) = read_guard() else {
         return null_mut();
@@ -2978,31 +2972,6 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_chain_dispatch_owned(
             dispatch_invoke_owned,
         )
     };
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_d3d11_present_dispatch_owned(
-    receiver: Raw,
-    sync_interval: u32,
-    flags: u32,
-    result: *mut i32,
-) -> i32 {
-    if result.is_null() {
-        return 0;
-    }
-    // The legacy call has no dispatch header; the core takes an exact receiver.
-    let mut request: rsf_d3d11_chain_dispatch = unsafe { std::mem::zeroed() };
-    request.receiver = receiver;
-    request.method = RSF_D3D11_DISPATCH_PRESENT;
-    request.args.present = rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_1 {
-        sync_interval,
-        flags,
-    };
-    unsafe { rsf_d3d11_chain_dispatch_owned(&mut request) };
-    if request.handled != 0 {
-        unsafe { result.write(request.result.hresult) };
-    }
-    request.handled as i32
 }
 
 unsafe extern "C" fn rsf_core_d3d11p_dispatch_owned(
@@ -3258,8 +3227,7 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_acquire(id: u64) -> i32 {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_d3d11_present_receipt(
+pub(crate) unsafe fn rsf_d3d11_present_receipt(
     expected: u64,
     id: u64,
     kinds: u32,

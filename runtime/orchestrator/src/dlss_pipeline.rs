@@ -441,8 +441,7 @@ pub(super) struct Pipeline {
 static PROCESS: Pipeline = Pipeline::new();
 
 // Applies saved settings to the process pipeline; used by the overlay in every build.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_dlss_pipeline_apply_sharpening(
+pub(crate) fn rsf_core_dlss_pipeline_apply_sharpening(
     settings: &crate::sys::rsf_render_settings,
 ) {
     let options = crate::settings_store::sharpening_of(settings, &sharpening_policy::defaults());

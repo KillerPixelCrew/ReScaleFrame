@@ -852,8 +852,7 @@ unsafe fn rsf_core_dlgvk_create(
     OK
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_images(
+pub(crate) unsafe fn rsf_dlssgvk_images(
     owner: *mut Owner,
     count: *mut u32,
     images: *mut u64,
@@ -868,8 +867,7 @@ pub(crate) unsafe extern "C" fn rsf_dlssgvk_images(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_acquire(
+pub(crate) unsafe fn rsf_dlssgvk_acquire(
     owner: *mut Owner,
     timeout: u64,
     semaphore: u64,
@@ -887,8 +885,7 @@ pub(crate) unsafe extern "C" fn rsf_dlssgvk_acquire(
         .acquire(owner.chain, timeout, semaphore, fence, index)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_image_layout(
+pub(crate) unsafe fn rsf_dlssgvk_image_layout(
     owner: *const Owner,
     layout: *mut u32,
 ) -> i32 {
@@ -900,8 +897,7 @@ pub(crate) unsafe extern "C" fn rsf_dlssgvk_image_layout(
     OK
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_enable(
+pub(crate) unsafe fn rsf_dlssgvk_enable(
     owner: *mut Owner,
     enabled: u32,
     count: u32,
@@ -941,8 +937,7 @@ unsafe fn record(owner: *mut Owner, commands: Handle, frame: *const Frame, hudle
     owner.record(commands, frame, record, hudless != 0)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_submitted(
+pub(crate) unsafe fn rsf_dlssgvk_submitted(
     owner: *mut Owner,
     commands: *const Handle,
     count: u32,
@@ -969,8 +964,7 @@ unsafe fn present(
     owner.present(info, source)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_get_status(
+pub(crate) unsafe fn rsf_dlssgvk_get_status(
     owner: *mut Owner,
     status: *mut Status,
 ) -> i32 {
@@ -987,13 +981,11 @@ pub(crate) unsafe extern "C" fn rsf_dlssgvk_get_status(
     OK
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_drain(owner: *mut Owner) -> i32 {
+pub(crate) unsafe fn rsf_dlssgvk_drain(owner: *mut Owner) -> i32 {
     unsafe { owner.as_mut() }.map_or(OK, Owner::drain)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_destroy(owner: *mut Owner) -> i32 {
+pub(crate) unsafe fn rsf_dlssgvk_destroy(owner: *mut Owner) -> i32 {
     let Some(live) = (unsafe { owner.as_mut() }) else {
         return OK;
     };
@@ -1020,8 +1012,7 @@ pub(crate) unsafe extern "C" fn rsf_dlssgvk_destroy(owner: *mut Owner) -> i32 {
 
 /// The provider entry: the Streamline leaves when CMake verified the corrected Streamline Vulkan
 /// runtime (the `streamline-vk` feature), otherwise NOT_COMPILED after admission.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_create(
+pub(crate) unsafe fn rsf_dlssgvk_create(
     setup: *const Setup,
     out: *mut *mut Owner,
     chain: *mut u64,
@@ -1034,8 +1025,7 @@ pub(crate) unsafe extern "C" fn rsf_dlssgvk_create(
     unsafe { rsf_core_dlgvk_create(platform, setup, out, chain) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_prepare(
+pub(crate) unsafe fn rsf_dlssgvk_prepare(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -1043,8 +1033,7 @@ pub(crate) unsafe extern "C" fn rsf_dlssgvk_prepare(
     unsafe { record(owner, commands, frame, 0) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_hudless(
+pub(crate) unsafe fn rsf_dlssgvk_hudless(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
@@ -1052,13 +1041,11 @@ pub(crate) unsafe extern "C" fn rsf_dlssgvk_hudless(
     unsafe { record(owner, commands, frame, 1) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
+pub(crate) unsafe fn rsf_dlssgvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
     unsafe { present(owner, info, ptr::null(), 0) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlssgvk_present_source(
+pub(crate) unsafe fn rsf_dlssgvk_present_source(
     owner: *mut Owner,
     info: *const c_void,
     source: *const Record,

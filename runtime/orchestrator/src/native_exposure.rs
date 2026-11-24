@@ -104,8 +104,7 @@ impl Exposure {
 
 static EXPOSURE: GraphicsCache<Option<Exposure>> = GraphicsCache::new(None);
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_native_scalar_exposure(
+pub(super) unsafe fn rsf_native_scalar_exposure(
     context: *mut c_void,
     input: *mut c_void,
 ) -> *mut c_void {

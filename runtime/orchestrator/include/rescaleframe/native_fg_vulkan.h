@@ -67,8 +67,6 @@ RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create(const rsf_fgvk_setup*, rsf_fg
    providers/counts are refused. In the exceptional case of failed cleanup after
    partial creation, nonnull owner/chain outputs retain ownership for destroy
    retry even though this call fails. Never discard those retained outputs. */
-RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create_for_backend(const rsf_fgvk_setup*, uint32_t backend,
-    uint32_t generated_count, rsf_fgvk**, uint64_t* chain);
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create_with_host(const rsf_fgvk_setup*, uint32_t backend,
     uint32_t generated_count, const rsf_fgvk_host_options*, rsf_fgvk**, uint64_t* chain);
 RSF_RUNTIME_API int32_t rsf_fgvk_images(rsf_fgvk*, uint32_t* count, uint64_t* images);

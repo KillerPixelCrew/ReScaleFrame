@@ -445,18 +445,7 @@ unsafe extern "C" fn rsf_fgvk_create(
     out: *mut *mut rsf_fgvk,
     chain: *mut u64,
 ) -> i32 {
-    unsafe { rsf_fgvk_create_for_backend(setup, FFX, 1, out, chain) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fgvk_create_for_backend(
-    setup: *const rsf_fgvk_setup,
-    backend: u32,
-    count: u32,
-    out: *mut *mut rsf_fgvk,
-    chain: *mut u64,
-) -> i32 {
-    unsafe { rsf_fgvk_create_with_host(setup, backend, count, ptr::null(), out, chain) }
+    unsafe { rsf_fgvk_create_with_host(setup, FFX, 1, ptr::null(), out, chain) }
 }
 
 #[unsafe(no_mangle)]

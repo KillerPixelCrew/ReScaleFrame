@@ -13,7 +13,6 @@ extern "C" {
 bool rsf_native_reinsert(ID3D11DeviceContext*, ID3D11Texture2D* source,
     ID3D11Texture2D* destination, ID3D11Texture2D* readable, const int32_t rect[4]);
 void rsf_native_reinsert_release(void);
-void* rsf_native_scalar_exposure(void* context, void* input);
 #ifdef __cplusplus
 }
 #endif

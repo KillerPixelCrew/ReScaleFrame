@@ -342,12 +342,10 @@ pub(super) unsafe extern "C" fn rsf_dx12vk_interop_create(
     0
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_dx12vk_interop_timeline(owner: Handle) -> u64 {
     unsafe { owner.cast::<Owner>().as_ref() }.map_or(0, |owner| owner.timeline)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_dx12vk_interop_image(
     owner: Handle,
     format: u32,
@@ -387,7 +385,6 @@ pub(crate) unsafe extern "C" fn rsf_dx12vk_interop_image(
     }
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_dx12vk_interop_release_guides(
     owner: Handle,
     depth: u64,
@@ -399,7 +396,6 @@ pub(crate) unsafe extern "C" fn rsf_dx12vk_interop_release_guides(
     owner.release_images([depth, motion]).err().unwrap_or(0)
 }
 
-#[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_dx12vk_interop_destroy(
     owner: Handle,
     queues_drained: u32,

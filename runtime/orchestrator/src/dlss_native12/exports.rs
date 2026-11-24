@@ -46,8 +46,7 @@ unsafe fn register(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_create(
+pub(crate) unsafe fn rsf_dlss_native12_registration_create(
     device: Handle,
     setup: *const Setup,
     out: *mut *mut Registration,
@@ -55,8 +54,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_create(
     unsafe { register(device, setup, null_mut(), out) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_borrow(
+pub(crate) unsafe fn rsf_dlss_native12_registration_borrow(
     device: Handle,
     module: Handle,
     setup: *const Setup,
@@ -68,8 +66,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_borrow(
     unsafe { register(device, setup, module, out) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_create_registered(
+pub(crate) unsafe fn rsf_dlss_native12_create_registered(
     device: Handle,
     setup: *const Setup,
     registration: *mut Registration,
@@ -89,8 +86,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_create_registered(
     rsf_core_dlss_native12_create_registered(device, setup, unsafe { &*registration }, out)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_present(
+pub(crate) unsafe fn rsf_dlss_native12_registration_present(
     registration: *mut Registration,
     swapchain: Handle,
     interval: u32,
@@ -103,15 +99,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_registration_present(
     unsafe { (*registration).0.present(swapchain, interval, flags, begin) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_native12_registration_destroy(registration: *mut Registration) {
-    if !registration.is_null() {
-        drop(unsafe { Box::from_raw(registration) });
-    }
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_create(
+pub(crate) unsafe fn rsf_dlss_native12_create(
     device: Handle,
     setup: *const Setup,
     out: *mut *mut Context,
@@ -119,8 +107,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_create(
     unsafe { rsf_dlss_native12_create_shared(device, setup, null_mut(), out) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_create_shared(
+pub(crate) unsafe fn rsf_dlss_native12_create_shared(
     device: Handle,
     setup: *const Setup,
     host: Handle,
@@ -140,8 +127,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_create_shared(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_plan(
+pub(crate) unsafe fn rsf_dlss_native12_plan(
     context: *mut Context,
     width: u32,
     height: u32,
@@ -170,8 +156,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_plan(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_evaluate(
+pub(crate) unsafe fn rsf_dlss_native12_evaluate(
     context: *mut Context,
     list: Handle,
     frame: *const Frame,
@@ -182,8 +167,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_evaluate(
     unsafe { rsf_core_dlss_native12_evaluate(&*context, list, frame, null_mut()) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_evaluate_borrowed(
+pub(crate) unsafe fn rsf_dlss_native12_evaluate_borrowed(
     context: *mut Context,
     list: Handle,
     frame: *const Frame,
@@ -195,22 +179,19 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native12_evaluate_borrowed(
     unsafe { rsf_core_dlss_native12_evaluate(&*context, list, frame, token) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_destroy(context: *mut Context) {
+pub(crate) unsafe fn rsf_dlss_native12_destroy(context: *mut Context) {
     if !context.is_null() {
         drop(unsafe { Box::from_raw(context) });
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_set_sdr(context: *mut Context, sdr: u32) {
+pub(crate) unsafe fn rsf_dlss_native12_set_sdr(context: *mut Context, sdr: u32) {
     if !context.is_null() {
         unsafe { &*context }.sdr.store(sdr != 0, Ordering::Relaxed);
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_dlss_native12_present(
+pub(crate) unsafe fn rsf_dlss_native12_present(
     context: *mut Context,
     swapchain: Handle,
     interval: u32,

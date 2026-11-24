@@ -115,18 +115,8 @@ extern "C" fn rsf_sharpening_core_defaults() -> Options {
     defaults()
 }
 
-// The by-value wrappers receive a complete options record even for a mismatched ABI prefix.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_sharpening_core_sanitize(options: Options) -> Options {
-    sanitize(options)
-}
-
+// The by-value wrapper receives a complete options record even for a mismatched ABI prefix.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_sharpening_core_valid(options: Options) -> u32 {
     u32::from(valid(&options))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_sharpening_core_vendor_sharpness(options: Options, backend: u32) -> f32 {
-    vendor_sharpness(&options, backend)
 }

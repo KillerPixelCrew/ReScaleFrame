@@ -18,8 +18,6 @@ bool rsf_native_regions_prepare(ID3D11DeviceContext*, ID3D11Texture2D* color, ID
 bool rsf_native_regions_temporal_mask(ID3D11DeviceContext*, ID3D11Texture2D* mask,
     const int32_t rect[4], const float weights[4], ID3D11Texture2D* reactive, ID3D11Texture2D* bias,
     ID3D11Texture2D** out_reactive, ID3D11Texture2D** out_bias);
-// CPU-only preflight before callers allocate/resize or change context bindings.
-bool rsf_native_regions_depth_valid(const rsf_game_depth_domains*, DXGI_FORMAT, const int32_t rect[4]);
 void rsf_native_regions_release(void);
 #ifdef __cplusplus
 }

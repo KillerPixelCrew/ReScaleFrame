@@ -291,8 +291,7 @@ pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_frame(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_frame_for_window(
+pub(crate) unsafe fn rsf_overlay_d3d12_frame_for_window(
     device: Handle,
     queue: Handle,
     backbuffer: Handle,
@@ -315,21 +314,4 @@ pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_frame_for_window(
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_overlay_d3d12_stop() {
     stop(&PLATFORM);
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_present(
-    device: Handle,
-    queue: Handle,
-    chain: Handle,
-    stats: *const rsf_overlay_stats,
-    intent: *mut rsf_overlay_intent,
-    log: OverlayLog,
-    user: Handle,
-) -> i32 {
-    unsafe {
-        crate::overlay_native12::native::rsf_overlay_native12_present(
-            device, queue, chain, stats, intent, log, user,
-        )
-    }
 }

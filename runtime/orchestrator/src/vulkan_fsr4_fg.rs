@@ -116,8 +116,7 @@ unsafe extern "C" fn rsf_fsr4gvk_probe(setup: *const Graphics, info: *mut Bridge
 }
 
 /// Rust admits the setup before it asks the shared graphics table to describe create_info.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_create(
+pub(crate) unsafe fn rsf_fsr4gvk_create(
     setup: *const Setup,
     options: *const Options,
     output: *mut *mut Owner,
@@ -375,16 +374,14 @@ impl Submission for Fsr4Submission<'_> {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_images(
+pub(crate) unsafe fn rsf_fsr4gvk_images(
     owner: *const Owner,
     count: *mut u32,
     out: *mut u64,
 ) -> i32 {
     unsafe { shared::images(owner, count, out) }
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_acquire(
+pub(crate) unsafe fn rsf_fsr4gvk_acquire(
     owner: *mut Owner,
     timeout: u64,
     semaphore: u64,
@@ -393,45 +390,35 @@ pub(crate) unsafe extern "C" fn rsf_fsr4gvk_acquire(
 ) -> i32 {
     unsafe { shared::acquire(owner, timeout, semaphore, fence, index) }
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_prepare(
+pub(crate) unsafe fn rsf_fsr4gvk_prepare(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
 ) -> i32 {
     unsafe { shared::prepare(owner, commands, frame) }
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_hudless(
+pub(crate) unsafe fn rsf_fsr4gvk_hudless(
     owner: *mut Owner,
     commands: Handle,
     frame: *const Frame,
 ) -> i32 {
     unsafe { shared::hudless(owner, commands, frame) }
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_submitted(
+pub(crate) unsafe fn rsf_fsr4gvk_submitted(
     owner: *mut Owner,
     commands: *const Handle,
     count: u32,
 ) {
     unsafe { shared::submitted(owner, commands, count) };
 }
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_enable(owner: *mut Owner, enabled: u32) -> i32 {
-    unsafe { rsf_fsr4gvk_enable_options(owner, enabled, 1) }
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_enable_options(
+pub(crate) unsafe fn rsf_fsr4gvk_enable_options(
     owner: *mut Owner,
     enabled: u32,
     count: u32,
 ) -> i32 {
     unsafe { shared::enable_options(owner, enabled, count) }
 }
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_fsr4gvk_max_generated(owner: *const Owner) -> u32 {
+pub(crate) fn rsf_fsr4gvk_max_generated(owner: *const Owner) -> u32 {
     u32::from(!owner.is_null())
 }
 unsafe fn present(
@@ -452,8 +439,7 @@ unsafe extern "C" fn present_marshaled(
     unsafe { present(owner.cast(), info, source, explicit) }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
+pub(crate) unsafe fn rsf_fsr4gvk_present(owner: *mut Owner, info: *const c_void) -> i32 {
     unsafe {
         platform::rsf_dx12gvk_present_marshaled(
             present_marshaled,
@@ -465,8 +451,7 @@ pub(crate) unsafe extern "C" fn rsf_fsr4gvk_present(owner: *mut Owner, info: *co
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_present_source(
+pub(crate) unsafe fn rsf_fsr4gvk_present_source(
     owner: *mut Owner,
     info: *const c_void,
     source: *const Record,
@@ -475,18 +460,15 @@ pub(crate) unsafe extern "C" fn rsf_fsr4gvk_present_source(
         platform::rsf_dx12gvk_present_marshaled(present_marshaled, owner.cast(), info, source, 1)
     }
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_status(
+pub(crate) unsafe fn rsf_fsr4gvk_status(
     owner: *const Owner,
     status: *mut Status,
 ) -> i32 {
     unsafe { shared::status(owner, status) }
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_drain(owner: *mut Owner) -> i32 {
+pub(crate) unsafe fn rsf_fsr4gvk_drain(owner: *mut Owner) -> i32 {
     unsafe { shared::drain(owner) }
 }
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fsr4gvk_destroy(owner: *mut Owner) -> i32 {
+pub(crate) unsafe fn rsf_fsr4gvk_destroy(owner: *mut Owner) -> i32 {
     unsafe { shared::destroy(owner) }
 }

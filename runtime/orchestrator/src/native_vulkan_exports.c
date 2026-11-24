@@ -31,8 +31,8 @@ RSF_EXPORT(rsf_slvk_initialize)
 RSF_EXPORT(rsf_slvk_invoke)
 RSF_EXPORT(rsf_slvk_without_dlssg)
 
-/* vulkan_fg.rs. rsf_fgvk_create{,_for_backend} and rsf_dlssgvk_* are not exported (decision D23);
-   the C tests that call them link the archive. */
+/* vulkan_fg.rs. rsf_fgvk_create is not exported (decision D23); tests/native_sr_vulkan_main.c,
+   its only caller, links the archive. */
 RSF_EXPORT(rsf_fgvk_create_with_host)
 RSF_EXPORT(rsf_fgvk_images)
 RSF_EXPORT(rsf_fgvk_acquire)
