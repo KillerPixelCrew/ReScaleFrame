@@ -36,17 +36,11 @@ fn handle(id: usize) -> Handle {
 }
 
 fn source(session: u64, id: u64) -> Record {
+    let render = [RENDER.width, RENDER.height];
+    let output = [OUTPUT.width, OUTPUT.height];
     let mut record = Record {
-        struct_size: size_of::<Record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
-        session_id: session,
-        frame_id: id,
-        render_width: RENDER.width,
-        render_height: RENDER.height,
-        output_width: OUTPUT.width,
-        output_height: OUTPUT.height,
         frame_time_ms: 16.0,
-        ..unsafe { std::mem::zeroed() }
+        ..rsf_test_support::frame_record(session, id, 0, render, output)
     };
     let camera = &mut record.camera;
     camera.struct_size = size_of_val(camera) as u32;
