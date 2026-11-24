@@ -245,8 +245,6 @@ mod present_rates;
 mod reflex_audit;
 #[cfg(windows)]
 mod render_host;
-#[cfg(windows)]
-mod render_host_methods;
 #[cfg(all(windows, not(test)))]
 mod render_host_native;
 #[cfg(windows)]

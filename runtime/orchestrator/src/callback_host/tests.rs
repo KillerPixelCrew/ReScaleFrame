@@ -12,6 +12,8 @@ use windows_sys::Win32::System::WindowsProgramming::{
     GetPrivateProfileIntW, WritePrivateProfileStringW,
 };
 
+type LogFn = Option<unsafe extern "C" fn(*mut c_void, *const c_char)>;
+
 #[repr(C)]
 struct Fake {
     com: ComHeader,
@@ -108,15 +110,15 @@ fn events() -> Vec<String> {
     with(|world| std::mem::take(&mut world.events))
 }
 
-unsafe extern "C" fn tick() -> u64 {
+pub(super) unsafe extern "C" fn tick() -> u64 {
     with(|world| world.now)
 }
-unsafe extern "C" fn device_of(child: Handle) -> Handle {
+pub(super) unsafe extern "C" fn child_device(child: Handle) -> Handle {
     let device = unsafe { &*child.cast::<Fake>() }.device;
     unsafe { add_ref(device.cast()) };
     device
 }
-unsafe extern "C" fn adapter(_: Handle, out: *mut Adapter) -> i32 {
+pub(super) unsafe extern "C" fn adapter(_: Handle, out: *mut Adapter) -> i32 {
     let (vendor, ok) = with(|world| (world.vendor, world.adapter_ok));
     if ok {
         unsafe {
@@ -129,7 +131,7 @@ unsafe extern "C" fn adapter(_: Handle, out: *mut Adapter) -> i32 {
     }
     i32::from(ok)
 }
-unsafe extern "C" fn last_present_count(_: Handle, out: *mut u32) -> i32 {
+pub(super) unsafe extern "C" fn last_present_count(_: Handle, out: *mut u32) -> i32 {
     match with(|world| world.presented) {
         Some(count) => {
             unsafe { out.write(count) };
@@ -138,7 +140,7 @@ unsafe extern "C" fn last_present_count(_: Handle, out: *mut u32) -> i32 {
         None => 0,
     }
 }
-unsafe extern "C" fn resource_desc(resource: Handle, out: *mut ResourceDesc) {
+pub(super) unsafe extern "C" fn resource_desc(resource: Handle, out: *mut ResourceDesc) {
     unsafe {
         out.write(ResourceDesc {
             width: resource as u64,
@@ -148,13 +150,13 @@ unsafe extern "C" fn resource_desc(resource: Handle, out: *mut ResourceDesc) {
         })
     };
 }
-unsafe extern "C" fn depth_domains(pass: *const Pass) -> u32 {
+pub(super) unsafe extern "C" fn depth_domains(pass: *const Pass) -> u32 {
     unsafe { (*pass).depth_domains.domain_count }
 }
-unsafe extern "C" fn dlss_preset_valid(preset: u32) -> u32 {
+pub(super) extern "C" fn dlss_preset_valid(preset: u32) -> u32 {
     u32::from(with(|world| world.refused_preset != Some(preset)))
 }
-unsafe extern "C" fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
     let setup = unsafe { &*setup };
     let dlss = &setup.dlss;
     let text = |value: *const c_char| {
@@ -195,7 +197,7 @@ unsafe extern "C" fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32
     }
     result
 }
-unsafe extern "C" fn sr12_plan(_: Handle, width: *mut u32, height: *mut u32) -> i32 {
+pub(super) unsafe extern "C" fn sr12_plan(_: Handle, width: *mut u32, height: *mut u32) -> i32 {
     let (w, h) = with(|world| world.plan);
     unsafe {
         width.write(w);
@@ -203,32 +205,40 @@ unsafe extern "C" fn sr12_plan(_: Handle, width: *mut u32, height: *mut u32) -> 
     }
     BACKEND_OK
 }
-unsafe extern "C" fn sr12_destroy(context: Handle) {
+pub(super) unsafe extern "C" fn sr12_destroy(context: Handle) {
     event(format!("destroy {}", context as usize));
 }
-unsafe extern "C" fn sr12_evaluate(context: Handle, _: Handle, _: *const Pass, slot: u32) -> i32 {
+pub(super) unsafe extern "C" fn sr12_evaluate(
+    context: Handle,
+    _: Handle,
+    _: *const Pass,
+    slot: u32,
+) -> i32 {
     event(format!("evaluate {} slot={slot}", context as usize));
     with(|world| world.evaluate_result)
 }
-unsafe extern "C" fn sr12_set_sharpening(context: Handle, options: *const Sharpening) -> i32 {
+pub(super) unsafe extern "C" fn sr12_set_sharpening(
+    context: Handle,
+    options: *const Sharpening,
+) -> i32 {
     event(format!("sharpen {} {}", context as usize, unsafe {
         (*options).sharpness
     }));
     BACKEND_OK
 }
-unsafe extern "C" fn fg_cpu(event_: *const CpuEvent) {
+pub(super) unsafe extern "C" fn fg_cpu(event_: *const CpuEvent) {
     event(format!("fg cpu {}", unsafe { (*event_).source_frame_id }));
 }
-unsafe extern "C" fn fg_submitted(session: u64, frame: u64) {
+pub(super) unsafe extern "C" fn fg_submitted(session: u64, frame: u64) {
     event(format!("fg submitted {session} {frame}"));
 }
-unsafe extern "C" fn fg_hudless(_: Handle, pass: *const Pass) {
+pub(super) unsafe extern "C" fn fg_hudless(_: Handle, pass: *const Pass) {
     event(format!("fg hudless {}", unsafe { (*pass).source_frame_id }));
 }
-unsafe extern "C" fn fg_window(pass: *const Pass) {
+pub(super) unsafe extern "C" fn fg_window(pass: *const Pass) {
     event(format!("fg window {}", unsafe { (*pass).source_frame_id }));
 }
-unsafe extern "C" fn fg_status(out: *mut FgStatus) -> i32 {
+pub(super) unsafe extern "C" fn fg_status(out: *mut FgStatus) -> i32 {
     match with(|world| world.fg_status) {
         Some(status) => {
             unsafe { out.write(status) };
@@ -237,31 +247,31 @@ unsafe extern "C" fn fg_status(out: *mut FgStatus) -> i32 {
         None => 0,
     }
 }
-unsafe extern "C" fn fg_options(options: *const FgOptions) {
+pub(super) unsafe extern "C" fn fg_options(options: *const FgOptions) {
     let o = unsafe { &*options };
     event(format!(
         "fg options mode={} generated={} reflex={} limit={}",
         o.mode, o.generated_frames, o.reflex_mode, o.frame_limit_us
     ));
 }
-unsafe extern "C" fn fg_choice_save(backend: u32) -> i32 {
+pub(super) extern "C" fn fg_choice_save(backend: u32) -> i32 {
     event(format!("fg save {backend}"));
     OK
 }
-unsafe extern "C" fn present_host() -> Handle {
+pub(super) extern "C" fn present_host() -> Handle {
     0x4000 as Handle
 }
-unsafe extern "C" fn present_request(backend: u32) -> i32 {
+pub(super) extern "C" fn present_request(backend: u32) -> i32 {
     event(format!("fg request {backend}"));
     with(|world| world.request_result)
 }
-unsafe extern "C" fn present_backend() -> u32 {
+pub(super) extern "C" fn present_backend() -> u32 {
     with(|world| world.present_backend)
 }
-unsafe extern "C" fn present_switch_result() -> i32 {
+pub(super) extern "C" fn present_switch_result() -> i32 {
     with(|world| world.switch_result)
 }
-unsafe extern "C" fn overlay_frame(
+pub(super) unsafe extern "C" fn overlay_frame(
     _: Handle,
     _: Handle,
     _: Handle,
@@ -280,20 +290,23 @@ unsafe extern "C" fn overlay_frame(
         world.drawn
     })
 }
-unsafe extern "C" fn overlay_stop() {
+pub(super) extern "C" fn overlay_stop() {
     event("overlay stop".into());
 }
-unsafe extern "C" fn overlay_fill_fg(stats: *mut Stats, fg: *const FgStatus) {
+pub(super) unsafe extern "C" fn overlay_fill_fg(stats: *mut Stats, fg: *const FgStatus) {
     unsafe {
         (*stats).fg_backend = 3;
         (*stats).fg_requested_backend = 3;
         (*stats).fg_available = u32::from(!fg.is_null());
     }
 }
-unsafe extern "C" fn input_dump_cancel(session: u64) {
+pub(super) extern "C" fn input_dump_cancel(session: u64) {
     event(format!("dump cancel {session}"));
 }
-unsafe extern "C" fn session_prepare(options: *const SessionOptions, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn session_prepare(
+    options: *const SessionOptions,
+    out: *mut Handle,
+) -> i32 {
     let options = unsafe { &*options };
     assert_eq!(options.struct_size as usize, size_of::<SessionOptions>());
     assert_eq!(options.abi_version, SESSION_ABI_VERSION);
@@ -305,7 +318,7 @@ unsafe extern "C" fn session_prepare(options: *const SessionOptions, out: *mut H
     unsafe { out.write(handle) };
     result
 }
-unsafe extern "C" fn session_start(_: Handle) -> i32 {
+pub(super) unsafe extern "C" fn session_start(_: Handle) -> i32 {
     event("start".into());
     let (result, commands, services) =
         with(|world| (world.start_result, world.start_commands, world.services));
@@ -316,49 +329,14 @@ unsafe extern "C" fn session_start(_: Handle) -> i32 {
     }
     result
 }
-unsafe extern "C" fn session_quiesce(_: Handle) -> i32 {
+pub(super) unsafe extern "C" fn session_quiesce(_: Handle) -> i32 {
     event("quiesce".into());
     with(|world| world.quiesce_result)
 }
-unsafe extern "C" fn session_stop(_: Handle) -> i32 {
+pub(super) unsafe extern "C" fn session_stop(_: Handle) -> i32 {
     event("stop".into());
     with(|world| world.stop_result)
 }
-
-static PLATFORM: Platform = Platform {
-    tick,
-    list_device: device_of,
-    queue_device: device_of,
-    adapter,
-    last_present_count,
-    resource_desc,
-    depth_domains,
-    dlss_preset_valid,
-    sr12_create,
-    sr12_plan,
-    sr12_destroy,
-    sr12_evaluate,
-    sr12_set_sharpening,
-    fg_cpu,
-    fg_submitted,
-    fg_hudless,
-    fg_window,
-    fg_status,
-    fg_options,
-    fg_choice_save,
-    present_host,
-    present_request,
-    present_backend,
-    present_switch_result,
-    overlay_frame,
-    overlay_stop,
-    overlay_fill_fg,
-    input_dump_cancel,
-    session_prepare,
-    session_start,
-    session_quiesce,
-    session_stop,
-};
 
 unsafe extern "C" fn policy(spatial: u32, quality: u32) -> c_int {
     event(format!("policy {spatial} {quality}"));
@@ -501,7 +479,7 @@ fn setup_v2(files: &Files, backend: u32, quality: u32) -> SetupV2 {
 fn host(files: &Files, backend: u32, quality: u32) -> Box<Host> {
     reset();
     let setup = setup(files, backend, quality);
-    let host = Box::new(unsafe { describe(&setup, &PLATFORM) }.ok().unwrap());
+    let host = Box::new(unsafe { describe(&setup) }.ok().unwrap());
     events();
     host
 }
@@ -551,8 +529,8 @@ static LIFECYCLE_TESTS: Mutex<()> = Mutex::new(());
 fn admission_refuses_in_the_native_order() {
     reset();
     let files = Files::new("admission");
-    let describe = |setup: &Setup| code(unsafe { describe(setup, &PLATFORM) });
-    assert_eq!(code(unsafe { super::describe(null(), &PLATFORM) }), 1);
+    let describe = |setup: &Setup| code(unsafe { describe(setup) });
+    assert_eq!(code(unsafe { super::describe(null()) }), 1);
     let short = Setup {
         struct_size: size_of::<Setup>() as u32 - 8,
         ..setup(&files, 1, 1)
@@ -633,7 +611,7 @@ fn start_publishes_services_and_stop_retires_in_order() {
     reset();
     with(|world| world.now = 1000);
     let setup = setup(&files, 3, 1);
-    assert_eq!(unsafe { start(&setup, &PLATFORM) }, 0);
+    assert_eq!(unsafe { start(&setup) }, 0);
     assert_eq!(events(), ["policy 0 1", "prepare", "start"]);
     let services = with(|world| world.services).unwrap();
     assert_eq!(services.struct_size as usize, size_of::<Services>());
@@ -643,7 +621,7 @@ fn start_publishes_services_and_stop_retires_in_order() {
     assert!(services.log.is_some() && services.render_config.is_some());
     assert!(services.render_pass.is_some() && services.cpu_event.is_some());
     assert!(services.process_upscale.is_none() && services.present.is_none());
-    assert_eq!(unsafe { start(&setup, &PLATFORM) }, 1);
+    assert_eq!(unsafe { start(&setup) }, 1);
     assert!(events().is_empty());
 
     // The plugin drives the host only through the services it was given.
@@ -704,7 +682,7 @@ fn refused_plugins_are_stopped_or_kept_for_retry() {
         world.prepare_result = -3;
         world.prepare_handle = null_mut();
     });
-    assert_eq!(unsafe { start(&setup, &PLATFORM) }, 10);
+    assert_eq!(unsafe { start(&setup) }, 10);
     assert_eq!(events(), ["policy 0 1", "prepare"]);
     assert!(
         files
@@ -720,7 +698,7 @@ fn refused_plugins_are_stopped_or_kept_for_retry() {
         world.start_result = -5;
         world.start_commands = commands;
     });
-    assert_eq!(unsafe { start(&setup, &PLATFORM) }, 10);
+    assert_eq!(unsafe { start(&setup) }, 10);
     let trace = events();
     let names: Vec<_> = trace.iter().map(String::as_str).collect();
     assert!(names.starts_with(&["policy 0 1", "prepare", "start"]));
@@ -731,9 +709,9 @@ fn refused_plugins_are_stopped_or_kept_for_retry() {
         world.prepare_result = -4;
         world.stop_result = -4;
     });
-    assert_eq!(unsafe { start(&setup, &PLATFORM) }, 9);
+    assert_eq!(unsafe { start(&setup) }, 9);
     assert_eq!(events(), ["policy 0 1", "prepare", "quiesce", "stop"]);
-    assert_eq!(unsafe { start(&setup, &PLATFORM) }, 1);
+    assert_eq!(unsafe { start(&setup) }, 1);
     with(|world| world.quiesce_result = -4);
     assert_eq!(stop(), 1);
     assert_eq!(events(), ["quiesce"]);
@@ -829,7 +807,7 @@ fn spatial_upscaling_is_planned_for_the_engine() {
     let list = fake(fake(null_mut()));
     for (quality, width, height) in [(0, 900, 500), (2, 902, 502), (5, 905, 505)] {
         let setup = setup_v2(&files, RSF_SR_SPATIAL, quality);
-        let host = unsafe { describe(&setup.base, &PLATFORM) }.ok().unwrap();
+        let host = unsafe { describe(&setup.base) }.ok().unwrap();
         events();
         run(&host, list, &sr((1920, 1080)), true);
         assert!(events().is_empty(), "no vendor context");
@@ -852,7 +830,7 @@ fn preset_change_waits_for_its_drain_even_during_resize() {
     reset();
     let files = Files::new("preset-drain");
     let setup = setup_v2(&files, RSF_SR_DLSS, 2);
-    let host = unsafe { describe(&setup.base, &PLATFORM) }.ok().unwrap();
+    let host = unsafe { describe(&setup.base) }.ok().unwrap();
     let device = fake(null_mut());
     let queue = fake(device);
     let list = fake(device);
@@ -886,7 +864,7 @@ fn quality_five_spatial_accepts_an_enable_only_change() {
     reset();
     let files = Files::new("spatial-enable");
     let setup = setup_v2(&files, RSF_SR_SPATIAL, 5);
-    let host = unsafe { describe(&setup.base, &PLATFORM) }.ok().unwrap();
+    let host = unsafe { describe(&setup.base) }.ok().unwrap();
     let device = fake(null_mut());
     let queue = fake(device);
     let list = fake(device);

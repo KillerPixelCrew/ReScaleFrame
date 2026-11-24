@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MIT
-use super::render_host_methods::{Adapter, ResourceDesc};
+// The leaves render_host and callback_host call. Production compiles this module; each host's
+// unit tests supply fakes with the same names instead.
+use super::render_host::{Adapter, ResourceDesc};
 use crate::com_ref;
 use crate::d3d12_fence::wait_fence;
 use crate::d3d12_host::{borrow, device_of};
 use crate::dlss_native12::{Registration, exports::rsf_dlss_native12_registration_borrow};
-use crate::sys::rsf_dlss_setup;
+use crate::sr12;
+use crate::sys::{rsf_dlss_setup, rsf_sharpening_options, rsf_sr12_setup};
 use crate::sys::{rsf_render_host_call_native_interface, rsf_render_host_native_interface_fn};
-use std::ffi::c_void;
+use rsf_game_sys::rsf_game_render_pass;
+use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
 use windows::Win32::Graphics::{
     Direct3D12::{
@@ -150,4 +154,114 @@ pub(super) unsafe fn queue_signal(queue: Handle, fence: Handle, value: u64) -> i
         }
         .is_ok(),
     )
+}
+
+pub(super) use crate::d3d11_present::{
+    rsf_d3d11_present_backend as present_backend,
+    rsf_d3d11_present_backend_choices as present_backend_choices,
+    rsf_d3d11_present_has_owner as present_has_owner, rsf_d3d11_present_host as present_host,
+    rsf_d3d11_present_request as present_request,
+    rsf_d3d11_present_switch_result as present_switch_result,
+};
+pub(super) use crate::d3d12_observer::attachment::{
+    rsf_d3d12_observer_device as observer_device, rsf_d3d12_observer_factory as observer_factory,
+};
+pub(super) use crate::d3d12_observer::diagnostics::rsf_d3d12_diagnostics_enable as diagnostics_enable;
+pub(super) use crate::d3d12_observer::rsf_d3d12_observer_create as observer_create;
+pub(super) use crate::dlss_native12::exports::{
+    rsf_dlss_native12_registration_create as registration_create,
+    rsf_dlss_native12_registration_present as registration_present,
+};
+pub(super) use crate::fg_choice::{
+    rsf_fg_choice_save as fg_choice_save, rsf_fg_default_backend as fg_default_backend,
+};
+pub(super) use crate::fg12::{
+    rsf_core_fg12_capture_outputs as fg_capture_outputs, rsf_core_fg12_cpu as fg_cpu,
+    rsf_core_fg12_hudless as fg_hudless, rsf_core_fg12_install as fg_install,
+    rsf_core_fg12_latency as fg_latency, rsf_core_fg12_options as fg_options,
+    rsf_core_fg12_status as fg_status, rsf_core_fg12_status_try as fg_status_try,
+    rsf_core_fg12_submitted as fg_submitted, rsf_core_fg12_window as fg_window,
+};
+pub(super) use crate::input_dump::abi::rsf_input_dump_cancel as input_dump_cancel;
+pub(super) use crate::overlay_native12::native::rsf_overlay_native12_present as overlay_present;
+pub(super) use crate::overlay_settings::rsf_overlay_fill_fg_stats as overlay_fill_fg;
+pub(super) use crate::overlay_wrapped12::native::{
+    rsf_overlay_d3d12_frame as overlay_frame, rsf_overlay_d3d12_stop as overlay_stop,
+};
+pub(super) use crate::plugin_session::{
+    rsf_plugin_session_prepare as session_prepare, rsf_plugin_session_quiesce as session_quiesce,
+    rsf_plugin_session_start as session_start, rsf_plugin_session_stop as session_stop,
+};
+
+pub(super) unsafe fn depth_domains(pass: *const rsf_game_render_pass) -> u32 {
+    unsafe {
+        u32::from(rsf_game_sys::depth_domains_requested(
+            &(*pass).depth_domains,
+        ))
+    }
+}
+
+pub(super) fn dlss_preset_valid(preset: u32) -> u32 {
+    u32::from(crate::streamline_sr::preset_valid(preset))
+}
+
+// The hosts hold SR contexts as untyped handles.
+pub(super) unsafe fn sr12_create(setup: *const rsf_sr12_setup, out: *mut Handle) -> i32 {
+    unsafe { sr12::rsf_core_sr12_create(setup, out.cast()) }
+}
+
+pub(super) unsafe fn sr12_plan(context: Handle, width: *mut u32, height: *mut u32) -> i32 {
+    unsafe { sr12::rsf_core_sr12_plan(context.cast(), width, height) }
+}
+
+pub(super) unsafe fn sr12_destroy(context: Handle) {
+    unsafe { sr12::rsf_core_sr12_destroy(context.cast()) }
+}
+
+pub(super) unsafe fn sr12_evaluate(
+    context: Handle,
+    commands: Handle,
+    pass: *const rsf_game_render_pass,
+    slot: u32,
+) -> i32 {
+    unsafe { sr12::rsf_core_sr12_evaluate(context.cast(), commands, pass, slot) }
+}
+
+pub(super) unsafe fn sr12_set_sharpening(
+    context: Handle,
+    options: *const rsf_sharpening_options,
+) -> i32 {
+    unsafe { sr12::rsf_core_sr12_set_sharpening(context.cast(), options) }
+}
+
+pub(super) unsafe fn sr12_present(
+    context: Handle,
+    chain: Handle,
+    interval: u32,
+    flags: u32,
+    begin: u32,
+) -> i32 {
+    unsafe { sr12::rsf_core_sr12_present(context.cast(), chain, interval, flags, begin) }
+}
+
+pub(super) unsafe fn sr12_capture(
+    context: Handle,
+    path: *const c_char,
+    first_frame: u64,
+    frames: u32,
+) -> i32 {
+    unsafe { sr12::rsf_core_sr12_capture(context.cast(), path, first_frame, frames) }
+}
+
+pub(super) unsafe fn sr12_capture_flush(context: Handle, slot: u32) -> i32 {
+    unsafe { sr12::rsf_core_sr12_capture_flush(context.cast(), slot) }
+}
+
+pub(super) unsafe fn sr12_capture_scene(
+    context: Handle,
+    commands: Handle,
+    pass: *const rsf_game_render_pass,
+    slot: u32,
+) -> i32 {
+    unsafe { sr12::rsf_core_sr12_capture_scene(context.cast(), commands, pass, slot) }
 }

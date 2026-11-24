@@ -12,7 +12,7 @@ use crate::com_ref;
 use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening, sr_name};
 #[cfg(not(test))]
 use crate::plugin_session::Session;
-use crate::render_host_methods::{Adapter, ResourceDesc};
+use crate::render_host::{Adapter, ResourceDesc};
 use crate::settings_store::{
     rsf_settings_store_read_layout, rsf_settings_store_write_layout,
     rsf_settings_store_write_sharpening, write_dlss_preset,
@@ -61,7 +61,6 @@ mod tests;
 type Handle = *mut c_void;
 #[cfg(test)]
 type Session = c_void;
-type LogFn = Option<unsafe extern "C" fn(*mut c_void, *const c_char)>;
 type SpatialFn = unsafe extern "C" fn(u32, u32) -> c_int;
 
 const OK: i32 = 0;
@@ -74,135 +73,11 @@ const SECTION: PCWSTR = w!("Rendering");
 const LOG_ACCESS: u32 = 4;
 const LOG_SHARE: u32 = 3;
 
+// Production calls the leaves in render_host_native; unit tests call same-named fakes.
 #[cfg(not(test))]
-struct Platform;
-
-#[cfg(not(test))]
-static PLATFORM: Platform = Platform;
-
-// Recording callbacks let fixtures exercise the same Rust host logic.
+use crate::render_host_native as leaf;
 #[cfg(test)]
-struct Platform {
-    tick: unsafe extern "C" fn() -> u64,
-    list_device: unsafe extern "C" fn(Handle) -> Handle,
-    queue_device: unsafe extern "C" fn(Handle) -> Handle,
-    adapter: unsafe extern "C" fn(Handle, *mut Adapter) -> i32,
-    last_present_count: unsafe extern "C" fn(Handle, *mut u32) -> i32,
-    resource_desc: unsafe extern "C" fn(Handle, *mut ResourceDesc),
-    depth_domains: unsafe extern "C" fn(*const Pass) -> u32,
-    dlss_preset_valid: unsafe extern "C" fn(u32) -> u32,
-    sr12_create: unsafe extern "C" fn(*const SrSetup, *mut Handle) -> i32,
-    sr12_plan: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> i32,
-    sr12_destroy: unsafe extern "C" fn(Handle),
-    sr12_evaluate: unsafe extern "C" fn(Handle, Handle, *const Pass, u32) -> i32,
-    sr12_set_sharpening: unsafe extern "C" fn(Handle, *const Sharpening) -> i32,
-    fg_cpu: unsafe extern "C" fn(*const CpuEvent),
-    fg_submitted: unsafe extern "C" fn(u64, u64),
-    fg_hudless: unsafe extern "C" fn(Handle, *const Pass),
-    fg_window: unsafe extern "C" fn(*const Pass),
-    fg_status: unsafe extern "C" fn(*mut FgStatus) -> i32,
-    fg_options: unsafe extern "C" fn(*const FgOptions),
-    fg_choice_save: unsafe extern "C" fn(u32) -> i32,
-    present_host: unsafe extern "C" fn() -> Handle,
-    present_request: unsafe extern "C" fn(u32) -> i32,
-    present_backend: unsafe extern "C" fn() -> u32,
-    present_switch_result: unsafe extern "C" fn() -> i32,
-    overlay_frame: unsafe extern "C" fn(
-        Handle,
-        Handle,
-        Handle,
-        *const Stats,
-        *mut Intent,
-        LogFn,
-        Handle,
-    ) -> i32,
-    overlay_stop: unsafe extern "C" fn(),
-    overlay_fill_fg: unsafe extern "C" fn(*mut Stats, *const FgStatus),
-    input_dump_cancel: unsafe extern "C" fn(u64),
-    session_prepare: unsafe extern "C" fn(*const SessionOptions, *mut Handle) -> i32,
-    session_start: unsafe extern "C" fn(Handle) -> i32,
-    session_quiesce: unsafe extern "C" fn(Handle) -> i32,
-    session_stop: unsafe extern "C" fn(Handle) -> i32,
-}
-
-crate::render_host_methods::impl_host_methods! {
-    fn tick() -> u64 { unsafe { crate::render_host_native::tick() } }
-    fn list_device(list: Handle) -> Handle { unsafe { crate::render_host_native::child_device(list) } }
-    fn queue_device(queue: Handle) -> Handle { unsafe { crate::render_host_native::child_device(queue) } }
-    fn adapter(device: Handle, out: *mut Adapter) -> i32 {
-        unsafe { crate::render_host_native::adapter(device, out) }
-    }
-    fn last_present_count(chain: Handle, out: *mut u32) -> i32 {
-        unsafe { crate::render_host_native::last_present_count(chain, out) }
-    }
-    fn resource_desc(resource: Handle, out: *mut ResourceDesc) {
-        unsafe { crate::render_host_native::resource_desc(resource, out) }
-    }
-    fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
-        unsafe { crate::sr12::rsf_core_sr12_create(setup, out.cast()) }
-    }
-    fn sr12_plan(context: Handle, width: *mut u32, height: *mut u32) -> i32 {
-        unsafe { crate::sr12::rsf_core_sr12_plan(context.cast(), width, height) }
-    }
-    fn sr12_destroy(context: Handle) { unsafe { crate::sr12::rsf_core_sr12_destroy(context.cast()) } }
-    fn sr12_evaluate(context: Handle, commands: Handle, pass: *const Pass, slot: u32) -> i32 {
-        unsafe { crate::sr12::rsf_core_sr12_evaluate(context.cast(), commands, pass, slot) }
-    }
-    fn sr12_set_sharpening(context: Handle, options: *const Sharpening) -> i32 {
-        unsafe { crate::sr12::rsf_core_sr12_set_sharpening(context.cast(), options) }
-    }
-    fn fg_options(options: *const FgOptions) { unsafe { crate::fg12::rsf_core_fg12_options(options) } }
-    fn fg_cpu(event: *const CpuEvent) { unsafe { crate::fg12::rsf_core_fg12_cpu(event) } }
-    fn fg_submitted(session: u64, source: u64) { unsafe { crate::fg12::rsf_core_fg12_submitted(session, source) } }
-    fn fg_hudless(commands: Handle, pass: *const Pass) {
-        unsafe { crate::fg12::rsf_core_fg12_hudless(commands, pass) }
-    }
-    fn fg_window(pass: *const Pass) { unsafe { crate::fg12::rsf_core_fg12_window(pass) } }
-    fn fg_status(output: *mut FgStatus) -> i32 { unsafe { crate::fg12::rsf_core_fg12_status(output) } }
-    fn depth_domains(pass: *const Pass) -> u32 {
-        unsafe { u32::from(rsf_game_sys::depth_domains_requested(&(*pass).depth_domains)) }
-    }
-    fn dlss_preset_valid(preset: u32) -> u32 { u32::from(crate::streamline_sr::preset_valid(preset)) }
-    fn present_host() -> Handle { crate::d3d11_present::rsf_d3d11_present_host() }
-    fn present_request(backend: u32) -> i32 { crate::d3d11_present::rsf_d3d11_present_request(backend) }
-    fn present_backend() -> u32 { crate::d3d11_present::rsf_d3d11_present_backend() }
-    fn overlay_fill_fg(stats: &mut Stats, fg: *const FgStatus) {
-        unsafe { crate::overlay_settings::rsf_overlay_fill_fg_stats(stats, fg) }
-    }
-    fn fg_choice_save(backend: u32) -> i32 { crate::fg_choice::rsf_fg_choice_save(backend) }
-    fn present_switch_result() -> i32 { crate::d3d11_present::rsf_d3d11_present_switch_result() }
-    fn overlay_frame(
-        device: Handle,
-        queue: Handle,
-        chain: Handle,
-        stats: *const Stats,
-        intent: *mut Intent,
-        log: LogFn,
-        user: Handle,
-    ) -> i32 {
-        unsafe {
-            crate::overlay_wrapped12::native::rsf_overlay_d3d12_frame(
-                device, queue, chain, stats, intent, log, user,
-            )
-        }
-    }
-    fn overlay_stop() { crate::overlay_wrapped12::native::rsf_overlay_d3d12_stop() }
-    fn input_dump_cancel(session: u64) {
-        unsafe { crate::sys::rsf_input_dump_cancel(session) }
-    }
-    fn session_prepare(options: *const SessionOptions, out: *mut *mut Session) -> i32 {
-        unsafe { crate::plugin_session::rsf_plugin_session_prepare(options, out) }
-    }
-    fn session_start(session: *mut Session) -> i32 {
-        unsafe { crate::plugin_session::rsf_plugin_session_start(session) }
-    }
-    fn session_quiesce(session: *mut Session) -> i32 {
-        unsafe { crate::plugin_session::rsf_plugin_session_quiesce(session) }
-    }
-    fn session_stop(session: *mut Session) -> i32 {
-        unsafe { crate::plugin_session::rsf_plugin_session_stop(session) }
-    }
-}
+use tests as leaf;
 
 struct State {
     // Vendor SR context, and the backend-zero context that normalizes generation inputs.
@@ -245,7 +120,6 @@ struct State {
 }
 
 pub(crate) struct Host {
-    p: &'static Platform,
     state: Mutex<State>,
     log_file: Mutex<File>,
     // Written only under the lifecycle lock; read by stop.
@@ -375,14 +249,14 @@ impl Host {
 
     fn destroy(&self, context: &mut Handle) {
         if !context.is_null() {
-            unsafe { self.p.sr12_destroy(*context) };
+            unsafe { leaf::sr12_destroy(*context) };
             *context = null_mut();
         }
     }
 
     fn release_rendering(&self, stop_overlay: bool) {
         if stop_overlay {
-            unsafe { self.p.overlay_stop() };
+            leaf::overlay_stop();
         }
         let mut state = self.lock();
         self.destroy(&mut state.sr);
@@ -390,8 +264,7 @@ impl Host {
     }
 
     fn render(&self, commands: Handle, pass: &Pass, begin: bool) {
-        let p = self.p;
-        if unsafe { p.depth_domains(pass) } != 0 {
+        if unsafe { leaf::depth_domains(pass) } != 0 {
             return;
         }
         if !begin {
@@ -402,12 +275,12 @@ impl Host {
                     | RSF_GAME_RENDER_FINAL_SCENE
                     | RSF_GAME_RENDER_SUBMISSION
             ) {
-                unsafe { p.fg_submitted(pass.session_id, pass.source_frame_id) };
+                unsafe { leaf::fg_submitted(pass.session_id, pass.source_frame_id) };
             }
             return;
         }
         match pass.role {
-            RSF_GAME_RENDER_FINAL_SCENE => unsafe { p.fg_hudless(commands, pass) },
+            RSF_GAME_RENDER_FINAL_SCENE => unsafe { leaf::fg_hudless(commands, pass) },
             RSF_GAME_RENDER_WINDOW => self.window(commands, pass),
             RSF_GAME_RENDER_SR | RSF_GAME_RENDER_FG_INPUTS => {
                 let mut state = self.lock();
@@ -419,20 +292,19 @@ impl Host {
 
     // Window pass: provider switch bookkeeping, the shared panel and its requested changes.
     fn window(&self, queue: Handle, pass: &Pass) {
-        let p = self.p;
         let mut guard = self.lock();
         let s = &mut *guard;
-        unsafe { p.fg_window(pass) };
-        let Some(device) = (unsafe { com_ref::owned(p.queue_device(queue)) }) else {
+        unsafe { leaf::fg_window(pass) };
+        let Some(device) = (unsafe { com_ref::owned(leaf::child_device(queue)) }) else {
             return;
         };
         if s.save_pending {
-            if unsafe { p.present_switch_result() } != 0 {
+            if leaf::present_switch_result() != 0 {
                 s.save_pending = false;
                 self.log("Generation provider switch failed; the saved choice is unchanged.");
-            } else if unsafe { p.present_backend() } == s.save_backend {
+            } else if leaf::present_backend() == s.save_backend {
                 s.save_pending = false;
-                let _ = unsafe { p.fg_choice_save(s.save_backend) };
+                let _ = leaf::fg_choice_save(s.save_backend);
             }
         }
         let mut stats = Stats {
@@ -498,7 +370,7 @@ impl Host {
         s.overlay_frames += 1;
         stats.frames_presented = s.overlay_frames as u32;
         let mut presented = 0u32;
-        if unsafe { p.last_present_count(pass.swapchain, &mut presented) } != 0 {
+        if unsafe { leaf::last_present_count(pass.swapchain, &mut presented) } != 0 {
             stats.application_presented_frames = u64::from(presented);
         }
         let (mut now, mut frequency) = (0i64, 0i64);
@@ -512,7 +384,7 @@ impl Host {
             struct_size: size_of::<FgStatus>() as u32,
             ..unsafe { std::mem::zeroed() }
         };
-        let have_fg = unsafe { p.fg_status(&mut fg) } != 0;
+        let have_fg = unsafe { leaf::fg_status(&mut fg) } != 0;
         if have_fg && !s.loaded_frame_limit {
             s.loaded_frame_limit = true;
             let limit = unsafe {
@@ -525,10 +397,10 @@ impl Host {
             };
             if limit != fg.requested.frame_limit_us {
                 fg.requested.frame_limit_us = limit;
-                unsafe { p.fg_options(&fg.requested) };
+                unsafe { leaf::fg_options(&fg.requested) };
             }
         }
-        unsafe { p.overlay_fill_fg(&mut stats, if have_fg { &fg } else { null() }) };
+        unsafe { leaf::overlay_fill_fg(&mut stats, if have_fg { &fg } else { null() }) };
         // The saved choice stays on the old provider until the switch lands, so show the target.
         if s.save_pending {
             stats.fg_requested_backend = s.save_backend;
@@ -545,7 +417,7 @@ impl Host {
         // query waits on this lock.
         drop(guard);
         let drawn = unsafe {
-            p.overlay_frame(
+            leaf::overlay_frame(
                 device.as_raw(),
                 queue,
                 pass.swapchain,
@@ -563,9 +435,8 @@ impl Host {
     }
 
     fn apply_intent(&self, s: &mut State, intent: &Intent, fg: &mut FgOptions) {
-        let p = self.p;
         if intent.fg_backend_changed != 0 {
-            let applied = unsafe { p.present_request(intent.fg_backend) };
+            let applied = leaf::present_request(intent.fg_backend);
             if applied == BACKEND_OK {
                 s.save_pending = true;
                 s.save_backend = intent.fg_backend;
@@ -599,7 +470,7 @@ impl Host {
                     self.log("Could not save the frame limit; keeping the active limit.");
                 }
             }
-            unsafe { p.fg_options(fg) };
+            unsafe { leaf::fg_options(fg) };
         }
         if intent.performance_hud_changed != 0 {
             s.show_performance = intent.performance_hud != 0;
@@ -625,7 +496,7 @@ impl Host {
             {
                 s.sharpening = requested;
                 if !s.sr.is_null() {
-                    let _ = unsafe { p.sr12_set_sharpening(s.sr, &s.sharpening) };
+                    let _ = unsafe { leaf::sr12_set_sharpening(s.sr, &s.sharpening) };
                 }
             } else {
                 self.log("Could not save sharpening settings; previous values retained.");
@@ -633,7 +504,7 @@ impl Host {
         }
         let preset_changed = intent.dlss_preset_changed != 0
             && intent.dlss_preset != s.preset
-            && unsafe { p.dlss_preset_valid(intent.dlss_preset) } != 0;
+            && leaf::dlss_preset_valid(intent.dlss_preset) != 0;
         let policy_changed = intent.backend_changed != 0
             || intent.quality_changed != 0
             || intent.enabled_changed != 0
@@ -686,7 +557,6 @@ impl Host {
 
     // SR and generation-input passes on the adapter's recording thread.
     fn scene(&self, s: &mut State, commands: Handle, pass: &Pass) {
-        let p = self.p;
         let camera = &pass.camera;
         let mut drained = pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0;
         if let (Some(adapter), Some(expected)) = (&self.policy_v2, s.requested_generation) {
@@ -738,7 +608,7 @@ impl Host {
                 || s.input_height != camera.render_height
             {
                 self.destroy(&mut s.inputs);
-                let Some(device) = (unsafe { com_ref::owned(p.list_device(commands)) }) else {
+                let Some(device) = (unsafe { com_ref::owned(leaf::child_device(commands)) }) else {
                     return;
                 };
                 let setup = SrSetup {
@@ -753,14 +623,14 @@ impl Host {
                     user: self.user(),
                     ..SrSetup::default()
                 };
-                if unsafe { p.sr12_create(&setup, &mut s.inputs) } != BACKEND_OK {
+                if unsafe { leaf::sr12_create(&setup, &mut s.inputs) } != BACKEND_OK {
                     return;
                 }
                 s.input_width = setup.render_width;
                 s.input_height = setup.render_height;
             }
             if let Some(slot) = s.command_lists.bind(commands) {
-                let _ = unsafe { p.sr12_evaluate(s.inputs, commands, pass, slot) };
+                let _ = unsafe { leaf::sr12_evaluate(s.inputs, commands, pass, slot) };
             }
             return;
         }
@@ -770,13 +640,13 @@ impl Host {
         let Some(slot) = s.command_lists.bind(commands) else {
             return;
         };
-        let now = unsafe { p.tick() };
+        let now = unsafe { leaf::tick() };
         if now >= s.sharpening_poll {
             s.sharpening_poll = now.saturating_add(SHARPENING_POLL_MS);
             s.sharpening = self.read_sharpening();
-            let _ = unsafe { p.sr12_set_sharpening(s.sr, &s.sharpening) };
+            let _ = unsafe { leaf::sr12_set_sharpening(s.sr, &s.sharpening) };
         }
-        let result = unsafe { p.sr12_evaluate(s.sr, commands, pass, slot) };
+        let result = unsafe { leaf::sr12_evaluate(s.sr, commands, pass, slot) };
         if result != BACKEND_OK && s.refused == 0 {
             let resources = [pass.color_input, pass.depth, pass.motion, pass.color_output];
             for (index, &resource) in resources.iter().enumerate() {
@@ -784,7 +654,7 @@ impl Host {
                     continue;
                 }
                 let mut desc = ResourceDesc::default();
-                unsafe { p.resource_desc(resource, &mut desc) };
+                unsafe { leaf::resource_desc(resource, &mut desc) };
                 self.log(&format!(
                     "SR input {index}: {}x{} format={} samples={}; camera={}x{} plan={}x{}",
                     desc.width,
@@ -826,7 +696,6 @@ impl Host {
     // The first SR pass after start or reconfiguration: resolve Auto, then plan the engine's
     // spatial path or prepare the vendor context. False ends this pass.
     fn prepare(&self, s: &mut State, commands: Handle, pass: &Pass) -> bool {
-        let p = self.p;
         s.attempted = true;
         s.plan = Config {
             struct_size: size_of::<Config>() as u32,
@@ -838,8 +707,8 @@ impl Host {
         };
         if s.automatic {
             let mut adapter = Adapter::default();
-            let identified = unsafe { com_ref::owned(p.list_device(commands)) }
-                .is_some_and(|device| unsafe { p.adapter(device.as_raw(), &mut adapter) } != 0);
+            let identified = unsafe { com_ref::owned(leaf::child_device(commands)) }
+                .is_some_and(|device| unsafe { leaf::adapter(device.as_raw(), &mut adapter) } != 0);
             if !identified {
                 s.last_result = BACKEND_NOT_SUPPORTED;
                 self.log("Automatic SR refused: owning D3D12 adapter could not be identified.");
@@ -882,7 +751,7 @@ impl Host {
             self.log("Engine spatial upscaling plan accepted.");
             return true;
         }
-        let Some(device) = (unsafe { com_ref::owned(p.list_device(commands)) }) else {
+        let Some(device) = (unsafe { com_ref::owned(leaf::child_device(commands)) }) else {
             return false;
         };
         let setup = SrSetup {
@@ -891,7 +760,7 @@ impl Host {
             device: device.as_raw(),
             backend: s.backend,
             quality: s.quality,
-            streamline_host: unsafe { p.present_host() },
+            streamline_host: leaf::present_host(),
             output_width: s.width,
             output_height: s.height,
             inverted_depth: pass.camera.depth_inverted,
@@ -917,18 +786,19 @@ impl Host {
             },
             ..SrSetup::default()
         };
-        let created = unsafe { p.sr12_create(&setup, &mut s.sr) };
+        let created = unsafe { leaf::sr12_create(&setup, &mut s.sr) };
         drop(device);
         s.last_result = created;
         if created == BACKEND_OK {
-            let now = unsafe { p.tick() };
+            let now = unsafe { leaf::tick() };
             if now >= s.sharpening_poll {
                 s.sharpening = self.read_sharpening();
                 s.sharpening_poll = now.saturating_add(SHARPENING_POLL_MS);
             }
-            let _ = unsafe { p.sr12_set_sharpening(s.sr, &s.sharpening) };
-            let _ =
-                unsafe { p.sr12_plan(s.sr, &mut s.plan.render_width, &mut s.plan.render_height) };
+            let _ = unsafe { leaf::sr12_set_sharpening(s.sr, &s.sharpening) };
+            let _ = unsafe {
+                leaf::sr12_plan(s.sr, &mut s.plan.render_width, &mut s.plan.render_height)
+            };
             s.plan.enabled = 1;
         }
         self.log(&format!(
@@ -971,13 +841,13 @@ unsafe extern "C" fn render(owner: *mut c_void, commands: Handle, pass: *const P
     host_from(owner).render(commands, unsafe { &*pass }, begin != 0);
 }
 
-unsafe extern "C" fn cpu_event(owner: *mut c_void, event: *const CpuEvent) {
-    unsafe { host_from(owner).p.fg_cpu(event) };
+unsafe extern "C" fn cpu_event(_: *mut c_void, event: *const CpuEvent) {
+    unsafe { leaf::fg_cpu(event) };
 }
 
 // Admission and host construction, before any plugin is loaded. Err is the public refusal code:
 // 1 incomplete or mismatched setup, 2 invalid choice, 4 log unavailable, 8 adapter policy refused.
-unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u32> {
+unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
     if setup.is_null() || (unsafe { setup.cast::<u32>().read() } as usize) < size_of::<Setup>() {
         return Err(1);
     }
@@ -1016,8 +886,7 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
         setup.backend
     };
     let quality = setup.quality;
-    if unsafe { p.dlss_preset_valid(setup.dlss_preset) } == 0
-        || !accepts_backend_quality(backend, quality)
+    if leaf::dlss_preset_valid(setup.dlss_preset) == 0 || !accepts_backend_quality(backend, quality)
     {
         return Err(2);
     }
@@ -1037,7 +906,6 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
     let preferences = unsafe { wide_copy(setup.preferences_path) };
     let ui_preferences = unsafe { rsf_settings_store_read_layout(preferences.as_ptr(), SECTION) };
     let host = Host {
-        p,
         state: Mutex::new(State {
             sr: null_mut(),
             inputs: null_mut(),
@@ -1095,22 +963,22 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
     Ok(host)
 }
 
-fn retire_plugin(platform: &Platform, plugin: *mut Session) -> bool {
+fn retire_plugin(plugin: *mut Session) -> bool {
     plugin.is_null()
-        || (unsafe { platform.session_quiesce(plugin) } == OK
-            && unsafe { platform.session_stop(plugin) } == OK)
+        || (unsafe { leaf::session_quiesce(plugin) } == OK
+            && unsafe { leaf::session_stop(plugin) } == OK)
 }
 
 // Refusal codes beyond describe: 9 a refused plugin could not be stopped and the host stays
 // published to retry, 10 the plugin refused preparation or activation, 11 no host allocation.
-unsafe fn start(setup: *const Setup, p: &'static Platform) -> u32 {
+unsafe fn start(setup: *const Setup) -> u32 {
     let Some(mut published) = try_lifecycle() else {
         return 1;
     };
     if !published.0.is_null() {
         return 1;
     }
-    let host = match unsafe { describe(setup, p) } {
+    let host = match unsafe { describe(setup) } {
         Ok(host) => host,
         Err(code) => return code,
     };
@@ -1129,7 +997,7 @@ unsafe fn start(setup: *const Setup, p: &'static Platform) -> u32 {
         services: Services {
             struct_size: size_of::<Services>() as u32,
             abi_version: RSF_GAME_ABI_VERSION,
-            session_id: unsafe { p.tick() }.wrapping_add(1),
+            session_id: unsafe { leaf::tick() }.wrapping_add(1),
             log: Some(log),
             render_pass: Some(render),
             render_config: Some(configuration),
@@ -1139,14 +1007,14 @@ unsafe fn start(setup: *const Setup, p: &'static Platform) -> u32 {
         },
     };
     let mut plugin = null_mut();
-    let mut result = unsafe { p.session_prepare(&options, &mut plugin) };
+    let mut result = unsafe { leaf::session_prepare(&options, &mut plugin) };
     if result == OK {
-        result = unsafe { p.session_start(plugin) };
+        result = unsafe { leaf::session_start(plugin) };
     }
     host.plugin.store(plugin, Ordering::Release);
     if result != OK {
         host.log("Native renderer plugin preparation/activation refused.");
-        if !retire_plugin(p, plugin) {
+        if !retire_plugin(plugin) {
             published.0 = raw;
             return 9;
         }
@@ -1172,14 +1040,13 @@ fn stop() -> u32 {
         return 0;
     }
     let host = unsafe { &*raw };
-    let p = host.p;
     let plugin = host.plugin.load(Ordering::Acquire);
-    if !retire_plugin(p, plugin) {
+    if !retire_plugin(plugin) {
         return 1;
     }
     host.plugin.store(null_mut(), Ordering::Release);
     host.release_rendering(true);
-    unsafe { p.input_dump_cancel(0) };
+    leaf::input_dump_cancel(0);
     host.log("Native renderer SR stopped after managed/native/GPU retirement.");
     published.0 = null_mut();
     drop(unsafe { Box::from_raw(raw) });
@@ -1189,7 +1056,7 @@ fn stop() -> u32 {
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_callback_host_start(setup: *const Setup) -> u32 {
-    unsafe { start(setup, &PLATFORM) }
+    unsafe { start(setup) }
 }
 
 #[unsafe(no_mangle)]

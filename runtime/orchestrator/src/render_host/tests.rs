@@ -8,6 +8,8 @@ use windows_sys::Win32::System::WindowsProgramming::{
     GetPrivateProfileIntW, WritePrivateProfileStringW,
 };
 
+type LogFn = Option<unsafe extern "C" fn(*mut c_void, *const c_char)>;
+
 #[allow(dead_code)]
 #[repr(C)]
 struct Vtable {
@@ -106,28 +108,28 @@ fn has_event(events: &[String], prefix: &str) -> bool {
     events.iter().any(|event| event.starts_with(prefix))
 }
 
-unsafe extern "C" fn tick() -> u64 {
+pub(super) unsafe extern "C" fn tick() -> u64 {
     with(|world| world.now)
 }
-unsafe extern "C" fn foreground() -> u32 {
+pub(super) unsafe extern "C" fn foreground() -> u32 {
     1
 }
-unsafe extern "C" fn device_of(child: Handle) -> Handle {
+pub(super) unsafe extern "C" fn child_device(child: Handle) -> Handle {
     let device = object(child).device;
     unsafe { add_ref(device.cast()) };
     device
 }
-unsafe extern "C" fn queue_direct(queue: Handle) -> i32 {
+pub(super) unsafe extern "C" fn queue_direct(queue: Handle) -> i32 {
     i32::from(object(queue).name.contains("direct"))
 }
-unsafe extern "C" fn create_fence(device: Handle) -> Handle {
+pub(super) unsafe extern "C" fn create_fence(device: Handle) -> Handle {
     event("fence".into());
     fake("fence", device)
 }
-unsafe extern "C" fn fence_completed(_: Handle) -> u64 {
+pub(super) unsafe extern "C" fn fence_completed(_: Handle) -> u64 {
     with(|world| world.completed)
 }
-unsafe extern "C" fn fence_wait(_: Handle, value: u64, timeout: u32) -> i32 {
+pub(super) unsafe extern "C" fn fence_wait(_: Handle, value: u64, timeout: u32) -> i32 {
     event(format!("wait {value} {timeout}"));
     with(|world| {
         if world.wait_result > 0 {
@@ -136,11 +138,11 @@ unsafe extern "C" fn fence_wait(_: Handle, value: u64, timeout: u32) -> i32 {
         world.wait_result
     })
 }
-unsafe extern "C" fn queue_signal(queue: Handle, _: Handle, value: u64) -> i32 {
+pub(super) unsafe extern "C" fn queue_signal(queue: Handle, _: Handle, value: u64) -> i32 {
     event(format!("signal {} {value}", object(queue).name));
     i32::from(with(|world| world.signal_ok))
 }
-unsafe extern "C" fn adapter(_: Handle, out: *mut Adapter) -> i32 {
+pub(super) unsafe extern "C" fn adapter(_: Handle, out: *mut Adapter) -> i32 {
     let vendor = with(|world| world.vendor);
     unsafe {
         out.write(Adapter {
@@ -151,20 +153,20 @@ unsafe extern "C" fn adapter(_: Handle, out: *mut Adapter) -> i32 {
     };
     1
 }
-unsafe extern "C" fn native_object(object: Handle) -> Handle {
+pub(super) unsafe extern "C" fn native_object(object: Handle) -> Handle {
     unsafe { add_ref(object.cast()) };
     object
 }
-unsafe extern "C" fn depth_domains(_: *const Pass) -> u32 {
+pub(super) unsafe extern "C" fn depth_domains(_: *const Pass) -> u32 {
     0
 }
-unsafe extern "C" fn dlss_preset_valid(preset: u32) -> u32 {
+pub(super) extern "C" fn dlss_preset_valid(preset: u32) -> u32 {
     u32::from(with(|world| world.refused_preset != Some(preset)))
 }
-unsafe extern "C" fn fg_default_backend(vendor: u32, _: u32) -> u32 {
+pub(super) extern "C" fn fg_default_backend(vendor: u32, _: u32) -> u32 {
     if vendor == 0x10de { 1 } else { 3 }
 }
-unsafe extern "C" fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32 {
     let setup = unsafe { &*setup };
     let result = with(|world| {
         world.contexts += 1;
@@ -186,10 +188,10 @@ unsafe extern "C" fn sr12_create(setup: *const SrSetup, out: *mut Handle) -> i32
     }
     result
 }
-unsafe extern "C" fn sr12_destroy(context: Handle) {
+pub(super) unsafe extern "C" fn sr12_destroy(context: Handle) {
     event(format!("destroy {}", context as usize));
 }
-unsafe extern "C" fn sr12_evaluate(
+pub(super) unsafe extern "C" fn sr12_evaluate(
     context: Handle,
     _: Handle,
     pass: *const Pass,
@@ -203,35 +205,56 @@ unsafe extern "C" fn sr12_evaluate(
     ));
     with(|world| world.evaluate_result)
 }
-unsafe extern "C" fn sr12_set_sharpening(_: Handle, options: *const Sharpening) -> i32 {
+pub(super) unsafe extern "C" fn sr12_set_sharpening(_: Handle, options: *const Sharpening) -> i32 {
     event(format!("sharpen {}", unsafe { (*options).sharpness }));
     BACKEND_OK
 }
-unsafe extern "C" fn sr12_present(_: Handle, _: Handle, _: u32, _: u32, begin: u32) -> i32 {
+pub(super) unsafe extern "C" fn sr12_present(
+    _: Handle,
+    _: Handle,
+    _: u32,
+    _: u32,
+    begin: u32,
+) -> i32 {
     event(format!("sr present {begin}"));
     BACKEND_OK
 }
-unsafe extern "C" fn sr12_capture(_: Handle, _: *const c_char, _: u64, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn sr12_capture(_: Handle, _: *const c_char, _: u64, _: u32) -> i32 {
     BACKEND_OK
 }
-unsafe extern "C" fn sr12_capture_flush(_: Handle, slot: u32) -> i32 {
+pub(super) unsafe extern "C" fn sr12_capture_flush(_: Handle, slot: u32) -> i32 {
     event(format!("flush {slot}"));
     BACKEND_OK
 }
-unsafe extern "C" fn sr12_capture_scene(_: Handle, _: Handle, _: *const Pass, slot: u32) -> i32 {
+pub(super) unsafe extern "C" fn sr12_capture_scene(
+    _: Handle,
+    _: Handle,
+    _: *const Pass,
+    slot: u32,
+) -> i32 {
     event(format!("capture scene {slot}"));
     BACKEND_OK
 }
-unsafe extern "C" fn registration(_: Handle, _: *const DlssSetup, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn registration(
+    _: Handle,
+    _: *const DlssSetup,
+    out: *mut Handle,
+) -> i32 {
     event("registration".into());
     unsafe { out.write(0x5000 as Handle) };
     BACKEND_OK
 }
-unsafe extern "C" fn registration_present(_: Handle, _: Handle, _: u32, _: u32, begin: u32) -> i32 {
+pub(super) unsafe extern "C" fn registration_present(
+    _: Handle,
+    _: Handle,
+    _: u32,
+    _: u32,
+    begin: u32,
+) -> i32 {
     event(format!("registration present {begin}"));
     BACKEND_OK
 }
-unsafe extern "C" fn fg_install(setup: *const FgSetup) -> i32 {
+pub(super) unsafe extern "C" fn fg_install(setup: *const FgSetup) -> i32 {
     let setup = unsafe { &*setup };
     event(format!(
         "fg install mode={} switching={}",
@@ -239,29 +262,29 @@ unsafe extern "C" fn fg_install(setup: *const FgSetup) -> i32 {
     ));
     BACKEND_OK
 }
-unsafe extern "C" fn fg_options(options: *const FgOptions) {
+pub(super) unsafe extern "C" fn fg_options(options: *const FgOptions) {
     let options = unsafe { &*options };
     event(format!(
         "fg options mode={} generated={} reflex={} limit={}",
         options.mode, options.generated_frames, options.reflex_mode, options.frame_limit_us
     ));
 }
-unsafe extern "C" fn fg_latency(_: *const LatencyEvent) -> i32 {
+pub(super) unsafe extern "C" fn fg_latency(_: *const LatencyEvent) -> i32 {
     BACKEND_OK
 }
-unsafe extern "C" fn fg_cpu(_: *const CpuEvent) {
+pub(super) unsafe extern "C" fn fg_cpu(_: *const CpuEvent) {
     event("fg cpu".into());
 }
-unsafe extern "C" fn fg_submitted(session: u64, frame: u64) {
+pub(super) unsafe extern "C" fn fg_submitted(session: u64, frame: u64) {
     event(format!("fg submitted {session} {frame}"));
 }
-unsafe extern "C" fn fg_hudless(_: Handle, pass: *const Pass) {
+pub(super) unsafe extern "C" fn fg_hudless(_: Handle, pass: *const Pass) {
     event(format!("fg hudless {}", unsafe { (*pass).source_frame_id }));
 }
-unsafe extern "C" fn fg_window(pass: *const Pass) {
+pub(super) unsafe extern "C" fn fg_window(pass: *const Pass) {
     event(format!("fg window {}", unsafe { (*pass).source_frame_id }));
 }
-unsafe extern "C" fn fg_status_try(out: *mut FgStatus) -> i32 {
+pub(super) unsafe extern "C" fn fg_status_try(out: *mut FgStatus) -> i32 {
     match with(|world| world.fg_status) {
         Some(status) => {
             unsafe { out.write(status) };
@@ -270,28 +293,28 @@ unsafe extern "C" fn fg_status_try(out: *mut FgStatus) -> i32 {
         None => 0,
     }
 }
-unsafe extern "C" fn fg_capture_outputs(directory: *const c_char) -> i32 {
+pub(super) unsafe extern "C" fn fg_capture_outputs(directory: *const c_char) -> i32 {
     let directory = unsafe { std::ffi::CStr::from_ptr(directory) };
     event(format!("fg capture {}", directory.to_str().unwrap()));
     with(|world| world.fg_capture_result)
 }
-unsafe extern "C" fn present_host() -> Handle {
+pub(super) extern "C" fn present_host() -> Handle {
     null_mut()
 }
-unsafe extern "C" fn present_has_owner() -> i32 {
+pub(super) extern "C" fn present_has_owner() -> i32 {
     with(|world| world.present_owner)
 }
-unsafe extern "C" fn present_request(backend: u32) -> i32 {
+pub(super) extern "C" fn present_request(backend: u32) -> i32 {
     event(format!("fg request {backend}"));
     with(|world| world.request_result)
 }
-unsafe extern "C" fn present_backend_choices() -> u32 {
+pub(super) extern "C" fn present_backend_choices() -> u32 {
     with(|world| world.present_choices)
 }
-unsafe extern "C" fn present_backend() -> u32 {
+pub(super) extern "C" fn present_backend() -> u32 {
     0
 }
-unsafe extern "C" fn overlay_present(
+pub(super) unsafe extern "C" fn overlay_present(
     _: Handle,
     queue: Handle,
     _: Handle,
@@ -309,10 +332,13 @@ unsafe extern "C" fn overlay_present(
     });
     1
 }
-unsafe extern "C" fn overlay_fill_fg(stats: *mut Stats, _: *const FgStatus) {
+pub(super) unsafe extern "C" fn overlay_fill_fg(stats: *mut Stats, _: *const FgStatus) {
     unsafe { (*stats).fg_backend = 3 };
 }
-unsafe extern "C" fn observer_create(setup: *const ObserverSetup, out: *mut Handle) -> i32 {
+pub(super) unsafe extern "C" fn observer_create(
+    setup: *const ObserverSetup,
+    out: *mut Handle,
+) -> i32 {
     assert_eq!(
         unsafe { (*setup).struct_size } as usize,
         size_of::<ObserverSetup>()
@@ -321,63 +347,20 @@ unsafe extern "C" fn observer_create(setup: *const ObserverSetup, out: *mut Hand
     unsafe { out.write(0x7000 as Handle) };
     with(|world| world.observer_result)
 }
-unsafe extern "C" fn observer_attach(observer: Handle, object: Handle) -> i32 {
+pub(super) extern "C" fn observer_attach(observer: Handle, object: Handle) -> i32 {
     event(format!("attach {} {}", observer as usize, object as usize));
     OK
 }
-unsafe extern "C" fn diagnostics_enable(_: LogFn, _: Handle) -> i32 {
+pub(super) extern "C" fn diagnostics_enable(_: LogFn, _: Handle) -> i32 {
     event("diagnostics".into());
     OK
 }
 
-static PLATFORM: Platform = Platform {
-    tick,
-    foreground,
-    list_device: device_of,
-    queue_device: device_of,
-    queue_direct,
-    create_fence,
-    fence_completed,
-    fence_wait,
-    queue_signal,
-    adapter,
-    native_object,
-    depth_domains,
-    dlss_preset_valid,
-    fg_default_backend,
-    sr12_create,
-    sr12_destroy,
-    sr12_evaluate,
-    sr12_set_sharpening,
-    sr12_present,
-    sr12_capture,
-    sr12_capture_flush,
-    sr12_capture_scene,
-    registration_create: registration,
-    registration_borrow: registration,
-    registration_present,
-    fg_install,
-    fg_options,
-    fg_latency,
-    fg_cpu,
-    fg_submitted,
-    fg_hudless,
-    fg_window,
-    fg_status_try,
-    fg_capture_outputs,
-    present_host,
-    present_has_owner,
-    present_request,
-    present_backend_choices,
-    present_backend,
-    overlay_present,
-    overlay_fill_fg,
-    observer_create,
-    observer_device: observer_attach,
-    observer_factory: observer_attach,
-    diagnostics_enable,
+// The host calls these fakes by the production leaf names.
+pub(super) use self::{
+    observer_attach as observer_device, observer_attach as observer_factory,
+    registration as registration_create, registration as registration_borrow,
 };
-
 unsafe extern "C" fn record_log(_: *mut c_void, message: *const c_char) {
     let text = unsafe { std::ffi::CStr::from_ptr(message) }.to_string_lossy();
     event(format!("log {text}"));
@@ -462,7 +445,7 @@ fn services() -> Services {
 // A host installed with the recording platform but not published.
 fn host(ini: &Temporary, owner: u32) -> Box<Host> {
     let setup = setup(ini, owner);
-    let host = Box::new(unsafe { describe(&setup, &services(), &PLATFORM) });
+    let host = Box::new(unsafe { describe(&setup, &services()) });
     assert_eq!(install(&host, &setup), OK);
     host
 }
@@ -485,9 +468,8 @@ fn admission_refuses_short_and_mismatched_requests() {
     let ini = Temporary::new("admission");
     let mut services = services();
     let valid = setup(&ini, 0);
-    let refuse =
-        |setup: &Setup, services: &mut Services| unsafe { create(setup, services, &PLATFORM) };
-    assert_eq!(unsafe { create(null(), &mut services, &PLATFORM) }, INVALID);
+    let refuse = |setup: &Setup, services: &mut Services| unsafe { create(setup, services) };
+    assert_eq!(unsafe { create(null(), &mut services) }, INVALID);
     let short = Setup {
         struct_size: size_of::<Setup>() as u32 - 8,
         ..setup(&ini, 0)
@@ -546,15 +528,12 @@ fn creation_refuses_busy_before_installing_and_releases_admission_after_refusal(
     with(|world| world.observer_result = -1);
     {
         let _installation = CREATION.lock().unwrap();
-        assert_eq!(unsafe { create(&setup, &mut services, &PLATFORM) }, BUSY);
+        assert_eq!(unsafe { create(&setup, &mut services) }, BUSY);
         assert!(events().is_empty());
         assert!(services.user.is_null() && services.process_upscale.is_none());
     }
     for _ in 0..2 {
-        assert_eq!(
-            unsafe { create(&setup, &mut services, &PLATFORM) },
-            NOT_READY
-        );
+        assert_eq!(unsafe { create(&setup, &mut services) }, NOT_READY);
         assert_eq!(events(), ["observer"]);
         assert!(services.user.is_null() && services.process_upscale.is_none());
     }
@@ -635,7 +614,7 @@ fn install_reads_one_shot_requests_and_owns_fg_or_observer() {
     assert!(!engine.fg_installed() && engine.observer.load(Ordering::Relaxed) as usize == 0x7000);
     with(|world| world.observer_result = -1);
     let refused = setup(&ini, ENGINE_PRESENTATION);
-    let refused_host = unsafe { describe(&refused, &services(), &PLATFORM) };
+    let refused_host = unsafe { describe(&refused, &services()) };
     assert_eq!(install(&refused_host, &refused), NOT_READY);
     with(|world| world.observer_result = 0);
 }
