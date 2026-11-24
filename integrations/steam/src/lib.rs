@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Steam overlay D3D11 swapchain forwarding, shared by the Skyrim SE and Fallout 4 adapters.
 //!
-//! This crate owns the exact gameoverlayrenderer64.dll profile: its fingerprint, the guarded
-//! load sites and Present entries, the relay page, the forwarding handlers and the one-shot
-//! installation. What a forwarded call means is the Runtime's decision through its
+//! This crate owns the gameoverlayrenderer64.dll sites, found by signature in the loaded overlay
+//! (discovery.rs; its file hash is logged only), the relay page, the forwarding handlers and the
+//! one-shot installation. What a forwarded call means is the Runtime's decision through its
 //! rsf_d3d11_host_dispatch_chain export. Native exception guards protect the two foreign calls.
 #![cfg(windows)]
 
@@ -45,55 +45,19 @@ use windows_sys::core::{s, w};
 
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 
-// The only recognized overlay build. Every RVA and byte below belongs to it.
-const STEAM_SHA256: [u8; 32] = [
-    0x21, 0xc0, 0xc1, 0xdd, 0xb4, 0x25, 0x9c, 0x11, 0x56, 0x35, 0x6b, 0xdf, 0xe8, 0x43, 0x2d, 0xff,
-    0x50, 0x4d, 0x52, 0xc7, 0xb9, 0x6d, 0x19, 0x71, 0x86, 0x88, 0xcf, 0xf2, 0xd5, 0xa6, 0xe5, 0x2f,
-];
+mod discovery;
 
-// A complete MOV RAX/R10,[RIP+disp32] that loads Steam's saved original method, followed by the
-// bytes that call or tail-jump through it.
-struct Site {
-    rva: usize,
-    method: u32,
-    load: [u8; 7],
-    following: [u8; 16],
-}
+use discovery::{LOAD_BYTES, LOAD_METHODS, LOADS, METHODS};
 
-#[rustfmt::skip]
-const SITES: [Site; 10] = [
-    Site { rva: 0x9c32f, method: RSF_D3D11_DISPATCH_RELEASE, load: [0x48,0x8b,0x05,0x7a,0x71,0x0e,0x00], following: [0x48,0x8b,0xf9,0xff,0xd0,0x8b,0xd8,0x85,0xc0,0x74,0x42,0x48,0x8b,0xd7,0x48,0x8d] },
-    Site { rva: 0x9c375, method: RSF_D3D11_DISPATCH_RELEASE, load: [0x48,0x8b,0x05,0x34,0x71,0x0e,0x00], following: [0x48,0x8b,0xcf,0xff,0xd0,0x8b,0xd8,0x85,0xdb,0x75,0x2d,0x48,0x8b,0xd7,0x48,0x8d] },
-    Site { rva: 0x9c154, method: RSF_D3D11_DISPATCH_PRESENT, load: [0x48,0x8b,0x05,0x5d,0x73,0x0e,0x00], following: [0xff,0xd0,0xe9,0x9b,0x01,0x00,0x00,0x4c,0x8d,0x25,0x7f,0x73,0x0e,0x00,0x4c,0x89] },
-    Site { rva: 0x9c23e, method: RSF_D3D11_DISPATCH_PRESENT, load: [0x48,0x8b,0x05,0x73,0x72,0x0e,0x00], following: [0x44,0x8b,0xc6,0x8b,0xd5,0x49,0x8b,0xcf,0xff,0xd0,0x8b,0xf0,0x48,0x85,0xff,0x74] },
-    Site { rva: 0x9c6cf, method: RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE, load: [0x48,0x8b,0x05,0xf2,0x6d,0x0e,0x00], following: [0x4d,0x8b,0xc6,0x41,0x8b,0xd7,0x48,0x8b,0xce,0x48,0x83,0xc4,0x28,0x41,0x5f,0x41] },
-    Site { rva: 0x9c5bc, method: RSF_D3D11_DISPATCH_RESIZE_BUFFERS, load: [0x4c,0x8b,0x15,0xfd,0x6e,0x0e,0x00], following: [0x45,0x8b,0xc7,0x41,0x8b,0xd4,0x48,0x8b,0xcd,0x48,0x83,0xc4,0x30,0x41,0x5f,0x41] },
-    Site { rva: 0x9bf72, method: RSF_D3D11_DISPATCH_PRESENT1, load: [0x48,0x8b,0x05,0x57,0x75,0x0e,0x00], following: [0xff,0xd0,0xe9,0x92,0x01,0x00,0x00,0x4c,0x8d,0x2d,0x61,0x75,0x0e,0x00,0x4c,0x89] },
-    Site { rva: 0x9c05d, method: RSF_D3D11_DISPATCH_PRESENT1, load: [0x48,0x8b,0x05,0x6c,0x74,0x0e,0x00], following: [0x4d,0x8b,0xcc,0x45,0x8b,0xc6,0x8b,0xd5,0x49,0x8b,0xcf,0xff,0xd0,0x8b,0xe8,0x48] },
-    Site { rva: 0x9c630, method: RSF_D3D11_DISPATCH_SET_COLOR_SPACE1, load: [0x48,0x8b,0x05,0xa1,0x6e,0x0e,0x00], following: [0x8b,0xd3,0x48,0x8b,0xce,0x48,0x83,0xc4,0x28,0x5f,0x5e,0x5d,0x5b,0x48,0xff,0xe0] },
-    Site { rva: 0x9c4df, method: RSF_D3D11_DISPATCH_RESIZE_BUFFERS1, load: [0x4c,0x8b,0x15,0xfa,0x6f,0x0e,0x00], following: [0x45,0x8b,0xc4,0x48,0x89,0x9c,0x24,0xf8,0x00,0x00,0x00,0x8b,0xd5,0x48,0x89,0xbc] },
-];
-
-// Steam's saved original methods, indexed by dispatch method - 1.
-const SLOTS: [usize; 7] = [
-    0x1834b0, 0x1834b8, 0x1834c8, 0x1834c0, 0x1834d0, 0x1834d8, 0x1834e0,
-];
-// Steam's Present and Present1 handlers, entered before they take Steam's global Present lock.
-const PRESENT_ENTRIES: [usize; 2] = [0x9c130, 0x9bf50];
-#[rustfmt::skip]
-const PRESENT_ENTRY_BYTES: [[u8; 16]; 2] = [
-    [0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,0x56,0x57,0x41,0x54,0x41,0x56],
-    [0x40,0x53,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x83,0xec],
-];
-const HOOK_COUNT: usize = SITES.len() + PRESENT_ENTRIES.len();
+const HOOK_COUNT: usize = LOADS + 2;
 
 // Relay page layout: one 32-byte stub per site, then the handler cells the stubs load.
 const PAGE_BYTES: usize = 4096;
 const STUB_BYTES: usize = 32;
 const CELL_OFFSET: usize = 512;
 const NEAR_LIMIT: usize = 0x7000_0000;
-const _: () = assert!(SITES.len() * STUB_BYTES <= CELL_OFFSET);
-const _: () = assert!(CELL_OFFSET + SLOTS.len() * size_of::<usize>() <= PAGE_BYTES);
+const _: () = assert!(LOADS * STUB_BYTES <= CELL_OFFSET);
+const _: () = assert!(CELL_OFFSET + METHODS * size_of::<usize>() <= PAGE_BYTES);
 const _: () = assert!(size_of::<rsf_d3d11_chain_dispatch>() == 72);
 
 // IDXGISwapChain, IDXGISwapChain1 and IDXGISwapChain3 methods as Steam calls them. Enumerations
@@ -130,7 +94,8 @@ unsafe extern "C" {
 struct Relay {
     service: Service,
     user: *mut c_void,
-    base: usize,
+    // Steam's saved original methods, indexed by dispatch method - 1.
+    slots: [usize; METHODS],
 }
 
 // Runtime owns the opaque user, guarantees concurrent dispatch, and is pinned before publication.
@@ -157,7 +122,7 @@ fn read_bytes<const N: usize>(address: usize) -> Option<[u8; N]> {
     rsf_game_sys::win32::read(address)
 }
 
-fn handlers() -> [usize; 7] {
+fn handlers() -> [usize; METHODS] {
     [
         forward_release as ReleaseFn as usize,
         forward_present as PresentFn as usize,
@@ -202,7 +167,7 @@ fn handled(request: &mut rsf_d3d11_chain_dispatch) -> bool {
 // Steam's saved original method, unless it is missing or would re-enter this handler.
 fn continuation(method: u32) -> Option<usize> {
     let index = method as usize - 1;
-    let next = rsf_game_sys::win32::read::<usize>(relay().base.wrapping_add(SLOTS[index]))?;
+    let next = rsf_game_sys::win32::read::<usize>(relay().slots[index])?;
     (next != 0 && next != handlers()[index]).then_some(next)
 }
 
@@ -434,31 +399,22 @@ fn near_page(site: usize) -> *mut u8 {
     null_mut()
 }
 
-// Every Present entry and load site still holds the recognized bytes.
-fn guarded(base: usize) -> bool {
-    PRESENT_ENTRIES
-        .iter()
-        .zip(&PRESENT_ENTRY_BYTES)
-        .all(|(&rva, expected)| read_bytes::<16>(base + rva).as_ref() == Some(expected))
-        && SITES.iter().all(|site| {
-            read_bytes::<7>(base + site.rva) == Some(site.load)
-                && read_bytes::<16>(base + site.rva + 7) == Some(site.following)
-        })
-}
-
 fn fail(host: &rsf_game_host_services, message: &str) -> bool {
     host_log(host, message);
     false
 }
 
-fn recognized(module: HMODULE) -> bool {
-    let Some(path) = (unsafe { rsf_game_sys::win32::module_path(module) }) else {
-        return false;
-    };
-    let path = std::ffi::OsString::from_wide(path.units());
-    rsf_windows::sha256_file(path.as_ref()) == Some(STEAM_SHA256)
+/// The overlay file's SHA-256 in lowercase hex, for the log only.
+fn digest(module: HMODULE) -> String {
+    let path = unsafe { rsf_game_sys::win32::module_path(module) };
+    let digest = path.and_then(|path| {
+        rsf_windows::sha256_file(std::ffi::OsString::from_wide(path.units()).as_ref())
+    });
+    digest.map_or_else(
+        || "unreadable".into(),
+        |digest| digest.iter().map(|byte| format!("{byte:02x}")).collect(),
+    )
 }
-
 fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> bool {
     if INSTALLED.load(Ordering::Acquire) {
         return true;
@@ -483,19 +439,27 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
             "Steam swapchain forwarding refused late installation after native device creation.",
         );
     }
-    if !recognized(module) {
-        return fail(
-            host,
-            "Steam swapchain forwarding refused: unrecognized overlay fingerprint.",
-        );
-    }
     let base = module as usize;
-    if !guarded(base) {
-        return fail(
-            host,
-            "Steam swapchain forwarding refused: load/call continuation bytes differ.",
-        );
-    }
+    // Evidence only: the hash names the overlay build in the log, it admits nothing.
+    let sites = match discovery::discover(base) {
+        Ok(sites) => sites,
+        Err(reason) => {
+            return fail(
+                host,
+                &format!(
+                    "Steam swapchain forwarding refused: {reason} in gameoverlayrenderer64.dll SHA-256 {}.",
+                    digest(module)
+                ),
+            );
+        }
+    };
+    host_log(
+        host,
+        &format!(
+            "Steam overlay sites discovered in gameoverlayrenderer64.dll SHA-256 {}.",
+            digest(module)
+        ),
+    );
     let runtime = unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) };
     let service = if runtime.is_null() {
         None
@@ -516,7 +480,7 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
             "Steam swapchain forwarding refused: typed chain service or process-lifetime modules unavailable.",
         );
     }
-    let page = near_page(base + SITES[0].rva);
+    let page = near_page(base + sites.loads[0]);
     if page.is_null() {
         return fail(
             host,
@@ -536,12 +500,12 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
         )
     };
     let mut targets = [null_mut::<c_void>(); HOOK_COUNT];
-    for (slot, rva) in targets[SITES.len()..].iter_mut().zip(PRESENT_ENTRIES) {
+    for (slot, rva) in targets[LOADS..].iter_mut().zip(sites.entries) {
         *slot = (base + rva) as *mut c_void;
     }
-    for (index, site) in SITES.iter().enumerate() {
+    for (index, (&load, &method)) in sites.loads.iter().zip(&LOAD_METHODS).enumerate() {
         let stub = page.wrapping_add(index * STUB_BYTES);
-        let target = base + site.rva;
+        let target = base + load;
         targets[index] = target as *mut c_void;
         let reach = (stub as isize)
             .wrapping_sub(target as isize)
@@ -553,13 +517,21 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
                 "Steam swapchain forwarding refused: relay outside rel32 reach.",
             );
         }
-        let cell = cells.wrapping_add((site.method as usize - 1) * size_of::<usize>());
-        let displacement = (cell as isize - (stub as isize + 7)) as i32;
+        let cell = cells.wrapping_add((method as usize - 1) * size_of::<usize>());
+        let displacement = (cell as isize - (stub as isize + LOAD_BYTES as isize)) as i32;
+        // The load's own REX, opcode and ModRM: a discovered pattern fixes them.
+        let Some(opcode) = read_bytes::<3>(target) else {
+            release(page);
+            return fail(
+                host,
+                "Steam swapchain forwarding refused: load site unreadable.",
+            );
+        };
         let mut code = [0u8; 21];
-        code[..3].copy_from_slice(&site.load[..3]);
+        code[..3].copy_from_slice(&opcode);
         code[3..7].copy_from_slice(&displacement.to_le_bytes());
         code[7..13].copy_from_slice(&[0xff, 0x25, 0, 0, 0, 0]);
-        code[13..].copy_from_slice(&(target + 7).to_le_bytes());
+        code[13..].copy_from_slice(&(target + LOAD_BYTES).to_le_bytes());
         unsafe { ptr::copy_nonoverlapping(code.as_ptr(), stub, code.len()) };
     }
     let mut old = 0;
@@ -574,10 +546,18 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
             "Steam swapchain forwarding refused: relay publication failed.",
         );
     }
+    // The expected bytes are checked again at every found site just before the hooks.
+    if let Some(site) = discovery::changed(base, &sites) {
+        release(page);
+        return fail(
+            host,
+            &format!("Steam swapchain forwarding refused: site '{site}' changed since discovery."),
+        );
+    }
     let record = Relay {
         service: unsafe { function::<Service>(service as usize) },
         user: host.user,
-        base,
+        slots: sites.slots.map(|slot| base + slot),
     };
     if RELAY.set(record).is_err() {
         release(page);
@@ -601,7 +581,7 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
     let mut created = 0;
     while created < HOOK_COUNT {
         let mut original = null_mut();
-        let entry = created.checked_sub(SITES.len()).map(|index| entries[index]);
+        let entry = created.checked_sub(LOADS).map(|index| entries[index]);
         let detour = match entry {
             Some((detour, _)) => detour,
             None => page.wrapping_add(created * STUB_BYTES).cast(),
@@ -642,7 +622,7 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
     INSTALLED.store(true, Ordering::Release);
     host_log(
         host,
-        "Steam swapchain forwarding installed at seven methods/ten guarded loads and two pre-lock Present entries; native receivers retain Steam handlers; original installer/global untouched; process-lived relays.",
+        "Steam swapchain forwarding installed at seven methods/ten discovered loads and two pre-lock Present entries; native receivers retain Steam handlers; original installer/global untouched; process-lived relays.",
     );
     true
 }
