@@ -201,7 +201,7 @@ pub(super) unsafe extern "C" fn init_source(
     s.graphics.struct_size = size_of::<rsf_streamline_graphics>() as u32;
     let queue = unsafe { IUnknown::from_raw_borrowed(&source) }
         .and_then(|source| source.cast::<ID3D12CommandQueue>().ok());
-    s.direct_queue = queue.and_then(|queue| unsafe { com_ref::owned(queue.into_raw()) });
+    s.direct_queue = queue.map(Into::into);
     s.native12 = u32::from(s.direct_queue.is_some());
     s.native12
 }

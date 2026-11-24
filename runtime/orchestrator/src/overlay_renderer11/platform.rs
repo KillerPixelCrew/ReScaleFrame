@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::{Draw, Handle, IUnknown, RawPipeline, Update, Vertex};
-use crate::com_ref;
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use windows::{
@@ -62,7 +61,7 @@ pub(super) unsafe fn texture(device: Handle, update: &Update, row_pitch: u32) ->
     };
     let mut texture = None;
     unsafe { device.CreateTexture2D(&desc, Some(&initial), Some(&mut texture)) }.ok()?;
-    unsafe { com_ref::owned(texture?.into_raw()) }
+    texture.map(Into::into)
 }
 
 pub(super) unsafe fn view(device: Handle, texture: Handle) -> Option<IUnknown> {
@@ -70,7 +69,7 @@ pub(super) unsafe fn view(device: Handle, texture: Handle) -> Option<IUnknown> {
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }?;
     let mut view = None;
     unsafe { device.CreateShaderResourceView(texture, None, Some(&mut view)) }.ok()?;
-    unsafe { com_ref::owned(view?.into_raw()) }
+    view.map(Into::into)
 }
 
 pub(super) unsafe fn patch(context: Handle, texture: Handle, update: &Update, pitch: u32) {
@@ -108,7 +107,7 @@ pub(super) unsafe fn buffer(device: Handle, bytes: u32, bind_flags: u32) -> Opti
     };
     let mut buffer = None;
     unsafe { device.CreateBuffer(&desc, None, Some(&mut buffer)) }.ok()?;
-    unsafe { com_ref::owned(buffer?.into_raw()) }
+    buffer.map(Into::into)
 }
 
 pub(super) unsafe fn write(

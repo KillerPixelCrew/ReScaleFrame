@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, IUnknown, RESOURCE_FAILED, SHADER_FAILED, Setup, Vertex};
-use crate::com_ref;
 use rsf_shader_compiler::{Compiler, Request, compile};
 use std::{ffi::CStr, mem::offset_of, ptr::null_mut};
 use windows::{
@@ -59,7 +58,7 @@ fn shader_code(setup: &Setup, entry: &CStr, target: &CStr) -> Option<Vec<u8>> {
     None
 }
 
-fn resource<T: Interface>(
+fn resource<T: Into<IUnknown>>(
     setup: &Setup,
     diagnostic: &str,
     create: impl FnOnce(&mut Option<T>) -> windows::core::Result<()>,
@@ -67,9 +66,8 @@ fn resource<T: Interface>(
     let mut object = None;
     if create(&mut object).is_ok()
         && let Some(object) = object
-        && let Some(reference) = unsafe { com_ref::owned(object.into_raw()) }
     {
-        return Ok(reference);
+        return Ok(object.into());
     }
     setup.say(diagnostic);
     Err(RESOURCE_FAILED)
@@ -90,8 +88,7 @@ pub(super) unsafe fn create(device: Handle, setup: &Setup) -> Result<[IUnknown; 
         setup.say("overlay shaders could not be created");
         return Err(SHADER_FAILED);
     };
-    let vertex = unsafe { com_ref::owned(vertex.into_raw()) }.ok_or(SHADER_FAILED)?;
-    let pixel = unsafe { com_ref::owned(pixel.into_raw()) }.ok_or(SHADER_FAILED)?;
+    let (vertex, pixel): (IUnknown, IUnknown) = (vertex.into(), pixel.into());
 
     let elements = [
         (c"POSITION", DXGI_FORMAT_R32G32_FLOAT, 0),
