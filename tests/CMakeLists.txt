@@ -670,7 +670,7 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_FG)
     add_executable(rsf_native_fsr4_fg_state_test fixture_main.c)
     set_target_properties(rsf_native_fsr4_fg_state_test PROPERTIES LINKER_LANGUAGE CXX)
     target_compile_definitions(rsf_native_fsr4_fg_state_test PRIVATE RSF_FIXTURE_ENTRY=rsf_fixture_fsr4fg_wsi_state)
-    # The fixture is vulkan_dx12_fg/fsr4_state_fixture.rs in the test-fixtures orchestrator archive.
+    # The fixture is vulkan_dx12_fg/fsr4_state_fixture.rs in the fixture-leaves orchestrator archive.
     target_link_libraries(rsf_native_fsr4_fg_state_test PRIVATE
         ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_orchestrator_rust rsf_build_options)
     add_test(NAME native_fsr4_fg_state_contract COMMAND rsf_native_fsr4_fg_state_test)
@@ -851,7 +851,7 @@ rsf_add_fixture_test(rsf_input_receipts_test NAME input_receipts_contract ENTRY 
     LIBS rsf_game_sdk_cpu_rust rsf_native_cpu)
 if(EXISTS "${RSF_XESS_INCLUDE}/xell/xell_d3d12.h" AND
    EXISTS "${RSF_XESS_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h")
-    # d3d12_generation/xell_fixture.rs in the test-fixtures orchestrator archive.
+    # d3d12_generation/xell_fixture.rs in the fixture-leaves orchestrator archive.
     rsf_add_fixture_test(rsf_xell_sleep_concurrency NAME xell_sleep_concurrency_contract ENTRY rsf_xell_fixture_run
         LIBS rsf_orchestrator_rust TIMEOUT 10)
 endif()
