@@ -32,10 +32,8 @@ impl Options {
 }
 
 // The SDK option and release leaves in the Windows bridge.
+use crate::sdk_api::OUT_OF_VRAM;
 use crate::win32::{fg_apply, fg_options_bound, fg_release};
-
-// sl::Result::eWarnOutOfVRAM, checked in sdk_records_checks.h.
-const OUT_OF_VRAM: i32 = 39;
 
 pub(crate) struct Swapchain {
     current: u64,
@@ -77,13 +75,7 @@ impl FrameGeneration {
             configured_at: None,
             resources_may_exist: false,
             enabled: false,
-            last_options: Options {
-                count: 0,
-                width: 0,
-                height: 0,
-                format: 0,
-                back_buffers: 0,
-            },
+            last_options: Options::new(0, 0, 0, 0, 0),
         }
     }
 

@@ -3,8 +3,6 @@
 use crate::sdk_api::header;
 pub use crate::sys::rsf_slvk_sdk_fg_options as Packed;
 #[cfg(windows)]
-pub use crate::sys::rsf_slvk_sdk_fg_sample as Sample;
-#[cfg(windows)]
 pub use crate::sys::rsf_slvk_sdk_fg_state as State;
 
 /// An empty `sl::DLSSGState` v4 for slDLSSGGetState to fill.

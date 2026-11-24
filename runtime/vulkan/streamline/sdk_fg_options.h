@@ -27,9 +27,3 @@ typedef struct rsf_slvk_sdk_fg_state {
     uint64_t inputs_fence_value;
     uint8_t dynamic_mfg;
 } rsf_slvk_sdk_fg_state;
-
-/* Narrow state facts copied from the typed SDK query. */
-typedef struct rsf_slvk_sdk_fg_sample {
-    uint32_t status, actual_presents, max_generated, min_dimension;
-    uint8_t vsync, dynamic_mfg;
-} rsf_slvk_sdk_fg_sample;

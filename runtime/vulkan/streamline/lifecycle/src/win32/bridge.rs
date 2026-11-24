@@ -8,7 +8,7 @@ use super::LIFECYCLE;
 use crate::frame_generation::Options;
 use crate::lifecycle::feature_mask;
 use crate::sdk_api::{self, Entries, FEATURE_DLSS_G, FEATURE_PCL, FEATURE_REFLEX, OK, guarded};
-use crate::sdk_fg_options::{self, Packed, Sample, State};
+use crate::sdk_fg_options::{self, Packed, State};
 use crate::sdk_records::{self, legacy_camera, legacy_tags};
 use crate::sys::{
     rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_pcl_options,
@@ -204,11 +204,6 @@ pub(crate) unsafe fn fg_release() -> i32 {
     guarded(|| unsafe { free(FEATURE_DLSS_G, &viewport) })
 }
 
-/// Runs a synchronous call that pins the initialized SDK session.
-fn with_sdk(inactive: i32, call: impl FnOnce() -> i32) -> i32 {
-    LIFECYCLE.with_sdk(inactive, call)
-}
-
 /// Runs a call with the current token when `explicit` is zero, pinning the
 /// initialized SDK until it returns.
 fn with_token(explicit: usize, inactive: i32, call: impl FnOnce(sdk_api::Token) -> i32) -> i32 {
@@ -280,7 +275,7 @@ extern "C" fn rsf_vk_sl_is_frame_generation_supported(physical: *mut c_void) -> 
     if physical.is_null() {
         return -1;
     }
-    with_sdk(-1, || {
+    LIFECYCLE.with_sdk(-1, || {
         let Some(supported) = core().is_feature_supported else {
             return -1;
         };
@@ -292,7 +287,7 @@ extern "C" fn rsf_vk_sl_is_frame_generation_supported(physical: *mut c_void) -> 
 /// Resolves the Reflex options, sleep and state entry points.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vk_sl_bind_reflex() -> i32 {
-    with_sdk(-1, || {
+    LIFECYCLE.with_sdk(-1, || {
         if !bind(&REFLEX_OPTIONS, FEATURE_REFLEX, c"slReflexSetOptions") {
             -1
         } else if !bind(&REFLEX_SLEEP, FEATURE_REFLEX, c"slReflexSleep") {
@@ -308,7 +303,7 @@ extern "C" fn rsf_vk_sl_bind_reflex() -> i32 {
 /// Resolves the DLSS-G option and state entry points.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vk_sl_bind_frame_generation() -> i32 {
-    with_sdk(-4, || {
+    LIFECYCLE.with_sdk(-4, || {
         if !bind(&FG_OPTIONS, FEATURE_DLSS_G, c"slDLSSGSetOptions") {
             -4
         } else if !bind(&FG_STATE, FEATURE_DLSS_G, c"slDLSSGGetState") {
@@ -335,7 +330,7 @@ unsafe extern "C" fn rsf_vk_sl_get_reflex_state(available: *mut u32, reports: *m
     if available.is_null() || reports.is_null() {
         return -1;
     }
-    with_sdk(-1, || {
+    LIFECYCLE.with_sdk(-1, || {
         let Some(read) = REFLEX_STATE.get() else {
             return -1;
         };
@@ -356,7 +351,7 @@ unsafe extern "C" fn rsf_vk_sl_get_reflex_state(available: *mut u32, reports: *m
 /// marker thread.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vk_sl_bind_pcl() -> i32 {
-    with_sdk(-1, || {
+    LIFECYCLE.with_sdk(-1, || {
         if !bind(&PCL_MARKER, FEATURE_PCL, c"slPCLSetMarker") {
             return -1;
         }
@@ -378,7 +373,7 @@ extern "C" fn rsf_vk_sl_bind_pcl() -> i32 {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vk_sl_pcl_window_message() -> u32 {
     let mut message = 0;
-    let result = with_sdk(-1, || {
+    let result = LIFECYCLE.with_sdk(-1, || {
         let Some(read) = PCL_STATE.get() else {
             return -1;
         };
@@ -410,7 +405,7 @@ fn reflex_options(mode: i32, limit: u32, limit_is_fps: bool) -> i32 {
     } else {
         limit
     };
-    with_sdk(-1, || {
+    LIFECYCLE.with_sdk(-1, || {
         let Some(apply) = REFLEX_OPTIONS.get() else {
             return -1;
         };
@@ -602,8 +597,8 @@ extern "C" fn rsf_vk_sl_free_frame_generation_resources() -> i32 {
     LIFECYCLE.with_frame_generation(0, |fg, _| unsafe { fg.free() })
 }
 
-fn read_fg_sample(output: impl FnOnce(&Sample)) -> i32 {
-    with_sdk(-1, || {
+fn read_fg_state(output: impl FnOnce(&State)) -> i32 {
+    LIFECYCLE.with_sdk(-1, || {
         let Some(get_state) = FG_STATE.get() else {
             return -1;
         };
@@ -611,14 +606,7 @@ fn read_fg_sample(output: impl FnOnce(&Sample)) -> i32 {
         let viewport = sdk_api::viewport(VIEWPORT);
         let result = guarded(|| unsafe { get_state(&viewport, &mut state, null()) });
         if result == OK {
-            output(&Sample {
-                status: state.status,
-                actual_presents: state.actual_presents,
-                max_generated: state.max_generated,
-                min_dimension: state.min_dimension,
-                vsync: state.vsync,
-                dynamic_mfg: state.dynamic_mfg,
-            });
+            output(&state);
         }
         result
     })
@@ -635,10 +623,10 @@ unsafe extern "C" fn rsf_vk_sl_get_frame_generation_state(
     if status.is_null() || presented.is_null() || max_generated.is_null() {
         return -1;
     }
-    read_fg_sample(|sample| unsafe {
-        status.write(sample.status);
-        presented.write(sample.actual_presents);
-        max_generated.write(sample.max_generated);
+    read_fg_state(|state| unsafe {
+        status.write(state.status);
+        presented.write(state.actual_presents);
+        max_generated.write(state.max_generated);
     })
 }
 
@@ -652,14 +640,14 @@ unsafe extern "C" fn rsf_vk_sl_get_frame_generation_state_details(
     if values.is_null() || count != 6 {
         return -1;
     }
-    read_fg_sample(|sample| unsafe {
+    read_fg_state(|state| unsafe {
         values.cast::<[u32; 6]>().write([
-            sample.status,
-            sample.actual_presents,
-            sample.max_generated,
-            sample.min_dimension,
-            u32::from(sample.vsync),
-            u32::from(sample.dynamic_mfg),
+            state.status,
+            state.actual_presents,
+            state.max_generated,
+            state.min_dimension,
+            u32::from(state.vsync),
+            u32::from(state.dynamic_mfg),
         ]);
     })
 }

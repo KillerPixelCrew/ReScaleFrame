@@ -279,16 +279,10 @@ impl Lifecycle {
         // The previous strings belong to a session that has already shut down.
         session.paths = Some(paths);
         self.set_common(&directory);
-        let mut selected = [0; 4];
-        let mut count = 0;
-        for feature in sdk_records::features(features) {
-            selected[count] = feature;
-            count += 1;
-        }
+        let selected: Vec<u32> = sdk_records::features(features).collect();
         let verbose = leaf::verbose();
         self.diagnostics.set_verbose(verbose);
-        let preferences =
-            sdk_records::preferences(&selected[..count], plugin, project, verbose, leaf::LOG);
+        let preferences = sdk_records::preferences(&selected, plugin, project, verbose, leaf::LOG);
         let result = unsafe { leaf::init(&preferences, crate::sdk_api::SDK_VERSION) };
         if result != 0 {
             unsafe { self.abandon(&mut session, loaded_here) };
