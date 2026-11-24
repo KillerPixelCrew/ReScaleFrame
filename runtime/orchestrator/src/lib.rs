@@ -327,6 +327,8 @@ mod vulkan_external_copy;
 #[cfg(windows)]
 use rsf_vk_fsr3::sdk_abi as ffx_vk_abi;
 #[cfg(windows)]
+// vulkan_fg's unit tests dispatch to doubles in place of this provider.
+#[cfg_attr(test, allow(dead_code))]
 mod vulkan_ffx_fg;
 #[cfg(windows)]
 mod vulkan_fg;

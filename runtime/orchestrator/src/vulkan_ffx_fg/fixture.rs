@@ -16,7 +16,9 @@ use crate::vulkan_fg_resources::Image as rsf_vkfg_image;
 use crate::vulkan_fg_resources::{SAMPLED_TRANSFER, ensure_image, release_image};
 use ash::vk::{self, Handle};
 use rsf_game_sys::backend_result::{
-    FEATURE_FAILED as FIXTURE_FEATURE_FAILED, INVALID_ARGUMENT as FIXTURE_INVALID_ARGUMENT,
+    ABI_MISMATCH as FIXTURE_ABI_MISMATCH, FEATURE_FAILED as FIXTURE_FEATURE_FAILED,
+    INIT_FAILED as FIXTURE_INIT_FAILED, INVALID_ARGUMENT as FIXTURE_INVALID_ARGUMENT,
+    MISSING_ENTRY_POINT as FIXTURE_MISSING_ENTRY_POINT, NOT_COMPILED as FIXTURE_NOT_COMPILED,
     NOT_READY as FIXTURE_NOT_READY, NOT_SUPPORTED as FIXTURE_NOT_SUPPORTED, OK as FIXTURE_OK,
 };
 use rsf_game_sys::{
@@ -147,7 +149,10 @@ unsafe extern "C" fn rsf_fixture_ffx_run(argc: c_int, argv: *const *const c_char
     match scenario {
         b"0" => reset(),
         b"1" => submission(),
-        b"2" => wsi_route(),
+        b"2" => {
+            wsi_route();
+            creation();
+        }
         _ => return 1,
     }
     0
@@ -866,6 +871,96 @@ fn wsi_route() {
                 && rsf_ffxgvk_destroy(successor) == FIXTURE_OK
                 && routed().is_null(),
             "the released route admits a successor"
+        );
+    }
+}
+
+/// Creation: admission refuses before the module loads, a refused rollback returns the owner for a
+/// destroy retry, and a failed open releases the WSI route.
+fn creation() {
+    let create = |host: bool, edit: Edit| {
+        let (mut owner, mut chain) = (ptr::null_mut(), 0);
+        let result = unsafe { rsf_fixture_ffx_create(host, edit, &mut owner, &mut chain) };
+        (result, owner, chain)
+    };
+    unsafe {
+        let loads = f!(loads);
+        let refusals: [(Edit, i32); 4] = [
+            (
+                |setup, _| setup.queues[3] = setup.queues[0],
+                FIXTURE_INVALID_ARGUMENT,
+            ),
+            (|setup, _| setup.abi_version += 1, FIXTURE_ABI_MISMATCH),
+            (|_, info| info.image_array_layers = 2, FIXTURE_NOT_SUPPORTED),
+            (
+                |_, info| info.old_swapchain = vk::SwapchainKHR::from_raw(5),
+                FIXTURE_NOT_SUPPORTED,
+            ),
+        ];
+        for (edit, expected) in refusals {
+            let (result, owner, chain) = create(true, edit);
+            assert!(
+                result == expected && owner.is_null() && chain == 0,
+                "admission refuses a duplicate queue, another ABI and an unsupported swapchain"
+            );
+        }
+        let (result, owner, chain) = create(false, |_, _| {});
+        assert!(
+            result == FIXTURE_NOT_COMPILED && owner.is_null() && chain == 0,
+            "the build without the SDK headers validates, then reports NOT_COMPILED"
+        );
+        assert!(f!(loads) == loads, "refused admission loads no SDK module");
+
+        let (effects, chains, swapchains) = (
+            f!(effects_destroyed),
+            f!(chains_destroyed),
+            f!(swapchains_destroyed),
+        );
+        let (configurations, drains) = (f!(configurations), f!(drains));
+        let unregistered = (*route()).unregistered;
+        f!(reject_provider) = true;
+        f!(reject_swapchain_destroy) = true;
+        let (result, owner, chain) = create(true, |_, _| {});
+        f!(reject_provider) = false;
+        assert!(
+            result == FIXTURE_INIT_FAILED && !owner.is_null() && chain == 0,
+            "a refused rollback returns the owner for a destroy retry"
+        );
+        assert!(
+            f!(configurations) == configurations
+                && f!(drains) == drains
+                && f!(effects_destroyed) == effects + 1
+                && f!(chains_destroyed) == chains + 1
+                && f!(swapchains_destroyed) == swapchains
+                && (*route()).unregistered == unregistered,
+            "an owner that never became available releases what it can without a disable or drain"
+        );
+        assert!(
+            rsf_ffxgvk_drain(owner) == FIXTURE_OK && f!(drains) == drains,
+            "a retiring owner has nothing left to drain"
+        );
+        f!(reject_swapchain_destroy) = false;
+        assert!(
+            rsf_ffxgvk_destroy(owner) == FIXTURE_OK
+                && f!(effects_destroyed) == effects + 1
+                && f!(chains_destroyed) == chains + 1
+                && f!(swapchains_destroyed) == swapchains + 1
+                && (*route()).unregistered == unregistered + 1
+                && routed().is_null(),
+            "the retry finishes the rollback without repeating a release"
+        );
+
+        f!(missing_export) = true;
+        let (result, owner, chain) = create(true, |_, _| {});
+        f!(missing_export) = false;
+        assert!(
+            result == FIXTURE_MISSING_ENTRY_POINT && owner.is_null() && chain == 0,
+            "a failed open closes its partial leaf"
+        );
+        let successor = start(false);
+        assert!(
+            rsf_ffxgvk_destroy(successor) == FIXTURE_OK,
+            "the failed open released the WSI route"
         );
     }
 }

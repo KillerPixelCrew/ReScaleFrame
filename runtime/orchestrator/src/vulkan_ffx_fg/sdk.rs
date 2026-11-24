@@ -1142,8 +1142,7 @@ pub(super) unsafe extern "C" fn fence_timing(native: Handle, frame: u64) {
     unsafe { rsf_core_vkfg_device_wait_timing(&mut *leaf.gpu, stage, frame) };
 }
 
-/// The SDK leaf's steps the owner calls. Unit tests call fakes instead, so these are unused there.
-#[cfg_attr(test, allow(unused_imports, dead_code))]
+/// The SDK leaf's steps the owner calls.
 pub(super) mod leaf {
     pub(in crate::vulkan_ffx_fg) use super::{
         acquire, barrier, capture_flush, capture_record, capture_wants, close, configure, copy,

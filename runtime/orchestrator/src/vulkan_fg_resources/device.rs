@@ -132,6 +132,8 @@ pub(crate) extern "C" fn rsf_core_vkfg_device_memory(
     device.local_types = device_local_mask(properties);
 }
 
+// Only the FFX FG leaf times its fence waits; vulkan_fg's unit tests replace that provider.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_core_vkfg_device_wait_timing(
     device: &mut Device,
     stage: *const c_char,

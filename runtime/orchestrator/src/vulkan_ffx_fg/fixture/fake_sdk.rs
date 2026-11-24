@@ -210,7 +210,8 @@ unsafe extern "C" fn query(
                 context == (*sdk_state).effect_slot,
                 "the provider version comes from the effect",
             );
-            (*header.cast::<sdk::ffxQueryGetProviderVersion>()).versionId = 1;
+            (*header.cast::<sdk::ffxQueryGetProviderVersion>()).versionId =
+                u64::from(!(*state()).reject_provider);
         },
         _ => require(false, "unexpected SDK query"),
     }
@@ -457,6 +458,7 @@ unsafe extern "C" fn set_wsi(setup: *const WsiDispatch) -> i32 {
 }
 
 unsafe extern "C" fn load(_: *const u16) -> *mut c_void {
+    unsafe { (*state()).loads += 1 };
     handle(MODULE)
 }
 
@@ -473,7 +475,7 @@ unsafe extern "C" fn symbol(module: *mut c_void, name: *const c_char) -> rsf_vk_
         b"ffxConfigure" => configure as *const (),
         b"ffxCreateContext" => create_context as *const (),
         b"ffxDestroyContext" => destroy_context as *const (),
-        b"ffxQuery" => query as *const (),
+        b"ffxQuery" if !unsafe { (*state()).missing_export } => query as *const (),
         b"ffxDispatch" => dispatch as *const (),
         b"rsfFfxSetVulkanWsiDispatch" => set_wsi as *const (),
         _ => return None,
@@ -555,7 +557,7 @@ unsafe extern "C" fn device_proc(device: *mut c_void, name: *const c_char) -> rs
 
 struct Setup {
     // Boxed so create_info keeps its address after the setup moves.
-    _info: Box<vk::SwapchainCreateInfoKHR<'static>>,
+    info: Box<vk::SwapchainCreateInfoKHR<'static>>,
     value: rsf_fgvk_setup,
 }
 
@@ -591,7 +593,7 @@ impl Setup {
         value.graphics_submit = Some(rsf_fixture_ffx_submit);
         value.lock_queues = Some(rsf_fixture_ffx_lock);
         value.unlock_queues = Some(rsf_fixture_ffx_unlock);
-        Self { _info: info, value }
+        Self { info, value }
     }
 }
 
@@ -606,6 +608,20 @@ pub(super) unsafe fn rsf_fixture_ffx_start(
         unsafe { (*route_state()).owner = *out };
     }
     result
+}
+
+/// The fixture setup after `edit`; `host` false is the build without the FidelityFX headers.
+pub(super) type Edit = fn(&mut rsf_fgvk_setup, &mut vk::SwapchainCreateInfoKHR<'static>);
+
+pub(super) unsafe fn rsf_fixture_ffx_create(
+    host: bool,
+    edit: Edit,
+    out: *mut *mut Owner,
+    chain: *mut u64,
+) -> i32 {
+    let mut setup = Setup::new();
+    edit(&mut setup.value, &mut setup.info);
+    unsafe { create(host.then_some(&HOST), &setup.value, out, chain) }
 }
 
 pub(super) extern "C" fn rsf_fixture_ffx_native() -> *mut c_void {
