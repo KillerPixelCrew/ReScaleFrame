@@ -6,18 +6,7 @@ use crate::profile_text;
 use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetPrivateProfileStringW(
-        section: *const u16,
-        key: *const u16,
-        fallback: *const u16,
-        output: *mut u16,
-        capacity: u32,
-        file: *const u16,
-    ) -> u32;
-}
+use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileStringW;
 
 pub const SECTION: &str = "Diagnostics";
 

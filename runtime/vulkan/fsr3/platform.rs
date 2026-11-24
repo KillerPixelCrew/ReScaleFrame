@@ -3,6 +3,7 @@
 
 use super::*;
 use std::sync::atomic::{AtomicPtr, Ordering};
+use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 
 use crate::sdk_abi as abi;
 use abi::*;
@@ -12,12 +13,6 @@ const _: () = {
     assert!(size_of::<VkSwapchainKHR>() == size_of::<Vk>());
     assert!(offset_of!(VkSwapchainCreateInfoKHR, oldSwapchain) == OLD_SWAPCHAIN_OFFSET);
 };
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetModuleHandleW(name: *const u16) -> Handle;
-    fn GetProcAddress(module: Handle, name: *const c_char) -> Handle;
-}
 
 static DEVICE_PROC: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 const VULKAN_DLL: [u16; 13] = rsf_game_sys::ffi_util::ascii_wide(b"vulkan-1.dll\0");
@@ -30,7 +25,8 @@ macro_rules! sdk_proc {
 }
 
 pub(super) unsafe fn resolve(module: Handle, name: *const c_char) -> Handle {
-    unsafe { GetProcAddress(module, name) }
+    unsafe { GetProcAddress(module, name.cast()) }
+        .map_or(ptr::null_mut(), |address| address as Handle)
 }
 
 fn bind_loader() -> bool {
@@ -38,7 +34,7 @@ fn bind_loader() -> bool {
     let proc = if module.is_null() {
         ptr::null_mut()
     } else {
-        unsafe { GetProcAddress(module, c"vkGetDeviceProcAddr".as_ptr()) }
+        unsafe { resolve(module, c"vkGetDeviceProcAddr".as_ptr()) }
     };
     DEVICE_PROC.store(proc, Ordering::Release);
     !proc.is_null()

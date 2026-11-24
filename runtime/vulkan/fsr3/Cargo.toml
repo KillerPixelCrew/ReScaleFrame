@@ -15,5 +15,8 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 rsf-game-sys = { path = "../../../sdk/game" }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_LibraryLoader"] }
+
 [lints]
 workspace = true
