@@ -16,7 +16,11 @@ evidence only.
   constants among them (viewport unit 1.0, jitter scale 0.001) have their value checked. The
   patterns were derived from 1.11.240.0 with `tools/derive-site-patterns.py` and
   `docs/research/evidence/fallout4-sites-1.11.240.spec`; each covers at least the bytes the old
-  exact-build guard checked at that address.
+  exact-build guard checked at that address. Four were then chosen by hand: the world graph is
+  found by the unique load that also reads its camera at +140, the creation call pattern runs on
+  through the renderer field reads after the call, the Effects stride pattern starts 105 bytes
+  before its site at an instruction boundary of the same function, and imagespace (whose entry a
+  sibling shares) is found through its first call.
 - **Names.** The ServingThread (job-list worker), PlayerControls, ImageSpaceEffectTemporalAA and
   PlayerCamera vtables come from their RTTI type names: the type descriptor, the complete object
   locator of offset 0 that names it, and the vtable slot after the pointer to that locator. The
