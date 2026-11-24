@@ -160,15 +160,16 @@ pub(super) static NATIVE_HOST: Host = Host {
 
 /// The corrected SDK's rsf_ffx_wsi_dispatch (runtime/vulkan/fsr3/wsi-dispatch.h).
 #[repr(C)]
-struct WsiDispatch {
-    struct_size: u32,
-    abi_version: u32,
-    device: vk::Device,
-    create: Option<vk::PFN_vkCreateSwapchainKHR>,
-    destroy: Option<vk::PFN_vkDestroySwapchainKHR>,
-    present: Option<vk::PFN_vkQueuePresentKHR>,
-    acquire: Option<vk::PFN_vkAcquireNextImageKHR>,
-    images: Option<vk::PFN_vkGetSwapchainImagesKHR>,
+#[derive(Clone, Copy)]
+pub(super) struct WsiDispatch {
+    pub(super) struct_size: u32,
+    pub(super) abi_version: u32,
+    pub(super) device: vk::Device,
+    pub(super) create: Option<vk::PFN_vkCreateSwapchainKHR>,
+    pub(super) destroy: Option<vk::PFN_vkDestroySwapchainKHR>,
+    pub(super) present: Option<vk::PFN_vkQueuePresentKHR>,
+    pub(super) acquire: Option<vk::PFN_vkAcquireNextImageKHR>,
+    pub(super) images: Option<vk::PFN_vkGetSwapchainImagesKHR>,
 }
 
 type SetWsiDispatch = unsafe extern "C" fn(*const WsiDispatch) -> i32;

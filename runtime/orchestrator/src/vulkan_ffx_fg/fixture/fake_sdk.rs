@@ -13,7 +13,9 @@ use super::fake_gpu::{
 use super::rsf_fixture_ffx_refused_second_owner;
 use crate::sdk_module::Loader;
 use crate::sys::{RSF_FGVK_ABI_VERSION, RSF_SRVK_ABI_VERSION, rsf_fgvk_setup, rsf_vk_function};
-use crate::vulkan_ffx_fg::sdk::{Host, rsf_ffxgvk_guard_memory, rsf_ffxgvk_guard_resolve};
+use crate::vulkan_ffx_fg::sdk::{
+    Host, WsiDispatch, rsf_ffxgvk_guard_memory, rsf_ffxgvk_guard_resolve,
+};
 use crate::vulkan_ffx_fg::{
     Owner, rsf_core_ffxgvk_create_sdk, rsf_core_ffxgvk_wsi_borrow, rsf_core_ffxgvk_wsi_return,
 };
@@ -51,20 +53,6 @@ fn require(value: bool, text: &str) {
 
 fn handle<T>(value: usize) -> *mut T {
     ptr::with_exposed_provenance_mut(value)
-}
-
-/// The corrected SDK's rsf_ffx_wsi_dispatch.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct WsiDispatch {
-    struct_size: u32,
-    abi_version: u32,
-    device: vk::Device,
-    create: Option<vk::PFN_vkCreateSwapchainKHR>,
-    destroy: Option<vk::PFN_vkDestroySwapchainKHR>,
-    present: Option<vk::PFN_vkQueuePresentKHR>,
-    acquire: Option<vk::PFN_vkAcquireNextImageKHR>,
-    images: Option<vk::PFN_vkGetSwapchainImagesKHR>,
 }
 
 // Records the SDK sees from the production leaf. The scenario, the SDK calls
