@@ -63,11 +63,7 @@ use rsf_game_sys::{
     rsf_game_plugin_api, rsf_game_probe, rsf_result,
 };
 use std::ffi::{CStr, CString, c_void};
-use std::ptr::null_mut;
-use windows_sys::Win32::System::LibraryLoader::{
-    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
-    GetModuleHandleW,
-};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 
 use rsf_game_sys::{
     RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY,
@@ -257,9 +253,7 @@ pub(crate) fn image() -> usize {
 
 /// Pins the module that contains `address` for the process.
 pub(crate) fn pin(address: *const c_void) -> bool {
-    let mut module = null_mut();
-    let flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN;
-    unsafe { GetModuleHandleExW(flags, address.cast(), &mut module) != 0 }
+    rsf_game_sys::win32::pin_module(address).is_some()
 }
 
 /// A terminated C string for the host log.

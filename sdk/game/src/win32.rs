@@ -5,7 +5,10 @@ use std::ffi::{CStr, c_void};
 use std::mem::MaybeUninit;
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetProcAddress};
+use windows_sys::Win32::System::LibraryLoader::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleFileNameW,
+    GetModuleHandleExW, GetProcAddress,
+};
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 const MODULE_PATH_CAPACITY: usize = 32768;
@@ -48,6 +51,14 @@ pub unsafe fn module_path(module: HMODULE) -> Option<ModulePath> {
     path.truncate(length + 1);
     path[length] = 0;
     Some(ModulePath(path))
+}
+
+/// Pins the module that contains `address` for the life of the process.
+pub fn pin_module(address: *const c_void) -> Option<HMODULE> {
+    let mut module = std::ptr::null_mut();
+    let flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN;
+    // SAFETY: FROM_ADDRESS only looks the address up in the loaded-module list.
+    (unsafe { GetModuleHandleExW(flags, address.cast(), &mut module) } != 0).then_some(module)
 }
 
 /// Resolves a function export from a borrowed module.

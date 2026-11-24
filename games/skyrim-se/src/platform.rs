@@ -10,10 +10,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::ptr;
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
-use windows_sys::Win32::System::LibraryLoader::{
-    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
-    GetModuleHandleW, GetProcAddress,
-};
+use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery};
 
 /// `RSF_SKYRIM_CREATION_PLATFORM_VERSION`, the native detour's call record version.
@@ -169,15 +166,8 @@ impl Platform {
     }
 
     pub(crate) fn pin_module(&self, address: usize) -> usize {
-        let mut pinned = ptr::null_mut();
-        let result = unsafe {
-            GetModuleHandleExW(
-                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-                address as *const u16,
-                &mut pinned,
-            )
-        };
-        if result == 0 { 0 } else { pinned as usize }
+        rsf_game_sys::win32::pin_module(address as *const c_void)
+            .map_or(0, |module| module as usize)
     }
 
     pub(crate) fn last_error(&self) -> u32 {
