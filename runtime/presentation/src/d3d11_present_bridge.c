@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* The native calls the Rust presentation owner cannot make itself: foreign C++ exceptions from
    DXGI and the Streamline proxies are contained with a structured-exception filter on the MSVC
-   C++ exception code 0xE06D7363, which stops what the former catch-all stopped; other faults
-   propagate. The two factory detours stay here so no foreign unwind crosses a Rust frame on the
+   C++ exception code 0xE06D7363; other faults propagate. The two factory detours stay here so no foreign unwind crosses a Rust frame on the
    way back to the application. Everything else is d3d11_present.rs. */
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
