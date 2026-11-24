@@ -155,8 +155,8 @@ typedef struct NativeInputHistoryReceipt {
     CameraRaster raster, previous_raster;
 } NativeInputHistoryReceipt;
 
-// The framebuffer receipt. Allocation, view and swap fields are filled at the stage that queried
-// them in the former reader.
+// The framebuffer receipt. Allocation, view and swap fields are filled at the reader stage that
+// queried them.
 typedef struct NativeFramebufferReceipt {
     NativeInputState before, after;
     NativeInputSwapFacts swap;

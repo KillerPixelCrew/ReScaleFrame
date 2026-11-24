@@ -6,7 +6,7 @@
 //! for its window, the call is bracketed by the Runtime's creation scope, and the final outer
 //! swapchain is bound for presentation. Scene and input producers are admitted separately.
 //! The original runs through the C creation call in host_boundary.c, which leaves a native throw
-//! uncaught as the former noexcept boundary did.
+//! uncaught, so an engine throw ends the process.
 use crate::build_layout::{
     RENDERER_CHAIN as CHAIN, RENDERER_CONTEXT as CONTEXT, RENDERER_DEVICE as DEVICE,
     RENDERER_POINTER as OWNER_RVA, RENDERER_WINDOW as WINDOW,
@@ -341,7 +341,7 @@ fn observe(caller: usize, call: &rsf_fallout4_create_call) -> i32 {
     let result = if original.is_null() {
         E_FAIL
     } else {
-        // The native function runs without a handler, as under the original noexcept boundary.
+        // The native function runs without a handler: an engine throw ends the process.
         unsafe { rsf_fallout4_call_creation(original, call) }
     };
     let native_error = unsafe { GetLastError() };

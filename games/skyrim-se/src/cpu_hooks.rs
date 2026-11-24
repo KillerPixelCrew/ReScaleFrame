@@ -115,7 +115,7 @@ const _: () = assert!(HOOKS.len() == crate::sys::RSF_SKYRIM_CPU_HOOK_COUNT as us
 
 const INDICES: std::ops::Range<usize> = 0..HOOKS.len();
 
-// C++ owns the native calls and unwind receipts. Rust binds their typed addresses to the
+// The C leaves own the native calls and unwind receipts. Rust binds their typed addresses to the
 // checked hook order and publishes the original trampoline before enabling a detour.
 unsafe extern "C" {
     fn rsf_skyrim_cpu_tick(main: *mut c_void) -> i16;

@@ -88,8 +88,7 @@ impl Leaves {
     }
 }
 
-/// Discards the candidate Context and chain when the begin step returns, as the C++ stack
-/// leases ended.
+/// Discards the candidate Context and chain when the begin step returns.
 struct Candidate<'a>(&'a Leaves);
 
 impl Drop for Candidate<'_> {

@@ -256,7 +256,7 @@ extern "C" fn rsf_fallout4_render_enter_imagespace(
     enter_imagespace(leaves, recovery, caller)
 }
 
-/// The exit of a selected imagespace, from the C++ scope guard after the original.
+/// The exit of a selected imagespace, called by the C shell after the original returns.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fallout4_render_leave_imagespace(leaves: &Leaves, recovery: &RecoveryLeaves) {
     leave_imagespace(leaves, recovery)

@@ -7,7 +7,7 @@
 RSF_FALLOUT4_RENDER_ASSERT(sizeof(NativeDepthMathFailure) == 64 && offsetof(NativeDepthMathFailure, w) == 16 &&
     offsetof(NativeDepthMathFailure, range) == 56);
 
-/* The text the former refuse() wrote; Rust decides the stage and its once-per-stage receipt. */
+/* The refusal text; Rust decides the stage and its once-per-stage receipt. */
 void rsf_fallout4_depth_report_refusal(NativeDepthReport report, const char* stage, const NativeDepthSnapshot* snapshot,
     const NativeDepthMathFailure* detail, uint32_t math)
 {
@@ -45,7 +45,7 @@ void rsf_fallout4_depth_report_refusal(NativeDepthReport report, const char* sta
     }
 }
 
-/* The text the former lease check wrote; Rust keeps its budget of sixteen. */
+/* The lease-check text; Rust keeps its budget of sixteen. */
 void rsf_fallout4_depth_report_lease(NativeDepthReport report, const NativeDepthSnapshot* snapshot,
     const NativeDepthSnapshot* current, uint32_t reached, uint32_t passed, uint32_t stage, uint32_t changed)
 {

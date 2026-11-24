@@ -119,8 +119,8 @@ impl Snapshot {
     }
 
     fn bytes(&self) -> &[u8] {
-        // Every field is initialized and the asserted layout has no padding. The supported
-        // Windows x64 adapter writes the same little-endian record as the former native struct.
+        // Every field is initialized and the asserted layout has no padding. The record is the
+        // little-endian Windows x64 layout.
         unsafe { std::slice::from_raw_parts(std::ptr::from_ref(self).cast(), size_of::<Self>()) }
     }
 }

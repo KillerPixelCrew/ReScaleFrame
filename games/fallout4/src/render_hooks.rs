@@ -542,8 +542,8 @@ extern "C" fn rsf_fallout4_render_capture_recovery(
     {
         return;
     }
-    // The identity comparison can call native COM. Read the current receipt facts
-    // at the same point as the former native capture before invoking the export.
+    // The identity comparison can call native COM, so read the current receipt facts before
+    // invoking the export.
     let world = World::read(facts);
     let basis = unsafe { *world.frame_pass };
     let request = rsf_d3d11_host_capture {

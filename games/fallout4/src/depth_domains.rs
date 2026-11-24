@@ -6,11 +6,12 @@
 //! Rust samples the D3D11 facts directly on the renderer thread. The native leaves format and
 //! report refusal receipts. Engine memory is read here through the guarded
 //! `crate::read`. Matrix work goes through `camera::xm` and the camera admission helpers, which
-//! repeat the DirectXMath SSE2 operations the former C++ compiled to.
+//! repeat the DirectXMath SSE2 operations, so refusals and stored values see the same
+//! single-precision rounding.
 //!
-//! Every refusal names the stage the C++ named, reports it once per stage when a report callback
-//! is supplied, and leaves fields written before the failing step in the reported copy. Outputs
-//! are cleared on entry and written only on admission.
+//! Every refusal names its stage, reports it once per stage when a report callback is supplied,
+//! and leaves fields written before the failing step in the reported copy. Outputs are cleared on
+//! entry and written only on admission.
 
 mod native;
 

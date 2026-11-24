@@ -304,7 +304,7 @@ pub(crate) mod asi {
             0x83, 0xf8,
         ],
     };
-    /// Social Club backbuffer dispatcher armed by social_club.cpp; named in the startup report.
+    /// Social Club backbuffer dispatcher armed by social_club.rs; named in the startup report.
     pub(crate) const SOCIAL_CLUB_DISPATCHER: u32 = 0x27f_09e8;
 
     /// rage settings collection copy, settings-owner load and apply.

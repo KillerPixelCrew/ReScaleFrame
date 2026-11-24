@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! The worker successor handoff contract, ported from tests/fallout4_worker_handoff.cpp.
+//! The worker successor handoff contract.
 use super::*;
 use rsf_game_sys::{
     RSF_GAME_CPU_ABORT_INTERVENING_POLL, RSF_GAME_CPU_ABORT_OVERLAP, RSF_GAME_CPU_ABORT_QUIESCE,

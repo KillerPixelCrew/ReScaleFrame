@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! The bounded worker successor handoff, ported from worker_handoff.h.
+//! The bounded worker successor handoff.
 //!
 //! A selected mode1 worker poll reserves one future source while Main still owns the current
 //! render. The ticket is one copied future intention, not a frame history. Its caller serializes

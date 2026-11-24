@@ -2,11 +2,11 @@
 //! Fallout 4 camera and raster/depth math: the copied row-vector camera cache to the GameSDK
 //! camera frame, the integer crop affine, native motion units, and depth-domain admission.
 //!
-//! Matrix products and inverses go through `xm`, which repeats the DirectXMath SSE2 operations
-//! the former camera.cpp compiled to, so the 1e-8 determinant refusal and every stored value see
-//! the same single-precision rounding. The GameSDK `inverse_4x4` is not reused: it pivots in f64
-//! with a 1e-12 pivot floor, which moves both the refusal boundary and the results.
-//! All scalar work keeps the C++ types: f32 for the camera and raster, f64 for the depth bound.
+//! Matrix products and inverses go through `xm`, which repeats the DirectXMath SSE2 operations,
+//! so the 1e-8 determinant refusal and every stored value see the same single-precision
+//! rounding. The GameSDK `inverse_4x4` is not reused: it pivots in f64 with a 1e-12 pivot floor,
+//! which moves both the refusal boundary and the results. Scalar work is f32 for the camera and
+//! raster and f64 for the depth bound.
 
 pub(crate) use rsf_game_sys::xm;
 

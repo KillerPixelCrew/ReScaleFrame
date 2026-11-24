@@ -1414,8 +1414,8 @@ extern "C" fn rsf_fallout4_inputs_claim_exception() -> bool {
     REPORTED.fetch_or(bit, Ordering::Relaxed) & bit == 0
 }
 
-/// The full reader. `output` is cleared first and written only on admission; the C++ wrapper
-/// keeps the lease only then.
+/// The full reader. `output` is cleared first and written only on admission; the caller keeps
+/// the lease only then.
 ///
 /// # Safety
 /// `transferred` points to the caller's empty lease, `producer` null or readable and `output` writable.

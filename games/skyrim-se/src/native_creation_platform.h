@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Internal boundary between the native leaves in native_creation.cpp and the Rust native-creation
+// Internal boundary between the native leaves in native_creation.c and the Rust native-creation
 // owner (src/creation.rs). Both sides link into ReScaleFrame.Game.SkyrimSE.dll.
 // src/platform.rs mirrors the call record and both sides assert sizes and offsets.
 #include <stdbool.h>

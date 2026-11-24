@@ -138,8 +138,7 @@ impl Leaves {
     }
 }
 
-/// FINISHes the recovery token when the SR step returns, after the input lease is released, as
-/// the C++ scope guard did.
+/// FINISHes the recovery token when the SR step returns, after the input lease is released.
 struct Finish<'a>(&'a RecoveryLeaves);
 
 impl Drop for Finish<'_> {

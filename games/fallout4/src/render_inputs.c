@@ -62,7 +62,7 @@ void* rsf_fallout4_input_object(const void* opaque, uint32_t slot)
     }
 }
 
-/* The text the former reader receipt wrote; Rust decides the stage and its once-per-stage mask. */
+/* The reader receipt text; Rust decides the stage and its once-per-stage mask. */
 void rsf_fallout4_inputs_report_reader(NativeInputReport report, const char* stage, const NativeInputReceipt* receipt,
     const rsf_game_render_pass* pass)
 {
@@ -114,7 +114,7 @@ void rsf_fallout4_inputs_report_reader(NativeInputReport report, const char* sta
     }
 }
 
-/* The text of the former state reread mismatch; Rust keeps the per-mask and sixteen-text budget. */
+/* The state reread mismatch text; Rust keeps the per-mask and sixteen-text budget. */
 void rsf_fallout4_inputs_report_mismatch(NativeInputReport report, const NativeInputState* first,
     const NativeInputState* second, uint32_t mask)
 {
@@ -136,7 +136,7 @@ void rsf_fallout4_inputs_report_mismatch(NativeInputReport report, const NativeI
     rsf_fallout4_report_guarded(report, text);
 }
 
-/* The text of the former camera history receipt; Rust keeps the per-reason and 32-text budget. */
+/* The camera history receipt text; Rust keeps the per-reason and 32-text budget. */
 void rsf_fallout4_inputs_report_history(NativeInputReport report, const NativeInputHistoryReceipt* receipt)
 {
     if (!receipt) return;
@@ -151,7 +151,7 @@ void rsf_fallout4_inputs_report_history(NativeInputReport report, const NativeIn
     rsf_fallout4_report_guarded(report, text);
 }
 
-/* The text of the former framebuffer receipt; Rust keeps its once-per-stage mask. */
+/* The framebuffer receipt text; Rust keeps its once-per-stage mask. */
 void rsf_fallout4_inputs_report_framebuffer(NativeInputReport report, const char* stage, const char* owner_stage,
     const NativeFramebufferReceipt* receipt)
 {

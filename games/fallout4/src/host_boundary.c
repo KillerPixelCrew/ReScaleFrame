@@ -60,9 +60,8 @@ _Static_assert(sizeof(rsf_fallout4_create_call) == 88 && offsetof(rsf_fallout4_c
 _Static_assert(sizeof(D3D_DRIVER_TYPE) == sizeof(int32_t) && sizeof(D3D_FEATURE_LEVEL) == sizeof(int32_t),
     "D3D enumerations are 32-bit");
 
-/* The previous native boundary was noexcept: an engine throw ended the process there. Nothing
-   catches it here either, so the creation call keeps that outcome instead of resuming a
-   half-created device chain. */
+/* An engine throw ends the process: nothing catches it here, so the creation call never resumes
+   a half-created device chain. */
 int32_t rsf_fallout4_call_creation(void* original, const rsf_fallout4_create_call* call)
 {
     const PFN_D3D11_CREATE_DEVICE_AND_SWAP_CHAIN native_create =
