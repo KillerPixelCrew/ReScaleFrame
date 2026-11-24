@@ -19,7 +19,7 @@ fn chain_request(receiver: Raw, method: u32) -> rsf_d3d11_chain_dispatch {
         abi_version: RSF_D3D11_HOST_ABI_VERSION,
         receiver,
         method,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     }
 }
 
@@ -136,26 +136,26 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_check_inner(user: Raw, inner: Raw) -
     if native_status(&mut call) != Some(INVALID_CALL) {
         return fail("Present1 preserves dirty-region refusal");
     }
-    call.args = unsafe { std::mem::zeroed() };
+    call.args = Default::default();
     call.method = RSF_D3D11_DISPATCH_RESIZE_BUFFERS;
     call.args.resize_buffers = rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_4 {
         buffer_count: 99,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     if native_status(&mut call) != Some(INVALID_CALL) {
         return fail("ResizeBuffers preserves invalid-count refusal");
     }
     let node_mask = 1u32;
-    call.args = unsafe { std::mem::zeroed() };
+    call.args = Default::default();
     call.method = RSF_D3D11_DISPATCH_RESIZE_BUFFERS1;
     call.args.resize_buffers1 = rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_6 {
         node_masks: &node_mask,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     if native_status(&mut call) != Some(INVALID_CALL) {
         return fail("ResizeBuffers1 preserves native-array refusal");
     }
-    call.args = unsafe { std::mem::zeroed() };
+    call.args = Default::default();
     call.method = RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE;
     if native_status(&mut call).is_none_or(|result| result < 0) {
         return fail("SetFullscreenState uses the actual physical owner");

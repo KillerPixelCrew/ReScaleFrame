@@ -74,17 +74,19 @@ unsafe fn scope_window(
     }
 
     // Slate packets carry source and window ownership independently of the scene's view keys.
-    let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
-    pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
-    pass.session_id = source.session_id;
-    pass.source_frame_id = source.source_frame_id;
-    pass.viewport_key = source.viewport_key;
-    pass.pass_key = source.source_frame_id;
-    pass.flags = source.flags;
-    pass.role = RSF_GAME_RENDER_WINDOW;
-    pass.window_key = window as usize as u64;
-    pass.rhi_viewport_key = 4;
-    pass.swapchain = chain;
+    let mut pass = rsf_game_render_pass {
+        struct_size: size_of::<rsf_game_render_pass>() as u32,
+        session_id: source.session_id,
+        source_frame_id: source.source_frame_id,
+        viewport_key: source.viewport_key,
+        pass_key: source.source_frame_id,
+        flags: source.flags,
+        role: RSF_GAME_RENDER_WINDOW,
+        window_key: window as usize as u64,
+        rhi_viewport_key: 4,
+        swapchain: chain,
+        ..Default::default()
+    };
     if unsafe { open(scopes, commands, &pass, output) } == 0 {
         return 0;
     }
@@ -229,8 +231,10 @@ unsafe extern "C" fn rsf_d3d11_fixture_window_source(
     expected: u32,
     source: &mut u64,
 ) -> i32 {
-    let mut window: rsf_game_render_pass = unsafe { std::mem::zeroed() };
-    window.struct_size = size_of::<rsf_game_render_pass>() as u32;
+    let mut window = rsf_game_render_pass {
+        struct_size: size_of::<rsf_game_render_pass>() as u32,
+        ..Default::default()
+    };
     if unsafe { rsf_native_window_match(chain, &mut window) } == 0
         || unsafe { rsf_native_scene_present_path(&window) } != expected
     {

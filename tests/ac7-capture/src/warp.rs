@@ -439,7 +439,7 @@ unsafe fn check_geometry(
             struct_size: size_of::<rsf_game_render_pass>() as u32,
             role: RSF_GAME_RENDER_TRANSLUCENCY,
             scope_id: 17,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         rsf_ac7_motion_capture_native_pass(&pass, 1);
         let mut draw = rsf_frame_tap_geometry {

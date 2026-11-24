@@ -52,8 +52,10 @@ fn document_input(run: &rsf_ac7_loop, window: HWND, id: u64) -> bool {
         rsf_native_fg_cpu(&input);
     }
 
-    let mut record: rsf_native_cpu_frame = unsafe { std::mem::zeroed() };
-    record.struct_size = size_of::<rsf_native_cpu_frame>() as u32;
+    let mut record = rsf_native_cpu_frame {
+        struct_size: size_of::<rsf_native_cpu_frame>() as u32,
+        ..Default::default()
+    };
     (unsafe { (run.read_cpu.unwrap())(SESSION, id, &mut record) } != 0)
         && record.stage_mask == 3
         && record.input_mask == 7

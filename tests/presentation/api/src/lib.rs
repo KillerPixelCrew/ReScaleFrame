@@ -254,13 +254,15 @@ unsafe extern "C" fn accept_window(_: *mut c_void, _: *mut c_void) -> i32 {
 
 fn setup_contract(api: &rsf_d3d11_present_api) -> Check {
     let mut reported_units = false;
-    let mut setup: rsf_d3d11_present_setup = unsafe { std::mem::zeroed() };
-    setup.struct_size = size_of::<rsf_d3d11_present_setup>() as u32;
-    setup.runtime_directory_utf8 = c".".as_ptr();
-    setup.user = ptr::from_mut(&mut reported_units).cast();
-    setup.log = Some(log_scale);
-    setup.accept_window = Some(accept_window);
-    setup.units_to_meters = f32::INFINITY;
+    let setup = rsf_d3d11_present_setup {
+        struct_size: size_of::<rsf_d3d11_present_setup>() as u32,
+        runtime_directory_utf8: c".".as_ptr(),
+        user: ptr::from_mut(&mut reported_units).cast(),
+        log: Some(log_scale),
+        accept_window: Some(accept_window),
+        units_to_meters: f32::INFINITY,
+        ..Default::default()
+    };
     let result = unsafe { api.prepare.unwrap()(&setup) };
     require(
         result == 0 && reported_units,

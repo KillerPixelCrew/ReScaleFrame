@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn constants_carry_the_sdk_header_and_defaults() {
-        let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
+        let mut pass: rsf_game_render_pass = Default::default();
         pass.camera.vertical_fov_radians = 1.0;
         pass.camera.view_to_clip[5] = 3.0;
         let constants = Constants::from_pass(&pass);

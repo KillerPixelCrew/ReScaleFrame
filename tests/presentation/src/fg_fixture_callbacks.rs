@@ -189,12 +189,14 @@ pub(super) fn prepare_input(
             record.output_height,
         );
         if ready {
-            let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
-            pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
-            pass.session_id = 1;
-            pass.source_frame_id = record.frame_id;
-            pass.view_key = 1;
-            pass.color_input = back.as_raw();
+            let pass = rsf_game_render_pass {
+                struct_size: size_of::<rsf_game_render_pass>() as u32,
+                session_id: 1,
+                source_frame_id: record.frame_id,
+                view_key: 1,
+                color_input: back.as_raw(),
+                ..Default::default()
+            };
             unsafe { rsf_fg12_hudless(commands.as_raw(), &pass) };
             transition(
                 commands,

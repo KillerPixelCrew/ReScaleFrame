@@ -125,7 +125,7 @@ impl Scenario<'_> {
 fn fg_status() -> (bool, rsf_native_fg_status) {
     let mut status = rsf_native_fg_status {
         struct_size: size_of::<rsf_native_fg_status>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     (
         unsafe { rsf_native_fg_status_get(&mut status) } != 0,
@@ -152,7 +152,7 @@ fn run_scenario(fixture: &mut Scenario<'_>) -> Result<i32, &'static str> {
     let mut settings = rsf_render_settings {
         struct_size: size_of::<rsf_render_settings>() as u32,
         abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     fixture.settings(&mut settings, "read initial warmup settings")?;
     settings.sr_enabled = 1;
@@ -359,7 +359,7 @@ fn run_scenario(fixture: &mut Scenario<'_>) -> Result<i32, &'static str> {
     let mut latency = rsf_native_latency_status {
         struct_size: size_of::<rsf_native_latency_status>() as u32,
         version: 1,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     let latency_ok = unsafe { rsf_native_latency_status_get(&mut latency) } != 0;
     println!(

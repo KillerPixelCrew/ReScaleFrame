@@ -53,12 +53,12 @@ pub(super) fn setup(window: HWND, device: Raw, queue: Raw, generated: u32) -> rs
             buffer_count: 3,
             max_generated_frames: generated,
             ui_mode: RSF_UI_MODE_NONE,
-            ..unsafe { std::mem::zeroed() }
+            ..Default::default()
         },
         depth_inverted: 1,
         depth_infinite: 1,
         view_space_to_meters: 1.0,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     }
 }
 

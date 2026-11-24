@@ -240,7 +240,7 @@ extern "C" fn rsf_test_fg_session() -> i32 {
     let mut setup = rsf_generation_setup {
         struct_size: size_of::<rsf_generation_setup>() as u32,
         abi_version: RSF_FG_ABI_VERSION,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     setup.chain.hwnd = without_provenance_mut(1);
     let mut options = rsf_fg_options {
@@ -285,7 +285,7 @@ extern "C" fn rsf_test_fg_session() -> i32 {
         struct_size: size_of::<rsf_fg_frame>() as u32,
         record: &raw const record,
         interpolate: 1,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     check!(unsafe { rsf_fg_session_prepare(live_session, null_mut(), &frame) } == INVALID_ARGUMENT);
     record.input_qpc = 10;
@@ -357,7 +357,7 @@ extern "C" fn rsf_test_fg_session() -> i32 {
     update(|state| state.fail_chain = false);
     let mut state = rsf_fg_session_status {
         struct_size: size_of::<rsf_fg_session_status>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     check!(unsafe { rsf_fg_session_get_status(live_session, &mut state) } == 0);
     check!(state.has_provider == 0 && state.plain_available != 0);
@@ -413,7 +413,7 @@ extern "C" fn rsf_test_fg_session() -> i32 {
     check!(short_state.0[0] == size_of::<u32>() as u32 && short_state.0[1] == 0xdeadbeef);
     let mut rendered = rsf_sequence_state {
         struct_size: size_of::<rsf_sequence_state>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     check!(unsafe { rsf_frame_sequencer_get(ledger, 1, &mut rendered) } == 0);
     check!(

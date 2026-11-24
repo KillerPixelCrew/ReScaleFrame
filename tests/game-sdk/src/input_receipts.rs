@@ -68,9 +68,11 @@ fn check() -> i32 {
     assert_eq!(dispatch(std::ptr::from_ref(packet).cast()), 0);
 
     // Both output structures contain only integer fields.
-    let mut counts: rsf_native_input_receipts = unsafe { std::mem::zeroed() };
-    counts.struct_size = size_of_val(&counts) as u32;
-    counts.version = 1;
+    let mut counts = rsf_native_input_receipts {
+        struct_size: size_of::<rsf_native_input_receipts>() as u32,
+        version: 1,
+        ..Default::default()
+    };
     assert_eq!(unsafe { rsf_native_input_receipts_get(&mut counts) }, 1);
     assert_eq!(
         (counts.accepted, counts.duplicates, counts.rejected),
@@ -80,8 +82,10 @@ fn check() -> i32 {
         (counts.input_kinds[1], delivery.count, delivery.malformed),
         (3, 3, 0)
     );
-    let mut frame: rsf_native_cpu_frame = unsafe { std::mem::zeroed() };
-    frame.struct_size = size_of_val(&frame) as u32;
+    let mut frame = rsf_native_cpu_frame {
+        struct_size: size_of::<rsf_native_cpu_frame>() as u32,
+        ..Default::default()
+    };
     assert_eq!(unsafe { rsf_native_cpu_read(7, 1, &mut frame) }, 1);
     assert_eq!(
         (

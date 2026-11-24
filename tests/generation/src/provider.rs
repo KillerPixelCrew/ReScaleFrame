@@ -115,7 +115,7 @@ fn graphics(
 ) -> Result<(GraphicsOwner, rsf_streamline_graphics), i32> {
     let mut info = rsf_streamline_graphics {
         struct_size: size_of::<rsf_streamline_graphics>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     let owner = if backend == RSF_FG_BACKEND_DLSS {
         let setup = rsf_streamline_host_setup {
@@ -189,7 +189,7 @@ unsafe fn exercise(
 
     let mut state = rsf_fg_status {
         struct_size: size_of::<rsf_fg_status>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     let result = unsafe { status(context, &mut state) };
     let version = state

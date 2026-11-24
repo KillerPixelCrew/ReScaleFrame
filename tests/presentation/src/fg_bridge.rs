@@ -78,13 +78,15 @@ pub(super) fn submit(frame: &Submission) -> Option<bool> {
     // The caller leases the chain through the worker's synchronous join.
     let callback = std::thread::Builder::new().spawn(move || {
         // The pass is a C record of scalar values and nullable resource pointers.
-        let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
-        pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
-        pass.session_id = 1;
-        pass.native_frame = source;
-        pass.source_frame_id = source;
-        pass.view_key = u64::from(view);
-        pass.swapchain = chain as Raw;
+        let pass = rsf_game_render_pass {
+            struct_size: size_of::<rsf_game_render_pass>() as u32,
+            session_id: 1,
+            native_frame: source,
+            source_frame_id: source,
+            view_key: u64::from(view),
+            swapchain: chain as Raw,
+            ..Default::default()
+        };
         unsafe { rsf_fg12_window(&pass) };
     });
     callback.ok()?.join().ok()?;

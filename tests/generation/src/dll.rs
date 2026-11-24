@@ -116,9 +116,11 @@ unsafe extern "C" fn rsf_test_d3d11_fg_api(
     check.that(large.tail == [0x5a; 32], "bytes beyond the table untouched");
 
     // Zeroed pointers are valid nullable callback slots.
-    let mut api: rsf_d3d11_fg_api = unsafe { std::mem::zeroed() };
-    api.struct_size = SIZE as u32;
-    api.abi_version = VERSION;
+    let mut api = rsf_d3d11_fg_api {
+        struct_size: SIZE as u32,
+        abi_version: VERSION,
+        ..Default::default()
+    };
     if unsafe { query(&mut api) } != 0 {
         eprintln!("FAIL: query current FG table");
         return 1;
@@ -175,7 +177,7 @@ unsafe extern "C" fn rsf_test_d3d11_fg_api(
     };
     let mut current = rsf_native_fg_status {
         struct_size: size_of::<rsf_native_fg_status>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     unsafe { options(&settings) };
     check.that(
@@ -188,7 +190,7 @@ unsafe extern "C" fn rsf_test_d3d11_fg_api(
     );
     let mut short_status = rsf_native_fg_status {
         struct_size: size_of::<rsf_native_fg_status>() as u32 - 1,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     check.that(
         unsafe { status(&mut short_status) } == 0,
@@ -236,7 +238,7 @@ unsafe extern "C" fn rsf_test_d3d11_fg_api(
             ..cpu_header(RSF_GAME_CPU_SOURCE_RESERVE, 3)
         },
         native_generation: 1,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     check.that(
         unsafe { cpu((&raw const reserved).cast()) } == 1,
@@ -269,7 +271,7 @@ unsafe extern "C" fn rsf_test_d3d11_fg_api(
     );
     let mut observed = rsf_native_cpu_frame {
         struct_size: size_of::<rsf_native_cpu_frame>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     check.that(
         unsafe { read_cpu(session, 3, &mut observed) } != 0
@@ -284,7 +286,7 @@ unsafe extern "C" fn rsf_test_d3d11_fg_api(
         role,
         session_id: session,
         source_frame_id,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     let unowned_submission = rsf_game_render_pass {
         submission_id: 3,
@@ -375,7 +377,7 @@ unsafe extern "C" fn rsf_test_d3d11_fg_api(
     let mut present = rsf_d3d11_present_api {
         struct_size: size_of::<rsf_d3d11_present_api>() as u32,
         abi_version: RSF_D3D11_PRESENT_API_VERSION,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     check.that(
         unsafe { query_present(&mut present) } == 0

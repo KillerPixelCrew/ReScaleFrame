@@ -187,8 +187,10 @@ fn presented(source: u64) -> bool {
 }
 
 fn read(source: u64) -> rsf_native_cpu_reservation {
-    let mut value: rsf_native_cpu_reservation = unsafe { std::mem::zeroed() };
-    value.struct_size = size_of_val(&value) as u32;
+    let mut value = rsf_native_cpu_reservation {
+        struct_size: size_of::<rsf_native_cpu_reservation>() as u32,
+        ..Default::default()
+    };
     if unsafe { rsf_native_cpu_reservation_read(SESSION, source, &mut value) } == 0 {
         value.state = 0;
     }
@@ -196,8 +198,10 @@ fn read(source: u64) -> rsf_native_cpu_reservation {
 }
 
 fn counters() -> rsf_native_cpu_reservation_counters {
-    let mut value: rsf_native_cpu_reservation_counters = unsafe { std::mem::zeroed() };
-    value.struct_size = size_of_val(&value) as u32;
+    let mut value = rsf_native_cpu_reservation_counters {
+        struct_size: size_of::<rsf_native_cpu_reservation_counters>() as u32,
+        ..Default::default()
+    };
     unsafe { rsf_native_cpu_reservation_counters_get(&mut value) };
     value
 }

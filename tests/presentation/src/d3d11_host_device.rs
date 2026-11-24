@@ -91,7 +91,7 @@ fn native_pass(
         render_rect: [0, 0, render_width as i32, render_height as i32],
         output_rect: [0, 0, width as i32, height as i32],
         camera,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     }
 }
 // Read the same actual D3D11 debug queue as the native launchers. The queue

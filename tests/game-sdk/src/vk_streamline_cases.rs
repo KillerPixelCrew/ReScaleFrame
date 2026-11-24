@@ -674,8 +674,10 @@ fn keyed_sources(setup: &rsf_latencyvk_setup) {
             poll_begin_qpc: 0,
         };
         rsf_latencyvk_cpu(ptr::from_ref(&unsupported).cast());
-        let mut absent: rsf_native_cpu_reservation = std::mem::zeroed();
-        absent.struct_size = size_of_val(&absent) as u32;
+        let mut absent = rsf_native_cpu_reservation {
+            struct_size: size_of::<rsf_native_cpu_reservation>() as u32,
+            ..Default::default()
+        };
         assert!(
             rsf_native_cpu_reservation_read(77, 101, &mut absent) == 0
                 && SLEPT.load(Relaxed) == before_prospective_sleep
@@ -711,11 +713,13 @@ fn keyed_sources(setup: &rsf_latencyvk_setup) {
                 && markers[2].kind == 1,
             "shared accepted input facts reach XeLL once in order"
         );
-        let mut execution: rsf_game_render_pass = std::mem::zeroed();
-        execution.struct_size = size_of_val(&execution) as u32;
-        execution.session_id = 77;
-        execution.source_frame_id = 100;
-        execution.role = RSF_GAME_RENDER_PRESENT;
+        let mut execution = rsf_game_render_pass {
+            struct_size: size_of::<rsf_game_render_pass>() as u32,
+            session_id: 77,
+            source_frame_id: 100,
+            role: RSF_GAME_RENDER_PRESENT,
+            ..Default::default()
+        };
         let short_execution = Short(4);
         assert!(
             rsf_latencyvk_execution(ptr::from_ref(&short_execution.0).cast(), 1)
@@ -829,8 +833,10 @@ fn keyed_sources(setup: &rsf_latencyvk_setup) {
         );
         fact = event(78, 1, BEGIN, 2000, 1000, V1, KEYED);
         rsf_latencyvk_cpu(&fact);
-        let mut restarted: rsf_native_cpu_frame = std::mem::zeroed();
-        restarted.struct_size = size_of_val(&restarted) as u32;
+        let mut restarted = rsf_native_cpu_frame {
+            struct_size: size_of::<rsf_native_cpu_frame>() as u32,
+            ..Default::default()
+        };
         assert!(
             rsf_native_cpu_read(78, 1, &mut restarted) != 0,
             "shutdown releases previous CPU session before a new source starts at one"

@@ -40,7 +40,7 @@ pub(super) fn run() {
             && read(2).native_generation == 20
     );
     assert!(!bind(2, 56)); // one binding per reservation
-    let mut frame: rsf_native_cpu_frame = unsafe { std::mem::zeroed() };
+    let mut frame: rsf_native_cpu_frame = Default::default();
     // A binding is no INPUT_SAMPLE, SIMULATION_BEGIN, marker or pacing time of the frame.
     assert!(
         read_frame(2, &mut frame)
@@ -277,7 +277,7 @@ pub(super) fn run() {
             && frame.timestamps_qpc[2] == 56
     );
     assert!(read(2).state == RSF_NATIVE_CPU_RESERVATION_CLOSED);
-    let mut measured: rsf_native_cpu_counters = unsafe { std::mem::zeroed() };
+    let mut measured: rsf_native_cpu_counters = Default::default();
     assert!(
         read_counters(&mut measured)
             && measured.substitutes == 0

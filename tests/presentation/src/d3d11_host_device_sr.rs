@@ -85,7 +85,7 @@ unsafe fn run(
     };
     let mut facts = rsf_native_cpu_frame {
         struct_size: size_of::<rsf_native_cpu_frame>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     unsafe { rsf_d3d11_host_fixture_cpu(host, source, RSF_GAME_CPU_FRAME_BEGIN, 0) };
     let cpu_owned = unsafe { rsf_native_cpu_read(host.session_id, source, &mut facts) } != 0;
@@ -143,7 +143,7 @@ unsafe fn run(
         )?;
         let mut cfg = rsf_game_render_config {
             struct_size: size_of::<rsf_game_render_config>() as u32,
-            ..unsafe { std::mem::zeroed() }
+            ..Default::default()
         };
         require(
             unsafe { config(host.user, &mut cfg) } != 0 && cfg.enabled != 0,
@@ -168,7 +168,7 @@ unsafe fn run(
     let ticketed = matches!(source, 2 | 6);
     let mut raster = pass;
     raster.camera_valid = 0;
-    raster.depth_domains = unsafe { std::mem::zeroed() };
+    raster.depth_domains = Default::default();
     let raw = rsf_d3d11_auxiliary_surface {
         struct_size: size_of::<rsf_d3d11_auxiliary_surface>() as u32,
         kind: RSF_D3D11_AUXILIARY_COLOUR,
@@ -270,7 +270,7 @@ unsafe fn run(
     if source == 1 {
         let mut cold = rsf_dlss_pipeline_status {
             struct_size: size_of::<rsf_dlss_pipeline_status>() as u32,
-            ..unsafe { std::mem::zeroed() }
+            ..Default::default()
         };
         require(
             result == PIPELINE_EVALUATE_FAILED
@@ -378,7 +378,7 @@ unsafe fn run_scenario(
     }
     let mut before = rsf_dlss_pipeline_status {
         struct_size: size_of::<rsf_dlss_pipeline_status>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     require(
         unsafe { rsf_dlss_pipeline_get_status(&mut before) } == RSF_OK
@@ -390,7 +390,7 @@ unsafe fn run_scenario(
 
     let mut after = rsf_dlss_pipeline_status {
         struct_size: before.struct_size,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     require(
         unsafe { rsf_dlss_pipeline_get_status(&mut after) } == RSF_OK
@@ -400,7 +400,7 @@ unsafe fn run_scenario(
     )?;
     let mut generation = rsf_native_fg_status {
         struct_size: size_of::<rsf_native_fg_status>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     require(
         unsafe { rsf_native_fg_status_get(&mut generation) } != 0

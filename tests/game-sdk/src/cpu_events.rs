@@ -57,8 +57,10 @@ impl Delivery {
 
 fn counts() -> rsf_native_cpu_counters {
     // The output structure contains only integer fields.
-    let mut stats: rsf_native_cpu_counters = unsafe { std::mem::zeroed() };
-    stats.struct_size = size_of_val(&stats) as u32;
+    let mut stats = rsf_native_cpu_counters {
+        struct_size: size_of::<rsf_native_cpu_counters>() as u32,
+        ..Default::default()
+    };
     assert_eq!(unsafe { rsf_native_cpu_counters_get(&mut stats) }, 1);
     stats
 }
@@ -125,8 +127,10 @@ fn check() -> i32 {
     assert_eq!(unsafe { rsf_native_cpu_marker(1, 5) }, 0);
     delivered.stage(1, END, 40);
     assert!(!delivered.send(&ping));
-    let mut frame: rsf_native_cpu_frame = unsafe { std::mem::zeroed() };
-    frame.struct_size = size_of_val(&frame) as u32;
+    let mut frame = rsf_native_cpu_frame {
+        struct_size: size_of::<rsf_native_cpu_frame>() as u32,
+        ..Default::default()
+    };
     assert_eq!(unsafe { rsf_native_cpu_read(9, 1, &mut frame) }, 1);
     assert_eq!(
         (

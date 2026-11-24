@@ -97,7 +97,7 @@ fn window_pass(chain: *mut Unknown) -> Pass {
         rhi_viewport_key: 60,
         swapchain: chain.cast(),
         // The remaining ABI fields are scalar or nullable.
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     }
 }
 

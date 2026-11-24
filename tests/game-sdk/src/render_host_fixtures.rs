@@ -287,7 +287,7 @@ extern "C" fn rsf_test_render_frontend() -> i32 {
         abi_version: RSF_GAME_ABI_VERSION,
         session_id: 7,
         // The remaining ABI fields are zero values and optional callbacks.
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     let setup = rsf_render_host_setup {
         struct_size: size_of::<rsf_render_host_setup>() as u32,

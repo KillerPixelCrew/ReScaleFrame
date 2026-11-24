@@ -82,7 +82,7 @@ pub(super) fn check_portable_math() -> Result<()> {
         "binary16 conversion differs from reference values",
     )?;
 
-    let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
+    let mut pass: rsf_game_render_pass = Default::default();
     pass.camera.output_width = WIDTH;
     pass.camera.output_height = HEIGHT;
     pass.camera.vertical_fov_radians = VERTICAL_FOV;

@@ -395,7 +395,7 @@ unsafe fn run(
     if let Some(outer_counts) = api.outer_counts {
         let mut observed = rsf_native_present_record {
             struct_size: size_of::<rsf_native_present_record>() as u32,
-            ..unsafe { std::mem::zeroed() }
+            ..Default::default()
         };
         state.verify(
             unsafe { rsf_native_window_last_present(&mut observed) } != 0
@@ -421,7 +421,7 @@ unsafe fn run(
     cpu(source, RSF_GAME_CPU_FRAME_END);
     let mut cpu_frame = rsf_native_cpu_frame {
         struct_size: size_of::<rsf_native_cpu_frame>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     let cpu_ok = unsafe { rsf_native_cpu_read(host.session_id, source, &mut cpu_frame) } != 0;
     state.verify(cpu_ok, "source CPU snapshot query");
@@ -439,7 +439,7 @@ unsafe fn run(
     );
     let mut fg = rsf_native_fg_status {
         struct_size: size_of::<rsf_native_fg_status>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     if unsafe { rsf_native_fg_status_get(&mut fg) } == 0 {
         return Err("per-source FG status query");

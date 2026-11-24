@@ -310,7 +310,7 @@ fn frame_pass(
     height: u32,
 ) -> rsf_game_render_pass {
     // The zeroed C record has no active resources or depth mappings.
-    let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
+    let mut pass: rsf_game_render_pass = Default::default();
     let mut identity = [0.0; 16];
     for i in (0..16).step_by(5) {
         identity[i] = 1.0;

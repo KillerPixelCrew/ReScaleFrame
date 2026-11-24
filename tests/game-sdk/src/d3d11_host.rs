@@ -116,7 +116,7 @@ fn check() -> i32 {
             log: Some(log),
             user: cookie,
             cpu_event: Some(cpu),
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         assert!(
             rsf_d3d11_host_create(null_mut(), &mut host) == RSF_ERROR_INVALID_ARGUMENT,
@@ -205,7 +205,7 @@ fn check() -> i32 {
         let mut outer = rsf_game_render_pass {
             struct_size: size_of::<rsf_game_render_pass>() as u32,
             source_frame_id: 42,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         assert!(
             rsf_native_fg_scene_swap(&mut outer) == 1,
@@ -214,7 +214,7 @@ fn check() -> i32 {
         let mut inner = rsf_game_render_pass {
             struct_size: size_of::<rsf_game_render_pass>() as u32,
             source_frame_id: 43,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         assert!(
             rsf_native_fg_scene_swap(&mut inner) == 1 && inner.source_frame_id == 42,
@@ -230,7 +230,7 @@ fn check() -> i32 {
         );
         let mut bound = rsf_game_render_pass {
             struct_size: size_of::<rsf_game_render_pass>() as u32,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         bound.source_frame_id = 101;
         bound.session_id = 91;
@@ -240,7 +240,7 @@ fn check() -> i32 {
         rsf_native_fg_bind_source(&bound);
         let mut anonymous = rsf_game_render_pass {
             struct_size: size_of::<rsf_game_render_pass>() as u32,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         anonymous.role = RSF_GAME_RENDER_SR;
         anonymous.flags = RSF_GAME_RENDER_NO_FG;
@@ -248,7 +248,7 @@ fn check() -> i32 {
         rsf_native_fg_scene(&anonymous);
         let mut resolved = rsf_game_render_pass {
             struct_size: size_of::<rsf_game_render_pass>() as u32,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         assert!(
             rsf_native_fg_scene_swap(&mut resolved) == 1
@@ -265,7 +265,7 @@ fn check() -> i32 {
         rsf_native_fg_scene(&anonymous);
         resolved = rsf_game_render_pass {
             struct_size: size_of::<rsf_game_render_pass>() as u32,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         assert!(
             rsf_native_fg_scene_swap(&mut resolved) == 1
@@ -277,7 +277,7 @@ fn check() -> i32 {
         rsf_native_fg_scene(null_mut());
         let mut inputs = rsf_game_render_pass {
             struct_size: size_of::<rsf_game_render_pass>() as u32,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         inputs.role = RSF_GAME_RENDER_FG_INPUTS;
         let invalid_context = fake;
@@ -382,7 +382,7 @@ fn check() -> i32 {
         );
         let mut event = rsf_game_cpu_event {
             struct_size: size_of::<rsf_game_cpu_event>() as u32,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         event.session_id = 91;
         host.cpu_event.unwrap()(host.user, &event);
@@ -399,7 +399,7 @@ fn check() -> i32 {
         }
         let mut config = rsf_game_render_config {
             struct_size: size_of::<rsf_game_render_config>() as u32,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         assert!(
             host.render_config.unwrap()(host.user, &mut config) == 1
@@ -409,7 +409,7 @@ fn check() -> i32 {
         );
         let mut early = rsf_game_render_pass {
             struct_size: size_of::<rsf_game_render_pass>() as u32,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         early.role = RSF_GAME_RENDER_SR;
         early.flags = RSF_GAME_RENDER_RECONFIGURE;
@@ -456,7 +456,7 @@ fn check() -> i32 {
 
         let mut call = rsf_d3d11_chain_dispatch {
             struct_size: size_of::<rsf_d3d11_chain_dispatch>() as u32,
-            ..std::mem::zeroed()
+            ..Default::default()
         };
         call.abi_version = RSF_D3D11_HOST_ABI_VERSION;
         call.receiver = fake;
@@ -484,7 +484,7 @@ fn check() -> i32 {
             call.args.resize_buffers1 = rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_6 {
                 node_masks: fake.cast(),
                 present_queues: fake.cast(),
-                ..std::mem::zeroed()
+                ..Default::default()
             };
             assert!(
                 rsf_d3d11_host_dispatch_chain(host.user, &mut call) == RSF_OK

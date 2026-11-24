@@ -72,7 +72,7 @@ extern "C" fn rsf_test_frame_assembly() -> i32 {
     let resources = resources();
     let size = size_of::<rsf_dlss_frame>() as u32;
     // The generated C record uses integer, float and pointer fields.
-    let mut frame: rsf_dlss_frame = unsafe { std::mem::zeroed() };
+    let mut frame: rsf_dlss_frame = Default::default();
     let mut passed = true;
     let mut check = |condition: bool, message: &str| {
         if !condition {

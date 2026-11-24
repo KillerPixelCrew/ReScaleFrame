@@ -90,8 +90,10 @@ fn record(
 }
 
 fn render(host: Raw, profile: u32) -> Result<(), i32> {
-    let mut graphics: rsf_streamline_graphics = unsafe { std::mem::zeroed() };
-    graphics.struct_size = size_of::<rsf_streamline_graphics>() as u32;
+    let mut graphics = rsf_streamline_graphics {
+        struct_size: size_of::<rsf_streamline_graphics>() as u32,
+        ..Default::default()
+    };
     check(unsafe { rsf_streamline_host_graphics(host, &mut graphics) })?;
     let device = unsafe { ID3D12Device::from_raw_borrowed(&graphics.device) }.ok_or(1)?;
     let queue = unsafe { ID3D12CommandQueue::from_raw_borrowed(&graphics.queue) }.ok_or(1)?;

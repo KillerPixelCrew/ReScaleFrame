@@ -94,7 +94,7 @@ fn plugin_api(module: &Module) -> rsf_game_sys::rsf_game_plugin_api {
     let entry = unsafe { module.export::<Entry>(name) }.expect("plugin entry point");
     let version = RSF_GAME_ABI_VERSION;
     // Zero initializes the sized C record before setting its input fields.
-    let mut api: rsf_game_plugin_api = unsafe { std::mem::zeroed() };
+    let mut api: rsf_game_plugin_api = Default::default();
     unsafe {
         assert_eq!(entry(version, null_mut()), RSF_ERROR_INVALID_ARGUMENT);
         assert_eq!(entry(version, &mut api), RSF_ERROR_INVALID_ARGUMENT);

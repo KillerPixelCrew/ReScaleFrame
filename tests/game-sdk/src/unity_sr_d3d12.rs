@@ -123,19 +123,21 @@ impl Inputs {
         backend: u32,
     ) -> Result<rsf_game_render_pass> {
         // The SDK record consists of numeric fields and borrowed pointers.
-        let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
-        pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
-        pass.role = RSF_GAME_RENDER_SR;
-        pass.camera_valid = 1;
-        pass.session_id = 7;
-        pass.view_key = 11;
-        pass.history_key = 11;
-        pass.native_frame = 1;
-        pass.resource_generation = 1;
-        pass.color_input = self.color.as_raw();
-        pass.depth = self.depth.as_raw();
-        pass.motion = self.motion.as_raw();
-        pass.color_output = self.output.as_raw();
+        let mut pass = rsf_game_render_pass {
+            struct_size: size_of::<rsf_game_render_pass>() as u32,
+            role: RSF_GAME_RENDER_SR,
+            camera_valid: 1,
+            session_id: 7,
+            view_key: 11,
+            history_key: 11,
+            native_frame: 1,
+            resource_generation: 1,
+            color_input: self.color.as_raw(),
+            depth: self.depth.as_raw(),
+            motion: self.motion.as_raw(),
+            color_output: self.output.as_raw(),
+            ..Default::default()
+        };
         pass.exposure = self
             .exposure
             .as_ref()
@@ -366,7 +368,7 @@ fn run(args: &Args) -> Result<i32> {
     };
     let mut sr = SuperResolution(ptr::null_mut());
     // The SDK host record contains nullable callbacks, borrowed pointers and numeric fields.
-    let mut host: rsf_game_host_services = unsafe { std::mem::zeroed() };
+    let mut host: rsf_game_host_services = Default::default();
     let host_ini = std::env::var_os("RSF_RDR2_HOST_INI");
     let host_root = std::env::var_os("RSF_RDR2_HOST_ROOT");
     let host_ini = if let (Some(ini), Some(root)) = (host_ini, host_root) {

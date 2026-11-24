@@ -291,14 +291,16 @@ fn engine_graphics() -> Result<rsf_streamline_graphics, i32> {
 }
 
 fn scene(frame: &rsf_dlss_frame) -> rsf_game_render_pass {
-    let mut source: rsf_game_render_pass = unsafe { std::mem::zeroed() };
-    source.struct_size = size_of::<rsf_game_render_pass>() as u32;
-    source.session_id = 42;
-    source.family_key = 1;
-    source.view_key = 2;
-    source.viewport_key = 3;
-    source.screen = RSF_SCREEN_FLIGHT;
-    source.flags = RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION;
+    let mut source = rsf_game_render_pass {
+        struct_size: size_of::<rsf_game_render_pass>() as u32,
+        session_id: 42,
+        family_key: 1,
+        view_key: 2,
+        viewport_key: 3,
+        screen: RSF_SCREEN_FLIGHT,
+        flags: RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION,
+        ..Default::default()
+    };
     let camera = &mut source.camera;
     camera.struct_size = size_of::<rsf_camera_frame>() as u32;
     camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
@@ -610,9 +612,11 @@ unsafe fn run(argv: &[*const c_char], native: &rsf_ac7_fixture_calls) -> Result<
     drop(identity);
     drop(modern);
     // Transfer the original COM reference to the exact owned Release dispatch.
-    let mut release: rsf_d3d11_chain_dispatch = unsafe { std::mem::zeroed() };
-    release.method = RSF_D3D11_DISPATCH_RELEASE;
-    release.receiver = chain.into_raw();
+    let mut release = rsf_d3d11_chain_dispatch {
+        method: RSF_D3D11_DISPATCH_RELEASE,
+        receiver: chain.into_raw(),
+        ..Default::default()
+    };
     unsafe { rsf_d3d11_chain_dispatch_owned(&mut release) };
     if release.handled == 0
         || unsafe { release.result.references } != 0

@@ -75,9 +75,11 @@ pub(super) unsafe fn shared_sr(
         frame.prev_clip_to_clip[index] = 1.0;
     }
     // The pass is a C record of scalar values and nullable resource pointers.
-    let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
-    pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
-    pass.source_frame_id = 1;
+    let pass = rsf_game_render_pass {
+        struct_size: size_of::<rsf_game_render_pass>() as u32,
+        source_frame_id: 1,
+        ..Default::default()
+    };
     if unsafe { rsf_streamline_host_begin(host.cast(), 1) } != 0 {
         return None;
     }

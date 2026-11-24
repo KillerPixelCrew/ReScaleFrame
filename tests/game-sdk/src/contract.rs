@@ -94,7 +94,7 @@ fn contract(fixture: &Fixture, module: &Module) {
     let quiesce = api.hooks.quiesce.expect("quiesce callback");
     let stop = api.hooks.stop.expect("stop callback");
     let status = api.hooks.status.expect("status callback");
-    let mut state: rsf_game_renderer_status = unsafe { std::mem::zeroed() };
+    let mut state: rsf_game_renderer_status = Default::default();
     assert_eq!(unsafe { status(&mut state) }, RSF_ERROR_INVALID_ARGUMENT);
     state.struct_size = size_of_val(&state) as u32;
     state.abi_version = version;

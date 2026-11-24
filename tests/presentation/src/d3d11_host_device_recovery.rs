@@ -39,7 +39,7 @@ unsafe fn run_source(
     raster.submission_id = source;
     raster.scope_id = source;
     raster.camera_valid = 0;
-    raster.depth_domains = unsafe { std::mem::zeroed() };
+    raster.depth_domains = Default::default();
 
     // Apply reactivation's requested generation before querying and reserving.
     let mut planning = raster;
@@ -50,7 +50,7 @@ unsafe fn run_source(
     )?;
     let mut plan = rsf_game_render_config {
         struct_size: size_of::<rsf_game_render_config>() as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..Default::default()
     };
     require(
         unsafe { config(user, &mut plan) } != 0 && plan.enabled != 0,

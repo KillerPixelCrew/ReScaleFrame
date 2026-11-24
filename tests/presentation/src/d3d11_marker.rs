@@ -145,8 +145,10 @@ impl MarkerFixture<'_> {
     }
 
     fn read(&mut self, id: u64) -> rsf_native_cpu_frame {
-        let mut facts: rsf_native_cpu_frame = unsafe { std::mem::zeroed() };
-        facts.struct_size = size_of::<rsf_native_cpu_frame>() as u32;
+        let mut facts = rsf_native_cpu_frame {
+            struct_size: size_of::<rsf_native_cpu_frame>() as u32,
+            ..Default::default()
+        };
         self.check(
             call!(self.calls, read, SESSION, id, &mut facts) != 0,
             "source CPU facts retained",
@@ -156,11 +158,13 @@ impl MarkerFixture<'_> {
 
     fn close(&mut self, id: u64, flags: u32) {
         self.check(self.modern(id, RSF_GAME_CPU_FRAME_END, flags), "CPU close");
-        let mut frame: rsf_game_render_pass = unsafe { std::mem::zeroed() };
-        frame.struct_size = size_of::<rsf_game_render_pass>() as u32;
-        frame.role = RSF_GAME_RENDER_FRAME;
-        frame.session_id = SESSION;
-        frame.source_frame_id = id;
+        let frame = rsf_game_render_pass {
+            struct_size: size_of::<rsf_game_render_pass>() as u32,
+            role: RSF_GAME_RENDER_FRAME,
+            session_id: SESSION,
+            source_frame_id: id,
+            ..Default::default()
+        };
         call!(self.calls, frame, &frame, 0);
     }
 
@@ -173,8 +177,10 @@ impl MarkerFixture<'_> {
     }
 
     fn counters(&mut self) -> rsf_native_cpu_counters {
-        let mut counters: rsf_native_cpu_counters = unsafe { std::mem::zeroed() };
-        counters.struct_size = size_of::<rsf_native_cpu_counters>() as u32;
+        let mut counters = rsf_native_cpu_counters {
+            struct_size: size_of::<rsf_native_cpu_counters>() as u32,
+            ..Default::default()
+        };
         self.check(
             call!(self.calls, counters, &mut counters) != 0,
             "CPU counters copied",
@@ -283,10 +289,12 @@ impl MarkerFixture<'_> {
             facts.marker_mask == 7,
             "provider-refused start cannot emit a matching end or Present",
         );
-        let mut state: rsf_native_latency_frame = unsafe { std::mem::zeroed() };
-        state.struct_size = size_of::<rsf_native_latency_frame>() as u32;
-        state.version = 1;
-        state.source = FAILED;
+        let mut state = rsf_native_latency_frame {
+            struct_size: size_of::<rsf_native_latency_frame>() as u32,
+            version: 1,
+            source: FAILED,
+            ..Default::default()
+        };
         self.check(
             call!(self.calls, latency_frame, &mut state) != 0 && state.failed != 0,
             "provider failure retained rather than hidden",
@@ -334,14 +342,16 @@ impl MarkerFixture<'_> {
             "real poll adopted and bound",
         );
 
-        let mut submission: rsf_game_render_pass = unsafe { std::mem::zeroed() };
-        submission.struct_size = size_of::<rsf_game_render_pass>() as u32;
-        submission.role = RSF_GAME_RENDER_SUBMISSION;
-        submission.session_id = SESSION;
-        submission.source_frame_id = PROSPECTIVE;
-        submission.submission_id = PROSPECTIVE;
-        submission.view_key = PROSPECTIVE;
-        submission.flags = RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION;
+        let submission = rsf_game_render_pass {
+            struct_size: size_of::<rsf_game_render_pass>() as u32,
+            role: RSF_GAME_RENDER_SUBMISSION,
+            session_id: SESSION,
+            source_frame_id: PROSPECTIVE,
+            submission_id: PROSPECTIVE,
+            view_key: PROSPECTIVE,
+            flags: RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION,
+            ..Default::default()
+        };
         call!(self.calls, submit, &submission, 1);
         call!(self.calls, submit, &submission, 0);
         let mut submitted_sleeps = 0;
