@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! `api.h` records, mirrored by hand (runtime_platform.c asserts the layouts the engine module reads),
-//! and the Rust-only records `Platform` passes between this crate's owners and the Runtime, DXGI and
-//! Win32. `Platform` is implemented by `host.rs` (D3D12, window, counters) and `vulkan/native.rs`
-//! (the Vulkan owner's guard, device, presenter, SDK and SR context calls); every decision stays in
-//! this crate. The Vulkan creation leaves are a separate table (`VkCreationLeaves`). The render pass and CPU event are the generated
-//! `rsf_game_render_pass` and `rsf_game_cpu_event` bindings.
+//! and the Rust-only records this crate's owners pass to `Platform` for the Runtime, DXGI and Win32.
+//! `Platform` is a unit type whose methods are `host.rs` (D3D12, window, counters) and
+//! `vulkan/native.rs` (the Vulkan owner's guard, device, presenter, SDK and SR context calls), or
+//! `platform/fake.rs` under `cfg(test)`; every decision stays in this crate. The Vulkan creation
+//! leaves are a separate table (`VkCreationLeaves`) because the tests bind a second set of fakes
+//! next to the real one. The render pass and CPU event are the generated `rsf_game_render_pass` and
+//! `rsf_game_cpu_event` bindings.
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
 
