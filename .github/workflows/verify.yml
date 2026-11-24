@@ -65,7 +65,9 @@ jobs:
       - name: Use LLVM and bindgen
         shell: pwsh
         run: |
-          "LIBCLANG_PATH=$env:LLVM_DIR\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # bindgen takes its builtin headers from the clang it finds; without CLANG_PATH that is
+          # the runner's older C:\Program Files\LLVM, whose headers libclang 22 rejects.
+          "LIBCLANG_PATH=$env:LLVM_DIR\bin", "CLANG_PATH=$env:LLVM_DIR\bin\clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
           bindgen --version
       - name: Verify native and Rust components
         shell: pwsh
