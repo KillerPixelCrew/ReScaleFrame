@@ -6,13 +6,14 @@ use crate::execution;
 use crate::windows::{
     create_hook, disable_hook, enable_hook, image_base, tick_count, verify_executable,
 };
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
     host_log, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
     rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
 use std::ffi::{CStr, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 use rsf_game_sys::call_header::validate;
 use rsf_game_sys::{
@@ -113,7 +114,7 @@ struct State {
 unsafe impl Send for State {}
 
 fn state() -> MutexGuard<'static, State> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&STATE)
 }
 
 fn target() -> Option<usize> {

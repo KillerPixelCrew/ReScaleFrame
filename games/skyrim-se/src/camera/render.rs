@@ -6,8 +6,9 @@ use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::taa;
 use crate::{platform::Platform, resolution};
 use rsf_game_sys::camera_math::finite_matrix_close;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{RSF_GAME_RENDER_RESET, rsf_game_host_services, rsf_game_render_pass};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 const RENDER_STATE: usize = 0x333_63a0;
@@ -45,14 +46,14 @@ struct History {
 static ACCEPTED_SR: Mutex<Option<SrFrame>> = Mutex::new(None);
 
 pub(crate) fn accept_sr(session: u64, frame: u32) {
-    *ACCEPTED_SR.lock().unwrap_or_else(PoisonError::into_inner) = Some(SrFrame { session, frame });
+    *lock_or_recover(&ACCEPTED_SR) = Some(SrFrame { session, frame });
 }
 
 static HISTORY: Mutex<[Option<History>; 2]> = Mutex::new([None, None]);
 
 pub(crate) fn reset_history() {
-    *HISTORY.lock().unwrap_or_else(PoisonError::into_inner) = [None, None];
-    *ACCEPTED_SR.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    *lock_or_recover(&HISTORY) = [None, None];
+    *lock_or_recover(&ACCEPTED_SR) = None;
 }
 
 fn read<const N: usize>(platform: &Platform, address: usize) -> Option<[u8; N]> {
@@ -183,8 +184,7 @@ pub(crate) fn read_frame(
         jitter: camera.jitter_pixels,
         time: now,
     };
-    let previous =
-        HISTORY.lock().unwrap_or_else(PoisonError::into_inner)[usize::from(fg)].replace(receipt)?;
+    let previous = lock_or_recover(&HISTORY)[usize::from(fg)].replace(receipt)?;
     if previous.session != session {
         return None;
     }
@@ -193,7 +193,7 @@ pub(crate) fn read_frame(
         return None;
     }
     camera.frame_time_seconds = elapsed as f32;
-    let accepted_sr = *ACCEPTED_SR.lock().unwrap_or_else(PoisonError::into_inner);
+    let accepted_sr = *lock_or_recover(&ACCEPTED_SR);
     let consumed = history_consumed(
         fg,
         accepted_sr,

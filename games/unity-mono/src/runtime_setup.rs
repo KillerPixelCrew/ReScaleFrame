@@ -7,6 +7,7 @@ use crate::runtime_config::{
     Ini, file_name, path_setting, preferences_path, profile_int, setting, terminated, utf8,
 };
 use crate::startup_policy::{self, MONO_DEADLINE, wait_for_sr};
+use rsf_game_sys::ffi_util::lock_or_recover;
 // The carrier already loaded the Runtime. The plugin target links its import library.
 use crate::sys::{
     RSF_DLSS_PRESET_MASK, RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_SR_AUTO,
@@ -28,7 +29,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::ptr::null_mut;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::Instant;
 use windows::Win32::Graphics::Direct3D12::{D3D12GetDebugInterface, ID3D12Debug};
@@ -84,9 +85,7 @@ unsafe extern "C" fn capture_directory_changed(
         return -1;
     }
     let ini = {
-        let path = DIAGNOSTICS_INI
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let path = lock_or_recover(&DIAGNOSTICS_INI);
         if path.is_empty() {
             return -3;
         }
@@ -104,9 +103,7 @@ unsafe extern "C" fn capture_directory_changed(
 
 fn register_diagnostics(ini: &Ini) {
     use crate::sys::*;
-    let mut path = DIAGNOSTICS_INI
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut path = lock_or_recover(&DIAGNOSTICS_INI);
     let rows = [
         rsf_overlay_saved_option {
             label_utf8: c"Graphics debug layer".as_ptr(),
@@ -155,7 +152,7 @@ unsafe extern "C" fn log(_: *mut c_void, message: *const c_char) {
         return;
     }
     let message = unsafe { CStr::from_ptr(message) }.to_bytes();
-    let path = LOG_PATH.lock().unwrap_or_else(PoisonError::into_inner);
+    let path = lock_or_recover(&LOG_PATH);
     if path.is_empty() {
         return;
     }
@@ -201,7 +198,7 @@ fn fg_choice_start(ini: &Ini) -> u32 {
 }
 
 fn fg_start(ini: *const u16) -> u32 {
-    let mut started = FG_STARTED.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut started = lock_or_recover(&FG_STARTED);
     let ini = match unsafe { Ini::new(ini) } {
         Some(ini) if !*started => ini,
         _ => {
@@ -213,7 +210,7 @@ fn fg_start(ini: *const u16) -> u32 {
         }
     };
     let backend = fg_choice_start(&ini);
-    *LOG_PATH.lock().unwrap_or_else(PoisonError::into_inner) = path_setting(&ini, w!("Log"));
+    *lock_or_recover(&LOG_PATH) = path_setting(&ini, w!("Log"));
     if setting(&ini, w!("GraphicsDebug"), 0) != 0 {
         let mut debug: Option<ID3D12Debug> = None;
         if unsafe { D3D12GetDebugInterface(&mut debug) }.is_ok()
@@ -407,9 +404,7 @@ unsafe extern "system" fn rsf_unity_sr_start(ini: *const u16) -> u32 {
 extern "system" fn rsf_unity_sr_stop(_: *mut c_void) -> u32 {
     guarded(code::STOP_REFUSED, || {
         let previous = {
-            let mut path = DIAGNOSTICS_INI
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut path = lock_or_recover(&DIAGNOSTICS_INI);
             if !path.is_empty() && unsafe { rsf_overlay_saved_options_unregister(null_mut()) } != 0
             {
                 return code::STOP_REFUSED;

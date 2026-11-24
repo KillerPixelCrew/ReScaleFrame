@@ -6,11 +6,12 @@ use crate::cpu_policy::bad_screen_query;
 use crate::cpu_sources::clear_proof;
 use crate::hook_set::HookSet;
 use crate::platform::{self, Platform};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Mutex, PoisonError};
 use windows_sys::Win32::System::Performance::QueryPerformanceFrequency;
 
 const NAMED_CALLBACK_SLOT: u32 = 0x20b5130;
@@ -308,7 +309,7 @@ impl Control {
         }
         self.pinned = true;
         self.frequency = frequency;
-        *SERVICES.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        *lock_or_recover(&SERVICES) = None;
         true
     }
 
@@ -321,13 +322,7 @@ impl Control {
             return Err(StartRefusal::new(c"hook state", HOOKS[index].0, 0));
         }
         let base = platform.main_module();
-        if !self.pinned
-            || base != self.base
-            || SERVICES
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .is_none()
-        {
+        if !self.pinned || base != self.base || lock_or_recover(&SERVICES).is_none() {
             return Err(StartRefusal::new(c"hook state", 0, 0));
         }
         admission(platform, base)?;
@@ -361,18 +356,15 @@ pub(crate) fn prepare() -> bool {
     let Some(platform) = platform::get() else {
         return false;
     };
-    CONTROL
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .prepare(platform)
+    lock_or_recover(&CONTROL).prepare(platform)
 }
 
 pub(crate) fn bind(host: &rsf_game_host_services) -> bool {
-    let control = CONTROL.lock().unwrap_or_else(PoisonError::into_inner);
+    let control = lock_or_recover(&CONTROL);
     if control.frequency == 0 || !control.hooks.is_disabled() || busy() {
         return false;
     }
-    *SERVICES.lock().unwrap_or_else(PoisonError::into_inner) = Some(Services {
+    *lock_or_recover(&SERVICES) = Some(Services {
         host: *host,
         frequency: control.frequency,
     });
@@ -381,10 +373,7 @@ pub(crate) fn bind(host: &rsf_game_host_services) -> bool {
 
 pub(crate) fn start() -> Result<(), StartRefusal> {
     let platform = platform::get().ok_or_else(|| StartRefusal::new(c"hook state", 0, 0))?;
-    CONTROL
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .start(platform)
+    lock_or_recover(&CONTROL).start(platform)
 }
 
 pub(crate) fn quiesce() {
@@ -394,25 +383,22 @@ pub(crate) fn quiesce() {
 }
 
 pub(crate) fn disable() -> bool {
-    CONTROL
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .disable()
+    lock_or_recover(&CONTROL).disable()
 }
 
 pub(crate) fn stop() -> bool {
-    let mut control = CONTROL.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut control = lock_or_recover(&CONTROL);
     if !control.disable() {
         return false;
     }
     // The caller handles the other subsystem refusals before calling stop. No further
     // native entries may borrow these services, but resident trampolines can still forward.
-    *SERVICES.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    *lock_or_recover(&SERVICES) = None;
     true
 }
 
 pub(crate) fn services() -> Option<Services> {
-    *SERVICES.lock().unwrap_or_else(PoisonError::into_inner)
+    *lock_or_recover(&SERVICES)
 }
 
 pub(crate) fn active() -> bool {

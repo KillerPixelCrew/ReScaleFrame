@@ -5,6 +5,7 @@ use crate::layout::target_slot;
 use crate::platform::Platform;
 use crate::render_native::{desc, retain, thread, viewport};
 use crate::resolution;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_d3d11_host_capture as Capture;
 use rsf_game_sys::{
     RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL,
@@ -15,7 +16,7 @@ use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
 use std::ffi::{CStr, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_RENDER_TARGET_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC, ID3D11DeviceContext,
     ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11Texture2D,
@@ -67,7 +68,7 @@ static CAPTURE: OnceLock<usize> = OnceLock::new();
 static DESCRIBED: Mutex<[u32; 3]> = Mutex::new([0, 0, u32::MAX]);
 
 fn state() -> MutexGuard<'static, State> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&STATE)
 }
 
 pub(crate) fn pending() -> bool {
@@ -308,8 +309,7 @@ pub(crate) fn observe(
         pass.camera.render_height,
         selector,
     ];
-    let describe =
-        *DESCRIBED.lock().unwrap_or_else(PoisonError::into_inner) != dims && host.log.is_some();
+    let describe = *lock_or_recover(&DESCRIBED) != dims && host.log.is_some();
     let observations = [
         (12, c"native_underwater_mask"),
         (13, c"native_refraction_normals"),
@@ -352,7 +352,7 @@ pub(crate) fn observe(
             );
         }
     }
-    *DESCRIBED.lock().unwrap_or_else(PoisonError::into_inner) = dims;
+    *lock_or_recover(&DESCRIBED) = dims;
 }
 
 fn report_restore(platform: &Platform, host: &rsf_game_host_services, frame: u64) {

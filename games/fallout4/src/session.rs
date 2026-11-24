@@ -16,6 +16,7 @@ use crate::{
     render_hooks,
 };
 use rsf_game_sys::call_header::validate;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::same_upstream_identity;
 use rsf_game_sys::win32::{module_path, typed_export};
 use rsf_game_sys::{
@@ -23,7 +24,7 @@ use rsf_game_sys::{
     rsf_game_start_args, rsf_result,
 };
 use std::ffi::{CStr, c_void};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::core::{s, w};
 
@@ -69,7 +70,7 @@ static SESSION: Mutex<Session> = Mutex::new(Session {
 });
 
 fn session() -> MutexGuard<'static, Session> {
-    SESSION.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&SESSION)
 }
 
 use rsf_game_sys::ffi_util::wide_path as wide;

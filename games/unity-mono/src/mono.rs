@@ -4,10 +4,11 @@
 //! attachment is ours to detach; a caller's Unity/Mono thread and its current domain are never
 //! touched.
 use crate::sys::rsf_unity_native_api;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::win32::typed_export;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::{self, null_mut};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 use std::thread;
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -216,7 +217,7 @@ pub(crate) unsafe fn start(
     helper: &str,
     api: *mut rsf_unity_native_api,
 ) -> Result<&'static CStr, &'static CStr> {
-    let mut loaded = LOADED_HELPER.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut loaded = lock_or_recover(&LOADED_HELPER);
     if loaded.is_some() {
         return Err(ALREADY_LOADED);
     }
@@ -245,7 +246,7 @@ fn stop_attached(loaded: &Loaded) -> bool {
 
 /// Calls Bootstrap.Stop. True when no helper is loaded or the helper stopped its producers.
 pub(crate) fn stop() -> bool {
-    let mut loaded = LOADED_HELPER.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut loaded = lock_or_recover(&LOADED_HELPER);
     let Some(helper) = *loaded else {
         return true;
     };

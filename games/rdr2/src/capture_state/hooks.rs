@@ -3,10 +3,11 @@
 
 #[cfg(not(test))]
 use super::detours::{create_hook, enable_hook, hook_report, vtable_target};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 #[cfg(test)]
 use tests::{create_hook, enable_hook, hook_report, vtable_target};
 
@@ -47,7 +48,7 @@ fn different_target(role: usize, slot: u32, target: *mut c_void) {
 }
 
 fn hooks() -> MutexGuard<'static, [Hook; HOOK_COUNT]> {
-    HOOKS.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&HOOKS)
 }
 
 #[cfg(any(all(windows, not(test)), test))]

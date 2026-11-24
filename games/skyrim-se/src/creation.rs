@@ -9,11 +9,12 @@
 //! admission and the game's native creation and Present run unchanged.
 use crate::layout::*;
 use crate::platform::{self, CreationCall, CreationScope, NativeChain, Platform};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CStr, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 use rsf_game_sys::RSF_OK as OK;
 
@@ -71,7 +72,7 @@ unsafe impl Send for Shared {}
 
 fn lock() -> MutexGuard<'static, Shared> {
     // Hook callbacks must not unwind; a poisoned lock keeps its last consistent state.
-    SHARED.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&SHARED)
 }
 
 fn shared() -> Shared {

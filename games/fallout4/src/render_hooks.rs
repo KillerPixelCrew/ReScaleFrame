@@ -34,12 +34,13 @@ use crate::sys::{
     NativeWorldAdmission as WorldAdmission,
 };
 use crate::{MH_OK, guard, image, read};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
 use std::ffi::{CStr, c_void};
 use std::mem::offset_of;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::core::{s, w};
 
@@ -303,7 +304,7 @@ static CREATED: Mutex<[bool; HOOK_COUNT]> = Mutex::new([false; HOOK_COUNT]);
 static LIVE: AtomicBool = AtomicBool::new(false);
 
 fn created() -> MutexGuard<'static, [bool; HOOK_COUNT]> {
-    CREATED.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&CREATED)
 }
 
 fn target(hook: &Hook) -> *mut c_void {
@@ -311,7 +312,7 @@ fn target(hook: &Hook) -> *mut c_void {
 }
 
 fn report(message: &CStr) {
-    let host = HOST.lock().unwrap_or_else(PoisonError::into_inner).0;
+    let host = lock_or_recover(&HOST).0;
     let _ = crate::log_host(&host, message);
 }
 
@@ -396,7 +397,7 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> bool {
         }
         return false;
     }
-    HOST.lock().unwrap_or_else(PoisonError::into_inner).0 = *services;
+    lock_or_recover(&HOST).0 = *services;
     unsafe { rsf_fallout4_render_bind_host(services) };
     true
 }

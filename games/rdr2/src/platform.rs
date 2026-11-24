@@ -8,7 +8,6 @@ use rsf_minhook_sys::{
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
 
 #[cfg(windows)]
 #[path = "native_input.rs"]
@@ -40,9 +39,7 @@ pub(crate) unsafe extern "C" fn worker_tls_slots() -> usize {
 }
 
 /// Hook callbacks must not unwind; a poisoned lock keeps its last consistent state.
-pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
+pub(crate) use rsf_game_sys::ffi_util::lock_or_recover as lock;
 
 /// The native routine MinHook or a cloned table stored in `slot`.
 ///

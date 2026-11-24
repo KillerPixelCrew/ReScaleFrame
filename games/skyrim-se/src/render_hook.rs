@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Publication of a permanent render trampoline and its replaceable session binding.
 
+use rsf_game_sys::ffi_util::lock_or_recover;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -22,7 +23,7 @@ impl<T: Copy> RenderHook<T> {
     }
 
     pub(crate) fn binding(&self) -> Option<T> {
-        *self.binding.lock().unwrap_or_else(PoisonError::into_inner)
+        *lock_or_recover(&self.binding)
     }
 
     // The session serializes writers. The detour can observe its binding while enable runs.
@@ -44,7 +45,7 @@ impl<T: Copy> RenderHook<T> {
             .unwrap_or_else(PoisonError::into_inner)
             .replace(binding);
         if !enable() {
-            *self.binding.lock().unwrap_or_else(PoisonError::into_inner) = previous;
+            *lock_or_recover(&self.binding) = previous;
             return false;
         }
         self.live.store(true, Ordering::Release);

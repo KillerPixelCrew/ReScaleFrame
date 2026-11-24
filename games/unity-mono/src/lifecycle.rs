@@ -7,6 +7,7 @@ use crate::sys::rsf_unity_native_api;
 #[cfg(test)]
 use rsf_game_sys::RSF_GAME_ABI_VERSION;
 use rsf_game_sys::call_header::validate;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::win32::module_path;
 use rsf_game_sys::{
     rsf_game_control_args, rsf_game_prepare_args, rsf_game_renderer_status, rsf_game_start_args,
@@ -15,7 +16,7 @@ use rsf_game_sys::{
 use rsf_unity::bridge_native::{mono_prepare, mono_release, mono_try_close};
 use std::ffi::CStr;
 use std::ptr;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -75,7 +76,7 @@ static STATE: Mutex<State> = Mutex::new(State {
 });
 
 fn lock() -> MutexGuard<'static, State> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&STATE)
 }
 
 /// ReScaleFrame.Unity.Managed.dll beside this plugin, as UTF-8.

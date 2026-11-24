@@ -9,10 +9,11 @@ use crate::render_inputs;
 use crate::render_native::thread;
 use crate::session;
 use crate::taa;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_host_services;
 use std::ptr;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, PoisonError};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::core::Interface;
 
@@ -65,7 +66,7 @@ fn drain(platform: &Platform, state: &mut Restore) -> bool {
 }
 
 fn bypass(platform: &Platform, manager: usize) -> Option<TaaReceipt> {
-    let mut state = RESTORE.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut state = lock_or_recover(&RESTORE);
     if !drain(platform, &mut state) {
         return None;
     }
@@ -95,11 +96,7 @@ pub(crate) fn cleanup_pending() -> bool {
     let Some(platform) = platform::get() else {
         return crate::auxiliary::pending();
     };
-    crate::auxiliary::pending()
-        || !drain(
-            platform,
-            &mut RESTORE.lock().unwrap_or_else(PoisonError::into_inner),
-        )
+    crate::auxiliary::pending() || !drain(platform, &mut lock_or_recover(&RESTORE))
 }
 
 #[unsafe(no_mangle)]
@@ -108,10 +105,7 @@ extern "C" fn rsf_skyrim_postprocess_prepare(call: &HdrCall, receipt: &mut TaaRe
     let Some(platform) = platform::get() else {
         return;
     };
-    if !drain(
-        platform,
-        &mut RESTORE.lock().unwrap_or_else(PoisonError::into_inner),
-    ) {
+    if !drain(platform, &mut lock_or_recover(&RESTORE)) {
         return;
     }
     let mut reconstructed = false;
@@ -150,7 +144,7 @@ extern "C" fn rsf_skyrim_postprocess_restore(receipt: &TaaReceipt) {
         return;
     };
     let restored = {
-        let mut state = RESTORE.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = lock_or_recover(&RESTORE);
         *state = Restore::Pending(*receipt);
         drain(platform, &mut state)
     };

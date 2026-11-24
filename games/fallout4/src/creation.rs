@@ -17,12 +17,13 @@ use crate::sys::{
 };
 use crate::{EXECUTABLE, EXECUTABLE_SHA256, Plain, RSF_ERROR_NOT_READY, RSF_OK};
 use crate::{image, read};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::win32::{module_path, typed_export};
 use rsf_game_sys::windows_path::leaf_is;
 use rsf_game_sys::{host_log, rsf_game_host_services};
 use std::ffi::c_void;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Mutex, PoisonError};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
@@ -205,7 +206,7 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> bool {
         end,
         bind,
     };
-    *SCOPED.lock().unwrap_or_else(PoisonError::into_inner) = Some(scoped);
+    *lock_or_recover(&SCOPED) = Some(scoped);
     let _ = crate::log_host(
         services,
         c"Fallout4 AE cold creation prepared at thunk22C4CD9, caller1824D40; native arguments and outer wrapper retained; scene admission remains separate.",
@@ -319,7 +320,7 @@ fn close(
 fn observe(caller: usize, call: &rsf_fallout4_create_call) -> i32 {
     let _entry = Entry::new();
     let entry_error = unsafe { GetLastError() };
-    let scoped = *SCOPED.lock().unwrap_or_else(PoisonError::into_inner);
+    let scoped = *lock_or_recover(&SCOPED);
     let mut scope = rsf_d3d11_creation_scope {
         struct_size: size_of::<rsf_d3d11_creation_scope>() as u32,
         abi_version: RSF_D3D11_HOST_ABI_VERSION,

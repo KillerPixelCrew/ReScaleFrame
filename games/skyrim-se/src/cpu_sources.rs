@@ -2,6 +2,7 @@
 //! Native job and input producer proof, plus the two prospective source slots. The
 //! detours lend their thread-local scopes and make the native calls at their original sites.
 
+use rsf_game_sys::ffi_util::lock_or_recover;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -480,7 +481,7 @@ type Store = Mutex<Sources>;
 static PRODUCTION: Store = Mutex::new(Sources::EMPTY);
 
 fn lock_store(store: &Store) -> MutexGuard<'_, Sources> {
-    store.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(store)
 }
 
 #[repr(u32)]

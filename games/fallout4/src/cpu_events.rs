@@ -31,6 +31,7 @@ use handoff::{
     CpuIdentity, Phase, WorkerCycle, WorkerTicket, active_join_matches, invalidates_render_source,
 };
 use native::{InputState, StateRead};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_CPU_ABORT_INTERVENING_POLL, RSF_GAME_CPU_ABORT_NOT_CONSUMED,
     RSF_GAME_CPU_ABORT_OVERLAP, RSF_GAME_CPU_ABORT_QUIESCE, RSF_GAME_CPU_ABORT_STATE_CHANGED,
@@ -47,7 +48,7 @@ use rsf_game_sys::{
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::System::Memory::{
     MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
@@ -135,7 +136,7 @@ static HOST: Mutex<Option<Host>> = Mutex::new(None);
 const EMPTY_SERVICES: rsf_game_host_services = unsafe { std::mem::zeroed() };
 
 fn host() -> Option<Host> {
-    *HOST.lock().unwrap_or_else(PoisonError::into_inner)
+    *lock_or_recover(&HOST)
 }
 
 fn host_services() -> rsf_game_host_services {
@@ -318,7 +319,7 @@ static WORKER: Mutex<Worker> = Mutex::new(Worker {
 });
 
 fn worker() -> MutexGuard<'static, Worker> {
-    WORKER.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&WORKER)
 }
 
 fn render_copy() -> RenderCycle {
@@ -3111,7 +3112,7 @@ static PEEK: Mutex<PeekCell> = Mutex::new(PeekCell {
 });
 
 fn peek_cell() -> MutexGuard<'static, PeekCell> {
-    PEEK.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&PEEK)
 }
 
 fn peek_slot() -> *mut *mut c_void {
@@ -3288,7 +3289,7 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> bool {
     if HOOKS.clone().any(hook_created) {
         return false;
     }
-    *HOST.lock().unwrap_or_else(PoisonError::into_inner) = Some(Host {
+    *lock_or_recover(&HOST) = Some(Host {
         services: *services,
         event,
     });

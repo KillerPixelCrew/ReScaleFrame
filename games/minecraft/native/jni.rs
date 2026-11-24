@@ -9,6 +9,7 @@ use jni_sys::{
     JNIEnv, JNINativeInterface_, jboolean, jclass, jfloatArray, jint, jintArray, jlong, jlongArray,
     jobject, jstring,
 };
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::ffi_util::wide;
 use rsf_game_sys::rsf_game_render_pass;
 use rsf_game_sys::{
@@ -26,8 +27,8 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::ptr::{null, null_mut};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, Ordering::SeqCst};
-use std::sync::{Mutex, PoisonError};
 
 const OK: i32 = 0;
 const ENGINE_VERSION: &CStr = c"Minecraft 1.21.1";
@@ -40,7 +41,7 @@ static INPUT_PIPELINE: AtomicPtr<rsf_gl_pipeline> = AtomicPtr::new(null_mut());
 static LOG: Mutex<Option<File>> = Mutex::new(None);
 
 fn write_log(message: &[u8]) {
-    let mut file = LOG.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut file = lock_or_recover(&LOG);
     let Some(file) = file.as_mut() else {
         return;
     };
@@ -67,7 +68,7 @@ unsafe extern "C" fn log(_user: *mut c_void, message: *const c_char) {
 }
 
 fn open_log(root: &Path) {
-    let mut file = LOG.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut file = lock_or_recover(&LOG);
     if file.is_none() {
         *file = OpenOptions::new()
             .append(true)

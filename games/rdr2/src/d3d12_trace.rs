@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Opt-in observation of native RDR2 D3D12 results.
 use crate::diagnostics::path_units;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_minhook_sys::{
     MH_CreateHook, MH_ERROR_ALREADY_INITIALIZED, MH_EnableHook, MH_Initialize, MH_OK,
 };
@@ -11,7 +12,7 @@ use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
@@ -42,7 +43,7 @@ pub(crate) unsafe extern "C" fn install(target: usize, image_size: u32, path: *c
     // Publish before the detour becomes reachable. Keep the trampoline and trace settings
     // after a refused enable because rollback must not free a potentially reachable detour.
     let path = PathBuf::from(OsString::from_wide(unsafe { path_units(path) }));
-    *TRACE.lock().unwrap_or_else(PoisonError::into_inner) = Some(Trace {
+    *lock_or_recover(&TRACE) = Some(Trace {
         path,
         image_size: image_size as usize,
     });
@@ -77,7 +78,7 @@ unsafe extern "C" fn observe(result: i32, caller: usize) -> i32 {
 }
 
 fn record(result: i32, base: usize, caller: usize, tick: u64, thread: u32, stack: &[*mut c_void]) {
-    let trace = TRACE.lock().unwrap_or_else(PoisonError::into_inner);
+    let trace = lock_or_recover(&TRACE);
     let Some(trace) = trace.as_ref() else {
         return;
     };

@@ -8,6 +8,7 @@ use crate::render_native::{
     retain, rsf_skyrim_call_render_config, rsf_skyrim_call_upscale, thread,
 };
 use crate::taa;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::sampling::halton_f32 as halton;
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SR, rsf_game_host_services,
@@ -16,7 +17,7 @@ use rsf_game_sys::{
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 
@@ -73,7 +74,7 @@ thread_local! {
 }
 
 fn state() -> MutexGuard<'static, State> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&STATE)
 }
 
 fn words<const N: usize>(platform: &Platform, address: usize) -> Option<[u32; N]> {

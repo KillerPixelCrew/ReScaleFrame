@@ -6,6 +6,7 @@ use super::{
     before_device, excluded_byte, features_inactive, profile_matches,
 };
 use crate::platform::{self, Platform};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::ffi_util::wide_path;
 use rsf_game_sys::win32::module_path;
 use std::ffi::{CStr, OsString, c_char, c_void};
@@ -13,7 +14,7 @@ use std::fs::OpenOptions;
 use std::os::windows::{ffi::OsStringExt, fs::OpenOptionsExt, io::AsRawHandle};
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, FARPROC, FreeLibrary, GetLastError,
     HANDLE, HMODULE,
@@ -106,7 +107,7 @@ static STATE: Mutex<State> = Mutex::new(State {
 static HOOKS: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];
 
 fn state() -> MutexGuard<'static, State> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&STATE)
 }
 
 fn refuse(reason: &'static CStr, withdraw: bool) {

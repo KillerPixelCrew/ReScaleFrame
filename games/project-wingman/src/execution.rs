@@ -6,6 +6,7 @@ use crate::windows::{
     disable_hook, enable_hook, image_base, rsf_wingman_acquire_texture,
     rsf_wingman_release_texture, rsf_wingman_report_execution, tick_count,
 };
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::{
     RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_game_host_services, rsf_game_render_pass,
@@ -14,7 +15,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 
 // Install allocator retirement before any hook can publish a packet.
 const RVAS: [usize; 5] = [0x538_21d0, 0x5c4_4910, 0x5c2_d4a0, 0x656_9660, 0x5c4_c9c0];
@@ -139,7 +140,7 @@ thread_local! {
 }
 
 fn state() -> MutexGuard<'static, State> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&STATE)
 }
 
 pub(crate) fn prepare() -> bool {

@@ -16,6 +16,7 @@ use crate::observers::Control;
 use crate::platform::{self, Platform};
 use crate::plugin::{INVALID_ARGUMENT, SHA256};
 use rsf_game_sys::call_header::validate;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_motion_decode_params as MotionDecode;
 use rsf_game_sys::win32::module_path;
 use rsf_game_sys::{
@@ -30,7 +31,7 @@ use rsf_game_sys::{
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 const RUNTIME_MODULE: &str = "ReScaleFrame.Runtime.dll";
 const ENGINE_VERSION: &CStr = c"1.7.104";
@@ -183,7 +184,7 @@ static ACCEPTING: AtomicBool = AtomicBool::new(false);
 static SESSION: Mutex<Session> = Mutex::new(Session::new());
 
 fn session() -> MutexGuard<'static, Session> {
-    SESSION.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&SESSION)
 }
 
 const fn empty_services() -> rsf_game_host_services {
