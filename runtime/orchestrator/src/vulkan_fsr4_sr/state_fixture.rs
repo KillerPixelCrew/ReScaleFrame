@@ -559,11 +559,11 @@ impl Fixture {
             depth: image(21, 1),
             motion: image(22, 2),
             output: image(23, 3),
+            // The owner admits only a valid record (sharpening_policy::valid), as callers send.
             sharpening: rsf_sharpening_options {
-                struct_size: size_of::<rsf_sharpening_options>() as u32,
                 mode: SHARPENING_VENDOR,
                 sharpness: 0.7,
-                ..unsafe { std::mem::zeroed() }
+                ..crate::sharpening_policy::defaults()
             },
             motion_scale_x: -192.0,
             motion_scale_y: 108.0,
