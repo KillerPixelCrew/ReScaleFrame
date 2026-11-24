@@ -4,7 +4,7 @@
 # includes this file; the build scripts run it as
 #   cmake -DRUNTIME=<runtime directory> -P runtime/vulkan/streamline/verify-receipt.cmake
 # which prints the digest on stdout.
-file(READ "${CMAKE_CURRENT_LIST_DIR}/../../../integrations/godot/dependencies.json" RSF_VENDOR_PINS)
+file(READ "${CMAKE_CURRENT_LIST_DIR}/../../../eng/dependencies.json" RSF_VENDOR_PINS)
 string(JSON RSF_STREAMLINE_SOURCE_REVISION GET "${RSF_VENDOR_PINS}" vendor streamline_source revision)
 set(RSF_STREAMLINE_RECEIPT_DIR "${CMAKE_CURRENT_LIST_DIR}")
 

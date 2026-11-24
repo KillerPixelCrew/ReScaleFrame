@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 RELATIVE = Path("sdk/include/FidelityFX/gpu/fsr2/ffx_fsr2_accumulate.h")
-PINS = json.loads((Path(__file__).resolve().parents[2] / "integrations/godot/dependencies.json").read_text(encoding="utf-8"))
+PINS = json.loads((Path(__file__).resolve().parents[2] / "eng/dependencies.json").read_text(encoding="utf-8"))
 EXPECTED = "f9564cb2ca4de0d50dc852a01f1fac71c066a4be92a8bcc9a27aaac345d082c6"
 
 

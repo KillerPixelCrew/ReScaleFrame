@@ -11,9 +11,14 @@ import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+PINS = json.loads((ROOT / "eng/dependencies.json").read_text(encoding="utf-8"))["vendor"]
+# The signed vendor DLLs the packages carry, by file name, with their pinned SHA-256.
+VENDOR_HASHES = {name: value for family in ("streamline", "fidelityfx", "xess")
+                 for name, value in PINS[family]["sha256"].items()}
 # The Streamline runtime every packager copies.
-RUNTIME = ("sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "sl.pcl.dll",
-           "sl.dlss_g.dll", "sl.reflex.dll", "nvngx_dlss.dll", "nvngx_dlssg.dll")
+RUNTIME = tuple(PINS["streamline"]["sha256"])
+# Where eng/fetch-vendor.ps1 unpacks the pinned Streamline release (bin/x64 and licences).
+STREAMLINE_SDK = ROOT / "vendor/streamline-sdk"
 
 
 def git(*args: str) -> str:

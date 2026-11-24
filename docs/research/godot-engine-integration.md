@@ -14,7 +14,7 @@ Godot 4.7.2 stable is pinned to `ed1daf0bf001b61586d9930840f2f1394092c079`.
 godot-cpp is pinned to `8070599885b6df675fcad033dd032ce44be2b850`, using its
 4.7 single-precision API. Both official Windows editions were downloaded and
 checked against the release SHA512 sums. The checked-in
-[dependency lock](../../integrations/godot/dependencies.json) records these inputs.
+[dependency lock](../../eng/dependencies.json) records these inputs.
 References, engine binaries, SDKs and generated validation projects remain ignored.
 
 The public CompositorEffect interface supplies scene buffers, camera transforms

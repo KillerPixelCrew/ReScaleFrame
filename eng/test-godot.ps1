@@ -26,7 +26,7 @@ $taskGpuLease = Enter-RsfGodotValidation
 try {
 $taskLocal = Join-Path $taskRoot '.local/godot'
 $taskSource = Join-Path $taskRoot 'integrations/godot'
-$taskLock = Get-Content -Raw -LiteralPath (Join-Path $taskSource 'dependencies.json') | ConvertFrom-Json
+$taskLock = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'dependencies.json') | ConvertFrom-Json
 $taskPackage = Join-Path $taskLocal 'package/addons/rescaleframe'
 $taskRunStamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')
 $taskRunResults = @()

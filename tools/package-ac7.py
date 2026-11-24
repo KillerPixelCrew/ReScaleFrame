@@ -14,12 +14,13 @@ import uuid
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from package_common import ROOT, RUNTIME, copy, dependency_notices, digest, git, release_identity  # noqa: E402
+from package_common import (ROOT, RUNTIME, STREAMLINE_SDK, VENDOR_HASHES, copy, dependency_notices, digest, git,  # noqa: E402
+                            release_identity)
 
 
 def main(argv=None, *, release_revision=None, game_only=False):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--streamline-root", required=True, type=Path)
+    parser.add_argument("--streamline-root", type=Path, default=STREAMLINE_SDK)
     parser.add_argument("--fidelityfx-root", type=Path, default=ROOT / "vendor/fidelityfx")
     parser.add_argument("--xess-root", type=Path, default=ROOT / "vendor/xess")
     parser.add_argument("--output", type=Path, default=ROOT / "build/releases")
@@ -44,11 +45,8 @@ def main(argv=None, *, release_revision=None, game_only=False):
     # The FSR4 compatibility hook recognizes this exact signed SDK binary.
     fsr = args.fidelityfx_root / "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll"
     xess = args.xess_root / "bin/libxess.dll"
-    for source, expected in (
-        (fsr, "aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace"),
-        (xess, "251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7"),
-    ):
-        if digest(source) != expected:
+    for source in (fsr, xess):
+        if digest(source) != VENDOR_HASHES[source.name]:
             raise RuntimeError(f"{source.name} differs from the validated SR runtime.")
     for source, relative in (
         (native, "dinput8.dll"), (plugin, "ReScaleFrame.Game.AC7.dll"),

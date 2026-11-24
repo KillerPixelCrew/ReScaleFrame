@@ -14,7 +14,7 @@ $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'common.ps1')
 $taskSource = Join-Path $taskRoot 'integrations/godot'
 $taskBindings = Join-Path $taskRoot 'references/godot/godot-cpp'
-$taskLock = Get-Content -Raw -LiteralPath (Join-Path $taskSource 'dependencies.json') | ConvertFrom-Json
+$taskLock = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'dependencies.json') | ConvertFrom-Json
 if ($Prepare) { & (Join-Path $PSScriptRoot 'prepare-godot.ps1') }
 if (!(Test-Path -LiteralPath $taskBindings)) { throw 'Run eng/prepare-godot.ps1 first, or pass -Prepare.' }
 $taskRevision = & git -C $taskBindings rev-parse HEAD
@@ -47,11 +47,11 @@ Copy-Item -LiteralPath (Join-Path $taskRoot 'LICENSE') -Destination (Join-Path $
 Copy-Item -LiteralPath (Join-Path $taskBindings 'LICENSE.md') -Destination (Join-Path $taskPackage 'godot-cpp-LICENSE.md') -Force
 Copy-RsfGodotArtifact (Join-Path $taskRoot 'references/godot/engine/LICENSE.txt') (Join-Path $taskPackage 'Godot-LICENSE.txt')
 Copy-RsfGodotArtifact (Join-Path $taskRoot 'references/godot/engine/COPYRIGHT.txt') (Join-Path $taskPackage 'Godot-COPYRIGHT.txt')
-Copy-Item -LiteralPath (Join-Path $taskSource 'dependencies.json') -Destination $taskPackage -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'dependencies.json') -Destination $taskPackage -Force
 if ($StageRuntime) {
     $taskRuntime = Join-Path $taskPackage 'runtime'
     $taskPayload = Get-RsfVendorPayload $taskRoot
-    $taskSlSdk = Join-Path $taskRoot '.local/streamline/sdk'
+    $taskSlSdk = Join-Path $taskRoot 'vendor/streamline-sdk'
     $taskPayload['streamline/reflex.license.txt'] = Join-Path $taskSlSdk 'bin/x64/reflex.license.txt'
     $taskSlVulkan = Join-Path $taskRoot '.local/godot/vulkan/host/artifacts/streamline-production-selected-device-reflex/runtime'
     if (Test-Path -LiteralPath (Join-Path $taskSlVulkan 'streamline-sdk-build.json')) {

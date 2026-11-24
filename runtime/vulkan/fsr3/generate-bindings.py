@@ -14,7 +14,7 @@ from committed_bindings import bindgen, emit, finish  # noqa: E402
 sdk = Path(sys.argv[1]).resolve()
 vulkan = Path(sys.argv[2]).resolve()
 revision = subprocess.check_output(["git", "-C", sdk, "rev-parse", "HEAD"], text=True).strip()
-pins = json.loads((Path(__file__).resolve().parents[3] / "integrations/godot/dependencies.json").read_text(encoding="utf-8"))
+pins = json.loads((Path(__file__).resolve().parents[3] / "eng/dependencies.json").read_text(encoding="utf-8"))
 if revision != pins["vendor"]["fidelityfx_vulkan"]["revision"]:
     raise SystemExit("Expected the pinned FidelityFX Vulkan SDK 1.1.4 revision")
 

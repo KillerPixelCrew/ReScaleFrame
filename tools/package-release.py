@@ -17,7 +17,7 @@ import tomllib
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from package_common import ROOT, digest, digest_stream, git  # noqa: E402
+from package_common import ROOT, STREAMLINE_SDK, digest, digest_stream, git  # noqa: E402
 
 GAMES = ("AC7", "RDR2", "Anomaly", "DragNWash")
 
@@ -287,7 +287,7 @@ def assemble(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--streamline-root", required=True, type=Path)
+    parser.add_argument("--streamline-root", type=Path, default=STREAMLINE_SDK)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--build", action="store_true", help="explicitly build all shipping outputs before packaging")
     parser.add_argument("--dry-run", action="store_true", help="check source/freshness and list planned assets; write nothing")

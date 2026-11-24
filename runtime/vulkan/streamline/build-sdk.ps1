@@ -23,7 +23,7 @@ $artifactRoot = [IO.Path]::GetFullPath((Join-Path $root 'artifacts'))
 if (-not $output.StartsWith($artifactRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Streamline output must be inside the repository artifacts directory.'
 }
-$commit = (Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../../../integrations/godot/dependencies.json') | ConvertFrom-Json).vendor.streamline_source.revision
+$commit = (Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../../../eng/dependencies.json') | ConvertFrom-Json).vendor.streamline_source.revision
 if ((& git -C $sdk rev-parse HEAD).Trim() -ne $commit) { throw 'Unexpected Streamline source commit.' }
 $patch = Join-Path $PSScriptRoot 'sdk-fixes/prepare.py'
 $patchHash = (Get-FileHash -LiteralPath $patch).Hash

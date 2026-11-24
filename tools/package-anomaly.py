@@ -25,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import anomaly_motion_deploy as motion  # noqa: E402
 import anomaly_profiles  # noqa: E402
 import rsf_shader_pack as shader_pack  # noqa: E402
-from package_common import RUNTIME, copy, dependency_notices, digest, git, release_identity  # noqa: E402
+from package_common import (RUNTIME, STREAMLINE_SDK, VENDOR_HASHES, copy, dependency_notices, digest, git,  # noqa: E402
+                            release_identity)
 
 CONFIG = """[Loader]
 AutoStart=1
@@ -63,22 +64,8 @@ FGDebug=0
 FGDevelopment=0
 """
 
-# Retail Streamline 2.14.1, FidelityFX SDK 2.3.0 and XeSS SDK 3.0.2. The FSR/XeSS SR pins are the AC7/RDR2 pins;
-# the rest pin the same reviewed SDK set as well, rather than admitting arbitrary files from a supplied directory.
-VENDOR_HASHES = {'sl.interposer.dll': '8c87c9499461da561edd529aa9bf7831d67d7b94ebb1c1a5ed54ef4934e1ea4c',
- 'sl.common.dll': '82924a8954dd671e09351c5de0eb87ad0eb25b944cc9f9ab955ca1d9950de15d',
- 'sl.dlss.dll': '73bf52c0cfaa5900a8f3f4a91306e4625e7cca696dfb305aae44c9f97b582e1f',
- 'sl.pcl.dll': 'f13d51cfa05f4cd514df2026049e2db8adf359221713170ad386fd499915b582',
- 'sl.dlss_g.dll': 'f4a6b2b14dcc0b1485989e430d3b4e3a44ac1800b92ba1ad74f476e64fb2b09c',
- 'sl.reflex.dll': '0ce9725e3e03ea9e7f81d008b57f33ee365973d2e349131c8b1c3e3378fe2db0',
- 'nvngx_dlss.dll': '3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983',
- 'nvngx_dlssg.dll': 'ff6e90eb78b827927dff5b4ecc6b1c870c2e9bca29ed9f48c7d348cc9e170b82',
- 'amd_fidelityfx_upscaler_dx12.dll': 'aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace',
- 'amd_fidelityfx_loader_dx12.dll': 'e2191d3c0828be45eb8affd4e3ec0378f2293adc345b772a7170edcf3b021ecb',
- 'amd_fidelityfx_framegeneration_dx12.dll': 'e6843252f58b0341a0d80f6a20bc0d840643ee95bc48c22cac08745344577bb6',
- 'libxess.dll': '251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7',
- 'libxess_fg.dll': 'ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27',
- 'libxell.dll': 'd2030dcd694fda8f2ec7e044b13e6db8f0b56d4ba9113a5efad334e3f3ded8c7'}
+# The vendor DLLs are the reviewed SDK set pinned in eng/dependencies.json (VENDOR_HASHES), rather than arbitrary files
+# admitted from a supplied directory.
 MOTION_NOTICE = """# Anomaly runtime shader patch rules
 
 The package contains only RSF-authored rules and additions. Original shader source
@@ -202,7 +189,7 @@ def archive_stage(stage, archive, stamp):
 
 def main(argv=None, *, release_revision=None, game_only=False):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--streamline-root', required=True, type=Path)
+    parser.add_argument('--streamline-root', type=Path, default=STREAMLINE_SDK)
     parser.add_argument('--fidelityfx-root', type=Path, default=ROOT / 'vendor/fidelityfx')
     parser.add_argument('--xess-root', type=Path, default=ROOT / 'vendor/xess')
     parser.add_argument('--output', type=Path, default=ROOT / 'build/releases/anomaly')
