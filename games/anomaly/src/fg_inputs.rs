@@ -37,11 +37,6 @@ struct Description {
 #[derive(Copy, Clone)]
 struct Targets {
     pub depth_copy: *mut c_void,
-    // The full target set; dispatch receives the depth and motion views separately.
-    #[allow(dead_code)]
-    pub depth: *mut c_void,
-    #[allow(dead_code)]
-    pub motion: *mut c_void,
     pub depth_view: *mut c_void,
     pub depth_uav: *mut c_void,
     pub motion_uav: *mut c_void,
@@ -161,8 +156,6 @@ impl SurfaceSet {
     fn bindings(&self) -> Targets {
         Targets {
             depth_copy: self.depth_copy.as_ptr(),
-            depth: self.depth.as_ptr(),
-            motion: self.motion.as_ptr(),
             depth_view: self.depth_view.as_ptr(),
             depth_uav: self.depth_uav.as_ptr(),
             motion_uav: self.motion_uav.as_ptr(),

@@ -161,8 +161,6 @@ pub(super) unsafe fn dispatch(
     let targets = unsafe { &*targets };
     let bound = [
         targets.depth_copy,
-        targets.depth,
-        targets.motion,
         targets.depth_view,
         targets.depth_uav,
         targets.motion_uav,
@@ -173,7 +171,7 @@ pub(super) unsafe fn dispatch(
     u32::from(
         label(pipeline.shader) == "shader"
             && label(pipeline.constants) == "constants"
-            && bound == SET
+            && bound == [SET[0], SET[3], SET[4], SET[5]]
             && (values.has_motion == 0.0) == motion.is_null()
             && groups_x == (values.size[0] as u32).div_ceil(8)
             && groups_y == (values.size[1] as u32).div_ceil(8),
