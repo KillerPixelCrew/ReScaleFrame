@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::*;
+use rsf_test_support::cpu_event;
 use std::ffi::c_void;
 
 type Event = rsf_game_cpu_event;
@@ -13,17 +14,9 @@ const PING: u32 = 0xc123;
 
 pub(super) fn fact(session_id: u64, source_frame_id: u64, stage: u32, timestamp_qpc: u64) -> Event {
     Event {
-        struct_size: size_of::<Event>() as u32,
-        stage,
-        session_id,
-        source_frame_id,
-        timestamp_qpc,
-        qpc_frequency: 1000,
-        render_expected: 1,
-        input_kind: 0,
-        message_id: 0,
         event_version: RSF_GAME_CPU_EVENT_VERSION,
         flags: RSF_GAME_CPU_INPUT_KEYED,
+        ..cpu_event(session_id, source_frame_id, stage, timestamp_qpc, 1000)
     }
 }
 

@@ -273,15 +273,9 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_cpu(
     let _ = unsafe { QueryPerformanceCounter(&mut now) };
     let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
     let event = rsf_game_cpu_event {
-        struct_size: size_of::<rsf_game_cpu_event>() as u32,
         event_version: RSF_GAME_CPU_EVENT_VERSION,
-        stage,
-        session_id: host.session_id,
-        source_frame_id: source,
-        timestamp_qpc: now as u64,
-        qpc_frequency: frequency as u64,
         render_expected,
-        ..unsafe { std::mem::zeroed() }
+        ..rsf_test_support::cpu_event(host.session_id, source, stage, now as u64, frequency as u64)
     };
     unsafe { host.cpu_event.unwrap()(host.user, &event) };
 }

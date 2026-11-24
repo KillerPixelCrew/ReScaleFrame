@@ -11,7 +11,6 @@ use std::os::windows::ffi::OsStrExt;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
 use std::time::Instant;
-use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::{
     Direct3D::D3D_DRIVER_TYPE_UNKNOWN,
     Direct3D11::*,

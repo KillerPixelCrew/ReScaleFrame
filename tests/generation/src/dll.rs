@@ -210,19 +210,7 @@ unsafe extern "C" fn rsf_test_d3d11_fg_api(
 
     let session = 77;
     let frequency = qpc_frequency();
-    let cpu_header = |stage, id| rsf_game_cpu_event {
-        struct_size: size_of::<rsf_game_cpu_event>() as u32,
-        stage,
-        session_id: session,
-        source_frame_id: id,
-        timestamp_qpc: now(),
-        qpc_frequency: frequency,
-        render_expected: 1,
-        input_kind: 0,
-        message_id: 0,
-        event_version: 0,
-        flags: 0,
-    };
+    let cpu_header = |stage, id| rsf_test_support::cpu_event(session, id, stage, now(), frequency);
     let event = |stage, id| unsafe { cpu(&cpu_header(stage, id)) };
     check.that(
         event(RSF_GAME_CPU_FRAME_BEGIN, 1) == 1,

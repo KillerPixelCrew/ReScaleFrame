@@ -241,17 +241,16 @@ fn inputs(host: &rsf_game_host_services, session: u64, source: u64, window: &Win
     let call = host.cpu_event.ok_or("missing host CPU callback")?;
     let (timestamp_qpc, qpc_frequency) = timestamps()?;
     let received = rsf_game_cpu_event {
-        struct_size: size_of::<rsf_game_cpu_event>() as u32,
-        stage: RSF_GAME_CPU_INPUT_EVENT,
-        session_id: session,
-        source_frame_id: source,
-        timestamp_qpc,
-        qpc_frequency,
-        render_expected: 1,
         input_kind: 7,
-        message_id: 0,
         event_version: RSF_GAME_CPU_EVENT_VERSION,
         flags: RSF_GAME_CPU_INPUT_KEYED,
+        ..rsf_test_support::cpu_event(
+            session,
+            source,
+            RSF_GAME_CPU_INPUT_EVENT,
+            timestamp_qpc,
+            qpc_frequency,
+        )
     };
     unsafe {
         call(host.user, &received);

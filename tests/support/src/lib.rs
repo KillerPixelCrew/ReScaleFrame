@@ -28,7 +28,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, IUnknown, PCSTR, PCWSTR, Param, Result};
 
-use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
+use rsf_game_sys::{
+    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record, rsf_game_cpu_event,
+};
 
 /// Ends the fixture process at the first failed condition, naming the file and line.
 #[macro_export]
@@ -100,6 +102,27 @@ pub fn sr_camera(record: &mut rsf_frame_record, near_plane: f32, far_plane: f32)
         for diagonal in [0, 5, 10, 15] {
             matrix[diagonal] = 1.0;
         }
+    }
+}
+
+/// A CPU event with the struct size, identity and clock set, a rendered source expected, and the
+/// event version, flags and input fields zero. Callers change the rest with struct update syntax.
+pub fn cpu_event(
+    session_id: u64,
+    source_frame_id: u64,
+    stage: u32,
+    timestamp_qpc: u64,
+    qpc_frequency: u64,
+) -> rsf_game_cpu_event {
+    rsf_game_cpu_event {
+        struct_size: size_of::<rsf_game_cpu_event>() as u32,
+        stage,
+        session_id,
+        source_frame_id,
+        timestamp_qpc,
+        qpc_frequency,
+        render_expected: 1,
+        ..Default::default()
     }
 }
 

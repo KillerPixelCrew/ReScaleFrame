@@ -116,17 +116,9 @@ fn event(
     flags: u32,
 ) -> Event {
     Event {
-        struct_size: size_of::<Event>() as u32,
-        stage,
-        session_id: session,
-        source_frame_id: source,
-        timestamp_qpc: stamp,
-        qpc_frequency: hz,
-        render_expected: 1,
-        input_kind: 0,
-        message_id: 0,
         event_version: version,
         flags,
+        ..rsf_test_support::cpu_event(session, source, stage, stamp, hz)
     }
 }
 

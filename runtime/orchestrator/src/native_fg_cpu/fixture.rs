@@ -79,17 +79,16 @@ fn fact(source_frame_id: u64, stage: u32) -> Event {
         QueryPerformanceFrequency(&mut frequency);
     }
     Event {
-        struct_size: size_of::<Event>() as u32,
-        stage,
-        session_id: SESSION,
-        source_frame_id,
-        timestamp_qpc: stamp as u64,
-        qpc_frequency: frequency as u64,
         render_expected: 0,
-        input_kind: 0,
-        message_id: 0,
         event_version: RSF_GAME_CPU_EVENT_VERSION,
         flags: RSF_GAME_CPU_INPUT_KEYED,
+        ..rsf_test_support::cpu_event(
+            SESSION,
+            source_frame_id,
+            stage,
+            stamp as u64,
+            frequency as u64,
+        )
     }
 }
 

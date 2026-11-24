@@ -120,17 +120,15 @@ impl MarkerFixture<'_> {
 
     fn header(&self, id: u64, stage: u32, flags: u32, version: u32) -> rsf_game_cpu_event {
         rsf_game_cpu_event {
-            struct_size: size_of::<rsf_game_cpu_event>() as u32,
-            stage,
-            session_id: SESSION,
-            source_frame_id: id,
-            timestamp_qpc: call!(self.calls, stamp),
-            qpc_frequency: self.frequency,
-            render_expected: 1,
-            input_kind: 0,
-            message_id: 0,
             event_version: version,
             flags,
+            ..rsf_test_support::cpu_event(
+                SESSION,
+                id,
+                stage,
+                call!(self.calls, stamp),
+                self.frequency,
+            )
         }
     }
 

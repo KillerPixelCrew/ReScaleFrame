@@ -17,15 +17,7 @@ const SESSION: u64 = 42;
 const INVALID_ARGUMENT: i32 = -1;
 
 fn event(id: u64, stage: u32) -> rsf_game_cpu_event {
-    let mut event: rsf_game_cpu_event = unsafe { std::mem::zeroed() };
-    event.struct_size = size_of::<rsf_game_cpu_event>() as u32;
-    event.stage = stage;
-    event.session_id = SESSION;
-    event.source_frame_id = id;
-    event.timestamp_qpc = stamp();
-    event.qpc_frequency = frequency();
-    event.render_expected = 1;
-    event
+    rsf_test_support::cpu_event(SESSION, id, stage, stamp(), frequency())
 }
 
 #[unsafe(no_mangle)]

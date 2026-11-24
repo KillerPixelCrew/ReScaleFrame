@@ -173,13 +173,16 @@ fn cpu(source: u64) {
         RSF_GAME_CPU_SIMULATION_BEGIN,
         RSF_GAME_CPU_SIMULATION_END,
     ] {
-        let mut event: rsf_game_cpu_event = unsafe { std::mem::zeroed() };
-        event.struct_size = size_of::<rsf_game_cpu_event>() as u32;
-        event.stage = stage;
-        event.session_id = 1;
-        event.source_frame_id = source;
-        event.timestamp_qpc = present_fixture_time::stamp();
-        event.qpc_frequency = present_fixture_time::frequency();
+        let event = rsf_game_cpu_event {
+            render_expected: 0,
+            ..rsf_test_support::cpu_event(
+                1,
+                source,
+                stage,
+                present_fixture_time::stamp(),
+                present_fixture_time::frequency(),
+            )
+        };
         unsafe { rsf_fg12_cpu(&event) };
     }
 }
