@@ -295,7 +295,7 @@ pub(crate) unsafe extern "C" fn create_sdk_context() -> *mut c_void {
 #[cfg(test)]
 mod tests {
     // The Callback binding with a recording driver: the Anti-Lag 2 source, pacing and
-    // end-of-render contract, formerly the C-ABI fixture tests/game-sdk/src/antilag.rs.
+    // end-of-render contract.
     use super::*;
     use std::sync::Condvar;
     use std::time::Duration;

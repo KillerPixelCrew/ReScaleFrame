@@ -7,7 +7,7 @@ use crate::com_ref::test::{Fake as ComHeader, release};
 use crate::sys::rsf_dlss_setup;
 use std::cell::{Cell, RefCell};
 
-// Read only through the COM calls in com_ref.cpp.
+// Read only through com_ref's COM calls.
 #[repr(C)]
 struct Fake {
     com: ComHeader,

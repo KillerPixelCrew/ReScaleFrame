@@ -109,7 +109,6 @@ mod tests {
     use crate::sys::RSF_FG_STAT_LATENCY_AVAILABLE;
     use rsf_game_sys::backend_result::FEATURE_FAILED;
 
-    // Ported from tests/fg_status_snapshot.cpp with the C bridges it called.
     #[test]
     fn completed_status_contract() {
         let mut pending = EMPTY_NATIVE;
