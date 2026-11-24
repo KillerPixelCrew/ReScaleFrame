@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Win32 platform operations and input-window ownership for the Unity package.
 use super::services::{Handle, report_window_message};
-use crate::runtime_config::{file_name, terminated};
+use crate::runtime_config::{PATH_CAPACITY, file_name, terminated};
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::win32;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::ptr::{null, null_mut, without_provenance};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering::SeqCst};
@@ -59,29 +59,36 @@ pub(super) fn rsf_unity_package_session_seed() -> u64 {
     unsafe { GetTickCount64() }
 }
 
-pub(super) unsafe fn rsf_unity_package_timestamp(counter: *mut u64, frequency: *mut u64) {
+pub(super) fn rsf_unity_package_timestamp() -> (u64, u64) {
     let (mut now, mut ticks) = (0, 0);
     unsafe {
         QueryPerformanceCounter(&mut now);
         QueryPerformanceFrequency(&mut ticks);
-        counter.write(now as u64);
-        frequency.write(ticks as u64);
     }
+    (now as u64, ticks as u64)
 }
 
-pub(super) unsafe fn rsf_unity_package_local_app_data(output: *mut u16, capacity: u32) -> u32 {
-    let length = unsafe { GetEnvironmentVariableW(w!("LOCALAPPDATA"), output, capacity) };
-    if length < capacity { length } else { 0 }
+/// %LOCALAPPDATA%; None when it is unset, empty or longer than a path buffer.
+pub(super) fn rsf_unity_package_local_app_data() -> Option<Vec<u16>> {
+    let mut value = vec![0u16; PATH_CAPACITY];
+    let length = unsafe {
+        GetEnvironmentVariableW(w!("LOCALAPPDATA"), value.as_mut_ptr(), PATH_CAPACITY as u32)
+    } as usize;
+    (length != 0 && length < PATH_CAPACITY).then(|| {
+        value.truncate(length);
+        value
+    })
 }
 
-pub(super) unsafe fn rsf_unity_package_create_directory(path: *const u16) {
-    unsafe { CreateDirectoryW(path, null()) };
+pub(super) fn rsf_unity_package_create_directory(path: &[u16]) {
+    unsafe { CreateDirectoryW(terminated(path.to_vec()).as_ptr(), null()) };
 }
 
-pub(super) unsafe fn rsf_unity_package_log_open(path: *const u16) -> HANDLE {
+/// Null when the file cannot be opened.
+pub(super) fn rsf_unity_package_log_open(path: &[u16]) -> HANDLE {
     let file = unsafe {
         CreateFileW(
-            path,
+            terminated(path.to_vec()).as_ptr(),
             FILE_APPEND_DATA,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             null(),
@@ -97,13 +104,13 @@ pub(super) unsafe fn rsf_unity_package_log_open(path: *const u16) -> HANDLE {
     }
 }
 
-pub(super) unsafe fn rsf_unity_package_log_write(file: HANDLE, text: *const c_char) {
+pub(super) fn rsf_unity_package_log_write(file: HANDLE, text: &CStr) {
     unsafe {
-        OutputDebugStringA(text.cast());
+        OutputDebugStringA(text.as_ptr().cast());
         OutputDebugStringA(c"\n".as_ptr().cast());
         if !file.is_null() {
             let mut written = 0;
-            let line = CStr::from_ptr(text).to_bytes();
+            let line = text.to_bytes();
             WriteFile(
                 file,
                 line.as_ptr(),
@@ -116,7 +123,7 @@ pub(super) unsafe fn rsf_unity_package_log_write(file: HANDLE, text: *const c_ch
     }
 }
 
-pub(super) unsafe fn rsf_unity_package_log_close(file: HANDLE) {
+pub(super) fn rsf_unity_package_log_close(file: HANDLE) {
     unsafe { CloseHandle(file) };
 }
 
@@ -166,22 +173,22 @@ unsafe extern "system" fn input_proc(
     value
 }
 
-pub(super) fn rsf_unity_package_subclass(hwnd: HWND) -> u32 {
+pub(super) fn rsf_unity_package_subclass(hwnd: HWND) -> bool {
     let owner = unsafe { GetCurrentThreadId() };
     if unsafe { GetWindowThreadProcessId(hwnd, null_mut()) } != owner {
-        return 0;
+        return false;
     }
     let mut receipt = lock_or_recover(&RECEIPT);
     if let Some(active) = receipt.as_ref() {
         if !DESTROYED.load(SeqCst) {
             if active.window.0 != hwnd || active.owner != owner {
-                return 0;
+                return false;
             }
             REPORTING.store(true, SeqCst);
-            return 1;
+            return true;
         }
         if active.owner != owner || IN_FLIGHT.load(SeqCst) != 0 {
-            return 0;
+            return false;
         }
         // A Unity export supplies the outer module lifetime during this owner-thread call.
         unsafe { FreeLibrary(active.module.0) };
@@ -191,20 +198,20 @@ pub(super) fn rsf_unity_package_subclass(hwnd: HWND) -> u32 {
     let ours = input_proc as *const () as isize;
     let previous = unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) };
     if previous == 0 || previous == ours {
-        return 0;
+        return false;
     }
     let mut module: HMODULE = null_mut();
     let address = without_provenance(ours as usize);
     if unsafe { GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, address, &mut module) }
         == 0
     {
-        return 0;
+        return false;
     }
     PREVIOUS.store(previous, SeqCst);
     let replaced = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, ours) };
     if replaced == 0 {
         unsafe { FreeLibrary(module) };
-        return 0;
+        return false;
     }
     PREVIOUS.store(replaced, SeqCst);
     *receipt = Some(Receipt {
@@ -214,7 +221,7 @@ pub(super) fn rsf_unity_package_subclass(hwnd: HWND) -> u32 {
     });
     DESTROYED.store(false, SeqCst);
     REPORTING.store(true, SeqCst);
-    1
+    true
 }
 
 pub(super) fn rsf_unity_package_restore(hwnd: HWND) {
@@ -333,7 +340,7 @@ mod tests {
                 SetWindowLongPtrW(window, GWLP_WNDPROC, original as *const () as isize),
                 0
             );
-            assert_eq!(rsf_unity_package_subclass(window), 1);
+            assert!(rsf_unity_package_subclass(window));
             let previous = SetWindowLongPtrW(window, GWLP_WNDPROC, upper as *const () as isize);
             assert_eq!(previous, input_proc as *const () as isize);
             UPPER_PREVIOUS.store(previous, SeqCst);

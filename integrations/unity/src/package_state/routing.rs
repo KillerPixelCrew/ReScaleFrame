@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Unity render-pass routing, window admission and device events.
-use super::{
-    Leaves, OPERATIONS, PACKAGE, Package, RECORDING, UNITY_GRAPHICS, UNITY_INTERFACES, loaded, raw,
-};
+use super::{OPERATIONS, PACKAGE, Package, RECORDING, UNITY_GRAPHICS, UNITY_INTERFACES, raw};
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 use super::{presentation, services};
 use crate::sys::RSF_UNITY_PREVIEW_SOURCE_COMMON;
@@ -30,45 +28,6 @@ pub(super) const DEVICE_RETAINED: u8 = 2;
 
 const RETAINED: &str = "Unity device shutdown retained unproved bridge work; initialization requires a process restart.";
 
-// SAFETY for every call below: package.c's leaves, borrowing their pointer arguments
-// for the call only.
-impl Leaves {
-    fn fg_submitted(&self, session: u64, source_frame: u64) {
-        unsafe { raw::fg_submitted(session, source_frame) }
-    }
-    fn fg_hudless(&self, commands: *mut c_void, pass: &rsf_game_render_pass) {
-        unsafe { raw::fg_hudless(commands, pass) }
-    }
-    fn preview_present(&self, pass: &rsf_game_render_pass, common: bool) -> bool {
-        unsafe { raw::preview_present(pass.color_input, pass, common) }
-    }
-    /// ID3D12Resource::GetDesc's width, height and format.
-    fn texture_desc(&self, resource: *mut c_void) -> (u64, u32, u32) {
-        unsafe { raw::texture_desc(resource) }
-    }
-    fn preview_prepare(&self, width: u32, height: u32) -> bool {
-        raw::preview_prepare(width, height)
-    }
-    fn preview_owns(&self, window: *mut c_void) -> bool {
-        raw::preview_owns(window)
-    }
-    fn renderer_vulkan(&self) -> bool {
-        unsafe { raw::renderer_vulkan(UNITY_GRAPHICS.load(SeqCst)) != 0 }
-    }
-    fn vulkan_owns(&self, window: *mut c_void) -> bool {
-        raw::vulkan_owns(window)
-    }
-    fn window_class(&self, window: *mut c_void) -> u32 {
-        raw::window_class(window)
-    }
-    fn bridge_load(&self) -> bool {
-        unsafe { raw::bridge_load(UNITY_INTERFACES.load(SeqCst)) }
-    }
-    fn bridge_unload(&self) {
-        raw::bridge_unload()
-    }
-}
-
 impl Package {
     fn editor(&self) -> bool {
         self.services.editor.load(SeqCst)
@@ -81,7 +40,6 @@ impl Package {
     /// the original under the package operation lock.
     pub(super) fn route(
         &self,
-        leaves: &Leaves,
         commands: *mut c_void,
         original: &rsf_game_render_pass,
         begin: bool,
@@ -89,61 +47,57 @@ impl Package {
         let pass = *original;
         if !begin {
             if pass.role != RSF_GAME_RENDER_WINDOW {
-                leaves.fg_submitted(pass.session_id, pass.source_frame_id);
+                unsafe { raw::fg_submitted(pass.session_id, pass.source_frame_id) };
             }
             return false;
         }
         if pass.role == RSF_GAME_RENDER_WINDOW {
-            self.request_generation(leaves);
+            self.request_generation();
             if self.editor() {
-                let shown = leaves
-                    .preview_present(&pass, pass.flags & RSF_UNITY_PREVIEW_SOURCE_COMMON != 0);
-                self.preview_refused(leaves, shown, &pass);
+                let common = pass.flags & RSF_UNITY_PREVIEW_SOURCE_COMMON != 0;
+                let shown = unsafe { raw::preview_present(pass.color_input, &pass, common) };
+                self.preview_refused(shown, &pass);
             } else {
                 unsafe { raw::fg_window(&pass) };
             }
             return false;
         }
         if pass.role == RSF_GAME_RENDER_FINAL_SCENE {
-            leaves.fg_hudless(commands, &pass);
+            unsafe { raw::fg_hudless(commands, &pass) };
             return false;
         }
-        !self.editor()
-            || leaves.preview_prepare(pass.camera.output_width, pass.camera.output_height)
+        !self.editor() || raw::preview_prepare(pass.camera.output_width, pass.camera.output_height)
     }
 
     /// Every refusal counts toward the budget; one with a texture within
     /// the first four is logged with the texture's and camera's extents.
-    fn preview_refused(&self, leaves: &Leaves, shown: bool, pass: &rsf_game_render_pass) {
+    fn preview_refused(&self, shown: bool, pass: &rsf_game_render_pass) {
         if shown
             || self.preview_reports.fetch_add(1, SeqCst) >= PREVIEW_REPORTS
             || pass.color_input.is_null()
         {
             return;
         }
-        let (width, height, format) = leaves.texture_desc(pass.color_input);
-        self.log(
-            leaves,
-            &format!(
-                "Editor presentation pending: texture={width}x{height} format={format} expected={}x{}",
-                pass.camera.output_width, pass.camera.output_height
-            ),
-        );
+        let (width, height, format) = unsafe { raw::texture_desc(pass.color_input) };
+        self.log(&format!(
+            "Editor presentation pending: texture={width}x{height} format={format} expected={}x{}",
+            pass.camera.output_width, pass.camera.output_height
+        ));
     }
 
     /// Generation's window guard: the Editor accepts only the preview's window and the Vulkan
     /// player only its surface. Otherwise this process's UnityWndClass window is accepted, and
     /// another window of this process when it is the Vulkan surface.
-    pub(super) fn accept_window(&self, leaves: &Leaves, window: *mut c_void) -> bool {
+    pub(super) fn accept_window(&self, window: *mut c_void) -> bool {
         if self.editor() {
-            return leaves.preview_owns(window);
+            return raw::preview_owns(window);
         }
-        if leaves.renderer_vulkan() {
-            return leaves.vulkan_owns(window);
+        if unsafe { raw::renderer_vulkan(UNITY_GRAPHICS.load(SeqCst)) } != 0 {
+            return raw::vulkan_owns(window);
         }
-        match leaves.window_class(window) {
+        match raw::window_class(window) {
             CLASS_PLAYER => true,
-            CLASS_OTHER => leaves.vulkan_owns(window),
+            CLASS_OTHER => raw::vulkan_owns(window),
             _ => false,
         }
     }
@@ -152,10 +106,12 @@ impl Package {
     /// Unity's interfaces exist. A ready one retires the session, then unloads the bridge; a
     /// refused retirement retains the device, since Unity's void event can go on to destroy it
     /// and a later callback cannot assume borrowed Vulkan handles still name a live device.
-    pub(super) fn device_event(&self, leaves: &Leaves, initialize: bool) {
+    pub(super) fn device_event(&self, initialize: bool) {
         let device = self.device.load(SeqCst);
         if initialize {
-            if device == DEVICE_WAITING && leaves.bridge_load() {
+            if device == DEVICE_WAITING
+                && unsafe { raw::bridge_load(UNITY_INTERFACES.load(SeqCst)) }
+            {
                 self.device.store(DEVICE_READY, SeqCst);
             }
             return;
@@ -163,12 +119,12 @@ impl Package {
         if device != DEVICE_READY {
             return;
         }
-        if !self.retire(leaves) {
+        if !self.retire() {
             self.device.store(DEVICE_RETAINED, SeqCst);
-            self.log(leaves, RETAINED);
+            self.log(RETAINED);
             return;
         }
-        leaves.bridge_unload();
+        raw::bridge_unload();
         self.presentation.device_retired();
         self.device.store(DEVICE_WAITING, SeqCst);
     }
@@ -176,13 +132,13 @@ impl Package {
     /// rsfu_shutdown after the preview is hidden: nothing to retire while waiting, a retained
     /// device refuses, a ready one reports its session's retirement.
     #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
-    pub(super) fn shutdown(&self, leaves: &Leaves) -> bool {
+    pub(super) fn shutdown(&self) -> bool {
         let retired = match self.device.load(SeqCst) {
-            DEVICE_READY => self.retire(leaves),
+            DEVICE_READY => self.retire(),
             device => device == DEVICE_WAITING,
         };
         if retired {
-            self.stop_window_input(leaves);
+            self.stop_window_input();
         }
         retired
     }
@@ -195,33 +151,25 @@ pub(super) unsafe extern "C" fn render_callback(
     pass: *const rsf_game_render_pass,
     begin: u32,
 ) {
-    let Some(leaves) = loaded() else {
-        return;
-    };
     if commands.is_null() || pass.is_null() {
         return;
     }
     let pass = unsafe { &*pass };
-    if PACKAGE.route(leaves, commands, pass, begin != 0) {
+    if PACKAGE.route(commands, pass, begin != 0) {
         let _operation = lock_or_recover(&OPERATIONS);
-        PACKAGE.render(leaves, commands, pass);
+        PACKAGE.render(commands, pass);
     } else {
         RECORDING.set(None);
     }
 }
 
 pub(super) extern "C" fn accept_window(_: *mut c_void, window: *mut c_void) -> c_int {
-    loaded().map_or(0, |leaves| {
-        c_int::from(PACKAGE.accept_window(leaves, window))
-    })
+    c_int::from(PACKAGE.accept_window(window))
 }
 
 // The preview presenter consumes the Runtime observation receipt before presenting.
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(super) unsafe extern "C" fn observe_preview(pass: *const rsf_game_render_pass) -> c_int {
-    if loaded().is_none() {
-        return 0;
-    }
     // The presenter lends the pass with the preview swap chain already attached. The Runtime
     // entry cannot unwind, so its return is the observation.
     unsafe { raw::fg_window(pass) };
@@ -236,18 +184,13 @@ extern "C" fn rsf_unity_package_device_event(sdk_event: u32) {
         _ => return,
     };
     let _operation = lock_or_recover(&OPERATIONS);
-    if let Some(leaves) = loaded() {
-        PACKAGE.device_event(leaves, initialize);
-    }
+    PACKAGE.device_event(initialize);
 }
 
 #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
 pub(super) fn shutdown() -> bool {
     let _operation = lock_or_recover(&OPERATIONS);
-    match loaded() {
-        Some(leaves) => PACKAGE.shutdown(leaves),
-        None => PACKAGE.device.load(SeqCst) == DEVICE_WAITING,
-    }
+    PACKAGE.shutdown()
 }
 
 // Only the load/unload entries take this lock. Registration can call the device callback,
@@ -295,26 +238,4 @@ extern "C" fn rsf_unity_package_plugin_unload() {
     services::unload();
     UNITY_INTERFACES.store(null_mut(), SeqCst);
     UNITY_GRAPHICS.store(null_mut(), SeqCst);
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn routes_without_a_loaded_table() {
-        let pass: rsf_game_render_pass = Default::default();
-        unsafe {
-            render_callback(
-                std::ptr::null_mut(),
-                std::ptr::NonNull::dangling().as_ptr(),
-                &pass,
-                1,
-            );
-        }
-        // The static package's device is still waiting: shutdown has nothing to retire.
-        assert_eq!(accept_window(std::ptr::null_mut(), std::ptr::null_mut()), 0);
-        rsf_unity_package_device_event(RSF_UNITY_DEVICE_EVENT_INITIALIZE);
-        assert_eq!(PACKAGE.device.load(SeqCst), DEVICE_WAITING);
-        assert!(shutdown());
-    }
 }

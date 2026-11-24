@@ -5,7 +5,7 @@
 //! pass. The identity comes from [UnitySR] when the plugin loads and from rsfu_initialize for each
 //! session. SR views read it for their contexts. Auto uses the Runtime's
 //! rsf_fg_default_backend with the current D3D12 adapter.
-use super::{Leaves, Package, raw};
+use super::{Package, raw};
 use crate::generation::{self, Sources};
 use crate::sys::{RSF_FG_BACKEND_AUTO, RSF_REFLEX_OFF, rsf_fg12_setup, rsf_native_fg_options};
 use crate::sys::{RSF_FG_OFF, rsf_unity_package_view_setup};
@@ -100,29 +100,11 @@ impl Presentation {
     }
 }
 
-// SAFETY for every call below: as for the other leaves, package.c's functions that
-// borrow their pointer arguments for the call only.
-impl Leaves {
-    fn fg_install(&self, setup: &rsf_fg12_setup) -> i32 {
-        unsafe { raw::fg_install(setup) }
-    }
-    fn present_has_owner(&self) -> bool {
-        unsafe { raw::present_has_owner() != 0 }
-    }
-    fn present_request(&self, backend: u32) -> i32 {
-        unsafe { raw::present_request(backend) }
-    }
-    /// Auto's provider for Unity's adapter; None when the device or adapter cannot be read.
-    fn fg_default_backend(&self) -> Option<u32> {
-        raw::fg_default_backend()
-    }
-}
-
 impl Package {
     /// The one install: the Auto provider with generation off until rsfu_configure, switchable
     /// at run time, from the SDK root's fidelityfx, xess and streamline directories. A refusal
     /// is retried by the next call. Its result is the generation result.
-    pub(super) fn install(&self, leaves: &Leaves) {
+    pub(super) fn install(&self) {
         let identity = self.presentation.identity();
         let result = {
             let mut installed = lock_or_recover(&self.presentation.installed);
@@ -146,14 +128,14 @@ impl Package {
                 engine_version: identity.version.as_ptr(),
                 project_id: identity.project.as_ptr(),
             };
-            let setup = generation::setup(
+            let setup: rsf_fg12_setup = generation::setup(
                 RSF_FG_BACKEND_AUTO,
                 options,
                 &sources,
                 super::routing::accept_window,
                 super::services::backend_log,
             );
-            let result = leaves.fg_install(&setup);
+            let result = unsafe { raw::fg_install(&setup) };
             *installed = result == backend_result::OK;
             result
         };
@@ -163,25 +145,26 @@ impl Package {
     /// The window pass's request: nothing without a presentation owner, the
     /// stored provider with Auto resolved for Unity's adapter (nothing while it cannot be read),
     /// nothing while that provider is active, else the request, whose result is recorded.
-    pub(super) fn request_generation(&self, leaves: &Leaves) {
-        if !leaves.present_has_owner() {
+    pub(super) fn request_generation(&self) {
+        if unsafe { raw::present_has_owner() } == 0 {
             return;
         }
         let mut requested = self.lock().settings.fg_backend;
         if requested == RSF_FG_BACKEND_AUTO {
             requested = self.presentation.default_backend.load(SeqCst);
             if requested == 0 {
-                let Some(resolved) = leaves.fg_default_backend() else {
+                // Auto's provider for Unity's adapter; None while it cannot be read.
+                let Some(resolved) = raw::fg_default_backend() else {
                     return;
                 };
                 self.presentation.default_backend.store(resolved, SeqCst);
                 requested = resolved;
             }
         }
-        if requested == leaves.present_backend() {
+        if requested == unsafe { raw::present_backend() } {
             return;
         }
-        let result = leaves.present_request(requested);
+        let result = unsafe { raw::present_request(requested) };
         self.lock().status.fg_result = result;
     }
 }
@@ -198,9 +181,6 @@ pub(super) fn load() {
     const PROFILE_TEXT: usize = 256;
 
     let (editor, ini) = super::windows::startup_paths();
-    PACKAGE.services.editor.store(editor, SeqCst);
-    super::LOADED.store(true, SeqCst);
-    let leaves = &super::Leaves;
     let mut log = Vec::new();
     if let Some(ini) = unsafe { Ini::new(ini.as_ptr()) } {
         let root = utf8(&path_setting(&ini, w!("Runtime")));
@@ -211,7 +191,7 @@ pub(super) fn load() {
             .set_identity(Identity::new(&root, &version, &project));
         log = path_setting(&ini, w!("Log"));
     }
-    PACKAGE.loaded(leaves, editor, &log);
+    PACKAGE.loaded(editor, &log);
 }
 
 #[cfg(test)]

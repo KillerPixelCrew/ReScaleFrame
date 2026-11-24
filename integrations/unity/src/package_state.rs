@@ -120,111 +120,36 @@ const fn fresh_status() -> rsf_unity_package_status {
 static OPERATIONS: Mutex<()> = Mutex::new(());
 static UNITY_INTERFACES: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static UNITY_GRAPHICS: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
-/// Plugin load bound the leaves; every entry before it refuses.
-static LOADED: AtomicBool = AtomicBool::new(false);
 
-fn loaded() -> Option<&'static Leaves> {
-    LOADED.load(SeqCst).then_some(&Leaves)
-}
-
-/// Package callbacks and native leaves, called through `raw`: native.rs's bindings in production,
-/// the test module's fakes under test. Plugin load makes them available (`loaded`).
-struct Leaves;
-
+// The Runtime, bridge and Win32 calls: native.rs's bindings in production, the test module's
+// fakes under test. SAFETY for every `raw` call: the leaves borrow their pointer arguments for
+// the call only.
 #[cfg(not(test))]
 use native::raw;
 #[cfg(test)]
 use tests as raw;
 
-// SAFETY for every call below: the leaves borrow their pointer arguments for the call only.
-impl Leaves {
-    fn sharpening_valid(&self, options: &rsf_sharpening_options) -> bool {
-        raw::sharpening_valid(options)
-    }
-    fn dlss_preset_valid(&self, preset: u32) -> bool {
-        unsafe { raw::dlss_preset_valid(preset) != 0 }
-    }
-    /// The bridge always accepts the policy, so there is no result.
-    fn set_engine_spatial(&self, spatial: bool, quality: u32) {
-        raw::set_engine_spatial(u32::from(spatial), quality);
-    }
-    fn fg_options(&self, options: &rsf_native_fg_options) {
-        unsafe { raw::fg_options(options) }
-    }
-    /// The Runtime's generation status; zero-filled apart from struct_size when it has none.
-    fn fg_status(&self) -> rsf_native_fg_status {
-        let mut status = rsf_native_fg_status {
-            struct_size: size_of::<rsf_native_fg_status>() as u32,
-            ..Default::default()
-        };
-        unsafe { raw::fg_status(&mut status) };
-        status
-    }
-    fn latency_status(&self) -> Option<rsf_native_latency_status> {
-        let mut status = rsf_native_latency_status {
-            struct_size: size_of::<rsf_native_latency_status>() as u32,
-            version: LATENCY_STATUS_VERSION,
-            ..Default::default()
-        };
-        (unsafe { raw::latency_status(&mut status) } != 0).then_some(status)
-    }
-    fn present_backend(&self) -> u32 {
-        unsafe { raw::present_backend() }
-    }
-    fn present_switch_result(&self) -> i32 {
-        unsafe { raw::present_switch_result() }
-    }
-    fn present_generation(&self) -> u64 {
-        unsafe { raw::present_generation() }
-    }
-    fn bridge_activate(&self, enabled: bool) {
-        raw::bridge_activate(u32::from(enabled))
-    }
-    fn bridge_try_close(&self) -> bool {
-        raw::bridge_try_close()
-    }
-    fn end_session(&self, session: u64) -> bool {
-        unsafe { raw::end_session(session) != 0 }
-    }
-    fn sr_quality_supported(&self, backend: u32, quality: u32) -> bool {
-        unsafe { raw::sr_quality_supported(backend, quality) != 0 }
-    }
+/// The Runtime's generation status; zero-filled apart from struct_size when it has none.
+fn fg_status() -> rsf_native_fg_status {
+    let mut status = rsf_native_fg_status {
+        struct_size: size_of::<rsf_native_fg_status>() as u32,
+        ..Default::default()
+    };
+    unsafe { raw::fg_status(&mut status) };
+    status
+}
 
-    fn sr_create(
-        &self,
-        commands: *mut c_void,
-        setup: &mut rsf_unity_package_view_setup,
-    ) -> Option<(i32, *mut rsf_sr12)> {
-        unsafe { raw::sr_create(commands, setup) }
-    }
+fn latency_status() -> Option<rsf_native_latency_status> {
+    let mut status = rsf_native_latency_status {
+        struct_size: size_of::<rsf_native_latency_status>() as u32,
+        version: LATENCY_STATUS_VERSION,
+        ..Default::default()
+    };
+    (unsafe { raw::latency_status(&mut status) } != 0).then_some(status)
+}
 
-    /// The stored sharpening, or the Runtime defaults while its struct_size is zero.
-    fn sharpening(&self, stored: &rsf_sharpening_options) -> rsf_sharpening_options {
-        if stored.struct_size != 0 {
-            *stored
-        } else {
-            raw::sharpening_defaults()
-        }
-    }
-    /// The result is not read.
-    fn sr_set_sharpening(&self, sr: *mut rsf_sr12, options: &rsf_sharpening_options) {
-        unsafe { raw::sr_set_sharpening(sr, options) };
-    }
-    fn sr_evaluate(
-        &self,
-        sr: *mut rsf_sr12,
-        commands: *mut c_void,
-        pass: &rsf_game_render_pass,
-        slot: u32,
-    ) -> i32 {
-        unsafe { raw::sr_evaluate(sr, commands, pass, slot) }
-    }
-    fn sr_destroy(&self, sr: *mut rsf_sr12) {
-        unsafe { raw::sr_destroy(sr) }
-    }
-    fn bridge_finish_retirement(&self, commit: bool) {
-        raw::bridge_finish_retirement(commit)
-    }
+fn sr_destroy(sr: *mut rsf_sr12) {
+    unsafe { raw::sr_destroy(sr) }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -380,12 +305,12 @@ pub(crate) fn rsf_unity_package_sr_ring_retired(epoch: u64) {
 
 /// The settings range checks, in order: the sharpening and preset leaves are only called once
 /// the fields before them passed.
-fn acceptable(input: &rsf_unity_package_settings, leaves: &Leaves) -> bool {
+fn acceptable(input: &rsf_unity_package_settings) -> bool {
     input.abi_version == RSF_UNITY_SETTINGS_ABI_VERSION
         && input.sr_backend <= RSF_SR_AUTO
-        && (input.sharpening.struct_size == 0 || leaves.sharpening_valid(&input.sharpening))
+        && (input.sharpening.struct_size == 0 || raw::sharpening_valid(&input.sharpening))
         && input.quality <= ULTRA_QUALITY
-        && leaves.dlss_preset_valid(input.dlss_preset)
+        && unsafe { raw::dlss_preset_valid(input.dlss_preset) } != 0
         && input.fg_mode <= RSF_FG_FIXED
         && input.latency_mode <= MAX_LATENCY_MODE
         && (1..=MAX_GENERATED_FRAMES).contains(&input.generated_frames)
@@ -423,9 +348,9 @@ impl Package {
     /// Stores valid settings. A reconstruction change (backend, quality or DLSS model) sets the
     /// engine policy, withdraws the plan and temporal readiness and waits for the bridge's
     /// reconfiguring pass. Auto quality admission happens on the current graphics device.
-    fn configure(&self, input: &rsf_unity_package_settings, leaves: &Leaves) -> bool {
-        if !acceptable(input, leaves)
-            || !leaves.sr_quality_supported(input.sr_backend, input.quality)
+    fn configure(&self, input: &rsf_unity_package_settings) -> bool {
+        if !acceptable(input)
+            || unsafe { raw::sr_quality_supported(input.sr_backend, input.quality) } == 0
         {
             return false;
         }
@@ -436,7 +361,7 @@ impl Package {
                 || state.settings.dlss_preset != input.dlss_preset
         };
         if reconstruction_changed {
-            leaves.set_engine_spatial(input.sr_backend == RSF_SR_SPATIAL, input.quality);
+            raw::set_engine_spatial(u32::from(input.sr_backend == RSF_SR_SPATIAL), input.quality);
         }
         {
             let mut state = self.lock();
@@ -448,29 +373,29 @@ impl Package {
             state.settings = *input;
             state.status.requested_sr = input.sr_backend;
         }
-        leaves.fg_options(&rsf_native_fg_options {
+        let options = rsf_native_fg_options {
             struct_size: size_of::<rsf_native_fg_options>() as u32,
             mode: input.fg_mode,
             generated_frames: input.generated_frames,
             reflex_mode: input.latency_mode,
             frame_limit_us: input.frame_limit_us,
             debug: 0,
-        });
+        };
+        unsafe { raw::fg_options(&options) };
         true
     }
 
-    /// The stored status merged with the Runtime's generation and latency status. Leaves are called
-    /// in order: generation status, present
-    /// backend, provider-switch result, latency status.
-    fn status(&self, leaves: &Leaves) -> rsf_unity_package_status {
-        let fg = leaves.fg_status();
-        let fg_backend = leaves.present_backend();
+    /// The stored status merged with the Runtime's generation and latency status, read in order:
+    /// generation status, present backend, provider-switch result, latency status.
+    fn status(&self) -> rsf_unity_package_status {
+        let fg = fg_status();
+        let fg_backend = unsafe { raw::present_backend() };
         let fg_result = rsf_game_sys::presentation_result::PresentationResult {
             session: fg.last_result,
-            provider_switch: leaves.present_switch_result(),
+            provider_switch: unsafe { raw::present_switch_result() },
         }
         .aggregate();
-        let latency = leaves.latency_status().unwrap_or_default();
+        let latency = latency_status().unwrap_or_default();
         let mut state = self.lock();
         let status = &mut state.status;
         status.fg_backend = fg_backend;
@@ -503,8 +428,8 @@ impl Package {
         *status
     }
 
-    fn frame_counters(&self, leaves: &Leaves) -> rsf_unity_frame_counters {
-        let fg = leaves.fg_status();
+    fn frame_counters(&self) -> rsf_unity_frame_counters {
+        let fg = fg_status();
         rsf_unity_frame_counters {
             struct_size: size_of::<rsf_unity_frame_counters>() as u32,
             abi_version: FRAME_COUNTERS_ABI_VERSION,
@@ -512,15 +437,15 @@ impl Package {
             active: fg.vendor.active,
             total_presented: fg.vendor.total_presented,
             generated_presented: fg.vendor.generated_presented,
-            provider_generation: leaves.present_generation(),
+            provider_generation: unsafe { raw::present_generation() },
         }
     }
 
     /// The session's identity replaces the loaded one before open, which may install from it.
     /// The bridge's managed API is returned once the session has started.
-    fn initialize(&self, leaves: &Leaves, identity: Identity) -> Result<rsf_unity_native_api, i32> {
+    fn initialize(&self, identity: Identity) -> Result<rsf_unity_native_api, i32> {
         let session = self.lock().session;
-        if matches!(session, Session::Opening | Session::Started(_)) && !self.retire(leaves) {
+        if matches!(session, Session::Opening | Session::Started(_)) && !self.retire() {
             return Err(code::BUSY);
         }
         self.bridge_result.store(0, SeqCst);
@@ -532,34 +457,37 @@ impl Package {
             state.session = Session::Opening;
         }
         self.presentation.set_identity(identity);
-        if !self.open(leaves) {
+        if !self.open() {
             return Err(code::FAILED);
         }
         let settings = self.lock().settings;
-        leaves.set_engine_spatial(settings.sr_backend == RSF_SR_SPATIAL, settings.quality);
+        raw::set_engine_spatial(
+            u32::from(settings.sr_backend == RSF_SR_SPATIAL),
+            settings.quality,
+        );
         self.lock().session = Session::Started(self.services.session());
-        leaves.bridge_activate(true);
+        raw::bridge_activate(1);
         Ok(self.services.api())
     }
 
-    fn retire(&self, leaves: &Leaves) -> bool {
+    fn retire(&self) -> bool {
         let session = self.lock().session;
         if session == Session::Stopped {
             return true;
         }
-        if !leaves.bridge_try_close() {
+        if !raw::bridge_try_close() {
             return false;
         }
         // Native admission and the Vulkan presentation lease hold the checked fence proof.
         if let Session::Started(id) = session
-            && !leaves.end_session(id)
+            && unsafe { raw::end_session(id) } == 0
         {
-            leaves.bridge_finish_retirement(false);
+            raw::bridge_finish_retirement(false);
             return false;
         }
         self.views_released();
-        destroy_views(&mut self.lock_views(), leaves);
-        leaves.bridge_finish_retirement(true);
+        destroy_views(&mut self.lock_views());
+        raw::bridge_finish_retirement(true);
         self.services.retired();
         self.lock().session = Session::Stopped;
         true
@@ -624,7 +552,7 @@ impl Package {
     /// a reconfiguring pass releases every view, a view whose extents no longer fit is
     /// destroyed, a missing one is created, and evaluation waits for a valid camera, the end of
     /// a pending reconfiguration and a recording slot.
-    fn render(&self, leaves: &Leaves, commands: *mut c_void, original: &rsf_game_render_pass) {
+    fn render(&self, commands: *mut c_void, original: &rsf_game_render_pass) {
         let recording = RECORDING
             .take()
             .filter(|(list, _)| *list == commands)
@@ -639,11 +567,11 @@ impl Package {
         };
         if pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0 {
             self.reconfigured();
-            destroy_views(&mut views, leaves);
+            destroy_views(&mut views);
         }
         for sr in views.reap(pass.view_key, pass.source_frame_id) {
             if !sr.is_null() {
-                leaves.sr_destroy(sr);
+                sr_destroy(sr);
             }
         }
         let camera = &pass.camera;
@@ -652,11 +580,11 @@ impl Package {
             (camera.output_width, camera.output_height),
             (camera.render_width, camera.render_height),
         ) {
-            leaves.sr_destroy(view.sr);
+            sr_destroy(view.sr);
             *view = View::EMPTY;
         }
         if view.sr.is_null() {
-            match self.create_view(leaves, commands, &settings, camera) {
+            match self.create_view(commands, &settings, camera) {
                 Some(created) => *view = created,
                 None => {
                     view.seen(pass.source_frame_id);
@@ -672,8 +600,14 @@ impl Package {
             return;
         };
         view.record(recording);
-        leaves.sr_set_sharpening(view.sr, &leaves.sharpening(&settings.sharpening));
-        let result = leaves.sr_evaluate(view.sr, commands, &pass, slot);
+        // A zero struct_size selects the Runtime defaults. The result is not read.
+        let sharpening = if settings.sharpening.struct_size != 0 {
+            settings.sharpening
+        } else {
+            raw::sharpening_defaults()
+        };
+        unsafe { raw::sr_set_sharpening(view.sr, &sharpening) };
+        let result = unsafe { raw::sr_evaluate(view.sr, commands, &pass, slot) };
         self.evaluated(result, view.backend);
     }
 
@@ -682,7 +616,6 @@ impl Package {
     /// creation's result is the SR result. None leaves the view empty for the next pass.
     fn create_view(
         &self,
-        leaves: &Leaves,
         commands: *mut c_void,
         settings: &rsf_unity_package_settings,
         camera: &rsf_camera_frame,
@@ -706,7 +639,7 @@ impl Package {
         };
         let identity = self.presentation.identity();
         identity.lend(&mut setup);
-        let (created, sr) = leaves.sr_create(commands, &mut setup)?;
+        let (created, sr) = unsafe { raw::sr_create(commands, &mut setup) }?;
         self.lock().status.sr_result = created;
         let backend = setup.backend;
         let render = (setup.render_width, setup.render_height);
@@ -723,29 +656,26 @@ impl Package {
             if !sr.is_null() {
                 state.status.sr_result = backend_result::FEATURE_FAILED;
                 drop(state);
-                leaves.sr_destroy(sr);
+                sr_destroy(sr);
             }
             return None;
         }
         let mut view = View::created(sr, backend, output);
         view.render = render;
         self.view_planned(backend, output, view.render);
-        self.log(
-            leaves,
-            &format!(
-                "URP SR requested={} active={backend} result={created} {}x{} -> {}x{}",
-                settings.sr_backend, view.render.0, view.render.1, output.0, output.1
-            ),
-        );
+        self.log(&format!(
+            "URP SR requested={} active={backend} result={created} {}x{} -> {}x{}",
+            settings.sr_backend, view.render.0, view.render.1, output.0, output.1
+        ));
         Some(view)
     }
 }
 
 /// Destroys every view's context. Their submissions are retired: a reconfiguring pass follows
 /// the bridge's wait for its command ring, and session retirement follows the bridge's drain.
-fn destroy_views(views: &mut Views, leaves: &Leaves) {
+fn destroy_views(views: &mut Views) {
     for sr in views.take() {
-        leaves.sr_destroy(sr);
+        sr_destroy(sr);
     }
 }
 
@@ -757,15 +687,12 @@ unsafe fn struct_size<T>(value: *const T) -> u32 {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfu_configure(input: *const rsf_unity_package_settings) -> c_int {
     let _operation = lock_or_recover(&OPERATIONS);
-    let Some(leaves) = loaded() else {
-        return 0;
-    };
     if input.is_null()
         || unsafe { struct_size(input) } != size_of::<rsf_unity_package_settings>() as u32
     {
         return 0;
     }
-    c_int::from(PACKAGE.configure(&unsafe { input.read() }, leaves))
+    c_int::from(PACKAGE.configure(&unsafe { input.read() }))
 }
 
 /// Accepts a longer structure and writes only this version's fields.
@@ -785,29 +712,23 @@ unsafe extern "C" fn rsfu_settings(output: *mut rsf_unity_package_settings) -> c
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfu_status(output: *mut rsf_unity_package_status) -> c_int {
     let _operation = lock_or_recover(&OPERATIONS);
-    let Some(leaves) = loaded() else {
-        return 0;
-    };
     if output.is_null()
         || unsafe { struct_size(output) } != size_of::<rsf_unity_package_status>() as u32
     {
         return 0;
     }
-    unsafe { output.write(PACKAGE.status(leaves)) };
+    unsafe { output.write(PACKAGE.status()) };
     1
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfu_frame_counters(output: *mut rsf_unity_frame_counters) -> c_int {
-    let Some(leaves) = loaded() else {
-        return 0;
-    };
     if output.is_null()
         || unsafe { struct_size(output) } != size_of::<rsf_unity_frame_counters>() as u32
     {
         return 0;
     }
-    unsafe { output.write(PACKAGE.frame_counters(leaves)) };
+    unsafe { output.write(PACKAGE.frame_counters()) };
     1
 }
 
@@ -824,9 +745,6 @@ unsafe extern "C" fn rsfu_initialize(
     output: *mut rsf_unity_native_api,
 ) -> c_int {
     let _operation = lock_or_recover(&OPERATIONS);
-    let Some(leaves) = loaded() else {
-        return code::FAILED;
-    };
     if runtime.is_null() || engine.is_null() || project.is_null() || output.is_null() {
         return code::FAILED;
     }
@@ -837,7 +755,7 @@ unsafe extern "C" fn rsfu_initialize(
     }
     let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_bytes();
     let identity = Identity::new(text(runtime), text(engine), text(project));
-    match PACKAGE.initialize(leaves, identity) {
+    match PACKAGE.initialize(identity) {
         Ok(api) => {
             unsafe { output.write(api) };
             code::STARTED
@@ -1251,39 +1169,32 @@ mod tests {
         }
         1
     }
-    fn wide(path: *const u16) -> String {
-        let length = (0..).take_while(|&i| unsafe { *path.add(i) } != 0).count();
-        String::from_utf16(unsafe { std::slice::from_raw_parts(path, length) }).unwrap()
+    fn wide(path: &[u16]) -> String {
+        String::from_utf16(path).unwrap()
     }
     fn handle(value: usize) -> *mut c_void {
         without_provenance_mut(value)
     }
-    pub(super) unsafe fn local_app_data(output: *mut u16, capacity: u32) -> u32 {
+    pub(super) fn local_app_data() -> Option<Vec<u16>> {
         call("local".into());
-        assert_eq!(capacity, 32768);
-        let Some(local) = fake().local else {
-            return 0;
-        };
-        let local: Vec<u16> = local.encode_utf16().collect();
-        unsafe { output.copy_from_nonoverlapping(local.as_ptr(), local.len()) };
-        local.len() as u32
+        fake().local.map(|local| local.encode_utf16().collect())
     }
-    pub(super) unsafe fn create_directory(path: *const u16) {
+    pub(super) fn create_directory(path: &[u16]) {
         call(format!("mkdir {}", wide(path)));
     }
-    pub(super) unsafe fn log_open(path: *const u16) -> *mut c_void {
+    pub(super) fn log_open(path: &[u16]) -> *mut c_void {
         call(format!("open {}", wide(path)));
         handle(fake().file)
     }
-    pub(super) unsafe fn log_write(file: *mut c_void, text: *const c_char) {
-        let text = unsafe { CStr::from_ptr(text) }.to_str().unwrap();
+    pub(super) fn log_write(file: *mut c_void, text: &CStr) {
+        let text = text.to_str().unwrap();
         call(if file.is_null() {
             format!("log {text}")
         } else {
             format!("log {:#x} {text}", file as usize)
         });
     }
-    pub(super) unsafe fn log_close(file: *mut c_void) {
+    pub(super) fn log_close(file: *mut c_void) {
         call(format!("close {:#x}", file as usize));
     }
     pub(super) fn player_window() -> *mut c_void {
@@ -1294,9 +1205,9 @@ mod tests {
         call("parent".into());
         handle(fake().parent)
     }
-    pub(super) fn subclass(window: *mut c_void) -> u32 {
+    pub(super) fn subclass(window: *mut c_void) -> bool {
         call(format!("subclass {:#x}", window as usize));
-        fake().subclass_accepted.into()
+        fake().subclass_accepted
     }
     pub(super) fn restore(window: *mut c_void) {
         call(format!("restore {:#x}", window as usize));
@@ -1307,11 +1218,8 @@ mod tests {
             fake().raw
         })
     }
-    pub(super) unsafe fn timestamp(counter: *mut u64, frequency: *mut u64) {
-        unsafe {
-            counter.write(1000);
-            frequency.write(10);
-        }
+    pub(super) fn timestamp() -> (u64, u64) {
+        (1000, 10)
     }
     pub(super) unsafe fn cpu(event: *const rsf_game_cpu_event) {
         let e = unsafe { *event };
@@ -1385,10 +1293,9 @@ mod tests {
     }
 
     /// Fresh fakes and an empty call record for this test.
-    fn leaves() -> Leaves {
+    fn reset() {
         FAKE.with(|cell| cell.set(READY));
         calls();
-        Leaves
     }
 
     #[test]
@@ -1417,7 +1324,7 @@ mod tests {
     #[test]
     fn configuration_is_range_checked_in_order() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         let valid = DEFAULT_SETTINGS;
         let refused: [fn(&mut rsf_unity_package_settings); 10] = [
             |s| s.abi_version = 1,
@@ -1434,18 +1341,18 @@ mod tests {
         for change in refused {
             let mut input = valid;
             change(&mut input);
-            assert!(!package.configure(&input, &leaves));
+            assert!(!package.configure(&input));
         }
         calls();
         // A zero sharpening size skips its check; any other size is validated.
         let mut input = valid;
         input.sharpening.struct_size = 56;
         set(|f| f.sharpening_valid = false);
-        assert!(!package.configure(&input, &leaves));
+        assert!(!package.configure(&input));
         assert_eq!(calls(), ["sharpening"]);
         set(|f| f.sharpening_valid = true);
         set(|f| f.preset_valid = false);
-        assert!(!package.configure(&input, &leaves));
+        assert!(!package.configure(&input));
         assert_eq!(calls(), ["sharpening", "preset"]);
         set(|f| f.preset_valid = true);
         // Nothing was stored by the refusals.
@@ -1453,27 +1360,27 @@ mod tests {
         for backend in FG_BACKENDS {
             let mut input = valid;
             input.fg_backend = backend;
-            assert!(package.configure(&input, &leaves));
+            assert!(package.configure(&input));
         }
     }
 
     #[test]
     fn runtime_admits_explicit_quality_and_defers_auto() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         let mut input = DEFAULT_SETTINGS;
         input.quality = ULTRA_QUALITY;
         input.sr_backend = RSF_SR_DLSS;
-        assert!(!package.configure(&input, &leaves));
+        assert!(!package.configure(&input));
         input.sr_backend = RSF_SR_AUTO;
         package.lock().status.active_sr = RSF_SR_DLSS;
-        assert!(package.configure(&input, &leaves));
+        assert!(package.configure(&input));
     }
 
     #[test]
     fn a_reconstruction_change_waits_for_reconfiguration() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         package.view_planned(3, (1920, 1080), (1280, 720));
         assert!(package.temporal_ready.load(SeqCst));
         calls();
@@ -1483,7 +1390,7 @@ mod tests {
         input.generated_frames = 3;
         input.latency_mode = 2;
         input.frame_limit_us = 16_666;
-        assert!(package.configure(&input, &leaves));
+        assert!(package.configure(&input));
         assert_eq!(calls(), ["preset", "options 24 1 3 2 16666 0"]);
         assert!(package.temporal_ready.load(SeqCst));
         assert!(!package.lock().pending);
@@ -1491,7 +1398,7 @@ mod tests {
         // The engine's spatial path is a reconstruction change.
         input.sr_backend = RSF_SR_SPATIAL;
         input.quality = 3;
-        assert!(package.configure(&input, &leaves));
+        assert!(package.configure(&input));
         assert_eq!(
             calls(),
             ["preset", "spatial 1 3", "options 24 1 3 2 16666 0"]
@@ -1507,7 +1414,7 @@ mod tests {
         }
         input.dlss_preset = 10;
         input.sr_backend = RSF_SR_DLSS;
-        assert!(package.configure(&input, &leaves));
+        assert!(package.configure(&input));
         assert_eq!(
             calls(),
             ["preset", "spatial 0 3", "options 24 1 3 2 16666 0"]
@@ -1555,10 +1462,10 @@ mod tests {
     #[test]
     fn status_merges_the_runtime_and_a_bridge_failure() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         package.lock().status.active_sr = 3;
         calls();
-        let status = package.status(&leaves);
+        let status = package.status();
         assert_eq!(calls(), ["fg status", "backend", "switch", "latency"]);
         assert_eq!(
             (status.fg_backend, status.fg_available, status.fg_active),
@@ -1588,7 +1495,7 @@ mod tests {
         set(|f| f.latency = false);
         package.bridge_failed(-9);
         package.lock().status.sleep_calls = 1;
-        let status = package.status(&leaves);
+        let status = package.status();
         assert_eq!(calls(), ["fg status", "backend", "switch", "latency"]);
         assert_eq!(
             (status.fg_result, status.sr_result, status.active_sr),
@@ -1599,7 +1506,7 @@ mod tests {
         assert_eq!((status.latency_owner, status.keyboard_inputs), (0, 0));
         // The merge is stored.
         assert_eq!(package.lock().status.fg_backend, 5);
-        let counters = package.frame_counters(&leaves);
+        let counters = package.frame_counters();
         assert_eq!((counters.struct_size, counters.abi_version), (40, 1));
         assert_eq!((counters.valid, counters.active), (1, 1));
         assert_eq!(
@@ -1630,21 +1537,19 @@ mod tests {
         calls.extend(["surface", "seed", "prepare 42"].map(String::from));
         calls
     }
-    fn started(package: &Package, leaves: &Leaves, identity: Identity) -> Result<u64, i32> {
-        package
-            .initialize(leaves, identity)
-            .map(|api| api.session_id)
+    fn started(package: &Package, identity: Identity) -> Result<u64, i32> {
+        package.initialize(identity).map(|api| api.session_id)
     }
 
     #[test]
     fn sessions_start_retire_and_refuse_while_busy() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         package.lock().settings.quality = 2;
         package.bridge_failed(-4);
         let session = || Identity::new(b"R", b"6000", b"P");
         // The bridge's API, with the session id of the host services, is handed out.
-        assert_eq!(started(&package, &leaves, session()), Ok(42));
+        assert_eq!(started(&package, session()), Ok(42));
         assert_eq!(
             calls(),
             [
@@ -1664,20 +1569,20 @@ mod tests {
         set(|f| f.drained = false);
         // A busy restart keeps the running session's identity.
         assert_eq!(
-            started(&package, &leaves, Identity::new(b"Q", b"1", b"P")),
+            started(&package, Identity::new(b"Q", b"1", b"P")),
             Err(code::BUSY)
         );
         assert_eq!(calls(), ["close"]);
         assert_eq!(package.presentation.identity().root.to_bytes(), b"R");
         set(|f| f.drained = true);
         set(|f| f.ended = false);
-        assert_eq!(started(&package, &leaves, session()), Err(code::BUSY));
+        assert_eq!(started(&package, session()), Err(code::BUSY));
         assert_eq!(calls(), ["close", "end 42", "retain"]);
         assert!(package.temporal_ready.load(SeqCst));
         assert_eq!(package.services.session(), 42);
         set(|f| f.ended = true);
         set(|f| f.prepared = false);
-        assert_eq!(started(&package, &leaves, session()), Err(code::FAILED));
+        assert_eq!(started(&package, session()), Err(code::FAILED));
         // The log and the input window outlive the session.
         assert_eq!(
             calls(),
@@ -1700,12 +1605,12 @@ mod tests {
         assert!(!package.temporal_ready.load(SeqCst));
         assert_eq!(package.services.session(), 0);
         set(|f| f.drained = false);
-        assert_eq!(started(&package, &leaves, session()), Err(code::BUSY));
+        assert_eq!(started(&package, session()), Err(code::BUSY));
         assert_eq!(calls(), ["close"]);
         set(|f| f.drained = true);
         set(|f| f.prepared = true);
         package.lock().settings.sr_backend = RSF_SR_SPATIAL;
-        assert_eq!(started(&package, &leaves, session()), Ok(42));
+        assert_eq!(started(&package, session()), Ok(42));
         assert_eq!(
             calls(),
             [
@@ -1718,14 +1623,14 @@ mod tests {
         assert_eq!(package.lock().status.requested_sr, RSF_SR_SPATIAL);
         // Shutdown and device shutdown use the same checked transaction as restart.
         set(|f| f.drained = false);
-        assert!(!package.retire(&leaves));
+        assert!(!package.retire());
         assert_eq!(calls(), ["close"]);
         set(|f| f.drained = true);
-        assert!(package.retire(&leaves));
+        assert!(package.retire());
         assert_eq!(calls(), ["close", "end 42", "release"]);
         assert!(package.lock().session == Session::Stopped);
         set(|f| f.drained = false);
-        assert!(package.retire(&leaves));
+        assert!(package.retire());
         assert!(calls().is_empty());
     }
 
@@ -1748,10 +1653,10 @@ mod tests {
     #[test]
     fn a_view_is_created_once_and_evaluated_in_its_bound_slot() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         let pass = sr_pass(5, (1920, 1080), (960, 540));
         // Auto resolves for the adapter; the stored gameplay flag selects the flight screen.
-        package.render(&leaves, list(0xa0), &pass);
+        package.render(list(0xa0), &pass);
         assert_eq!(
             calls(),
             [
@@ -1776,18 +1681,18 @@ mod tests {
             assert_eq!((status.render_width, status.output_height), (1280, 1080));
         }
         // The view keeps its context and its list's slot; another list binds the next slot.
-        package.render(&leaves, list(0xa0), &pass);
+        package.render(list(0xa0), &pass);
         assert_eq!(calls(), ["defaults", "sharpen 56", "evaluate 0x103 0 4"]);
-        package.render(&leaves, list(0xb0), &pass);
+        package.render(list(0xb0), &pass);
         assert_eq!(calls(), ["defaults", "sharpen 56", "evaluate 0x103 1 4"]);
         // A temporal context keeps other engine render extents; stored sharpening is applied.
         package.lock().settings.sharpening.struct_size = 99;
         package.lock().settings.gameplay = 0;
-        package.render(&leaves, list(0xb0), &sr_pass(5, (1920, 1080), (1000, 500)));
+        package.render(list(0xb0), &sr_pass(5, (1920, 1080), (1000, 500)));
         assert_eq!(calls(), ["sharpen 99", "evaluate 0x103 1 1"]);
         // A refusal is counted and becomes the SR result.
         set(|f| f.evaluate_result = -6);
-        package.render(&leaves, list(0xb0), &pass);
+        package.render(list(0xb0), &pass);
         calls();
         let status = package.lock().status;
         assert_eq!((status.refused_frames, status.sr_result), (1, -6));
@@ -1795,7 +1700,7 @@ mod tests {
         set(|f| f.evaluate_result = 0);
         package.lock().settings.sr_backend = RSF_SR_DLSS;
         let wide = sr_pass(5, (2560, 1440), (960, 540));
-        package.render(&leaves, list(0xc0), &wide);
+        package.render(list(0xc0), &wide);
         assert_eq!(
             calls(),
             [
@@ -1808,24 +1713,24 @@ mod tests {
             ]
         );
         // A fourth list finds every slot of the view bound and is not evaluated.
-        package.render(&leaves, list(0xd0), &wide);
-        package.render(&leaves, list(0xe0), &wide);
+        package.render(list(0xd0), &wide);
+        package.render(list(0xe0), &wide);
         assert_eq!(calls().last().unwrap(), "evaluate 0x101 2 1");
-        package.render(&leaves, list(0xf0), &wide);
+        package.render(list(0xf0), &wide);
         assert!(calls().is_empty());
     }
 
     #[test]
     fn a_vendor_failure_falls_back_to_backend_zero() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         package.lock().settings.sr_backend = RSF_SR_DLSS;
         set(|f| f.vendor_creates = false);
         set(|f| f.create_result = -5);
         // Backend 0 plans the engine's render extents.
         set(|f| f.plan = (960, 540));
         let pass = sr_pass(1, (1920, 1080), (960, 540));
-        package.render(&leaves, list(0xa0), &pass);
+        package.render(list(0xa0), &pass);
         assert_eq!(
             calls(),
             [
@@ -1842,11 +1747,11 @@ mod tests {
         assert!(!package.temporal_ready.load(SeqCst));
         let status = package.lock().status;
         assert_eq!((status.sr_result, status.active_sr), (-5, 0));
-        package.render(&leaves, list(0xa0), &pass);
+        package.render(list(0xa0), &pass);
         assert_eq!(calls(), ["defaults", "sharpen 56", "evaluate 0x100 0 4"]);
         // A backend-zero context is replaced for other engine render extents.
         set(|f| f.plan = (1000, 500));
-        package.render(&leaves, list(0xa0), &sr_pass(1, (1920, 1080), (1000, 500)));
+        package.render(list(0xa0), &sr_pass(1, (1920, 1080), (1000, 500)));
         assert_eq!(
             calls(),
             [
@@ -1863,7 +1768,7 @@ mod tests {
         // The engine's spatial path asks for backend 0 directly and reports itself active.
         package.lock().settings.sr_backend = RSF_SR_SPATIAL;
         set(|f| f.create_result = 0);
-        package.render(&leaves, list(0xa0), &sr_pass(2, (1920, 1080), (960, 540)));
+        package.render(list(0xa0), &sr_pass(2, (1920, 1080), (960, 540)));
         assert_eq!(calls()[0], "create 0 1 0 1920x1080 960x540 1");
         assert_eq!(package.lock().status.active_sr, RSF_SR_SPATIAL);
     }
@@ -1871,11 +1776,11 @@ mod tests {
     #[test]
     fn a_view_is_created_with_the_package_identity() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         package
             .presentation
             .set_identity(Identity::new(b"R", b"6000", b"P"));
-        package.render(&leaves, list(0xa0), &sr_pass(1, (8, 8), (4, 4)));
+        package.render(list(0xa0), &sr_pass(1, (8, 8), (4, 4)));
         assert_eq!(
             calls()[1],
             "create 3 1 0 8x8 4x4 1 R R/streamline R/streamline/sl.interposer.dll R/fidelityfx \
@@ -1886,14 +1791,14 @@ mod tests {
     #[test]
     fn generation_installs_once_when_identified() {
         let package = Package::new();
-        let leaves = leaves();
-        package.install(&leaves);
+        reset();
+        package.install();
         assert!(calls().is_empty());
         package
             .presentation
             .set_identity(Identity::new(b"R", b"6000", b"P"));
         set(|f| f.install_result = -4);
-        package.install(&leaves);
+        package.install();
         // Auto, unlimited, generation off with Reflex off until rsfu_configure, inverted finite
         // depth in metres, switchable, HUD-less backbuffer, Unity's Streamline identity.
         assert_eq!(
@@ -1906,11 +1811,11 @@ mod tests {
         assert_eq!(package.lock().status.fg_result, -4);
         // A refusal is retried; an accepted install is not repeated.
         set(|f| f.install_result = 0);
-        package.install(&leaves);
+        package.install();
         assert_eq!(calls().len(), 1);
         assert_eq!(package.lock().status.fg_result, 0);
         package.lock().status.fg_result = 9;
-        package.install(&leaves);
+        package.install();
         assert!(calls().is_empty());
         assert_eq!(package.lock().status.fg_result, 9);
     }
@@ -1918,40 +1823,40 @@ mod tests {
     #[test]
     fn the_window_pass_requests_the_stored_provider() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         set(|f| f.owner = false);
-        package.request_generation(&leaves);
+        package.request_generation();
         assert_eq!(calls(), ["owner"]);
         set(|f| f.owner = true);
         // Auto waits for a readable adapter.
         set(|f| f.fg_adapter = None);
-        package.request_generation(&leaves);
+        package.request_generation();
         assert_eq!(calls(), ["owner", "fg default"]);
         // Auto resolves once; the active provider (5) is not requested again.
         set(|f| f.fg_adapter = Some(5));
-        package.request_generation(&leaves);
+        package.request_generation();
         assert_eq!(calls(), ["owner", "fg default", "backend"]);
         set(|f| f.fg_adapter = Some(3));
-        package.request_generation(&leaves);
+        package.request_generation();
         assert_eq!(calls(), ["owner", "backend"]);
         assert_eq!(package.lock().status.fg_result, 0);
-        package.device_event(&leaves, true);
-        package.device_event(&leaves, false);
-        package.device_event(&leaves, true);
+        package.device_event(true);
+        package.device_event(false);
+        package.device_event(true);
         calls();
-        package.request_generation(&leaves);
+        package.request_generation();
         assert_eq!(calls(), ["owner", "fg default", "backend", "request 3"]);
         // Another provider is requested and its result recorded.
         package.lock().settings.fg_backend = RSF_FG_BACKEND_DLSS;
         set(|f| f.request_result = -2);
-        package.request_generation(&leaves);
+        package.request_generation();
         assert_eq!(calls(), ["owner", "backend", "request 1"]);
         assert_eq!(package.lock().status.fg_result, -2);
         // An adapter without a provider resolves Auto to off, read again every pass.
         let package = Package::new();
         set(|f| f.fg_adapter = Some(0));
         for _ in 0..2 {
-            package.request_generation(&leaves);
+            package.request_generation();
             assert_eq!(calls(), ["owner", "fg default", "backend", "request 0"]);
         }
     }
@@ -1959,7 +1864,7 @@ mod tests {
     #[test]
     fn a_refused_or_invalid_plan_releases_the_context_without_publishing() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         let pass = sr_pass(1, (1920, 1080), (960, 540));
         for (result, extent, expected) in [
             (-4, (960, 540), -4),
@@ -1970,7 +1875,7 @@ mod tests {
                 f.plan_result = result;
                 f.plan = extent;
             });
-            package.render(&leaves, list(0xa0), &pass);
+            package.render(list(0xa0), &pass);
             assert_eq!(&calls()[2..], ["plan", "destroy 0x103"]);
             assert!(!package.temporal_ready.load(SeqCst));
             let state = package.lock();
@@ -1982,16 +1887,16 @@ mod tests {
     #[test]
     fn creation_and_evaluation_wait_for_their_inputs() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         package.lock().status.sr_result = 4;
         let pass = sr_pass(1, (1920, 1080), (960, 540));
         // An unreadable adapter or a list without a device leaves the view empty, unreported.
         set(|f| f.adapter = 0);
-        package.render(&leaves, list(0xa0), &pass);
+        package.render(list(0xa0), &pass);
         assert_eq!(calls(), ["default"]);
         package.lock().settings.sr_backend = RSF_SR_DLSS;
         set(|f| f.device = false);
-        package.render(&leaves, list(0xa0), &pass);
+        package.render(list(0xa0), &pass);
         assert_eq!(calls(), ["create 1 1 0 1920x1080 960x540 1"]);
         assert_eq!(package.lock().status.sr_result, 4);
         assert!(package.lock_views().entry(1).sr.is_null());
@@ -1999,19 +1904,19 @@ mod tests {
         set(|f| f.device = true);
         let mut probe = pass;
         probe.camera_valid = 0;
-        package.render(&leaves, list(0xa0), &probe);
+        package.render(list(0xa0), &probe);
         assert_eq!(
             calls().last().unwrap(),
             "log URP SR requested=1 active=1 result=0 1280x720 -> 1920x1080"
         );
         package.lock().pending = true;
-        package.render(&leaves, list(0xa0), &pass);
+        package.render(list(0xa0), &pass);
         assert!(calls().is_empty());
         // A reconfiguring pass releases every view, then plans the new one without evaluating.
         package.lock_views().entry(9);
         package.lock().status.active_sr = 1;
         probe.flags = RSF_GAME_RENDER_RECONFIGURE;
-        package.render(&leaves, list(0xa0), &probe);
+        package.render(list(0xa0), &probe);
         assert_eq!(
             calls(),
             [
@@ -2024,7 +1929,7 @@ mod tests {
         );
         assert!(!package.lock().pending);
         assert!(package.temporal_ready.load(SeqCst));
-        package.render(&leaves, list(0xa0), &pass);
+        package.render(list(0xa0), &pass);
         assert_eq!(calls().last().unwrap(), "evaluate 0x101 0 4");
     }
 
@@ -2064,14 +1969,14 @@ mod tests {
         unsafe {
             routing::render_callback(null_mut(), null_mut(), &pass, 1);
             routing::render_callback(null_mut(), list(1), std::ptr::null(), 1);
-            routing::render_callback(null_mut(), list(1), &pass, 1);
         }
         assert!(calls().is_empty());
         let (text, none) = (c"x".as_ptr(), std::ptr::null());
         let mut api: rsf_unity_native_api = Default::default();
         let output = &raw mut api;
         unsafe {
-            assert_eq!(rsfu_initialize(text, text, text, output), code::FAILED);
+            // Unity's device has not initialized yet.
+            assert_eq!(rsfu_initialize(text, text, text, output), code::BUSY);
             assert_eq!(rsfu_initialize(none, text, text, output), code::FAILED);
             assert_eq!(rsfu_initialize(text, none, text, output), code::FAILED);
             assert_eq!(rsfu_initialize(text, text, none, output), code::FAILED);
@@ -2091,87 +1996,87 @@ mod tests {
     #[test]
     fn the_player_loads_its_log_and_installs_once() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         package
             .presentation
             .set_identity(Identity::new(b"R", b"6000", b"P"));
-        package.loaded(&leaves, false, &wide_text("C:\\rsf.log"));
+        package.loaded(false, &wide_text("C:\\rsf.log"));
         let loaded = calls();
         assert_eq!(loaded[0], "open C:\\rsf.log");
         assert!(loaded[1].starts_with("install 152 7 "));
         assert_eq!(loaded.len(), 2);
         // The configured log stands in for the process log; lines reach both outputs.
-        package.log(&leaves, "hello");
+        package.log("hello");
         assert_eq!(calls(), ["log 0x10 hello"]);
-        assert!(package.open(&leaves));
+        assert!(package.open());
         assert_eq!(
             calls(),
             ["player", "subclass 0x20", "surface", "seed", "prepare 42"]
         );
         // Unload restores the procedure and closes the log; later lines reach the debugger only.
-        package.unload(&leaves);
+        package.unload();
         assert_eq!(calls(), ["restore 0x20", "close 0x10"]);
-        package.log(&leaves, "late");
+        package.log("late");
         assert_eq!(calls(), ["log late"]);
-        package.unload(&leaves);
+        package.unload();
         assert!(calls().is_empty());
         // The player has no preview input.
-        package.preview_input(&leaves);
+        package.preview_input();
         assert!(calls().is_empty());
     }
 
     #[test]
     fn the_editor_installs_per_session_and_hooks_the_preview() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         package
             .presentation
             .set_identity(Identity::new(b"R", b"6000", b"P"));
-        package.loaded(&leaves, true, &[]);
+        package.loaded(true, &[]);
         assert!(calls().is_empty());
         // No player window and no Vulkan surface: the preview presents in the Editor.
-        assert!(package.open(&leaves));
+        assert!(package.open());
         let opened = calls();
         assert_eq!(opened[0], "local");
         assert!(opened[4].starts_with("install 152 7 "));
         assert_eq!(opened[5..], ["seed", "prepare 42"]);
         // The preview's parent is hooked once it exists, then kept.
         set(|f| f.parent = 0);
-        package.preview_input(&leaves);
+        package.preview_input();
         assert_eq!(calls(), ["parent"]);
         set(|f| f.parent = 0x40);
-        package.preview_input(&leaves);
+        package.preview_input();
         assert_eq!(calls(), ["parent", "subclass 0x40"]);
-        package.preview_input(&leaves);
+        package.preview_input();
         assert!(calls().is_empty());
-        assert!(package.open(&leaves));
+        assert!(package.open());
         assert_eq!(calls(), ["seed", "prepare 42"]);
     }
 
     #[test]
     fn a_refused_window_subclass_is_retried() {
         let package = Package::new();
-        let leaves = leaves();
-        package.loaded(&leaves, true, &[]);
+        reset();
+        package.loaded(true, &[]);
         set(|f| f.subclass_accepted = false);
-        package.preview_input(&leaves);
+        package.preview_input();
         assert_eq!(calls(), ["parent", "subclass 0x40"]);
         set(|f| f.subclass_accepted = true);
-        package.preview_input(&leaves);
+        package.preview_input();
         assert_eq!(calls(), ["parent", "subclass 0x40"]);
-        package.preview_input(&leaves);
+        package.preview_input();
         assert!(calls().is_empty());
     }
 
     #[test]
     fn a_refused_log_or_surface_is_retried_by_the_next_session() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         set(|f| f.file = 0);
-        package.loaded(&leaves, false, &wide_text("C:\\rsf.log"));
+        package.loaded(false, &wide_text("C:\\rsf.log"));
         assert_eq!(calls(), ["open C:\\rsf.log"]);
         set(|f| f.surface = false);
-        assert!(!package.open(&leaves));
+        assert!(!package.open());
         let mut refused = opened(true);
         refused.truncate(refused.len() - 2);
         refused.push(
@@ -2181,7 +2086,7 @@ mod tests {
         // Without %LOCALAPPDATA% there is no process log; the window stays hooked.
         set(|f| f.surface = true);
         set(|f| f.local = None);
-        assert!(package.open(&leaves));
+        assert!(package.open());
         assert_eq!(calls(), ["local", "surface", "seed", "prepare 42"]);
     }
 
@@ -2189,7 +2094,7 @@ mod tests {
     fn received_input_is_keyed_to_the_cpu_frame_in_progress() {
         use rsf_game_sys::{RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END};
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         package.services.session.store(42, SeqCst);
         let frame = |stage, source| rsf_game_cpu_event {
             struct_size: 64,
@@ -2205,19 +2110,19 @@ mod tests {
             flags: 0,
         };
         // Outside a frame a keyed message is unframed; any other message carries no kind.
-        package.window_message(&leaves, 0x0100, 0);
+        package.window_message(0x0100, 0);
         assert_eq!(calls(), ["cpu 5 42 0 1000/10 1 0x100 21 1"]);
-        package.window_message(&leaves, 0x000f, 0);
+        package.window_message(0x000f, 0);
         assert_eq!(calls(), ["cpu 5 42 0 1000/10 0 0xf 5 1"]);
         // The bridge's events reach the Runtime unchanged.
-        package.cpu_event(&leaves, &frame(RSF_GAME_CPU_FRAME_BEGIN, 7));
+        package.cpu_event(&frame(RSF_GAME_CPU_FRAME_BEGIN, 7));
         assert_eq!(calls(), ["cpu 0 42 7 5/10 0 0x0 0 1"]);
-        package.window_message(&leaves, 0x020e, 0);
+        package.window_message(0x020e, 0);
         assert_eq!(calls(), ["cpu 5 42 7 1000/10 2 0x20e 5 1"]);
         // WM_INPUT carries its raw device's kind.
         for (raw, kind) in [(Some(1), 1), (Some(0), 2), (Some(2), 0), (None, 0)] {
             set(|f| f.raw = raw);
-            package.window_message(&leaves, 0x00ff, 9);
+            package.window_message(0x00ff, 9);
             assert_eq!(
                 calls(),
                 [
@@ -2227,15 +2132,15 @@ mod tests {
             );
         }
         // Managed input is keyed to its frame only while that frame is in progress.
-        assert_eq!(package.input(&leaves, 7, 3), backend_result::OK);
+        assert_eq!(package.input(7, 3), backend_result::OK);
         assert_eq!(calls(), ["cpu 5 42 7 1000/10 3 0x0 1 1"]);
-        package.input(&leaves, 6, 4);
+        package.input(6, 4);
         assert_eq!(calls(), ["cpu 5 42 0 1000/10 4 0x0 17 1"]);
-        package.cpu_event(&leaves, &frame(RSF_GAME_CPU_FRAME_END, 7));
+        package.cpu_event(&frame(RSF_GAME_CPU_FRAME_END, 7));
         assert_eq!(calls(), ["cpu 4 42 7 5/10 0 0x0 0 1"]);
-        package.input(&leaves, 7, 1);
+        package.input(7, 1);
         assert_eq!(calls(), ["cpu 5 42 0 1000/10 1 0x0 17 1"]);
-        package.window_message(&leaves, 0x0109, 0);
+        package.window_message(0x0109, 0);
         assert_eq!(calls(), ["cpu 5 42 0 1000/10 1 0x109 21 1"]);
     }
 
@@ -2245,25 +2150,25 @@ mod tests {
             RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW,
         };
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         set(|f| f.owner = false);
         let mut pass = sr_pass(3, (8, 8), (4, 4));
         (pass.role, pass.session_id, pass.source_frame_id) = (RSF_GAME_RENDER_SR, 42, 7);
         // An end reports every pass but the window's as submitted.
-        assert!(!package.route(&leaves, list(1), &pass, false));
+        assert!(!package.route(list(1), &pass, false));
         assert_eq!(calls(), ["submitted 42 7"]);
         pass.role = RSF_GAME_RENDER_WINDOW;
-        assert!(!package.route(&leaves, list(1), &pass, false));
+        assert!(!package.route(list(1), &pass, false));
         assert!(calls().is_empty());
         // The player's window pass asks for the provider, then hands the pass to generation.
-        assert!(!package.route(&leaves, list(1), &pass, true));
+        assert!(!package.route(list(1), &pass, true));
         assert_eq!(calls(), ["owner", "window 3"]);
         pass.role = RSF_GAME_RENDER_FINAL_SCENE;
-        assert!(!package.route(&leaves, list(1), &pass, true));
+        assert!(!package.route(list(1), &pass, true));
         assert_eq!(calls(), ["hudless 0x1 3"]);
         // Any other pass goes to the SR pass; the player has no preview to prepare.
         pass.role = RSF_GAME_RENDER_SR;
-        assert!(package.route(&leaves, list(1), &pass, true));
+        assert!(package.route(list(1), &pass, true));
         assert!(calls().is_empty());
     }
 
@@ -2271,7 +2176,7 @@ mod tests {
     fn the_editor_preview_is_admitted_and_its_refusals_budgeted() {
         use rsf_game_sys::{RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW};
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         set(|f| {
             f.owner = false;
             f.shown = false;
@@ -2281,14 +2186,14 @@ mod tests {
         let mut pass = sr_pass(3, (8, 6), (4, 3));
         pass.role = RSF_GAME_RENDER_SR;
         // The SR pass waits for the preview's resources.
-        assert!(!package.route(&leaves, list(1), &pass, true));
+        assert!(!package.route(list(1), &pass, true));
         assert_eq!(calls(), ["preview prepare 8x6"]);
         set(|f| f.preview_ready = true);
-        assert!(package.route(&leaves, list(1), &pass, true));
+        assert!(package.route(list(1), &pass, true));
         assert_eq!(calls(), ["preview prepare 8x6"]);
         // A refusal without a texture still spends the budget.
         pass.role = RSF_GAME_RENDER_WINDOW;
-        assert!(!package.route(&leaves, list(1), &pass, true));
+        assert!(!package.route(list(1), &pass, true));
         assert_eq!(calls(), ["owner", "present 0x0 0"]);
         // Route the D3D11 producer's real Editor plan after its native resource handoff.
         use crate::{d3d11_pass, sys::rsf_unity_packet};
@@ -2301,14 +2206,14 @@ mod tests {
         pass.color_input = packet.color;
         let logged = "log Editor presentation pending: texture=640x360 format=10 expected=8x6";
         for _ in 0..3 {
-            package.route(&leaves, list(1), &pass, true);
+            package.route(list(1), &pass, true);
             assert_eq!(calls(), ["owner", "present 0x50 1", "desc 0x50", logged]);
         }
-        package.route(&leaves, list(1), &pass, true);
+        package.route(list(1), &pass, true);
         assert_eq!(calls(), ["owner", "present 0x50 1"]);
         // A shown preview neither logs nor counts.
         set(|f| f.shown = true);
-        package.route(&leaves, list(1), &pass, true);
+        package.route(list(1), &pass, true);
         assert_eq!(calls(), ["owner", "present 0x50 1"]);
         assert_eq!(package.preview_reports.load(SeqCst), 5);
     }
@@ -2316,65 +2221,65 @@ mod tests {
     #[test]
     fn the_window_guard_follows_the_host() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         let window = without_provenance_mut(0x60);
         // The D3D12 player accepts its own UnityWndClass window, and another window of this
         // process only when it is the Vulkan surface.
-        assert!(package.accept_window(&leaves, window));
+        assert!(package.accept_window(window));
         assert_eq!(calls(), ["vulkan renderer", "class 0x60"]);
         set(|f| {
             f.class = 2;
             f.surface_owns = false;
         });
-        assert!(!package.accept_window(&leaves, window));
+        assert!(!package.accept_window(window));
         assert_eq!(
             calls(),
             ["vulkan renderer", "class 0x60", "surface owns 0x60"]
         );
         set(|f| f.class = 0);
-        assert!(!package.accept_window(&leaves, window));
+        assert!(!package.accept_window(window));
         assert_eq!(calls(), ["vulkan renderer", "class 0x60"]);
         // The Vulkan player accepts only its surface.
         set(|f| {
             f.vulkan = true;
             f.surface_owns = true;
         });
-        assert!(package.accept_window(&leaves, window));
+        assert!(package.accept_window(window));
         assert_eq!(calls(), ["vulkan renderer", "surface owns 0x60"]);
         // The Editor accepts only its preview.
         package.services.editor.store(true, SeqCst);
         set(|f| f.preview_owns = false);
-        assert!(!package.accept_window(&leaves, window));
+        assert!(!package.accept_window(window));
         assert_eq!(calls(), ["preview owns 0x60"]);
     }
 
     #[test]
     fn the_device_lifecycle_loads_retires_and_retains() {
         let package = Package::new();
-        let leaves = leaves();
+        reset();
         // Waiting: nothing to retire, and the bridge loads once Unity's interfaces exist.
-        assert!(package.shutdown(&leaves));
-        package.device_event(&leaves, false);
+        assert!(package.shutdown());
+        package.device_event(false);
         assert!(calls().is_empty());
         set(|f| f.registry = false);
-        package.device_event(&leaves, true);
+        package.device_event(true);
         assert_eq!(calls(), ["bridge load"]);
         assert_eq!(package.device.load(SeqCst), routing::DEVICE_WAITING);
         set(|f| f.registry = true);
-        package.device_event(&leaves, true);
-        package.device_event(&leaves, true);
+        package.device_event(true);
+        package.device_event(true);
         assert_eq!(calls(), ["bridge load"]);
         assert_eq!(package.device.load(SeqCst), routing::DEVICE_READY);
         // Ready: a shutdown retires the session, then unloads the bridge.
-        package.device_event(&leaves, false);
+        package.device_event(false);
         assert_eq!(calls(), ["close", "release", "bridge unload"]);
         assert_eq!(package.device.load(SeqCst), routing::DEVICE_WAITING);
         // A refused retirement retains the device for the process.
-        package.device_event(&leaves, true);
+        package.device_event(true);
         package.lock().session = Session::Opening;
         set(|f| f.drained = false);
         calls();
-        package.device_event(&leaves, false);
+        package.device_event(false);
         assert_eq!(
             calls(),
             [
@@ -2383,9 +2288,9 @@ mod tests {
             ]
         );
         assert_eq!(package.device.load(SeqCst), routing::DEVICE_RETAINED);
-        assert!(!package.shutdown(&leaves));
-        package.device_event(&leaves, true);
-        package.device_event(&leaves, false);
+        assert!(!package.shutdown());
+        package.device_event(true);
+        package.device_event(false);
         assert!(calls().is_empty());
     }
 }
