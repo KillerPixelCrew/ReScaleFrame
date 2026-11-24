@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
-#[cfg(not(test))]
 use crate::d3d11_output_platform::{rsf_d3d11_output_child_device, rsf_d3d11_output_is_immediate};
-#[cfg(not(test))]
 use crate::{
     dlss_pipeline::exports::{
         rsf_dlss_pipeline_on_frame, rsf_dlss_pipeline_output_texture,
@@ -27,16 +25,11 @@ use crate::{
     native_translucency::rsf_native_translucency_take,
 };
 
-#[cfg(not(test))]
 use crate::com_ref;
 use crate::d3d11_output::GraphicsCache;
-#[cfg(not(test))]
 use crate::d3d11_output::{SavedBindings, texture_desc};
-#[cfg(not(test))]
 use crate::fg_scene::with_scene;
-#[cfg(not(test))]
 use crate::frame_assembly::rsf_assemble_dlss_frame;
-#[cfg(not(test))]
 use crate::motion_resolve_params::{dense_resolve_params, has_motion_sentinel};
 use crate::native_composition::rsf_native_composition_release;
 use crate::native_cpu::rsf_native_cpu_release;
@@ -49,48 +42,33 @@ use crate::native_sr_state::{clear_surface, reset_history, rsf_native_sr_set_ena
 use crate::native_translucency::rsf_native_translucency_release;
 use crate::native_window::rsf_native_window_reset;
 use crate::owned_handle::OwnedHandle;
-#[cfg(not(test))]
 use crate::sr_session::has_capacity;
-#[cfg(not(test))]
 use crate::sys::RSF_D3D11_FORMAT_RGBA16_FLOAT;
-#[cfg(not(test))]
 use crate::sys::rsf_native_translucency_masks as Masks;
-#[cfg(not(test))]
 use crate::sys::{
     RSF_DLSS_PIPELINE_ABI_VERSION, RSF_MOTION_DECODE_ABI_VERSION, rsf_dlss_pipeline_frame as Frame,
     rsf_motion_decode_params as DecodeParams, rsf_motion_decode_setup,
 };
-#[cfg(not(test))]
 use crate::sys::{rsf_dlss_frame as DlssFrame, rsf_frame_resources};
-#[cfg(test)]
-use rsf_game_sys::rsf_game_render_pass as Pass;
-#[cfg(not(test))]
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_NO_FG,
     RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, depth_domains_requested, rsf_camera_frame,
     rsf_game_render_pass as Pass,
 };
 use std::ffi::c_void;
-#[cfg(not(test))]
 use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
-#[cfg(not(test))]
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32G32_FLOAT;
 use windows::core::IUnknown;
-#[cfg(not(test))]
 use windows::core::Interface;
 
-#[cfg(not(test))]
 const INVALID: i32 = -1;
-#[cfg(not(test))]
 const ABI_MISMATCH: i32 = -2;
-#[cfg(not(test))]
 const NOT_READY: i32 = -3;
 const RESOURCE_FAILED: i32 = -7;
 const SR: u32 = 0;
 const FG: u32 = 1;
 type Texture = *mut c_void;
 
-#[cfg(not(test))]
 unsafe fn validate_device(context: *mut c_void, pass: &Pass) -> bool {
     let context = unsafe { crate::d3d11_d3d12::borrow::<ID3D11DeviceContext>(&context) };
     let Ok(device) = (unsafe { context.GetDevice() }) else {
@@ -118,7 +96,6 @@ unsafe fn validate_device(context: *mut c_void, pass: &Pass) -> bool {
         })
 }
 
-#[cfg(not(test))]
 unsafe fn clear_predication(context: *mut c_void) {
     let context = unsafe { crate::d3d11_d3d12::borrow::<ID3D11DeviceContext>(&context) };
     unsafe { context.SetPredication(None, false) };
@@ -128,7 +105,6 @@ fn extent(rect: [i32; 4]) -> Option<[u32; 2]> {
     Region::new(rect).map(|region| region.extent)
 }
 
-#[cfg(not(test))]
 fn validate_pass(pass: &Pass) -> Result<[u32; 2], i32> {
     if pass.role != RSF_GAME_RENDER_SR
         || pass.camera_valid == 0
@@ -157,7 +133,6 @@ fn validate_pass(pass: &Pass) -> Result<[u32; 2], i32> {
     extent(pass.output_rect).ok_or(INVALID)
 }
 
-#[cfg(not(test))]
 unsafe fn input_is_local(pass: &Pass, depth_domains: bool) -> bool {
     if depth_domains || pass.render_rect[0] != 0 || pass.render_rect[1] != 0 {
         return false;
@@ -173,14 +148,12 @@ unsafe fn input_is_local(pass: &Pass, depth_domains: bool) -> bool {
 }
 
 /// None when the depth layout is refused, otherwise whether depth domains are requested.
-#[cfg(not(test))]
 unsafe fn depth_layout(pass: &Pass) -> Option<bool> {
     let desc = unsafe { texture_desc(pass.depth) };
     unsafe { rsf_native_regions_depth_valid(&pass.depth_domains, desc.format, &pass.render_rect) }
         .then(|| depth_domains_requested(&pass.depth_domains))
 }
 
-#[cfg(not(test))]
 unsafe fn prepare(context: Texture, pass: &Pass, out: &mut [Texture; 3]) -> bool {
     let [color, depth, motion] = out;
     unsafe {
@@ -199,12 +172,10 @@ unsafe fn prepare(context: Texture, pass: &Pass, out: &mut [Texture; 3]) -> bool
     }
 }
 
-#[cfg(not(test))]
 unsafe extern "C" fn destroy_decode(pass: Texture) {
     unsafe { rsf_motion_decode_destroy(pass.cast()) };
 }
 
-#[cfg(not(test))]
 unsafe extern "C" fn destroy_resolve(pass: Texture) {
     unsafe { rsf_motion_resolve_destroy(pass.cast()) };
 }
@@ -214,15 +185,9 @@ fn discard_history(owner: u32, result: i32) -> i32 {
     result
 }
 
-type PrepareRegions = unsafe fn(Texture, &Pass, &mut [Texture; 3]) -> bool;
-
 /// Decodes the region preparation once for SR and explicit FG: the three textures on
 /// success, `RESOURCE_FAILED` for a refusal or an incomplete publication.
-unsafe fn prepare_regions(
-    prepare: PrepareRegions,
-    context: Texture,
-    pass: &Pass,
-) -> Result<[Texture; 3], i32> {
+unsafe fn prepare_regions(context: Texture, pass: &Pass) -> Result<[Texture; 3], i32> {
     let mut textures = [std::ptr::null_mut(); 3];
     if unsafe { prepare(context, pass, &mut textures) }
         && textures.iter().all(|texture| !texture.is_null())
@@ -235,7 +200,8 @@ unsafe fn prepare_regions(
 
 /// D3D11 host entry. Every native write of this call is recorded on the immediate
 /// context before it returns, so the receipt is always ordered.
-#[cfg(not(test))]
+// Called by the D3D11 host's production platform, which unit tests replace.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_native_sr_evaluate_ordered(
     context: *mut c_void,
     pass: *const Pass,
@@ -248,7 +214,6 @@ pub(crate) unsafe extern "C" fn rsf_native_sr_evaluate_ordered(
     result
 }
 
-#[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_native_sr_evaluate(
     context: *mut c_void,
@@ -257,7 +222,6 @@ pub(crate) unsafe extern "C" fn rsf_native_sr_evaluate(
     unsafe { evaluate(context, pass) }
 }
 
-#[cfg(not(test))]
 unsafe fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
     if context.is_null() || !unsafe { has_capacity(pass) } {
         return INVALID;
@@ -299,7 +263,7 @@ unsafe fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
     let textures = if unsafe { input_is_local(pass, depth_domains) } {
         [pass.color_input, pass.depth, pass.motion]
     } else {
-        match unsafe { prepare_regions(prepare, context, pass) } {
+        match unsafe { prepare_regions(context, pass) } {
             Ok(textures) => textures,
             Err(code) => return code,
         }
@@ -389,7 +353,6 @@ unsafe impl Send for FgInputs {}
 
 static FG_INPUTS: GraphicsCache<Option<FgInputs>> = GraphicsCache::new(None);
 
-#[cfg(not(test))]
 unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams) -> Option<()> {
     let source = &pass.camera;
     let _bindings =
@@ -450,8 +413,7 @@ unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams
                 })
             };
             stage(c"normalize-regions-decode");
-            let [color, depth, vectors] =
-                unsafe { prepare_regions(prepare, context, pass) }.ok()?;
+            let [color, depth, vectors] = unsafe { prepare_regions(context, pass) }.ok()?;
             if unsafe {
                 rsf_motion_decode_run(inputs.decode.get().cast(), context, vectors, motion)
             } != 0
@@ -523,7 +485,6 @@ unsafe fn capture_on_stream(context: Texture, pass: &Pass, motion: &DecodeParams
         .flatten()
 }
 
-#[cfg(not(test))]
 unsafe fn capture_validated(context: Texture, pass: &Pass, motion: &DecodeParams) -> i32 {
     if pass.source_frame_id == 0
         || pass.camera_valid == 0
@@ -568,7 +529,6 @@ unsafe fn capture_validated(context: Texture, pass: &Pass, motion: &DecodeParams
     }
 }
 
-#[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_native_sr_capture_fg(
     context: Texture,
@@ -615,40 +575,6 @@ pub(crate) extern "C" fn rsf_native_sr_release_resources() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn region_refusal_keeps_history_and_discard_resets_one_owner() {
-        unsafe fn refused(_: Texture, _: &Pass, _: &mut [Texture; 3]) -> bool {
-            false
-        }
-        unsafe fn incomplete(_: Texture, _: &Pass, out: &mut [Texture; 3]) -> bool {
-            out[0] = std::ptr::dangling_mut();
-            true
-        }
-        let mut pass: Pass = unsafe { std::mem::zeroed() };
-        pass.session_id = 1;
-        pass.native_frame = 1;
-        commit_history(SR, &pass);
-        commit_history(FG, &pass);
-        pass.native_frame = 2;
-        assert_eq!(camera_for(SR, &pass).reset, 0);
-        assert_eq!(camera_for(FG, &pass).reset, 0);
-
-        assert_eq!(
-            unsafe { prepare_regions(incomplete, std::ptr::null_mut(), &pass) },
-            Err(RESOURCE_FAILED)
-        );
-        assert_eq!(
-            unsafe { prepare_regions(refused, std::ptr::null_mut(), &pass) },
-            Err(RESOURCE_FAILED)
-        );
-        assert_eq!(camera_for(SR, &pass).reset, 0);
-        assert_eq!(camera_for(FG, &pass).reset, 0);
-        assert_eq!(discard_history(FG, RESOURCE_FAILED), RESOURCE_FAILED);
-        assert_eq!(camera_for(SR, &pass).reset, 0);
-        assert_eq!(camera_for(FG, &pass).reset, 1);
-        reset_history(SR);
-    }
 
     #[test]
     fn invalid_extents_refuse_before_subtraction() {

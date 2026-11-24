@@ -2257,7 +2257,6 @@ use platform as leaf;
 #[cfg(test)]
 use tests as leaf;
 
-#[cfg(not(test))]
 pub(crate) mod exports;
 
 #[cfg(test)]
