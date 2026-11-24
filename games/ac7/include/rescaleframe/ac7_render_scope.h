@@ -49,9 +49,6 @@ int rsf_ac7_render_scopes_create_passes(uint64_t session_id, uint32_t capacity,
    Native commands queued between open and close execute inside the copied pass/view scope. */
 int rsf_ac7_render_scope_open(rsf_ac7_render_scopes*, void* native_command_list,
                               const rsf_ac7_render_scope*, rsf_ac7_render_ticket** out);
-/* Takes lease ownership on success only. Resolution occurs on the RHI stream, release after end. */
-int rsf_ac7_render_scope_open_leased(rsf_ac7_render_scopes*, void* native_command_list,
-    const rsf_ac7_render_scope*, const rsf_ac7_scope_lease*, rsf_ac7_render_ticket** out);
 /* Queues adjacent begin/end markers. On refusal the list and lease ownership are unchanged. */
 int rsf_ac7_render_scope_enqueue_leased(rsf_ac7_render_scopes*, void* native_command_list,
     const rsf_ac7_render_scope*, const rsf_ac7_scope_lease*);
@@ -62,8 +59,6 @@ int rsf_ac7_render_scope_close(rsf_ac7_render_ticket*, void* native_command_list
 int rsf_ac7_render_scope_current(rsf_ac7_render_scopes*, rsf_ac7_render_scope* out);
 /* Disable further producers. Existing queued markers continue to close safely. */
 void rsf_ac7_render_scopes_quiesce(rsf_ac7_render_scopes*);
-/* Readiness check without releasing the owner. Used before disabling native drain hooks. */
-int rsf_ac7_render_scopes_idle(rsf_ac7_render_scopes*);
 /* Refuses destruction while markers/scopes remain. The module must remain loaded until success. */
 int rsf_ac7_render_scopes_destroy(rsf_ac7_render_scopes*);
 

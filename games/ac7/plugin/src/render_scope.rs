@@ -309,8 +309,7 @@ pub(crate) unsafe extern "C" fn rsf_ac7_render_scope_open(
 /// `scopes` is null or a live owner; `native_command_list` is null or a recording native list
 /// owned by the calling thread; `scope` is null or a caller scope of at least its struct_size;
 /// `lease` and `out` are null or valid.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_render_scope_open_leased(
+pub(crate) unsafe fn rsf_ac7_render_scope_open_leased(
     scopes: *mut Scopes,
     native_command_list: *mut c_void,
     scope: *const rsf_ac7_render_scope,
@@ -468,8 +467,7 @@ fn idle(state: &State) -> bool {
 ///
 /// # Safety
 /// `scopes` is null or a live owner.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_render_scopes_idle(scopes: *mut Scopes) -> c_int {
+pub(crate) unsafe fn rsf_ac7_render_scopes_idle(scopes: *mut Scopes) -> c_int {
     match unsafe { scopes.as_ref() } {
         Some(owner) => c_int::from(idle(&owner.lock())),
         None => 1,
