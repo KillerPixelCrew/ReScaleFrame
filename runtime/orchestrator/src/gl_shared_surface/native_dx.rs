@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Typed DXGI and D3D12 calls for the GL interop owner's native table.
+pub(super) use crate::d3d11_d3d12::{execute as queue_execute, fence_completed};
 use super::Handle;
 // The leaves gl_shared_surface.rs calls as `native::*`; its tests fake the same names.
 pub(super) use super::native_gl::{
@@ -8,7 +9,6 @@ pub(super) use super::native_gl::{
     memory_delete, memory_import, release, semaphore_delete, semaphore_import, texture_delete,
     texture_store,
 };
-use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
 use windows::Win32::{
     Foundation::{E_FAIL, GENERIC_ALL, LUID},
@@ -167,10 +167,6 @@ pub(super) unsafe extern "C" fn list_close(list: Handle) -> i32 {
     status(unsafe { borrow::<ID3D12GraphicsCommandList>(&list).Close() })
 }
 
-pub(super) unsafe extern "C" fn fence_completed(fence: Handle) -> u64 {
-    unsafe { borrow::<ID3D12Fence>(&fence).GetCompletedValue() }
-}
-
 pub(super) unsafe extern "C" fn fence_wait(
     fence: Handle,
     value: u64,
@@ -184,13 +180,6 @@ pub(super) unsafe extern "C" fn queue_wait(queue: Handle, fence: Handle, value: 
     status(unsafe {
         borrow::<ID3D12CommandQueue>(&queue).Wait(borrow::<ID3D12Fence>(&fence), value)
     })
-}
-
-pub(super) unsafe extern "C" fn queue_execute(queue: Handle, list: Handle) {
-    let queue = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
-    // The recording slot already owns this reference.
-    let list = ManuallyDrop::new(Some(unsafe { ID3D12CommandList::from_raw(list) }));
-    unsafe { queue.ExecuteCommandLists(std::slice::from_ref(&*list)) };
 }
 
 pub(super) unsafe extern "C" fn queue_signal(queue: Handle, fence: Handle, value: u64) -> i32 {

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::d3d11_d3d12::{borrow, close_commands, create_texture12, execute, query};
+use crate::d3d11_d3d12::{borrow, close_commands, create_texture12, execute};
 // The leaves sr_bridge.rs calls as `native::*`; sr_bridge/tests.rs fakes the same names.
 pub(super) use crate::d3d11_d3d12::{
     close_event, context_signal, context_wait, copy_resource, copy_transitioned, create_commands,
-    create_event, create_output, fence_d3d11, fence_d3d12, flush, queue_signal, queue_wait,
-    reset_commands, surface_d3d11, surface_d3d12, surface_destroy, transition,
+    create_event, create_fence, create_output, fence_d3d11, fence_d3d12, flush, query_context4,
+    queue_signal, queue_wait, reset_commands, surface_d3d11, surface_d3d12, surface_destroy,
+    transition,
 };
 use crate::shared_surface::{
     ABI_VERSION, SurfaceSetup, rsf_shared_fence_create, rsf_shared_fence_destroy,
@@ -120,10 +121,6 @@ pub(super) unsafe extern "C" fn create_texture(
             D3D12_RESOURCE_STATE_COMMON,
         )
     }
-}
-pub(super) unsafe extern "C" fn create_fence(device: Handle) -> Handle {
-    unsafe { borrow::<ID3D12Device>(&device).CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }
-        .map_or(null_mut(), Interface::into_raw)
 }
 pub(super) unsafe extern "C" fn describe(
     texture: Handle,
@@ -335,8 +332,4 @@ pub(super) unsafe extern "C" fn dump_result(
             )
         };
     }
-}
-
-pub(super) unsafe extern "C" fn query_context4(context: Handle) -> Handle {
-    unsafe { query::<ID3D11DeviceContext, ID3D11DeviceContext4>(context) }
 }

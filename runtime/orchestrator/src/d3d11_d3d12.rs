@@ -289,3 +289,17 @@ pub(crate) unsafe extern "C" fn queue_wait(queue: Handle, fence: Handle, value: 
             .is_ok(),
     )
 }
+
+pub(crate) unsafe extern "C" fn create_fence(device: Handle) -> Handle {
+    unsafe { borrow::<ID3D12Device>(&device).CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }
+        .map_or(null_mut(), Interface::into_raw)
+}
+
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) unsafe extern "C" fn fence_completed(fence: Handle) -> u64 {
+    unsafe { borrow::<ID3D12Fence>(&fence).GetCompletedValue() }
+}
+
+pub(crate) unsafe extern "C" fn query_context4(context: Handle) -> Handle {
+    unsafe { query::<ID3D11DeviceContext, ID3D11DeviceContext4>(context) }
+}

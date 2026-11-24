@@ -10,7 +10,7 @@ use crate::sys::*;
 use std::ffi::c_char;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_TEXTURE2D_DESC, ID3D11DeviceContext, ID3D11DeviceContext4, ID3D11Texture2D,
+    D3D11_TEXTURE2D_DESC, ID3D11DeviceContext, ID3D11Texture2D,
 };
 use windows::core::{IUnknown, Interface};
 
@@ -19,8 +19,8 @@ use windows::core::{IUnknown, Interface};
 pub(super) use crate::d3d11_d3d12::{
     close_commands, close_event, context_signal, context_wait, copy_resource, copy_transitioned,
     create_commands, create_event, create_output, execute, fence_d3d11, fence_d3d12, flush,
-    queue_signal, queue_wait, reset_commands, surface_d3d11, surface_d3d12, surface_destroy,
-    transition,
+    query_context4, queue_signal, queue_wait, reset_commands, surface_d3d11, surface_d3d12,
+    surface_destroy, transition,
 };
 pub(super) use crate::d3d11_present::rsf_d3d11_present_host as present_host;
 pub(super) use crate::d3d11_present::{
@@ -46,10 +46,6 @@ pub(super) use crate::native_scene::{
 pub(super) use crate::native_window::rsf_native_window_match as window_match;
 use crate::streamline_host::rsf_streamline_host_token;
 pub(super) use rsf_game_sys::rsf_frame_allows_fg as allows_fg;
-
-pub(super) unsafe fn query_context4(context: Handle) -> Handle {
-    unsafe { query::<ID3D11DeviceContext, ID3D11DeviceContext4>(context) }
-}
 
 pub(super) unsafe fn query_texture(object: Handle) -> Handle {
     unsafe { query::<IUnknown, ID3D11Texture2D>(object) }

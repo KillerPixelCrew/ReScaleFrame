@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::d3d12_host::device_of;
 use crate::d3d11_d3d12::transition_barrier;
 use crate::d3d11_output_platform::rsf_d3d11_output_srv_format;
 use crate::d3d11_sharpening::{Frame, rsf_sharpen11_active, rsf_sharpen11_pack};
@@ -36,12 +37,6 @@ pub(super) struct Sharpen12 {
     root: Option<ID3D12RootSignature>,
     device: Option<ID3D12Device>,
     dispatches: u64,
-}
-
-fn device_of(child: &ID3D12DeviceChild) -> Option<ID3D12Device> {
-    let mut device = None;
-    unsafe { child.GetDevice(&mut device) }.ok()?;
-    device
 }
 
 fn shader_readable(desc: &D3D12_RESOURCE_DESC) -> bool {

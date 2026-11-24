@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+pub(super) use crate::d3d11_d3d12::create_fence;
 use super::*;
 use rsf_game_sys::backend_result::MISSING_ENTRY_POINT;
 
@@ -197,12 +198,6 @@ pub(super) unsafe extern "C" fn create_chain(
     }
     unsafe { out.write(chain) };
     OK
-}
-
-pub(super) unsafe extern "C" fn create_fence(device: Raw) -> Raw {
-    let device = unsafe { ID3D12Device::from_raw_borrowed(&device) }.unwrap();
-    unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }
-        .map_or(null_mut(), Interface::into_raw)
 }
 
 pub(super) unsafe extern "C" fn create_event() -> Raw {

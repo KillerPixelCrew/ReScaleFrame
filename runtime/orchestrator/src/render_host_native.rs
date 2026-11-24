@@ -3,6 +3,7 @@
 // unit tests supply fakes with the same names instead.
 use super::render_host::{Adapter, ResourceDesc};
 use crate::com_ref;
+pub(super) use crate::d3d11_d3d12::{create_fence, fence_completed, queue_signal};
 use crate::d3d12_fence::wait_fence;
 use crate::d3d12_host::{borrow, device_of};
 use crate::dlss_native12::{Registration, exports::rsf_dlss_native12_registration_borrow};
@@ -14,8 +15,8 @@ use std::ffi::{c_char, c_void};
 use std::ptr::{null, null_mut};
 use windows::Win32::Graphics::{
     Direct3D12::{
-        D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_FENCE_FLAG_NONE, ID3D12CommandQueue, ID3D12Device,
-        ID3D12DeviceChild, ID3D12Fence, ID3D12Resource,
+        D3D12_COMMAND_LIST_TYPE_DIRECT, ID3D12CommandQueue, ID3D12Device, ID3D12DeviceChild,
+        ID3D12Resource,
     },
     Dxgi::{
         CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter1, IDXGIFactory4,
@@ -128,15 +129,6 @@ pub(super) unsafe fn queue_direct(queue: Handle) -> i32 {
     i32::from(desc.Type == D3D12_COMMAND_LIST_TYPE_DIRECT)
 }
 
-pub(super) unsafe fn create_fence(device: Handle) -> Handle {
-    unsafe { borrow::<ID3D12Device>(&device).CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }
-        .map_or(null_mut(), Interface::into_raw)
-}
-
-pub(super) unsafe fn fence_completed(fence: Handle) -> u64 {
-    unsafe { borrow::<ID3D12Fence>(&fence).GetCompletedValue() }
-}
-
 pub(super) unsafe fn fence_wait(fence: Handle, value: u64, timeout: u32) -> i32 {
     let event = unsafe { CreateEventW(null(), 0, 0, null()) };
     if event.is_null() {
@@ -147,14 +139,6 @@ pub(super) unsafe fn fence_wait(fence: Handle, value: u64, timeout: u32) -> i32 
     if status >= 0 { 1 } else { -1 }
 }
 
-pub(super) unsafe fn queue_signal(queue: Handle, fence: Handle, value: u64) -> i32 {
-    i32::from(
-        unsafe {
-            borrow::<ID3D12CommandQueue>(&queue).Signal(borrow::<ID3D12Fence>(&fence), value)
-        }
-        .is_ok(),
-    )
-}
 
 pub(super) use crate::d3d11_present::{
     rsf_d3d11_present_backend as present_backend,
