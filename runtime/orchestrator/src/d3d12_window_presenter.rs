@@ -371,10 +371,10 @@ impl Graphics {
         unsafe { gpu.queue.ExecuteCommandLists(&[Some((*slot.list).clone())]) };
         // The GPU already owns the list and source. A missing or refused signal
         // leaves this slot current and bars all further use or retirement.
-        if !self
+        if self
             .ring
             .submit(index)
-            .is_some_and(|complete| unsafe { gpu.queue.Signal(&gpu.fence, complete) }.is_ok())
+            .is_none_or(|complete| unsafe { gpu.queue.Signal(&gpu.fence, complete) }.is_err())
         {
             self.faulted = true;
             return false;

@@ -31,7 +31,7 @@ mod leaves {
             return native_hooks::set_enabled(&HOOKS, true);
         }
         let trampolines = (&raw mut rsf_anomaly_observer_trampolines).cast::<*mut c_void>();
-        let detours = unsafe { &*(&raw const rsf_anomaly_observer_detours) };
+        let detours = unsafe { &rsf_anomaly_observer_detours };
         super::sites(engine.build, detours, trampolines)
             .is_some_and(|(size, sites)| native_hooks::install(&HOOKS, engine.image, size, &sites))
     }

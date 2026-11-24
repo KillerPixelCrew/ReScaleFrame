@@ -7,7 +7,7 @@
 //! and file output are synthetic.
 use super::vulkan::{self, State};
 use super::{Handle, Platform, Setup};
-use crate::dlss_vulkan_capture::leaves::{LEAVES as CAPTURE_LEAVES, fixture_native};
+use crate::dlss_vulkan_capture::leaves::fixture_native;
 use crate::dlss_vulkan_capture::{Owner as Capture, Platform as CapturePlatform};
 use crate::sys::{
     RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_sdk_constants, rsf_slvk_sdk_fg_options,
@@ -322,8 +322,7 @@ unsafe extern "C" fn wants(_: Handle, frame: u64) -> u32 {
     u32::from(frame == 42)
 }
 
-/// The production capture leaves with a synthetic open, frame selection, readback recording and
-/// file output.
+/// A synthetic open and frame selection with the fixture's readback recording and file output.
 static CAPTURE_TABLE: LazyLock<CapturePlatform> = LazyLock::new(|| CapturePlatform {
     open: open_capture,
     wants,
@@ -332,7 +331,6 @@ static CAPTURE_TABLE: LazyLock<CapturePlatform> = LazyLock::new(|| CapturePlatfo
     flush: vulkan::flush,
     failure: vulkan::failure,
     append: vulkan::append,
-    ..CAPTURE_LEAVES
 });
 
 pub(super) unsafe fn capture_open(

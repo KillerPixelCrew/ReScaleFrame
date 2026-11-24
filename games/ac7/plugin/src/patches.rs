@@ -209,7 +209,7 @@ mod fixture {
     /// As `rsf_ac7_velocity_apply`.
     #[unsafe(no_mangle)]
     unsafe extern "C" fn rsf_ac7_velocity_restore(patches: *mut rsf_ac7_code_patches) -> bool {
-        unsafe { patches.as_mut() }.is_some_and(|patches| velocity_restore(patches))
+        unsafe { patches.as_mut() }.is_some_and(velocity_restore)
     }
 }
 

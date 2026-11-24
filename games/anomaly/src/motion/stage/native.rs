@@ -300,7 +300,7 @@ pub(super) mod leaf {
     pub(super) fn detours() -> (&'static [Raw; 3], *mut Raw) {
         unsafe {
             (
-                &*(&raw const rsf_anomaly_motion_detours),
+                &rsf_anomaly_motion_detours,
                 (&raw mut rsf_anomaly_motion_originals).cast(),
             )
         }
@@ -309,7 +309,7 @@ pub(super) mod leaf {
     pub(super) fn draw_detours() -> (&'static [Raw; 4], *mut Raw) {
         unsafe {
             (
-                &*(&raw const rsf_anomaly_motion_draw_detours),
+                &rsf_anomaly_motion_draw_detours,
                 (&raw mut rsf_anomaly_motion_draw_originals).cast(),
             )
         }

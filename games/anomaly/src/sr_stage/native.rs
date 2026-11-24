@@ -838,7 +838,7 @@ mod c {
     pub(super) fn detours() -> (&'static [Ptr; 5], *mut Ptr) {
         unsafe {
             (
-                &*(&raw const rsf_anomaly_sr_detours),
+                &rsf_anomaly_sr_detours,
                 (&raw mut rsf_anomaly_sr_originals).cast(),
             )
         }

@@ -592,9 +592,9 @@ fn sleep(host: &Host, id: u64) -> i32 {
         // current CPU frame sleeps. Only option changes share the sleeper's owner lock.
         let _sleeper = host.reflex.lock().unwrap();
         let sleeping = Instant::now();
-        if !host
+        if host
             .sleep
-            .is_some_and(|sleep| unsafe { sleep(handle.as_ptr()) } == sdk::OK)
+            .is_none_or(|sleep| unsafe { sleep(handle.as_ptr()) } != sdk::OK)
         {
             return FEATURE_FAILED;
         }
