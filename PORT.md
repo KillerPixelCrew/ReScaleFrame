@@ -1072,6 +1072,44 @@ Bytes: 704 KB of C++; Rust 1,259 KB before, 1,236 KB after (1.79x to 1.76x).
 
 Estimate of what is left: about 22,600 lines over the C++. Roughly 7,000 are the test seams and the unit tests and fixtures over them (`sr12/tests.rs` 1,107, `gl_pipeline/tests.rs` 969, `gl_shared_surface/tests.rs` 935, `sr_bridge/tests.rs` 845, `frame_capture12/tests.rs`, the `sr_bridge`, `sr_session`, `native_fg_cpu` and XeLL fixtures, plus the `native`/`platform`/`linked` modules), kept because they test fixed defects. About 3,000 are SDK records and capture leaves whose C++ is not in the count (FidelityFX, XeSS, NVAPI, Anti-Lag 2, the XeSS-FG D3D12 capture). Most of the rest is inherent: rustfmt splitting the C++'s `;`-joined lines, explicit `unsafe` and COM ownership at each call, the foreign-exception guards, and the fixes themselves. This method could remove perhaps another 3 to 5 percent here: the `pub(super) use ... as` alias layers in `native_fg/platform.rs`, `fg12/native.rs` and `gl_pipeline/linked.rs`, the Rust-only C shapes of `sr_legacy` and the `rsf_core_sr12_*` calls between in-crate owners, and the local constant mirrors with their asserts in `sr12/native.rs`. Removing the seams themselves would remove the fixed-defect coverage, which is the coordinator's call, not this method's.
 
+### C++-reference pass: cppref-orch-vulkan
+
+Method: the Vulkan orchestrator owners (`runtime/orchestrator/src` `vulkan_*`, `dx12_vulkan*`, `fsr4_*`, `frame_capture_vk*`), `runtime/vulkan/**` and `runtime/backends/**` compared module by module against the C++ on `main` (`native_fg_vulkan.cpp`, `native_fg_vulkan_dispatch.cpp`, `native_fg_dlss_vulkan.cpp`, `native_dlss_vulkan.cpp`, `native_sr_vulkan.cpp`, `native_xess_vulkan.cpp`, `native_sr_split_vulkan.cpp`, `native_sr_fsr4_vulkan.cpp`, `native_fg_fsr4_vulkan.cpp`, `native_fg_xess_vulkan*.cpp`, `native_dx12_vulkan_interop.cpp`, `native_latency_vulkan.cpp`, `latency_amd_vulkan.cpp`, `sharpening_vulkan.h`, `frame_capture_vk.h`, the `runtime/vulkan/*/bridge.cpp` units and their tests). Checked with `cargo check -p rsf-orchestrator` (default, `--tests`, `--all-features`, `--all-features --tests`) and `cargo fmt`; nothing was built through CMake or run, and the FFX fixture scenario added below has not run.
+
+Lines (all lines; C++ sources with their C++ tests on `main`, Rust with C leaves, headers, tests, generated bindings and fixtures before and after this pass):
+
+| Module | C++ | Before | After |
+| --- | ---: | ---: | ---: |
+| FFX FG Vulkan (`vulkan_ffx_fg*`) | 925 | 5,110 | 4,315 |
+| Standalone FSR3 (`runtime/vulkan/fsr3`, 1,818 generated) | 1,603 | 5,357 | 5,357 |
+| FG dispatch and shared FG (`vulkan_fg*`) | 1,027 | 3,837 | 3,839 |
+| DLSS FG Vulkan | 910 | 3,905 | 3,888 |
+| DLSS SR Vulkan | 329 | 1,093 | 1,093 |
+| Vulkan SR, XeSS SR, split (`vulkan_sr*`) | 2,461 | 6,587 | 6,587 |
+| FSR4 SR Vulkan (with `dx12_vulkan_platform`) | 1,351 | 2,435 | 2,435 |
+| Vulkan-DX12 FG (`vulkan_dx12_fg*`, interop, FSR4 and XeSS providers) | 2,056 | 5,534 | 5,515 |
+| FSR4 FG bridge | 647 | 2,577 | 2,577 |
+| XeSS FG bridge (`runtime/vulkan/xess-fg`) | 1,453 | 4,963 | 4,963 |
+| Latency and pacing | 1,493 | 2,928 | 2,928 |
+| Sharpening | 602 | 1,721 | 1,721 |
+| Capture (`frame_capture_vk*`) | 235 | 1,788 | 1,788 |
+| Streamline (`runtime/vulkan/streamline`) | 2,167 | 5,378 | 5,378 |
+| NGX | 965 | 1,028 | 1,028 |
+| Backends (688 generated) | 2,212 | 4,155 | 4,155 |
+| README | 29 | 31 | 31 |
+| Total | 20,465 | 58,427 | 57,598 |
+
+Bytes: 1.29 MB of C++, 2.11 MB of Rust before, 2.09 MB after (2.85x to 2.81x lines, 1.64x to 1.62x bytes). Removed as port overhead:
+
+- **FFX FG Vulkan.** `startup.rs`: a ten-entry `Platform` table between `sdk.rs` and itself that bound the SDK exports, device and WSI entries, and its call-order test; `rsf_ffxgvk_create` in the C++ bound them inline, and the leaf's `Native::bind` does again, with the same order and results. The unit tests' second copy of the SDK leaf (`#[cfg(test)] use tests as leaf`, about 400 lines of fakes) and its six tests: the C++ tests (`native_ffx_vulkan_reset.cpp`, `native_ffx_vulkan_submission.cpp`) drove the real implementation over a fake FidelityFX module, which `vulkan_ffx_fg/fixture` still does. Three of the tests repeated the fixture's submission and WSI route scenarios (the consumer fence after a present error, teardown retry without repeating, the route borrow); the other three move into the fixture's route scenario (`native_ffx_vulkan_wsi_route_contract`) over the production leaf: admission refusals before the module loads and the disabled build's NOT_COMPILED, the owner returned for a refused rollback after a failed provider query, and the route released by a failed open. The dead-code allowance for `vulkan_fg`'s dispatch doubles is now one attribute on the module.
+- **DLSS FG Vulkan, Vulkan-DX12 FG.** Size and offset pins on records whose C counterparts the port deleted: the DLSS-G `Sample`, `Tag`, `SdkCall`, `Sdk` and `Platform`, the Vulkan-DX12 `GraphicsOps`, `Swapchain`, `PresentInfo`, `PresentInput` and `PresentSubmit`, and asserts on ash's own Vulkan sizes and constants. Their `repr(C)` stays: the records still cross Rust `extern "C"` signatures and the DLSS fixture writes the SDK entries at the start of `Native`.
+
+Kept as real fixes (each is a V01-V06 finding or a Rust review fix): the FFX WSI route with borrow counting and closing (hooks without a user pointer could reach a freed owner in the C++), step-by-step retirement that retries without repeating a release, the owner returned for a refused rollback, the stored-source FG veto and submission plan (`vulkan_fg_frames`), bounded swapchain-image enumeration; the FG dispatcher's retained cleanup-only owner and presentation admission (`vulkan_presentation`); DLSS-G recovery from a WSI error, the API-error report and the checked capture detach; capture publication only after the recording command or group retired (`frame_capture_vk`); the FSR4 FG bridge's retention on refused destruction, history reset across a missing source and status on every exit; the FSR3 bridge's retained swapchain on refused rollback, old-link retirement and exclusive pairing; the Streamline lifecycle's checked unload, sticky shutdown and frame-token return; the XeSS FG timing per session and per-setting capture reads.
+
+Kept as FFI: the C ABI of every public `rsf_*vk_*` entry and its `struct_size`/`abi_version` checks (the C++ had them), `bridge.c` and the XeSS FG `Platform` table (the standalone MinGW DLL links `session.rs` without crates, so the COM calls stay in C), the C glue in `native_fg_xess_vulkan*.c`, `native_xess_vulkan.c`, `native_sr_vulkan.c` and `native_vulkan_exports.c`, the C-unwind guards around SDK and host calls, the generated SDK records, the Streamline and FidelityFX SDK patch payloads and their pinned hashes.
+
+Left, read against the C++: the provider table in `vulkan_fg.rs` (the C++ `#if` switch is the same length; its unit test ports `tests/native_fg_vulkan_dispatch.cpp`, which faked the providers at link time), the split SR provider table and stub (the C++ test used `RSF_TEST_SPLIT_STUB` the same way), the leaf tables that the fixtures and unit tests substitute (`vulkan_sr::FfxOps`, `XessOps`, `vulkan_dlss_sr::Platform`, `vulkan_dlss_fg_abi::Platform`, `GraphicsOps`, the FSR4 FG and SR state-fixture leaves), because their tests pin fixed defects the C++ tests did not cover and no fixture over a fake SDK covers them instead; latency, sharpening, FSR4 SR and NGX, whose Rust is within 3 percent of the C++ bytes. Moving the XeSS FG C glue tables into Rust would save about 30 lines and needs an unverified CMake link change; not done.
+
 ## Scope
 
 - **375 C++ implementation files**, including 168 under `tests/`. All have the `.cpp` suffix in this revision.
