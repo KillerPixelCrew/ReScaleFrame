@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Native COM discovery for the shared D3D presentation platform.
 use super::{E_FAIL, E_INVALIDARG, S_OK};
+use crate::d3d11_d3d12::borrow;
 use crate::d3d11_present_abi::Raw;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
@@ -16,10 +17,6 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::core::{BOOL, IUnknown, Interface, Result};
 
 const NO_INTERFACE: i32 = windows::Win32::Foundation::E_NOINTERFACE.0;
-
-unsafe fn borrow<T: Interface>(raw: &Raw) -> &T {
-    unsafe { T::from_raw_borrowed(raw) }.unwrap()
-}
 
 fn same_identity(left: &impl Interface, right: &impl Interface) -> bool {
     let Ok(left) = left.cast::<IUnknown>() else {

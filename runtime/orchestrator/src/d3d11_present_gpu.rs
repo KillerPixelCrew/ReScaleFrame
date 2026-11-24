@@ -2,8 +2,7 @@
 //! D3D12 platform leaves with the same raw output and HRESULT contracts used by
 //! the fake platform and the C++ state capsule.
 use super::{E_FAIL, S_OK};
-use crate::com_ref;
-use crate::d3d11_d3d12::transition_barrier;
+use crate::d3d11_d3d12::{borrow, execute, transition_barrier};
 use crate::d3d11_present_abi::Raw;
 use rsf_game_sys::backend_result::FEATURE_FAILED;
 use std::ptr::{null, null_mut};
@@ -13,12 +12,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING, IDXGISwapChain};
 use windows::core::{IUnknown, Interface};
-use windows_sys::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle};
+use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
 use windows_sys::Win32::System::Threading::{CreateEventW, GetCurrentProcess, SetEvent};
-
-unsafe fn borrow<T: Interface>(value: &Raw) -> &T {
-    unsafe { T::from_raw_borrowed(value) }.unwrap()
-}
 
 pub(super) unsafe extern "C" fn create_interop_queue(device: Raw, out: *mut Raw) -> i32 {
     let bound = unsafe { borrow::<ID3D12Device>(&device) };
@@ -61,60 +56,6 @@ pub(super) unsafe extern "C" fn duplicate_event(event: Raw) -> Raw {
         )
     };
     copy
-}
-
-pub(super) unsafe extern "C" fn close_event(event: Raw) {
-    unsafe { CloseHandle(event) };
-}
-
-pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_create_slot(
-    device: Raw,
-    out_allocator: *mut Raw,
-    out_list: *mut Raw,
-) -> i32 {
-    unsafe {
-        out_allocator.write(null_mut());
-        out_list.write(null_mut());
-    }
-    let bound = unsafe { borrow::<ID3D12Device>(&device) };
-    let mut allocator = null_mut();
-    let mut list = null_mut();
-    let ty = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    let allocated = unsafe {
-        (bound.vtable().CreateCommandAllocator)(
-            device,
-            ty,
-            &ID3D12CommandAllocator::IID,
-            &mut allocator,
-        )
-    };
-    let owner = unsafe { com_ref::owned(allocator) };
-    if !allocated.is_ok() || owner.is_none() {
-        return E_FAIL;
-    }
-    let created = unsafe {
-        (bound.vtable().CreateCommandList)(
-            device,
-            0,
-            ty,
-            allocator,
-            null_mut(),
-            &ID3D12GraphicsCommandList::IID,
-            &mut list,
-        )
-    };
-    let recording = unsafe { com_ref::owned(list) };
-    let (Some(owner), Some(recording)) = (owner, recording) else {
-        return E_FAIL;
-    };
-    if !created.is_ok() || unsafe { borrow::<ID3D12GraphicsCommandList>(&list).Close() }.is_err() {
-        return E_FAIL;
-    }
-    unsafe {
-        out_allocator.write(owner.into_raw());
-        out_list.write(recording.into_raw());
-    }
-    S_OK
 }
 
 pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_render_buffer(
@@ -224,11 +165,6 @@ pub(super) unsafe extern "C" fn close_execute(queue: Raw, list: Raw, command: Ra
         unsafe { execute(queue, command) };
     }
     closed.0
-}
-
-unsafe fn execute(queue: Raw, command: Raw) {
-    let bound = unsafe { borrow::<ID3D12CommandQueue>(&queue) };
-    unsafe { (bound.vtable().ExecuteCommandLists)(queue, 1, &command) };
 }
 
 pub(super) unsafe extern "C" fn application_ready(event: Raw, fence: Raw, value: u64) -> i32 {

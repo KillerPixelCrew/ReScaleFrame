@@ -351,7 +351,12 @@ pub(super) unsafe extern "C" fn create_slot(
     allocator: *mut Raw,
     list: *mut Raw,
 ) -> i32 {
-    unsafe { rsf_d3d11p_gpu_create_slot(state(facade).graphics.device, allocator, list) }
+    let device = unsafe { state(facade) }.graphics.device;
+    if unsafe { crate::d3d11_d3d12::create_commands(device, allocator, list) } != 0 {
+        S_OK
+    } else {
+        E_FAIL
+    }
 }
 
 pub(super) unsafe extern "C" fn create_render_buffer(

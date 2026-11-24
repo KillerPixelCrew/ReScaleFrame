@@ -66,6 +66,7 @@ mod leaf {
     pub(super) use super::provider_table;
     use super::{Event as rsf_observer_present_event, Raw};
     pub(super) use super::{device::verify_outer, dxgi::*, gpu::*, native::*};
+    pub(super) use crate::d3d11_d3d12::close_event;
     pub(super) use crate::shared_surface::rsf_shared_surface_native_platform as shared_surface_platform;
     pub(super) use crate::streamline_host::{
         rsf_streamline_host_abort as host_abort, rsf_streamline_host_acquire as host_acquire,
