@@ -4,7 +4,7 @@ use crate::frame_capture12::{self as capture, Owner as Capture};
 use rsf_game_sys::rsf_frame_allows_fg;
 use std::sync::atomic::AtomicPtr;
 
-// The linked native calls `native!` reaches by name. Unit tests do not build this module.
+// The linked native calls fg12 makes as `native::*`. Unit tests do not build this module.
 pub(super) use crate::d3d11_present::{
     rsf_d3d11_present_backend as present_backend,
     rsf_d3d11_present_generation as present_generation, rsf_d3d11_present_has_owner as has_owner,

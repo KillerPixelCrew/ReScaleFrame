@@ -36,12 +36,6 @@ use std::sync::{Mutex, OnceLock};
 mod native;
 use native::texture_desc;
 
-macro_rules! native {
-    ($operation:ident($($argument:expr),* $(,)?)) => {
-        $crate::fg12::native::$operation($($argument),*)
-    };
-}
-
 mod colors;
 mod retirement;
 use colors::Colors;
@@ -147,7 +141,7 @@ struct Texture {
 impl Texture {
     unsafe fn allocate(list: *mut c_void, source: *mut c_void, old: Option<&Self>) -> Option<Self> {
         let reuse = old.map_or(null_mut(), |texture| texture.resource.as_raw());
-        let raw = unsafe { native!(texture(list, source, reuse)) };
+        let raw = unsafe { native::texture(list, source, reuse) };
         let resource = unsafe { com_ref::owned(raw) }?;
         Some(Self {
             resource,
@@ -160,13 +154,13 @@ impl Texture {
     }
 
     unsafe fn copy_from(&mut self, list: *mut c_void, src: *mut c_void, state: u32) {
-        unsafe { native!(copy(list, src, state, self.resource.as_raw(), self.state)) };
+        unsafe { native::copy(list, src, state, self.resource.as_raw(), self.state) };
         self.state = COMMON;
     }
 
     unsafe fn read(&mut self, list: *mut c_void) -> *mut c_void {
         let raw = self.resource.as_raw();
-        unsafe { native!(transition(list, raw, self.state, SHADER_READ)) };
+        unsafe { native::transition(list, raw, self.state, SHADER_READ) };
         self.state = SHADER_READ;
         raw
     }
@@ -219,7 +213,7 @@ impl SourceFence {
             .serial
             .checked_add(1)
             .filter(|&value| value < u64::MAX)?;
-        if unsafe { native!(signal(self.queue.as_raw(), self.fence.as_raw(), value)) } == 0 {
+        if unsafe { native::signal(self.queue.as_raw(), self.fence.as_raw(), value) } == 0 {
             return None;
         }
         self.serial = value;
@@ -383,7 +377,7 @@ unsafe fn install(request: *const rsf_fg12_setup, explicit: bool) -> i32 {
     // The native bridge only retains the process-lifetime callbacks above.
     // Its synchronous install receipt can use the caller's still-borrowed logger.
     INSTALL_LOGGER.set((request.log, request.user as usize));
-    let installed = unsafe { native!(install(&setup, i32::from(explicit))) };
+    let installed = unsafe { native::install(&setup, i32::from(explicit)) };
     INSTALL_LOGGER.set((None, 0));
     if installed == 0 {
         INSTALL.store(0, Ordering::Release);
@@ -396,9 +390,9 @@ unsafe fn install(request: *const rsf_fg12_setup, explicit: bool) -> i32 {
     }
     *LOGGER.lock().unwrap() = (request.log, request.user as usize);
     unsafe {
-        native!(latency_graphics(12));
-        native!(fg_options_set(&request.options));
-        native!(fg_set_log(request.log, request.user));
+        native::latency_graphics(12);
+        native::fg_options_set(&request.options);
+        native::fg_set_log(request.log, request.user);
     }
     let _ = WINDOW_FILTER.set((window_filter, request.user as usize));
     INSTALL.store(2, Ordering::Release);
@@ -424,13 +418,13 @@ fn latency_frame(id: u64) -> Option<rsf_native_latency_frame> {
         source: id,
         ..unsafe { std::mem::zeroed() }
     };
-    (unsafe { native!(latency_frame_get(&mut core)) } != 0).then_some(core)
+    (unsafe { native::latency_frame_get(&mut core) } != 0).then_some(core)
 }
 
 unsafe extern "C" fn cpu_fact(_: *mut c_void, event: *const rsf_game_cpu_event) {
     // The shared owner can sleep here. Present and render must still be able to
     // progress older frames while the provider waits for them.
-    unsafe { native!(fg_cpu(event)) };
+    unsafe { native::fg_cpu(event) };
     let event = unsafe { &*event };
     let Some(core) = latency_frame(event.source_frame_id) else {
         return;
@@ -464,8 +458,8 @@ unsafe extern "C" fn cpu_fact(_: *mut c_void, event: *const rsf_game_cpu_event) 
 
 #[unsafe(export_name = "rsf_fg12_cpu")]
 pub(super) unsafe extern "C" fn rsf_core_fg12_cpu(event: *const rsf_game_cpu_event) {
-    if native!(has_owner()) != 0 {
-        unsafe { native!(cpu_dispatch(event, Some(cpu_fact), null_mut())) };
+    if native::has_owner() != 0 {
+        unsafe { native::cpu_dispatch(event, Some(cpu_fact), null_mut()) };
     }
 }
 
@@ -523,7 +517,7 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_latency(event: *const rsf_game_lat
 fn start_render(timing: &mut Cpu, frame: Frame) {
     if timing.frame == frame && !timing.render_started {
         timing.render_started = true;
-        native!(latency_render(frame.id, 1));
+        native::latency_render(frame.id, 1);
     }
 }
 
@@ -565,15 +559,15 @@ unsafe extern "C" fn rsf_core_fg12_capture(
         || motion.is_null()
         || frame.id == 0
         || record.abi_version != RSF_GAME_FRAME_ABI_VERSION
-        || native!(has_owner()) == 0
+        || native::has_owner() == 0
     {
         return;
     }
-    let Some(source_queue) = (unsafe { com_ref::owned(native!(source_queue())) }) else {
+    let Some(source_queue) = (unsafe { com_ref::owned(native::source_queue()) }) else {
         return;
     };
     let mut owner = OWNER.lock().unwrap();
-    let generation = native!(present_generation());
+    let generation = native::present_generation();
     let slot = &mut owner.slots[frame.index(INPUT_SLOTS)];
     if let Some(previous) = slot {
         if (previous.record.session_id, previous.record.frame_id) == (frame.session, frame.id) {
@@ -646,36 +640,35 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_hudless(
     let Some(pass) = (unsafe { checked(pass) }) else {
         return;
     };
-    if list.is_null() || pass.color_input.is_null() || unsafe { native!(depth_domains(pass)) } != 0
-    {
+    if list.is_null() || pass.color_input.is_null() || unsafe { native::depth_domains(pass) } != 0 {
         return;
     }
     let view = View::pass(pass);
     if let Some(record) = current_dump(view) {
         unsafe {
-            native!(dump_record(
+            native::dump_record(
                 list,
                 pass.color_input,
                 RENDER_TARGET,
                 &record,
                 c"hudless_color".as_ptr(),
                 0,
-            ));
+            );
             if !pass.ui_input.is_null() {
                 for role in [c"hud_color", c"hud_alpha"] {
-                    native!(dump_record(
+                    native::dump_record(
                         list,
                         pass.ui_input,
                         SHADER_READ,
                         &record,
                         role.as_ptr(),
                         0,
-                    ));
+                    );
                 }
             }
         }
     }
-    if native!(has_owner()) == 0 {
+    if native::has_owner() == 0 {
         return;
     }
     let mut owner = OWNER.lock().unwrap();
@@ -711,10 +704,10 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_window(pass: *const rsf_game_rende
     let Some(pass) = (unsafe { checked(pass) }) else {
         return;
     };
-    if unsafe { native!(depth_domains(pass)) != 0 || native!(is_owner(pass.swapchain)) == 0 } {
+    if unsafe { native::depth_domains(pass) != 0 || native::is_owner(pass.swapchain) == 0 } {
         return;
     }
-    let index = unsafe { native!(buffer_index(pass.swapchain)) } as usize;
+    let index = unsafe { native::buffer_index(pass.swapchain) } as usize;
     let view = View::pass(pass);
     let mut owner = OWNER.lock().unwrap();
     let Some(window) = owner.windows.get_mut(index) else {
@@ -752,7 +745,7 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_submitted(session: u64, id: u64) {
         .as_ref()
         .is_none_or(|fence| queue.as_raw() != fence.queue.as_raw())
     {
-        let fence = unsafe { com_ref::owned(native!(fence(queue.as_raw()))) };
+        let fence = unsafe { com_ref::owned(native::fence(queue.as_raw())) };
         *source_fence = fence.map(|fence| SourceFence {
             queue: queue.clone(),
             fence,
@@ -776,13 +769,13 @@ pub(crate) struct TextureDesc {
 
 fn current_dump(view: View) -> Option<rsf_frame_record> {
     let mut record = empty_record();
-    (unsafe { native!(dump_current(&mut record)) } != 0 && view.matches(&record)).then_some(record)
+    (unsafe { native::dump_current(&mut record) } != 0 && view.matches(&record)).then_some(record)
 }
 
 unsafe fn record_final(view: View, requested: bool, list: *mut c_void, buffer: *mut c_void) {
     if requested && !buffer.is_null() && view.frame.session != 0 && view.frame.id != 0 {
         let mut current = empty_record();
-        if unsafe { native!(dump_current(&mut current)) } == 0 {
+        if unsafe { native::dump_current(&mut current) } == 0 {
             let desc = unsafe { texture_desc(buffer) };
             let record = rsf_frame_record {
                 abi_version: RSF_GAME_FRAME_ABI_VERSION,
@@ -794,7 +787,7 @@ unsafe fn record_final(view: View, requested: bool, list: *mut c_void, buffer: *
                 flags: RSF_FRAME_FLAG_NO_SR | RSF_FRAME_FLAG_NO_FG,
                 ..empty_record()
             };
-            unsafe { native!(dump_begin_record(&record, 0)) };
+            unsafe { native::dump_begin_record(&record, 0) };
         }
     }
     if !list.is_null()
@@ -802,14 +795,14 @@ unsafe fn record_final(view: View, requested: bool, list: *mut c_void, buffer: *
         && let Some(record) = current_dump(view)
     {
         unsafe {
-            native!(dump_record(
+            native::dump_record(
                 list,
                 buffer,
                 PRESENT_STATE,
                 &record,
                 c"final_color".as_ptr(),
                 (view.frame.id % 3) as u32,
-            ));
+            );
         }
     }
 }
@@ -841,7 +834,7 @@ fn eligibility(slot: Option<&Slot>, view: View, cpu_valid: bool, needs_hudless: 
     };
     if slot.record.flags & RSF_FRAME_FLAG_RESET != 0 {
         RSF_NATIVE_FG_REASON_RESET
-    } else if unsafe { native!(allows_fg(&slot.record)) } == 0 {
+    } else if unsafe { native::allows_fg(&slot.record) } == 0 {
         RSF_NATIVE_FG_REASON_SCENE_UNSUPPORTED
     } else if needs_hudless && !slot.hudless_recorded {
         RSF_NATIVE_FG_REASON_HUDLESS_MISSING
@@ -877,17 +870,17 @@ unsafe extern "C" fn prepare(
     context: *mut c_void,
     _: u32,
 ) {
-    unsafe { native!(dump_flush()) };
-    let requested = native!(dump_requested()) != 0;
-    native!(dump_poll());
+    unsafe { native::dump_flush() };
+    let requested = native::dump_requested() != 0;
+    native::dump_poll();
     let mut owner = OWNER.lock().unwrap();
-    let index = unsafe { native!(buffer_index(chain)) } as usize;
+    let index = unsafe { native::buffer_index(chain) } as usize;
     let view = owner
         .windows
         .get_mut(index)
         .map(std::mem::take)
         .unwrap_or_default();
-    let generation = native!(present_generation());
+    let generation = native::present_generation();
     owner.colors.poll(generation);
     let mut present = Present {
         view,
@@ -901,12 +894,12 @@ unsafe extern "C" fn prepare(
     let timing = owner.cpu[frame.index(CPU_SLOTS)];
     if !host.is_null() {
         crate::native_fg_cpu::retire_unsubmitted(frame.session, frame.id, |id| unsafe {
-            native!(host_abort(host, id))
+            native::host_abort(host, id)
         });
     }
 
     let Some(provider) =
-        (unsafe { native!(present_provider()).as_ref() }).filter(|_| !context.is_null())
+        (unsafe { native::present_provider().as_ref() }).filter(|_| !context.is_null())
     else {
         owner.state.vendor = unsafe { std::mem::zeroed() };
         owner.state.last_result = OK;
@@ -1024,10 +1017,10 @@ unsafe extern "C" fn prepare(
     present.prepared = true;
     PRESENT.set(present);
     let result = unsafe { tag(context, list, &submission) };
-    let backend = native!(present_backend());
+    let backend = native::present_backend();
     unsafe {
-        native!(dump_prepare(&submission, result));
-        native!(dump_result(&record, c"fg".as_ptr(), backend, result));
+        native::dump_prepare(&submission, result);
+        native::dump_result(&record, c"fg".as_ptr(), backend, result);
     }
     owner.state.last_result = result;
     if result == OK {
@@ -1060,17 +1053,17 @@ unsafe extern "C" fn latency(_: *mut c_void, event: *const rsf_observer_present_
         return;
     }
     if event.completed == 0 {
-        native!(latency_present(frame.id, event.swapchain, 1));
+        native::latency_present(frame.id, event.swapchain, 1);
         return;
     }
-    let queue = unsafe { native!(present_queue()) };
+    let queue = unsafe { native::present_queue() };
     if let Some(record) = current_dump(present.view) {
         unsafe {
-            native!(dump_submitted(queue, &record));
-            native!(dump_complete(&record, event.result));
+            native::dump_submitted(queue, &record);
+            native::dump_complete(&record, event.result);
         }
     }
-    native!(latency_present(frame.id, event.swapchain, 0));
+    native::latency_present(frame.id, event.swapchain, 0);
     if !queue.is_null() {
         unsafe { OWNER.lock().unwrap().colors.submitted(present, queue) };
     }
@@ -1079,9 +1072,9 @@ unsafe extern "C" fn latency(_: *mut c_void, event: *const rsf_observer_present_
 unsafe extern "C" fn retire(_: *mut c_void, context: *mut c_void) {
     let present = PRESENT.replace(Present::default());
     let mut owner = OWNER.lock().unwrap();
-    let generation = native!(present_generation());
+    let generation = native::present_generation();
     let Some(provider) =
-        (unsafe { native!(present_provider()).as_ref() }).filter(|_| !context.is_null())
+        (unsafe { native::present_provider().as_ref() }).filter(|_| !context.is_null())
     else {
         owner.state.vendor = unsafe { std::mem::zeroed() };
         return;
@@ -1105,7 +1098,7 @@ unsafe extern "C" fn retire(_: *mut c_void, context: *mut c_void) {
         if owner.samples <= 3 || owner.samples.is_multiple_of(120) {
             log(format!(
                 "Native renderer FG status backend={} source={} prepare={} mode={} active={} vendor={} generated_callbacks={} presented={} valid_stats=0x{:x}",
-                native!(present_backend()),
+                native::present_backend(),
                 present.view.frame.id,
                 owner.state.last_result,
                 status.effective_mode,
@@ -1136,7 +1129,7 @@ unsafe extern "C" fn retire(_: *mut c_void, context: *mut c_void) {
     // callbacks and rendering keep progressing while the bridge joins it.
     let mut fence = null_mut();
     let mut value = 0;
-    let result = unsafe { native!(present_retire(context, null_mut(), &mut fence, &mut value)) };
+    let result = unsafe { native::present_retire(context, null_mut(), &mut fence, &mut value) };
     let point = if result == OK && !fence.is_null() && value != 0 && value != u64::MAX {
         // The bridge returns a borrowed fence inside the Present callback lease.
         Some(FencePoint {
@@ -1165,7 +1158,7 @@ extern "C" fn rsf_core_fg12_end_session(session: u64) -> i32 {
         return 0;
     }
     let mut owner = OWNER.lock().unwrap();
-    let generation = native!(present_generation());
+    let generation = native::present_generation();
     if owner.slots.iter().flatten().any(|slot| {
         slot.record.session_id == session
             && if matches!(slot.vendor, VendorUse::None) {
@@ -1180,7 +1173,7 @@ extern "C" fn rsf_core_fg12_end_session(session: u64) -> i32 {
     }
     // The caller has quiesced and drained its recording owner. Only the vendor
     // inputs could still be in use after the caller's own GPU fence.
-    unsafe { native!(dump_flush()) };
+    unsafe { native::dump_flush() };
     for frame in &mut owner.cpu {
         if frame.frame.session == session {
             *frame = Cpu::EMPTY;
@@ -1204,7 +1197,7 @@ extern "C" fn rsf_core_fg12_end_session(session: u64) -> i32 {
     }
     owner.colors.poll(generation);
     drop(owner);
-    native!(latency_end_session(session));
+    native::latency_end_session(session);
     1
 }
 
@@ -1223,9 +1216,9 @@ unsafe fn status_snapshot(output: *mut rsf_native_fg_status, wait: bool) -> i32 
     let mut result = owner.state;
     result.struct_size = size_of::<rsf_native_fg_status>() as u32;
     result.requested = owner.options;
-    result.available = u32::from(native!(has_owner()) != 0 && native!(present_backend()) != 0);
+    result.available = u32::from(native::has_owner() != 0 && native::present_backend() != 0);
     let generation = owner.generation;
-    if generation != native!(present_generation()) {
+    if generation != native::present_generation() {
         result.vendor = unsafe { std::mem::zeroed() };
     }
     let mut latency = rsf_native_latency_status {
@@ -1233,7 +1226,7 @@ unsafe fn status_snapshot(output: *mut rsf_native_fg_status, wait: bool) -> i32 
         version: 1,
         ..rsf_native_latency_status::default()
     };
-    if unsafe { native!(latency_status_get(&mut latency)) } != 0 {
+    if unsafe { native::latency_status_get(&mut latency) } != 0 {
         result.vendor.pacing_owner = latency.owner;
         result.vendor.low_latency_available = latency.available;
         result.vendor.effective_reflex = latency.effective_mode;
@@ -1261,7 +1254,7 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_options(request: *const rsf_native
     if !options_valid(request) {
         return;
     }
-    unsafe { native!(fg_options_set(request)) };
+    unsafe { native::fg_options_set(request) };
     OWNER.lock().unwrap().options = *request;
 }
 

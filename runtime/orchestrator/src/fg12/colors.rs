@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{
-    FencePoint, FenceState, IUnknown, PRESENT_STATE, Present, SHADER_READ, log, texture_desc,
+    FencePoint, FenceState, IUnknown, PRESENT_STATE, Present, SHADER_READ, log, native,
+    texture_desc,
 };
 use crate::com_ref;
 use std::ffi::c_void;
@@ -23,7 +24,7 @@ unsafe impl Send for Readback {}
 
 impl Readback {
     unsafe fn allocate(source: *mut c_void) -> Option<Self> {
-        let (raw, layout) = unsafe { native!(readback(source)) }?;
+        let (raw, layout) = unsafe { native::readback(source) }?;
         Some(Self {
             buffer: unsafe { com_ref::owned(raw) }?,
             layout,
@@ -31,27 +32,19 @@ impl Readback {
     }
 
     unsafe fn record(&self, list: *mut c_void, source: *mut c_void, state: u32) {
-        unsafe {
-            native!(readback_copy(
-                list,
-                source,
-                state,
-                self.buffer.as_raw(),
-                &self.layout
-            ))
-        };
+        unsafe { native::readback_copy(list, source, state, self.buffer.as_raw(), &self.layout) };
     }
 
     fn write(&self, path: &Path) -> io::Result<()> {
         let layout = self.layout;
-        let mapped = unsafe { native!(map(self.buffer.as_raw(), layout.bytes)) };
+        let mapped = unsafe { native::map(self.buffer.as_raw(), layout.bytes) };
         if mapped.is_null() {
             return Err(io::Error::other("FG readback mapping failed"));
         }
         struct Mapping<'a>(&'a IUnknown);
         impl Drop for Mapping<'_> {
             fn drop(&mut self) {
-                unsafe { native!(unmap(self.0.as_raw())) };
+                unsafe { native::unmap(self.0.as_raw()) };
             }
         }
         let _mapping = Mapping(&self.buffer);
@@ -201,10 +194,10 @@ impl Colors {
         {
             return;
         }
-        let Some(fence) = (unsafe { com_ref::owned(native!(fence(queue))) }) else {
+        let Some(fence) = (unsafe { com_ref::owned(native::fence(queue)) }) else {
             return;
         };
-        if unsafe { native!(signal(queue, fence.as_raw(), 1)) } != 0 {
+        if unsafe { native::signal(queue, fence.as_raw(), 1) } != 0 {
             pair.completion = Some(FencePoint { fence, value: 1 });
         }
     }
