@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MIT
+// The message leaves of the overlay input owner.
 use crate::overlay_cursor_hooks::rsf_core_overlay_cursor_ready;
+use crate::overlay_input::{
+    apply_visibility, close_touch, deliver_contact, pointer_contact, record_button,
+    record_mouse_position, record_raw_mouse, touch_contacts,
+};
 use crate::overlay_pointer;
 use crate::overlay_visibility::{
     self, Apply, rsf_core_overlay_toggle_key, rsf_core_overlay_visibility_set,
@@ -47,22 +52,9 @@ pub(super) struct Contact {
     pub(super) kind: i32,
 }
 
-#[repr(C)]
-pub(super) struct MessageOps {
-    pub(super) pointer: unsafe extern "C" fn(u32, &mut Contact) -> u32,
-    pub(super) touch: unsafe extern "C" fn(isize, u32, *mut Contact, &mut u64) -> u32,
-    pub(super) close_touch: unsafe extern "C" fn(isize),
-    pub(super) contact: unsafe extern "C" fn(*mut c_void, &Contact, u32),
-    pub(super) mouse_position: unsafe extern "C" fn(*mut c_void, isize),
-    pub(super) mouse_button: unsafe extern "C" fn(u32, u32),
-    pub(super) raw_mouse: unsafe extern "C" fn(*mut c_void, isize) -> bool,
-    pub(super) apply: Apply,
-}
-
 const _: () = {
     assert!(size_of::<Contact>() == 20);
     assert!(std::mem::offset_of!(Contact, kind) == 16);
-    assert!(size_of::<MessageOps>() == usize::BITS as usize);
 };
 
 #[repr(u32)]
@@ -101,15 +93,9 @@ fn apply_gesture(desired: i32, apply: Apply) {
     }
 }
 
-fn route_pointer(
-    ops: &MessageOps,
-    window: *mut c_void,
-    message: u32,
-    id: u32,
-    visible: bool,
-) -> Disposition {
+fn route_pointer(window: *mut c_void, message: u32, id: u32, visible: bool) -> Disposition {
     let mut contact = Contact::default();
-    if unsafe { (ops.pointer)(id, &mut contact) } == 0 {
+    if unsafe { pointer_contact(id, &mut contact) } == 0 {
         if visible {
             note_pointer(1, 0);
         }
@@ -118,7 +104,7 @@ fn route_pointer(
     contact.flags |= contact_flags(message);
     if contact.kind == PT_TOUCH {
         let desired = contact.gesture(overlay_pointer::POINTER, unsafe { GetTickCount64() });
-        apply_gesture(desired, ops.apply);
+        apply_gesture(desired, apply_visibility);
     }
     let canceled = contact.flags & overlay_pointer::CANCEL != 0;
     if canceled {
@@ -129,7 +115,7 @@ fn route_pointer(
         note_pointer(1, supported.into());
         if supported {
             if !canceled {
-                unsafe { (ops.contact)(window, &contact, 1) };
+                unsafe { deliver_contact(window, &contact, 1) };
             }
             return Disposition::Consume;
         }
@@ -137,17 +123,11 @@ fn route_pointer(
     Disposition::Forward
 }
 
-fn route_touch(
-    ops: &MessageOps,
-    window: *mut c_void,
-    handle: isize,
-    count: u32,
-    visible: bool,
-) -> Disposition {
+fn route_touch(window: *mut c_void, handle: isize, count: u32, visible: bool) -> Disposition {
     let mut contacts = [Contact::default(); 32];
     let mut now = 0;
     if count as usize > contacts.len()
-        || unsafe { (ops.touch)(handle, count, contacts.as_mut_ptr(), &mut now) } == 0
+        || unsafe { touch_contacts(handle, count, contacts.as_mut_ptr(), &mut now) } == 0
     {
         return Disposition::Forward;
     }
@@ -159,15 +139,15 @@ fn route_touch(
             desired = change;
         }
     }
-    apply_gesture(desired, ops.apply);
+    apply_gesture(desired, apply_visibility);
     if !visible {
         return Disposition::Forward;
     }
     note_pointer(count, count);
     for contact in contacts {
-        unsafe { (ops.contact)(window, contact, 1) };
+        unsafe { deliver_contact(window, contact, 1) };
     }
-    unsafe { (ops.close_touch)(handle) };
+    unsafe { close_touch(handle) };
     Disposition::Consume
 }
 
@@ -196,7 +176,6 @@ pub(super) extern "C" fn rsf_core_overlay_route_message(
     message: u32,
     wparam: usize,
     lparam: isize,
-    ops: &MessageOps,
 ) -> Disposition {
     // Use the visibility at entry for delivery, even if this message toggles the overlay.
     let visible = rsf_core_overlay_visible() != 0;
@@ -212,12 +191,12 @@ pub(super) extern "C" fn rsf_core_overlay_route_message(
             ..Contact::default()
         };
         note_pointer(1, 1);
-        unsafe { (ops.contact)(window, &contact, 0) };
+        unsafe { deliver_contact(window, &contact, 0) };
         return Disposition::Consume;
     }
     match message {
         WM_POINTERDOWN | WM_POINTERUPDATE | WM_POINTERUP => {
-            return route_pointer(ops, window, message, u32::from(wparam as u16), visible);
+            return route_pointer(window, message, u32::from(wparam as u16), visible);
         }
         WM_POINTERCAPTURECHANGED => {
             overlay_pointer::capture_lost(u32::from(wparam as u16));
@@ -225,7 +204,7 @@ pub(super) extern "C" fn rsf_core_overlay_route_message(
                 return Disposition::Consume;
             }
         }
-        WM_TOUCH => return route_touch(ops, window, lparam, u32::from(wparam as u16), visible),
+        WM_TOUCH => return route_touch(window, lparam, u32::from(wparam as u16), visible),
         WM_KILLFOCUS => focus_lost(),
         WM_ACTIVATEAPP if wparam == 0 => focus_lost(),
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
@@ -239,14 +218,14 @@ pub(super) extern "C" fn rsf_core_overlay_route_message(
             if lparam & 0x40000000 != 0 {
                 flags |= REPEAT;
             }
-            if route_key(wparam as u32, flags, visible, ops.apply) != 0 {
+            if route_key(wparam as u32, flags, visible, apply_visibility) != 0 {
                 return Disposition::Consume;
             }
         }
         WM_CHAR | WM_DEADCHAR | WM_MOUSEHWHEEL if visible => return Disposition::Consume,
         WM_MOUSEMOVE if visible => {
             note_pointer(1, 1);
-            unsafe { (ops.mouse_position)(window, lparam) };
+            unsafe { record_mouse_position(window, lparam) };
             return Disposition::Consume;
         }
         WM_MOUSEWHEEL if visible => {
@@ -257,7 +236,7 @@ pub(super) extern "C" fn rsf_core_overlay_route_message(
             return Disposition::Consume;
         }
         WM_INPUT if visible => {
-            if unsafe { (ops.raw_mouse)(window, lparam) } {
+            if unsafe { record_raw_mouse(window, lparam) } {
                 RAW.fetch_add(1, Ordering::Relaxed);
             }
             // DefWindowProc releases the consumed raw-input record.
@@ -268,8 +247,8 @@ pub(super) extern "C" fn rsf_core_overlay_route_message(
                 let consumed = route_button(key, down, visible);
                 if visible {
                     unsafe {
-                        (ops.mouse_position)(window, lparam);
-                        (ops.mouse_button)(key, down.into());
+                        record_mouse_position(window, lparam);
+                        record_button(key, down.into());
                     }
                 }
                 if consumed {

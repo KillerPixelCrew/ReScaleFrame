@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: MIT
 use crate::overlay_cursor_capture::{self as capture, Effects};
 use crate::overlay_cursor_hooks::{self as hooks, Platform as HookPlatform};
-use crate::overlay_input_route::{
-    Contact, Disposition, MessageOps, rsf_core_overlay_route_message,
-};
+use crate::overlay_input_route::{Contact, Disposition, rsf_core_overlay_route_message};
 use crate::overlay_pointer::{self as pointer, ClientPoint};
 use crate::overlay_visibility::{
     rsf_core_overlay_toggle_key, rsf_core_overlay_toggle_poll, rsf_core_overlay_visibility_set,
     rsf_core_overlay_visible,
 };
-use crate::overlay_window::{self as window, Platform as WindowPlatform};
+use crate::overlay_window as window;
 use crate::sys::{rsf_overlay_input as Input, rsf_overlay_input_options as Options};
 use std::ffi::{c_char, c_void};
 use std::mem::{offset_of, transmute};
@@ -98,7 +96,7 @@ fn button_bit(key: u32) -> u32 {
     }
 }
 
-unsafe extern "C" fn record_raw_mouse(window: HWND, lparam: LPARAM) -> bool {
+pub(super) unsafe extern "C" fn record_raw_mouse(window: HWND, lparam: LPARAM) -> bool {
     // A freed cursor is sampled in absolute coordinates at collection time.
     if hooks::rsf_core_overlay_cursor_ready() != 0 {
         return false;
@@ -131,7 +129,7 @@ unsafe extern "C" fn record_raw_mouse(window: HWND, lparam: LPARAM) -> bool {
     true
 }
 
-unsafe extern "C" fn record_mouse_position(window: HWND, lparam: LPARAM) {
+pub(super) unsafe extern "C" fn record_mouse_position(window: HWND, lparam: LPARAM) {
     let p = POINT {
         x: i32::from(lparam as i16),
         y: i32::from((lparam >> 16) as i16),
@@ -149,7 +147,7 @@ unsafe extern "C" fn record_mouse_position(window: HWND, lparam: LPARAM) {
     pointer::rsf_core_overlay_pointer_move(&facts, freed);
 }
 
-unsafe extern "C" fn record_button(key: u32, down: u32) {
+pub(super) unsafe extern "C" fn record_button(key: u32, down: u32) {
     let bit = button_bit(key);
     if bit != 0 {
         pointer::rsf_core_overlay_pointer_button(bit, down);
@@ -327,7 +325,7 @@ unsafe extern "system" fn hooked_raw_buffer(
     result
 }
 
-unsafe extern "C" fn install_cursor() {
+pub(super) unsafe extern "C" fn install_cursor() {
     let detours = [
         hooked_set_position as *mut c_void,
         hooked_clip as *mut c_void,
@@ -340,7 +338,7 @@ unsafe extern "C" fn install_cursor() {
     hooks::rsf_core_overlay_cursor_install(&detours, &minhook::PLATFORM);
 }
 
-unsafe extern "C" fn retire_cursor(visible: u32, window_alive: u32) -> i32 {
+pub(super) unsafe extern "C" fn retire_cursor(visible: u32, window_alive: u32) -> i32 {
     if visible != 0 {
         capture::rsf_core_overlay_cursor_capture(0, window_alive, &EFFECTS);
     }
@@ -349,7 +347,7 @@ unsafe extern "C" fn retire_cursor(visible: u32, window_alive: u32) -> i32 {
     retired
 }
 
-unsafe extern "C" fn apply_visibility(visible: u32, route: u32) {
+pub(super) unsafe extern "C" fn apply_visibility(visible: u32, route: u32) {
     pointer::rsf_core_overlay_pointer_clear();
     capture::rsf_core_overlay_cursor_capture(visible, 1, &EFFECTS);
     if visible != 0 {
@@ -369,7 +367,7 @@ unsafe extern "C" fn apply_visibility(visible: u32, route: u32) {
     ));
 }
 
-unsafe extern "C" fn pointer_contact(id: u32, out: &mut Contact) -> u32 {
+pub(super) unsafe extern "C" fn pointer_contact(id: u32, out: &mut Contact) -> u32 {
     let mut info = POINTER_INFO::default();
     if unsafe { GetPointerInfo(id, &mut info) } == 0 {
         return 0;
@@ -388,7 +386,7 @@ unsafe extern "C" fn pointer_contact(id: u32, out: &mut Contact) -> u32 {
     1
 }
 
-unsafe extern "C" fn touch_contacts(
+pub(super) unsafe extern "C" fn touch_contacts(
     handle: isize,
     count: u32,
     out: *mut Contact,
@@ -431,11 +429,11 @@ unsafe extern "C" fn touch_contacts(
     1
 }
 
-unsafe extern "C" fn close_touch(handle: isize) {
+pub(super) unsafe extern "C" fn close_touch(handle: isize) {
     unsafe { CloseTouchInputHandle(handle as _) };
 }
 
-unsafe extern "C" fn deliver_contact(window: HWND, contact: &Contact, screen: u32) {
+pub(super) unsafe extern "C" fn deliver_contact(window: HWND, contact: &Contact, screen: u32) {
     let mut point = POINT {
         x: contact.x,
         y: contact.y,
@@ -450,17 +448,6 @@ unsafe extern "C" fn deliver_contact(window: HWND, contact: &Contact, screen: u3
     );
 }
 
-static MESSAGE_OPS: MessageOps = MessageOps {
-    pointer: pointer_contact,
-    touch: touch_contacts,
-    close_touch,
-    contact: deliver_contact,
-    mouse_position: record_mouse_position,
-    mouse_button: record_button,
-    raw_mouse: record_raw_mouse,
-    apply: apply_visibility,
-};
-
 unsafe extern "system" fn window_proc(
     window: HWND,
     message: u32,
@@ -468,7 +455,7 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     let original = window::rsf_core_overlay_input_original();
-    match rsf_core_overlay_route_message(window, message, wparam, lparam, &MESSAGE_OPS) {
+    match rsf_core_overlay_route_message(window, message, wparam, lparam) {
         Disposition::Consume => 0,
         Disposition::ConsumeXButton => 1,
         Disposition::Forward if original != 0 => {
@@ -479,7 +466,7 @@ unsafe extern "system" fn window_proc(
     }
 }
 
-unsafe extern "C" fn invoke_log(
+pub(super) unsafe extern "C" fn invoke_log(
     log: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
     user: *mut c_void,
     message: *const c_char,
@@ -487,35 +474,19 @@ unsafe extern "C" fn invoke_log(
     unsafe { crate::graphics_d3d11::rsf_call_native_log(log, user, message) };
 }
 
-static WINDOW_PLATFORM: WindowPlatform = WindowPlatform {
-    install_cursor,
-    retire_cursor,
-    log: invoke_log,
-};
-
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_overlay_input_install(
     window: HWND,
     options: *const Options,
 ) -> i32 {
     unsafe {
-        window::rsf_core_overlay_input_install(
-            window,
-            options,
-            window_proc as *const () as isize,
-            &WINDOW_PLATFORM,
-        )
+        window::rsf_core_overlay_input_install(window, options, window_proc as *const () as isize)
     }
 }
 
 #[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_overlay_input_uninstall() -> i32 {
-    unsafe {
-        window::rsf_core_overlay_input_uninstall(
-            window_proc as *const () as isize,
-            &WINDOW_PLATFORM,
-        )
-    }
+    unsafe { window::rsf_core_overlay_input_uninstall(window_proc as *const () as isize) }
 }
 
 #[unsafe(no_mangle)]

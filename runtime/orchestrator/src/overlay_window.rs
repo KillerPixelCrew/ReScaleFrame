@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::overlay_input::{install_cursor, invoke_log, retire_cursor};
 use crate::overlay_visibility::{self, rsf_core_overlay_toggle_key};
 use crate::sr_session::has_capacity;
 use crate::sync::lock;
@@ -33,16 +34,8 @@ pub(super) const NOT_INSTALLED: i32 = -4;
 const SUBCLASS_FAILED: i32 = -5;
 const FOREIGN_SUBCLASS: i32 = -6;
 
-#[repr(C)]
-pub(super) struct Platform {
-    pub(super) install_cursor: unsafe extern "C" fn(),
-    pub(super) retire_cursor: unsafe extern "C" fn(u32, u32) -> i32,
-    pub(super) log: InvokeLog,
-}
-
 const _: () = {
     assert!(size_of::<Options>() == 32);
-    assert!(size_of::<Platform>() == 3 * size_of::<Handle>());
 };
 
 #[derive(Clone, Copy)]
@@ -115,7 +108,6 @@ pub(super) unsafe extern "C" fn rsf_core_overlay_input_install(
     window: Handle,
     options: *const Options,
     procedure: isize,
-    platform: &Platform,
 ) -> i32 {
     if window.is_null() || !unsafe { has_capacity(options) } {
         return INVALID;
@@ -135,7 +127,7 @@ pub(super) unsafe extern "C" fn rsf_core_overlay_input_install(
     let log = Logger {
         callback: options.log,
         user: options.log_user,
-        invoke: platform.log,
+        invoke: invoke_log,
     };
     if unsafe { IsWindowUnicode(window) } == 0 {
         log.say(c"overlay input: window is ANSI, subclassing it with the wide entry point converts it to Unicode");
@@ -180,19 +172,16 @@ pub(super) unsafe extern "C" fn rsf_core_overlay_input_install(
         }
         Ok(_) => {}
     }
-    unsafe { (platform.install_cursor)() };
+    unsafe { install_cursor() };
     OK
 }
 
-pub(super) unsafe extern "C" fn rsf_core_overlay_input_uninstall(
-    procedure: isize,
-    platform: &Platform,
-) -> i32 {
+pub(super) unsafe extern "C" fn rsf_core_overlay_input_uninstall(procedure: isize) -> i32 {
     let _lifecycle = lock(&LIFECYCLE);
     let window = rsf_core_overlay_input_window();
     if window.is_null() {
         return if overlay_cursor_hooks::has_hooks() {
-            if unsafe { (platform.retire_cursor)(0, 0) } != 0 {
+            if unsafe { retire_cursor(0, 0) } != 0 {
                 OK
             } else {
                 SUBCLASS_FAILED
@@ -224,7 +213,7 @@ pub(super) unsafe extern "C" fn rsf_core_overlay_input_uninstall(
     // A message already inside the subclass can still read ORIGINAL.
     WINDOW.store(null_mut(), Ordering::Release);
     let visible = reset_input(rsf_core_overlay_toggle_key(), false);
-    let retired = unsafe { (platform.retire_cursor)(visible.into(), alive.into()) } != 0;
+    let retired = unsafe { retire_cursor(visible.into(), alive.into()) } != 0;
     set_logger(None);
     if !retired {
         if let Some(log) = log {
