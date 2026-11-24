@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::overlay_input::{install_cursor, invoke_log, retire_cursor};
+use crate::graphics_d3d11::rsf_call_native_log;
+use crate::overlay_input::{install_cursor, retire_cursor};
 use crate::overlay_visibility::{self, rsf_core_overlay_toggle_key};
 use crate::sr_session::has_capacity;
 use crate::sync::lock;
@@ -8,7 +9,7 @@ use crate::sys::{
     rsf_overlay_input_options as Options,
 };
 use crate::{overlay_cursor_hooks, overlay_pointer};
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, CString, c_void};
 use std::ptr::null_mut;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, Ordering};
@@ -23,7 +24,6 @@ use windows_sys::Win32::{
 };
 
 type Handle = *mut c_void;
-type InvokeLog = unsafe extern "C" fn(LogFn, Handle, *const c_char);
 
 const INSERT: u32 = 0x2d;
 pub(super) const OK: i32 = 0;
@@ -42,7 +42,6 @@ const _: () = {
 struct Logger {
     callback: LogFn,
     user: Handle,
-    invoke: InvokeLog,
 }
 
 // The user context is a token owned by the caller for the attachment lifetime.
@@ -51,7 +50,7 @@ unsafe impl Send for Logger {}
 impl Logger {
     fn say(self, text: &CStr) {
         if self.callback.is_some() {
-            unsafe { (self.invoke)(self.callback, self.user, text.as_ptr()) };
+            unsafe { rsf_call_native_log(self.callback, self.user, text.as_ptr()) };
         }
     }
 
@@ -127,7 +126,6 @@ pub(super) unsafe extern "C" fn rsf_core_overlay_input_install(
     let log = Logger {
         callback: options.log,
         user: options.log_user,
-        invoke: invoke_log,
     };
     if unsafe { IsWindowUnicode(window) } == 0 {
         log.say(c"overlay input: window is ANSI, subclassing it with the wide entry point converts it to Unicode");

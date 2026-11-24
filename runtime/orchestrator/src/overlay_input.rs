@@ -9,7 +9,7 @@ use crate::overlay_visibility::{
 };
 use crate::overlay_window as window;
 use crate::sys::{rsf_overlay_input as Input, rsf_overlay_input_options as Options};
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::mem::{offset_of, transmute};
 use std::ptr::{self, null, null_mut};
 use windows_sys::Win32::{
@@ -457,14 +457,6 @@ unsafe extern "system" fn window_proc(
         }
         _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
     }
-}
-
-pub(super) unsafe extern "C" fn invoke_log(
-    log: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
-    user: *mut c_void,
-    message: *const c_char,
-) {
-    unsafe { crate::graphics_d3d11::rsf_call_native_log(log, user, message) };
 }
 
 #[unsafe(no_mangle)]
