@@ -2,7 +2,7 @@
 use super::*;
 use crate::d3d11_d3d12::transition_barrier;
 use ::windows::Win32::{
-    Foundation::{HANDLE, HWND},
+    Foundation::HWND,
     Graphics::{
         Direct3D12::*,
         Dxgi::{Common::*, *},
@@ -86,16 +86,10 @@ pub(super) unsafe fn create_chain(
     true
 }
 
-pub(super) unsafe fn chain_extent(chain: *mut c_void, width: *mut u32, height: *mut u32) -> bool {
+pub(super) unsafe fn chain_extent(chain: *mut c_void) -> Option<(u32, u32)> {
     let chain: &IDXGISwapChain3 = unsafe { borrow(&chain) };
-    let Ok(desc) = (unsafe { chain.GetDesc1() }) else {
-        return false;
-    };
-    unsafe {
-        width.write(desc.Width);
-        height.write(desc.Height);
-    }
-    true
+    let desc = unsafe { chain.GetDesc1() }.ok()?;
+    Some((desc.Width, desc.Height))
 }
 
 pub(super) unsafe fn resize_chain(chain: *mut c_void, width: u32, height: u32) -> bool {
@@ -104,7 +98,7 @@ pub(super) unsafe fn resize_chain(chain: *mut c_void, width: u32, height: u32) -
         .is_ok()
 }
 
-pub(super) unsafe fn describe(source: *mut c_void, output: *mut Texture) {
+pub(super) unsafe fn describe(source: *mut c_void) -> Texture {
     let source: &ID3D12Resource = unsafe { borrow(&source) };
     let desc = unsafe { source.GetDesc() };
     let compatible = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
@@ -118,13 +112,11 @@ pub(super) unsafe fn describe(source: *mut c_void, output: *mut Texture) {
                 | DXGI_FORMAT_R8G8B8A8_TYPELESS
                 | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
         );
-    unsafe {
-        output.write(Texture {
-            width: desc.Width,
-            height: desc.Height,
-            compatible,
-        })
-    };
+    Texture {
+        width: desc.Width,
+        height: desc.Height,
+        compatible,
+    }
 }
 
 pub(super) unsafe fn completed(fence: *mut c_void) -> u64 {
@@ -143,16 +135,7 @@ pub(super) unsafe fn wait(fence: *mut c_void, value: u64) -> bool {
     if event.is_null() {
         return false;
     }
-    let result = crate::d3d12_fence::wait_for_value(
-        value,
-        10_000,
-        || unsafe { fence.GetCompletedValue() },
-        || {
-            unsafe { fence.SetEventOnCompletion(value, HANDLE(event)) }
-                .map_or_else(|e| e.code().0, |()| S_OK)
-        },
-        |remaining| unsafe { crate::d3d12_fence::wait_event(event, remaining) },
-    );
+    let result = unsafe { crate::d3d12_fence::wait_fence(fence.as_raw(), value, event, 10_000) };
     unsafe { CloseHandle(event) };
     result == S_OK
 }

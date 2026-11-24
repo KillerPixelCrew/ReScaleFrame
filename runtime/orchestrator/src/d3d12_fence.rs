@@ -48,7 +48,7 @@ fn completion_result(done: u64, value: u64) -> Option<i32> {
     }
 }
 
-pub(super) fn wait_for_value(
+fn wait_for_value(
     value: u64,
     timeout_ms: u32,
     mut completed: impl FnMut() -> u64,
@@ -109,11 +109,9 @@ pub(crate) unsafe fn wait_fence(fence: Handle, value: u64, event: Handle, timeou
         |remaining| unsafe { wait_event(event, remaining) },
     )
 }
-/// One wait on a fence event, as the HRESULT `wait_for_value` expects from its wait step.
-///
-/// # Safety
-/// `event` is a live event handle for the duration of the call.
-pub(super) unsafe fn wait_event(event: Handle, remaining: u32) -> i32 {
+// One wait on a fence event, as the HRESULT `wait_for_value` expects from its wait step. `event`
+// is a live event handle for the duration of the call.
+unsafe fn wait_event(event: Handle, remaining: u32) -> i32 {
     match unsafe { WaitForSingleObject(event, remaining) } {
         WAIT_OBJECT_0 => S_OK,
         WAIT_TIMEOUT => TIMED_OUT,

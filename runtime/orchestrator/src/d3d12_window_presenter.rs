@@ -44,8 +44,6 @@ impl Target {
     };
 }
 
-#[repr(C)]
-#[derive(Default)]
 struct Texture {
     width: u64,
     height: u32,
@@ -208,11 +206,10 @@ impl Graphics {
         if self.gpu.chain.is_null() {
             return self.create_chain(window, width, height);
         }
-        let (mut old_width, mut old_height) = (0, 0);
-        if !unsafe { leaf::chain_extent(self.gpu.chain, &mut old_width, &mut old_height) } {
+        let Some(extent) = (unsafe { leaf::chain_extent(self.gpu.chain) }) else {
             return false;
-        }
-        (old_width, old_height) == (width, height)
+        };
+        extent == (width, height)
             || unsafe {
                 leaf::wait(self.gpu.fence, self.ring.submitted())
                     && leaf::resize_chain(self.gpu.chain, width, height)
@@ -310,8 +307,7 @@ impl Graphics {
         if self.faulted || self.replace_chain || self.gpu.chain.is_null() || self.target != target {
             return false;
         }
-        let mut facts = Texture::default();
-        unsafe { leaf::describe(texture, &mut facts) };
+        let facts = unsafe { leaf::describe(texture) };
         let width = pass.camera.output_width;
         let height = pass.camera.output_height;
         if facts.width != u64::from(width) || facts.height != height || !facts.compatible {
@@ -533,30 +529,20 @@ mod tests {
         true
     }
 
-    pub(super) unsafe extern "C" fn chain_extent(
-        _: *mut c_void,
-        width: *mut u32,
-        height: *mut u32,
-    ) -> bool {
-        unsafe {
-            width.write(8);
-            height.write(8);
-        }
-        called("chain_extent")
+    pub(super) unsafe fn chain_extent(_: *mut c_void) -> Option<(u32, u32)> {
+        called("chain_extent").then_some((8, 8))
     }
 
     pub(super) unsafe extern "C" fn resize_chain(_: *mut c_void, width: u32, height: u32) -> bool {
         called(&format!("resize {width}x{height}"))
     }
 
-    pub(super) unsafe extern "C" fn describe(_: *mut c_void, facts: *mut Texture) {
-        unsafe {
-            facts.write(Texture {
-                width: 8,
-                height: 8,
-                compatible: true,
-            })
-        };
+    pub(super) unsafe fn describe(_: *mut c_void) -> Texture {
+        Texture {
+            width: 8,
+            height: 8,
+            compatible: true,
+        }
     }
 
     pub(super) unsafe extern "C" fn completed(_: *mut c_void) -> u64 {
