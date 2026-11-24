@@ -113,15 +113,6 @@ impl Platform {
         rsf_game_sys::win32::read(address)
     }
 
-    /// Reads `expected.len()` bytes at `address` and compares them.
-    pub(crate) fn matches(&self, address: usize, expected: &[u8]) -> bool {
-        let mut actual = [0; 128];
-        let Some(actual) = actual.get_mut(..expected.len()) else {
-            return false;
-        };
-        self.read(address, actual) && actual == expected
-    }
-
     pub(crate) fn query(&self, address: usize) -> Option<MemoryRegion> {
         let mut region = MEMORY_BASIC_INFORMATION::default();
         let read = unsafe {
