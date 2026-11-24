@@ -41,9 +41,10 @@
 //   is done, so the flag stays set through the key wait, when the world still renders under the loading screen and
 //   dwPrecacheFrame is 0. device_precache_frame_rva = Device.dwPrecacheFrame (device_width_rva + 8);
 //   load_screen_registered_rva = load_screen_renderer.b_registered (bool).
-//   hw_*: HW.pDevice, HW.pContext, HW.pBaseRT, HW.pBaseZB.
+//   hw_*: HW.pDevice, HW.pContext, HW.m_pSwapChain, HW.pBaseRT, HW.pBaseZB.
 //   render_implementation_rva: RImplementation (CRender). render_options_word0/3_rva: CRender::o, first and fourth u32 of
-//   the bitfield. sampler_cache_rva: SSManager (dx10SamplerStateCache).
+//   the bitfield. sunshafts_mode_rva: ps_sunshafts_mode; 2/3 run phase_sunshafts. sampler_cache_rva: SSManager
+//   (dx10SamplerStateCache). user_mip_bias_rva: ps_r__tf_Mipbias (float). user_anisotropy_rva: ps_r__tf_Anisotropic (u32).
 //   backend_rva: RCache (CBackend).
 //   SSAO viewport helper (r4_rendertarget_phase_ssao.cpp:3-10): `static D3D_VIEWPORT viewport[1] = {0, 0, w, h, 0, 1}`
 //   is a function-local static, so its width and height are fixed by the first call for the rest of the process and
@@ -114,17 +115,39 @@ pub(crate) const SITE_SUN_CASCADES: usize = 15;
 pub(crate) const SITE_POSITION_SETUP: usize = 16;
 pub(crate) const SR_CALL_SITE_COUNT: usize = 6;
 pub(crate) const SR_FIRST_PERSON_SITE_COUNT: usize = 6;
+#[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+pub(crate) const RM_NEAR_SLOT: u32 = 55;
+#[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+pub(crate) const RM_FAR_SLOT: u32 = 56;
+#[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+pub(crate) const RM_NORMAL_SLOT: u32 = 57;
 pub(crate) const RENDER_TARGET_OFFSET: u32 = 0x768;
+#[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+pub(crate) const MRTMIXDEPTH_BIT: u32 = 1 << 26;
 pub(crate) const DX10_MSAA_BIT: u32 = 1 << 14;
 pub(crate) const SAMPLER_MIP_LOD_BIAS_OFFSET: u32 = 0x19c;
 pub(crate) const TARGET_WIDTH_OFFSET: u32 = 0x8;
 pub(crate) const TARGET_HEIGHT_OFFSET: u32 = 0xc;
+#[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+pub(crate) const TARGET_LUM_SRC_TEXTURE_OFFSET: u32 = 0x4c8;
+#[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+pub(crate) const TARGET_LUM_DEST_TEXTURE_OFFSET: u32 = 0x4d0;
 pub(crate) const D3DFMT_A8R8G8B8: u32 = 21;
 pub(crate) const D3DFMT_A16B16G16R16F: u32 = 113;
 pub(crate) const D3DFMT_R16F: u32 = 111;
 pub(crate) const D3DFMT_R32F: u32 = 114;
 pub(crate) const SSAO_VIEWPORT_WIDTH_OFFSET: u32 = 0x8;
 pub(crate) const SSAO_VIEWPORT_HEIGHT_OFFSET: u32 = 0xc;
+#[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+pub(crate) const SSAO_BLUR_ON_BIT: u32 = 1 << 1;
+#[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+pub(crate) const SSAO_OPT_DATA_BIT: u32 = 1 << 2;
+#[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+pub(crate) const SSAO_HALF_DATA_BIT: u32 = 1 << 3;
+#[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+pub(crate) const SSAO_HDAO_BIT: u32 = 1 << 5;
+#[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+pub(crate) const SSAO_ULTRA_BIT: u32 = 1 << 6;
 pub(crate) const CRT_SIZE: u32 = 0x50;
 pub(crate) const CRT_SURFACE_OFFSET: u32 = 0x10;
 pub(crate) const CRT_RTV_OFFSET: u32 = 0x18;
@@ -267,6 +290,8 @@ pub(crate) struct Profile {
     pub(crate) unique_guards: &'static [UniqueGuard],
     pub(crate) call_sites: [NativeSite; SR_CALL_SITE_COUNT],
     pub(crate) first_person_sites: [FirstPersonSite; SR_FIRST_PERSON_SITE_COUNT],
+    #[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    pub(crate) crender_vtable_rva: u32,
     pub(crate) device_view_rva: u32,
     pub(crate) device_project_rva: u32,
     pub(crate) device_full_transform_rva: u32,
@@ -274,6 +299,8 @@ pub(crate) struct Profile {
     pub(crate) load_screen_registered_rva: u32,
     pub(crate) hw_device_rva: u32,
     pub(crate) hw_context_rva: u32,
+    #[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    pub(crate) hw_swap_chain_rva: u32,
     pub(crate) hw_base_rt_rva: u32,
     pub(crate) hw_base_zb_rva: u32,
     pub(crate) render_implementation_rva: u32,
@@ -281,7 +308,13 @@ pub(crate) struct Profile {
     #[cfg_attr(not(feature = "sr-fixtures"), allow(dead_code))]
     pub(crate) render_options_word0_rva: u32,
     pub(crate) render_options_word3_rva: u32,
+    #[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    pub(crate) sunshafts_mode_rva: u32,
     pub(crate) sampler_cache_rva: u32,
+    #[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    pub(crate) user_mip_bias_rva: u32,
+    #[allow(dead_code)] // Evidence data: tools/anomaly_sr_evidence.py checks it against the binary.
+    pub(crate) user_anisotropy_rva: u32,
     pub(crate) ssao_set_viewport_rva: u32,
     pub(crate) ssao_viewport_rva: u32,
     pub(crate) ssao_viewport_guard_rva: u32,
@@ -375,6 +408,7 @@ pub(crate) static PROFILES: [Profile; 2] = [
             first_person(c"CParticleEffect::Render HUD mode (ParticleEffect.cpp:599-611)", 0x8d8420, 0x8d8a8e, 0x8d8a9a),
             first_person(c"CRenderTarget::accum_point HUD light (r4_rendertarget_accum_point.cpp:19-31)", 0x90dca0, 0x90e16c, 0x90e178),
         ],
+        crender_vtable_rva: 0xb669f8,
         device_view_rva: 0xd376c8,
         device_project_rva: 0xd37708,
         device_full_transform_rva: 0xd37748,
@@ -382,12 +416,16 @@ pub(crate) static PROFILES: [Profile; 2] = [
         load_screen_registered_rva: 0xce41b0,
         hw_device_rva: 0xceb8d0,
         hw_context_rva: 0xceb8d8,
+        hw_swap_chain_rva: 0xceb8e0,
         hw_base_rt_rva: 0xceb8e8,
         hw_base_zb_rva: 0xceb8f0,
         render_implementation_rva: 0xd64e40,
         render_options_word0_rva: 0xd652a0,
         render_options_word3_rva: 0xd652ac,
+        sunshafts_mode_rva: 0xceb36c,
         sampler_cache_rva: 0xd63a20,
+        user_mip_bias_rva: 0xd607a0,
+        user_anisotropy_rva: 0xceb878,
         ssao_set_viewport_rva: 0x8f95f0,
         ssao_viewport_rva: 0xceebd0,
         ssao_viewport_guard_rva: 0xd79284,
@@ -440,6 +478,7 @@ pub(crate) static PROFILES: [Profile; 2] = [
             first_person(c"CParticleEffect::Render HUD mode (ParticleEffect.cpp:599-611)", 0x8cd840, 0x8cddcb, 0x8cddd7),
             first_person(c"CRenderTarget::accum_point HUD light (r4_rendertarget_accum_point.cpp:19-31)", 0x9021d0, 0x90260d, 0x902619),
         ],
+        crender_vtable_rva: 0xb53b68,
         device_view_rva: 0xd256c8,
         device_project_rva: 0xd25708,
         device_full_transform_rva: 0xd25748,
@@ -447,12 +486,16 @@ pub(crate) static PROFILES: [Profile; 2] = [
         load_screen_registered_rva: 0xcd21b0,
         hw_device_rva: 0xcd98d0,
         hw_context_rva: 0xcd98d8,
+        hw_swap_chain_rva: 0xcd98e0,
         hw_base_rt_rva: 0xcd98e8,
         hw_base_zb_rva: 0xcd98f0,
         render_implementation_rva: 0xd52e40,
         render_options_word0_rva: 0xd532a0,
         render_options_word3_rva: 0xd532ac,
+        sunshafts_mode_rva: 0xcd936c,
         sampler_cache_rva: 0xd51a20,
+        user_mip_bias_rva: 0xd4e7a0,
+        user_anisotropy_rva: 0xcd9878,
         ssao_set_viewport_rva: 0x8eded0,
         ssao_viewport_rva: 0xcdcbd0,
         ssao_viewport_guard_rva: 0xd67284,
