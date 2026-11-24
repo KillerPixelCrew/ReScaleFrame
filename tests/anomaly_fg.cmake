@@ -23,9 +23,5 @@ if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamli
         anomaly_fg_xess_sr5_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300 RUN_SERIAL TRUE)
 endif()
 
-# native_observer.cpp calls the FG stage from its boundaries.
-target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_FG_SRC}/fg_stage_platform.c")
-target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
-
 add_test(NAME anomaly_input_events_standard_contract COMMAND rsf_anomaly_fg_device_test --input-contract standard)
 add_test(NAME anomaly_input_events_avx_contract COMMAND rsf_anomaly_fg_device_test --input-contract avx)

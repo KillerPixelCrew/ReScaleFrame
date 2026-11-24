@@ -18,15 +18,11 @@ endif()
 
 # Geometry identity/lifetime producer. Pure CPU registry, draw scopes and history feed, then real x64
 # detours on fixture functions plus the production guarded install against a synthetic image. No game code runs.
-set(RSF_ANOMALY_GEOMETRY_SOURCES
-    "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_geometry_platform.c"
-    "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_hooks_platform.c")
-add_executable(rsf_anomaly_geometry_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_tests.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
-target_include_directories(rsf_anomaly_geometry_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
+# The adapter's C leaves come with the fixture archive (rsf_anomaly_native_leaves).
+add_executable(rsf_anomaly_geometry_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_tests.c")
 target_link_libraries(rsf_anomaly_geometry_test PRIVATE rsf_anomaly_fixtures_rust minhook rsf_build_options)
 add_test(NAME anomaly_geometry_contract COMMAND rsf_anomaly_geometry_test)
-add_executable(rsf_anomaly_geometry_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_hooks.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
-target_include_directories(rsf_anomaly_geometry_hooks_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
+add_executable(rsf_anomaly_geometry_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_hooks.c")
 target_compile_definitions(rsf_anomaly_geometry_hooks_test PRIVATE RSF_ANOMALY_GEOMETRY_TESTING)
 target_link_libraries(rsf_anomaly_geometry_hooks_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::GameSDK minhook rsf_build_options)
 add_test(NAME anomaly_geometry_hooks_contract COMMAND rsf_anomaly_geometry_hooks_test)
@@ -57,17 +53,10 @@ set_tests_properties(anomaly_sr_profile_contract PROPERTIES TIMEOUT 30)
 # synthetic image; the round-trip fixture runs the production pass and shader on a real D3D11 device (hardware
 # with the debug layer when present, else WARP; 77 when neither exists). None of them runs game code.
 set(RSF_ANOMALY_SR_SRC "${PROJECT_SOURCE_DIR}/games/anomaly/src")
-add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hook_bridge.c"
-    "${RSF_ANOMALY_SR_SRC}/sr_stage_platform.c" "${RSF_ANOMALY_SR_SRC}/sr_d3d11_platform.c" "${RSF_ANOMALY_SR_SRC}/engine_slots.c"
-    "${RSF_ANOMALY_SR_SRC}/native_observer_platform.c" ${RSF_ANOMALY_GEOMETRY_SOURCES})
-# The observer leaf retires its invocations during a C++ unwind (cleanup handlers under GCC).
-target_compile_options(rsf_anomaly_sr_hooks_test PRIVATE $<$<AND:$<COMPILE_LANGUAGE:C>,$<NOT:$<C_COMPILER_ID:MSVC>>>:-fexceptions>)
-target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
-target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon
-    ReScaleFrame::GraphicsLeaves ReScaleFrame::Graphics minhook d3d11 rsf_build_options)
+add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hook_bridge.c")
+target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
 add_test(NAME anomaly_sr_hooks_contract COMMAND rsf_anomaly_sr_hooks_test)
-add_executable(rsf_anomaly_sr_roundtrip_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_roundtrip.c" "${RSF_ANOMALY_SR_SRC}/sr_d3d11_platform.c")
-target_include_directories(rsf_anomaly_sr_roundtrip_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+add_executable(rsf_anomaly_sr_roundtrip_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_roundtrip.c")
 target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::GraphicsLeaves
     ReScaleFrame::Graphics d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
@@ -96,9 +85,7 @@ add_test(NAME anomaly_motion_device COMMAND rsf_anomaly_motion_device_test)
 set_tests_properties(anomaly_motion_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_motion_contract anomaly_motion_device PROPERTIES TIMEOUT 300)
 # The geometry flush detour (redirected onto a fixture) calls the motion stage's flush slot after the original.
-add_executable(rsf_anomaly_motion_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_hooks_native.c"
-    ${RSF_ANOMALY_GEOMETRY_SOURCES})
-target_include_directories(rsf_anomaly_motion_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
+add_executable(rsf_anomaly_motion_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_hooks_native.c")
 target_link_libraries(rsf_anomaly_motion_hooks_test PRIVATE rsf_anomaly_fixtures_rust
     minhook rsf_build_options)
 add_test(NAME anomaly_motion_hooks_contract COMMAND rsf_anomaly_motion_hooks_test)
@@ -127,9 +114,8 @@ target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE rsf_anomaly_fix
     bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
 add_test(NAME anomaly_motion_far_device COMMAND rsf_anomaly_motion_far_device_test)
 set_tests_properties(anomaly_motion_far_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
-# rsf_anomaly_sr_hooks_test links the native observer, which installs/reports/quiesces the motion stage.
-target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/motion_stage_platform.c")
-target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE bcrypt dxguid d3dcompiler)
+# rsf_anomaly_sr_hooks_test runs the native observer, which installs, reports and quiesces the motion stage.
+target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE d3dcompiler)
 # SR Stage 3 (jitter and mip bias). The jitter test checks the Halton sequence, the row-vector NDC offset, the
 # first-person rule, the mip bias delta and the published motion/SR state on the CPU; the Stage 3 swap cases (projection
 # and bias restore on every exit path) are cargo tests in games/anomaly/src/sr_swap/tests. The device fixture runs the unchanged core
@@ -166,8 +152,7 @@ foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_d
         target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_fixtures_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>")
         add_dependencies(${rsf_sr5_client} rsf_orchestrator)
     else()
-        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.c"
-            "${RSF_ANOMALY_SR_SRC}/sr_d3d11_platform.c")
+        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.c")
         # The fixture calls the Runtime's motion passes directly, which only the Runtime archive
         # defines; that archive also defines the SR API, so this test links it instead of the DLL.
         target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_fixtures_rust rsf_orchestrator_rust
@@ -216,7 +201,6 @@ if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/fidelity
 endif()
 set_tests_properties(anomaly_sr_runtime_api_contract
     anomaly_sr_temporal_device PROPERTIES TIMEOUT 120)
-target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include")
 
 # Profile-dependent fixtures once more against the AVX executable's tables (native_profile.rs selects them by name and
 # SHA-256 in the game; here the argument selects them). anomaly_sr_profile_contract checks both tables.
@@ -224,7 +208,6 @@ add_test(NAME anomaly_geometry_hooks_avx_contract COMMAND rsf_anomaly_geometry_h
 add_test(NAME anomaly_sr_hooks_avx_contract COMMAND rsf_anomaly_sr_hooks_test avx)
 set_tests_properties(anomaly_geometry_hooks_avx_contract anomaly_sr_hooks_avx_contract PROPERTIES TIMEOUT 120)
 
-target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_fixtures_rust)
 
 add_executable(rsf_anomaly_input_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_input_hooks.c")
 set_target_properties(rsf_anomaly_input_hooks_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)

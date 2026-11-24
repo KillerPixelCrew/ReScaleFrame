@@ -70,8 +70,9 @@ target_include_directories(rsf_ac7_fixture_rust INTERFACE "${PROJECT_SOURCE_DIR}
 rsf_add_rust_static(rsf_anomaly_fixtures_rust rsf_rust_anomaly_fixtures
     rsf-anomaly rsf_anomaly
     --features fg-fixture,input-hook-fixture,overlay-device-fixture,motion-hooks-fixture,motion-binder-fixture,motion-device-fixture,native-hook-fixture,sr-fixtures)
-# rsf-minhook-sys leaves MinHook to the CMake link; native_memory.h includes the GameSDK headers.
-target_link_libraries(rsf_anomaly_fixtures_rust INTERFACE minhook ReScaleFrame::GameSDK)
+# rsf-minhook-sys leaves MinHook to the CMake link; native_memory.h includes the GameSDK headers. The archive names the
+# adapter's C leaves directly, so every executable that links it compiles them in (games/anomaly/CMakeLists.txt).
+target_link_libraries(rsf_anomaly_fixtures_rust INTERFACE minhook ReScaleFrame::GameSDK rsf_anomaly_native_leaves)
 if(MSVC)
     target_sources(rsf_anomaly_fixtures_rust INTERFACE "${rsf_anomaly_comctl6}")
 endif()
@@ -111,8 +112,7 @@ add_dependencies(rsf_anomaly_plugin_test rsf_game_anomaly)
 rsf_add_fixture_test(rsf_anomaly_lifecycle_test NAME anomaly_lifecycle_contract ENTRY rsf_test_anomaly_lifecycle
     LIBS rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK ARGS "$<TARGET_FILE:rsf_game_anomaly>")
 add_dependencies(rsf_anomaly_lifecycle_test rsf_game_anomaly)
-add_executable(rsf_anomaly_native_hooks_test anomaly_native_hook_leaves.c ../games/anomaly/src/native_hooks_platform.c)
-target_include_directories(rsf_anomaly_native_hooks_test PRIVATE ../games/anomaly/src)
+add_executable(rsf_anomaly_native_hooks_test anomaly_native_hook_leaves.c)
 target_link_libraries(rsf_anomaly_native_hooks_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::GameSDK minhook rsf_build_options)
 add_test(NAME anomaly_native_hooks_contract COMMAND rsf_anomaly_native_hooks_test)
 set_tests_properties(anomaly_native_hooks_contract PROPERTIES TIMEOUT 30)
