@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::native::leaf;
+use super::native::{self, leaf};
 use super::shaders::{Refusal, Variant, link_variants};
 use super::*;
 use crate::sys::RSF_ANOMALY_PASS_MAIN;
@@ -46,9 +46,8 @@ fn engine_matrix(matrix: &[f32; 16]) -> Mat4 {
 }
 
 fn camera() -> Option<CameraSample> {
-    let mut view = [0.; 16];
-    let mut projection = [0.; 16];
-    unsafe { leaf::camera(&mut view, &mut projection) }.then(|| CameraSample {
+    let (view, projection) = native::camera()?;
+    Some(CameraSample {
         view: engine_matrix(&view),
         projection: engine_matrix(&projection),
     })
@@ -118,7 +117,8 @@ impl Render {
             );
             self.counters.camera_conflicts += u64::from(h.conflict);
         }
-        if let Some(capture) = unsafe { facts.capture.as_ref() }
+        // The flush lends the geometry snapshot, laid out as GeometrySnapshotFacts, for this call.
+        if let Some(capture) = unsafe { facts.capture.cast::<GeometrySnapshotFacts>().as_ref() }
             && let Some(input) = capture.input()
         {
             let snapshot = unsafe { Snapshot::borrow(&input) };
@@ -390,13 +390,13 @@ impl Stage {
         if !self.active.load(Acquire) {
             return;
         }
-        let backend = unsafe { leaf::backend() };
+        let backend = native::backend();
         if !render.window.open {
             if render.binder.cache_may_hold_motion != 0 && !render.device_view().rtv.is_null() {
                 render.bind_draw(backend, false);
             }
             if facts.detail {
-                self.poison_only(&mut render, unsafe { leaf::context() });
+                self.poison_only(&mut render, native::context());
             }
             return;
         }

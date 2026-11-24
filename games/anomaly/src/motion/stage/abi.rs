@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 //! Private call-scoped records shared with motion_stage_platform.h.
-use super::*;
 use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
@@ -22,19 +21,8 @@ pub(super) struct TargetFacts {
     pub layers: u32,
 }
 
-#[repr(C)]
-pub(super) struct DrawFacts {
-    pub capture: *const GeometrySnapshotFacts,
-    pub visual: u64,
-    pub tree_lod: i64,
-    pub pass: u8,
-    pub kind: u8,
-    pub verdict: u8,
-    pub view: u8,
-    pub domain: u8,
-    pub in_visual: bool,
-    pub detail: bool,
-}
+/// The geometry producer's flush facts.
+pub(super) use crate::native_geometry_abi::NativeDrawFacts as DrawFacts;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -91,7 +79,6 @@ pub(super) use crate::sys::rsf_anomaly_motion_frame_target as FrameTarget;
 
 const _: () = {
     assert!(size_of::<PositionViews>() == 16);
-    assert!(size_of::<DrawFacts>() == 32);
     assert!(size_of::<ShaderObjects>() == 40);
     assert!(size_of::<ShaderCreation>() == 56);
     assert!(std::mem::offset_of!(ShaderCreation, return_address) == 32);

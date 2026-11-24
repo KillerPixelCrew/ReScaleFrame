@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
-//! Guarded access to the engine profile and the SDK draw slots.
+//! The motion stage's engine reads and hook sets. motion_stage_platform.c keeps the detours, their unwind scopes and
+//! the SEH-guarded engine includer; everything else reads engine memory through the guarded copy.
 use super::abi::{DrawState, PositionViews, Raw};
-use crate::engine_guards::{Read, read_bytes};
+use crate::engine_guards::{guarded_copy, read_bytes};
+use crate::native_geometry_abi::NativeDrawFacts;
+use crate::native_hooks::{self, HookSet, Site, Target};
 use crate::native_profile::PROFILES as NATIVE;
 use crate::sr_profile::{
     BACKEND_RT_CHANGED_OFFSET, BACKEND_RT_OFFSET, BACKEND_XFORMS_OFFSET, BACKEND_ZB_OFFSET,
@@ -9,12 +12,25 @@ use crate::sr_profile::{
     XFORMS_PROJECT_OFFSET, XFORMS_VIEW_OFFSET,
 };
 use crate::sys::rsf_anomaly_motion_bind_layout as BindLayout;
-use std::ptr::{null_mut, with_exposed_provenance_mut};
+use std::ffi::c_void;
+use std::ptr::{null_mut, with_exposed_provenance, with_exposed_provenance_mut};
+use std::sync::OnceLock;
 use windows::Win32::Graphics::Direct3D11::{D3D11_VIEWPORT, ID3D11DeviceContext_Vtbl};
 
-/// The installed build's engine addresses the native leaf reads, image-relative (motion_stage_platform.h).
-pub(super) use crate::sys::rsf_anomaly_motion_engine as Engine;
-
+/// The installed build's engine addresses, image-relative.
+#[derive(Clone, Copy)]
+pub(super) struct Engine {
+    build: usize,           // native_profile.rs build index, for the geometry view read
+    hw_device_rva: u32,     // HW.pDevice
+    hw_context_rva: u32,    // HW.pContext
+    backend_rva: u32,       // RCache (CBackend)
+    render_target_rva: u32, // RImplementation.Target (CRenderTarget*)
+    options_word3_rva: u32, // fourth u32 of CRender::o
+    device_frame_rva: u32,  // Device.dwFrame
+    position_offset: u32,   // CRenderTarget::rt_Position
+    view_rva: u32,          // RCache.xforms.m_v
+    projection_rva: u32,    // RCache.xforms.m_p
+}
 /// CBackend pRT/pZB and m_bChangedRTorZB, for the RTV2 binder.
 pub(super) const BIND_LAYOUT: BindLayout = BindLayout {
     rt_offset: BACKEND_RT_OFFSET,
@@ -43,31 +59,93 @@ impl Engine {
             options_word3_rva: sr.render_options_word3_rva,
             device_frame_rva: native.device_frame_rva,
             position_offset: position.offset,
-            crt_rtv_offset: CRT_RTV_OFFSET,
-            crt_surface_offset: CRT_SURFACE_OFFSET,
             view_rva: xforms.checked_add(XFORMS_VIEW_OFFSET)?,
             projection_rva: xforms.checked_add(XFORMS_PROJECT_OFFSET)?,
         })
     }
 }
 
-fn read_pointer(read: Read, base: usize, offset: usize) -> Option<Raw> {
+/// The image and engine addresses of the first install; trampolines pin them for the process.
+static INSTALLED: OnceLock<(usize, Engine)> = OnceLock::new();
+
+fn global<const N: usize>(rva: impl FnOnce(&Engine) -> u32) -> Option<[u8; N]> {
+    let (image, engine) = INSTALLED.get()?;
+    read_bytes(guarded_copy, image.checked_add(rva(engine) as usize)?)
+}
+
+fn global_pointer(rva: impl FnOnce(&Engine) -> u32) -> Raw {
+    global(rva).map_or(null_mut(), |bytes| {
+        with_exposed_provenance_mut(usize::from_ne_bytes(bytes))
+    })
+}
+
+fn read_pointer(base: usize, offset: usize) -> Option<Raw> {
     if base == 0 {
         return None;
     }
-    let value = usize::from_ne_bytes(read_bytes(read, base.checked_add(offset)?)?);
+    let value = usize::from_ne_bytes(read_bytes(guarded_copy, base.checked_add(offset)?)?);
     (value != 0).then(|| with_exposed_provenance_mut(value))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_resolve_draws(
-    read: Read,
-    context: Raw,
-    out: &mut [Raw; 4],
-) -> bool {
-    let Some(vtable) = read_pointer(read, context.expose_provenance(), 0) else {
-        return false;
-    };
+fn matrix(rva: impl FnOnce(&Engine) -> u32) -> Option<[f32; 16]> {
+    let bytes: [u8; 64] = global(rva)?;
+    let (words, _) = bytes.as_chunks::<4>();
+    Some(std::array::from_fn(|i| f32::from_ne_bytes(words[i])))
+}
+
+pub(super) fn shader_device() -> Raw {
+    global_pointer(|engine| engine.hw_device_rva)
+}
+
+pub(super) fn context() -> Raw {
+    global_pointer(|engine| engine.hw_context_rva)
+}
+
+pub(super) fn render_target() -> Raw {
+    global_pointer(|engine| engine.render_target_rva)
+}
+
+pub(super) fn backend() -> Raw {
+    INSTALLED.get().map_or(null_mut(), |(image, engine)| {
+        with_exposed_provenance_mut(image + engine.backend_rva as usize)
+    })
+}
+
+pub(super) fn native_frame() -> Option<u32> {
+    global(|engine| engine.device_frame_rva).map(u32::from_ne_bytes)
+}
+
+pub(super) fn options_word3() -> Option<u32> {
+    global(|engine| engine.options_word3_rva).map(u32::from_ne_bytes)
+}
+
+/// RCache.xforms' view and projection.
+pub(super) fn camera() -> Option<([f32; 16], [f32; 16])> {
+    Some((
+        matrix(|engine| engine.view_rva)?,
+        matrix(|engine| engine.projection_rva)?,
+    ))
+}
+
+/// The geometry producer's current render view.
+pub(super) fn render_view() -> Option<u8> {
+    let (image, engine) = INSTALLED.get()?;
+    let view = unsafe { leaf::current_view(with_exposed_provenance(*image), engine.build) };
+    (view != crate::native_geometry_abi::UNSET).then_some(view)
+}
+
+/// CRenderTarget::rt_Position's CRT pRT and pSurface.
+pub(super) fn position_views(target: Raw) -> Option<PositionViews> {
+    let (_, engine) = INSTALLED.get()?;
+    let crt = read_pointer(target.addr(), engine.position_offset as usize)?;
+    Some(PositionViews {
+        rtv: read_pointer(crt.addr(), CRT_RTV_OFFSET as usize)?,
+        surface: read_pointer(crt.addr(), CRT_SURFACE_OFFSET as usize)?,
+    })
+}
+
+fn resolve_draws(context: Raw) -> Option<[Raw; 4]> {
+    let vtable = read_pointer(context.expose_provenance(), 0)?;
     let offsets = [
         std::mem::offset_of!(ID3D11DeviceContext_Vtbl, DrawIndexed),
         std::mem::offset_of!(ID3D11DeviceContext_Vtbl, Draw),
@@ -76,37 +154,88 @@ extern "C" fn rsf_anomaly_motion_resolve_draws(
     ];
     let mut methods = [null_mut(); 4];
     for (slot, offset) in methods.iter_mut().zip(offsets) {
-        let Some(function) = read_pointer(read, vtable.expose_provenance(), offset) else {
-            return false;
-        };
-        *slot = function;
+        *slot = read_pointer(vtable.expose_provenance(), offset)?;
     }
-    *out = methods;
-    true
+    Some(methods)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_position_views(
-    read: Read,
-    target: Raw,
-    position: u32,
-    rtv: u32,
-    surface: u32,
-    out: &mut std::mem::MaybeUninit<PositionViews>,
-) -> bool {
-    let Some(crt) = read_pointer(read, target.expose_provenance(), position as usize) else {
-        return false;
-    };
-    let (Some(rtv), Some(surface)) = (
-        read_pointer(read, crt.expose_provenance(), rtv as usize),
-        read_pointer(read, crt.expose_provenance(), surface as usize),
-    ) else {
-        return false;
-    };
-    out.write(PositionViews { rtv, surface });
-    true
+static HOOKS: HookSet = HookSet::new(null_mut());
+static DRAW_HOOKS: HookSet = HookSet::new(null_mut());
+
+pub(super) fn hooks_created() -> bool {
+    native_hooks::created(&HOOKS)
 }
 
+pub(super) fn disable_hooks() -> bool {
+    native_hooks::set_enabled(&HOOKS, false)
+}
+
+/// Adopts the engine addresses, then installs the profile's sites (SITE_* order) with the leaf's detours.
+pub(super) fn install_hooks(image: usize, size: u32, engine: Engine, sites: &[Site; 3]) -> bool {
+    INSTALLED.get_or_init(|| (image, engine));
+    if hooks_created() {
+        return native_hooks::set_enabled(&HOOKS, true);
+    }
+    let (detours, originals) = leaf::detours();
+    let sites: [Site; 3] = std::array::from_fn(|i| Site {
+        replacement: detours[i],
+        original: originals.wrapping_add(i),
+        ..sites[i]
+    });
+    native_hooks::install(&HOOKS, with_exposed_provenance_mut(image), size, &sites)
+}
+
+/// The immediate context's four draw methods, resolved through its vtable.
+pub(super) fn install_draw_hooks(context: Raw) -> bool {
+    let Some(targets) = resolve_draws(context) else {
+        return false;
+    };
+    let (detours, originals) = leaf::draw_detours();
+    let sites: [Target; 4] = std::array::from_fn(|i| Target {
+        address: targets[i],
+        replacement: detours[i],
+        original: originals.wrapping_add(i),
+    });
+    native_hooks::install_resolved(&DRAW_HOOKS, &sites)
+}
+
+unsafe extern "C" fn flush(facts: *const NativeDrawFacts) {
+    // The geometry flush lends a live stack record for this call.
+    if let Some(facts) = unsafe { facts.as_ref() } {
+        super::rsf_anomaly_motion_stage_flush(facts);
+    }
+}
+
+pub(super) fn observe_flush(enabled: bool) {
+    crate::native_geometry::rsf_anomaly_geometry_set_flush(enabled.then_some(flush as _));
+}
+
+pub(super) fn read_engine(address: usize, bytes: &mut [u8]) -> bool {
+    unsafe {
+        guarded_copy(
+            bytes.as_mut_ptr().cast(),
+            with_exposed_provenance(address),
+            bytes.len(),
+        )
+    }
+}
+
+unsafe extern "C" fn bind_read(_: Raw, address: *const c_void, out: Raw, size: usize) -> u32 {
+    u32::from(unsafe { guarded_copy(out, address, size) })
+}
+
+unsafe extern "C" fn bind_write(_: Raw, address: Raw, input: *const c_void, size: usize) -> u32 {
+    u32::from(unsafe { guarded_copy(address, input, size) })
+}
+
+/// The RTV2 binder's engine calls: the guarded copies and the motion device's target bindings.
+pub(in crate::motion) static BIND: crate::motion_target::Platform =
+    crate::motion_target::Platform {
+        read: bind_read,
+        write: bind_write,
+        set_targets: crate::motion_device::rsf_anomaly_motion_bind_targets,
+        clear_targets: crate::motion_device::rsf_anomaly_motion_clear_targets,
+    };
 /// The bound viewport of `raw` and the SR stage's current and previous jitter in viewport UV.
 pub(super) unsafe fn draw_state(raw: Raw) -> DrawState {
     use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
@@ -134,52 +263,21 @@ pub(super) unsafe fn draw_state(raw: Raw) -> DrawState {
     state
 }
 
-/// The C leaves of motion_stage_platform.c and the geometry constant reads. Unit tests never reach the motion stage's
-/// native side, so they link stand-ins.
+/// The C leaves: motion_stage_platform.c's detours and trampoline slots and the geometry producer's reads. Unit tests
+/// never reach the motion stage's native side, so they link stand-ins.
 #[cfg(not(test))]
 pub(super) mod leaf {
-    use super::super::abi::{PositionViews, Raw};
-    use super::Engine;
+    use super::Raw;
     use std::ffi::c_void;
 
     unsafe extern "C" {
-        #[link_name = "rsf_anomaly_motion_native_copy"]
-        pub(in crate::motion) fn copy(out: *mut c_void, input: *const c_void, size: usize) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_observe_flush"]
-        pub(in crate::motion) fn observe_flush(enabled: bool);
-        #[link_name = "rsf_anomaly_motion_native_install_hooks"]
-        pub(in crate::motion) fn install_hooks(
-            image: Raw,
-            size: u32,
-            engine: *const Engine,
-            sites: *const c_void,
-            count: usize,
-        ) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_disable_hooks"]
-        pub(in crate::motion) fn disable_hooks() -> bool;
-        #[link_name = "rsf_anomaly_motion_native_hooks_created"]
-        pub(in crate::motion) fn hooks_created() -> bool;
-        #[link_name = "rsf_anomaly_motion_native_install_draw_hooks"]
-        pub(in crate::motion) fn install_draw_hooks(context: Raw) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_render_target"]
-        pub(in crate::motion) fn render_target() -> Raw;
-        #[link_name = "rsf_anomaly_motion_native_position_views"]
-        pub(in crate::motion) fn position_views(target: Raw, views: *mut PositionViews) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_native_frame"]
-        pub(in crate::motion) fn native_frame(frame: *mut u32) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_render_view"]
-        pub(in crate::motion) fn render_view(view: *mut u8) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_options_word3"]
-        pub(in crate::motion) fn options_word3(options: *mut u32) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_backend"]
-        pub(in crate::motion) fn backend() -> Raw;
-        #[link_name = "rsf_anomaly_motion_native_context"]
-        pub(in crate::motion) fn context() -> Raw;
-        #[link_name = "rsf_anomaly_motion_native_shader_device"]
-        pub(in crate::motion) fn shader_device() -> Raw;
-        #[link_name = "rsf_anomaly_motion_native_camera"]
-        pub(in crate::motion) fn camera(view: *mut [f32; 16], projection: *mut [f32; 16]) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_world"]
+        static rsf_anomaly_motion_detours: [Raw; 3];
+        static mut rsf_anomaly_motion_originals: [Raw; 3];
+        static rsf_anomaly_motion_draw_detours: [Raw; 4];
+        static mut rsf_anomaly_motion_draw_originals: [Raw; 4];
+        #[link_name = "rsf_anomaly_geometry_current_view"]
+        pub(super) fn current_view(module: *const c_void, build: usize) -> u8;
+        #[link_name = "rsf_anomaly_geometry_world_matrix"]
         pub(in crate::motion) fn world(matrix: *mut [f32; 16]) -> bool;
         #[link_name = "rsf_anomaly_geometry_read_constants"]
         pub(in crate::motion) fn read_constant(
@@ -197,88 +295,39 @@ pub(super) mod leaf {
             input: *const c_void,
             size: u32,
         ) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_read_engine"]
-        pub(in crate::motion) fn read_engine(
-            owner: *const c_void,
-            address: usize,
-            out: *mut u8,
-            size: usize,
-        ) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_bind_read"]
-        fn bind_read(host: Raw, address: *const c_void, out: Raw, size: usize) -> u32;
-        #[link_name = "rsf_anomaly_motion_native_bind_write"]
-        fn bind_write(host: Raw, address: Raw, input: *const c_void, size: usize) -> u32;
     }
 
-    /// The RTV2 binder's engine calls: the leaf's guarded copies and the motion device's target bindings.
-    pub(in crate::motion) static BIND: crate::motion_target::Platform =
-        crate::motion_target::Platform {
-            read: bind_read,
-            write: bind_write,
-            set_targets: crate::motion_device::rsf_anomaly_motion_bind_targets,
-            clear_targets: crate::motion_device::rsf_anomaly_motion_clear_targets,
-        };
+    pub(super) fn detours() -> (&'static [Raw; 3], *mut Raw) {
+        unsafe {
+            (
+                &*(&raw const rsf_anomaly_motion_detours),
+                (&raw mut rsf_anomaly_motion_originals).cast(),
+            )
+        }
+    }
+
+    pub(super) fn draw_detours() -> (&'static [Raw; 4], *mut Raw) {
+        unsafe {
+            (
+                &*(&raw const rsf_anomaly_motion_draw_detours),
+                (&raw mut rsf_anomaly_motion_draw_originals).cast(),
+            )
+        }
+    }
 }
 
 #[cfg(test)]
 pub(super) mod leaf {
-    use super::super::abi::{PositionViews, Raw};
-    use super::Engine;
+    use super::Raw;
     use std::ffi::c_void;
 
-    pub(in crate::motion) unsafe extern "C" fn copy(
-        _: *mut c_void,
-        _: *const c_void,
-        _: usize,
-    ) -> bool {
+    pub(super) fn detours() -> (&'static [Raw; 3], *mut Raw) {
         unreachable!("motion C leaf in a unit test")
     }
-    pub(in crate::motion) unsafe fn observe_flush(_: bool) {
+    pub(super) fn draw_detours() -> (&'static [Raw; 4], *mut Raw) {
         unreachable!("motion C leaf in a unit test")
     }
-    pub(in crate::motion) unsafe fn install_hooks(
-        _: Raw,
-        _: u32,
-        _: *const Engine,
-        _: *const c_void,
-        _: usize,
-    ) -> bool {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn disable_hooks() -> bool {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn hooks_created() -> bool {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn install_draw_hooks(_: Raw) -> bool {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn render_target() -> Raw {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn position_views(_: Raw, _: *mut PositionViews) -> bool {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn native_frame(_: *mut u32) -> bool {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn render_view(_: *mut u8) -> bool {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn options_word3(_: *mut u32) -> bool {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn backend() -> Raw {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn context() -> Raw {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn shader_device() -> Raw {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) unsafe fn camera(_: *mut [f32; 16], _: *mut [f32; 16]) -> bool {
+    pub(super) unsafe fn current_view(_: *const c_void, _: usize) -> u8 {
         unreachable!("motion C leaf in a unit test")
     }
     pub(in crate::motion) unsafe fn world(_: *mut [f32; 16]) -> bool {
@@ -302,25 +351,4 @@ pub(super) mod leaf {
     ) -> bool {
         unreachable!("motion C leaf in a unit test")
     }
-    pub(in crate::motion) unsafe fn read_engine(
-        _: *const c_void,
-        _: usize,
-        _: *mut u8,
-        _: usize,
-    ) -> bool {
-        unreachable!("motion C leaf in a unit test")
-    }
-    unsafe extern "C" fn bind_read(_: Raw, _: *const c_void, _: Raw, _: usize) -> u32 {
-        unreachable!("motion C leaf in a unit test")
-    }
-    unsafe extern "C" fn bind_write(_: Raw, _: Raw, _: *const c_void, _: usize) -> u32 {
-        unreachable!("motion C leaf in a unit test")
-    }
-    pub(in crate::motion) static BIND: crate::motion_target::Platform =
-        crate::motion_target::Platform {
-            read: bind_read,
-            write: bind_write,
-            set_targets: crate::motion_device::rsf_anomaly_motion_bind_targets,
-            clear_targets: crate::motion_device::rsf_anomaly_motion_clear_targets,
-        };
 }

@@ -463,10 +463,11 @@ unsafe fn prepare_bytecode(
     unsafe { (pack.session.api.prepare.unwrap())(pack.session.handle.as_ptr(), &request, output) }
 }
 
-// The SEH-guarded engine includer and copy leaves (motion_stage_platform.c). The engine lends its includer as the
+// The SEH-guarded engine includer (motion_stage_platform.c) and the guarded copy. The engine lends its includer as the
 // vtable pointer `table`. Unit tests never open an engine pack, so their stand-ins refuse.
 #[cfg(not(test))]
 mod engine {
+    pub(super) use crate::engine_guards::guarded_copy as copy;
     use std::ffi::{c_char, c_void};
     unsafe extern "C" {
         #[link_name = "rsf_anomaly_motion_native_include_open"]
@@ -476,8 +477,7 @@ mod engine {
             data: *mut *const c_void,
             size: *mut u32,
         ) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_include_copy"]
-        pub(super) fn copy(out: *mut c_void, input: *const c_void, size: usize) -> bool;
+
         #[link_name = "rsf_anomaly_motion_native_include_close"]
         pub(super) fn close(table: *mut c_void, data: *const c_void);
     }

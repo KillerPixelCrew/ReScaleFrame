@@ -177,8 +177,7 @@ extern "C" fn rsf_anomaly_geometry_set_draw(user: usize, callback: Option<DrawSi
     *DRAW.write().unwrap() = (user, callback);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_set_flush(callback: Option<Flush>) {
+pub(crate) fn rsf_anomaly_geometry_set_flush(callback: Option<Flush>) {
     *FLUSH.write().unwrap() = callback;
 }
 

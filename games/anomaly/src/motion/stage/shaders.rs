@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-use super::native::leaf;
 use super::*;
 use crate::motion_profile::SHADER_OBJECT_OFFSET;
 use crate::shader_family::{FAMILY_COUNT, NO_FAMILY, diagnostic_family_name};
@@ -593,9 +592,7 @@ impl Stage {
 
     pub(super) fn admit_shader_creation(&self, native: &ShaderCreation) {
         let mut filename = [0; FILENAME_CAPACITY];
-        let call = Creation::read(native, &mut filename, |address, bytes| unsafe {
-            leaf::read_engine(ptr::null(), address, bytes.as_mut_ptr(), bytes.len())
-        });
+        let call = Creation::read(native, &mut filename, super::native::read_engine);
         if let Some(call) = call
             && self.active.load(Acquire)
         {
@@ -615,9 +612,7 @@ impl Stage {
         let Some(pack) = &mut loader.pack else { return };
         let layout = build.motion.frame_layout();
         let module = build.image;
-        let read = |address: usize, bytes: &mut [u8]| unsafe {
-            leaf::read_engine(ptr::null(), address, bytes.as_mut_ptr(), bytes.len())
-        };
+        let read = super::native::read_engine;
         let file = String::from_utf8_lossy(call.file);
         let frame = match decode_frame(
             &layout,
@@ -659,7 +654,7 @@ impl Stage {
                     )
                 })
                 .and_then(|request| {
-                    let device = unsafe { leaf::shader_device() };
+                    let device = super::native::shader_device();
                     Replacement::build(pack, &request, (stage, family_id), device, true)
                         .map(|replacement| (replacement, request, device))
                 })

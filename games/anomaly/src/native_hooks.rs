@@ -372,6 +372,12 @@ pub(crate) fn install(set: &HookSet, module: Address, image_size: u32, sites: &[
     install_with(set, &MINHOOK, read_mapped, module, image_size, sites)
 }
 
+/// Only for immediate-context D3D11 methods resolved through their COM vtable.
+#[cfg(windows)]
+pub(crate) fn install_resolved(set: &HookSet, sites: &[Target]) -> bool {
+    install_resolved_with(set, &MINHOOK, sites)
+}
+
 #[cfg(windows)]
 pub(crate) fn set_enabled(set: &HookSet, enable: bool) -> bool {
     set_enabled_with(set, &MINHOOK, enable)
