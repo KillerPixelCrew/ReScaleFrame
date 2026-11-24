@@ -317,6 +317,10 @@ unsafe extern "C" fn flush_capture(owner: Handle) {
 }
 
 // Selected when the build has the XeSS Vulkan SDK (the xess-vk feature).
+#[cfg_attr(
+    feature = "test-fixtures",
+    unsafe(export_name = "rsf_xessvk_native_ops")
+)]
 pub(super) static NATIVE_OPS: XessOps = XessOps {
     loader: Loader {
         load: rsf_core_vk_sdk_load,

@@ -185,6 +185,9 @@ fn session() -> std::sync::MutexGuard<'static, Option<Arc<Library>>> {
     SESSION.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+// The XeSS input-range fixture (tests/vulkan-fg) drives the owner with its own copy of the production
+// table, so test-fixtures builds give the owner entries and the table C names.
+#[cfg_attr(feature = "test-fixtures", unsafe(no_mangle))]
 unsafe extern "C" fn rsf_core_xessvk_initialize(
     ops: Option<&'static XessOps>,
     setup: *const XessSetup,
@@ -287,6 +290,7 @@ unsafe extern "C" fn rsf_core_xessvk_device_requirements(
     status(sdk(result, INIT_FAILED))
 }
 
+#[cfg_attr(feature = "test-fixtures", unsafe(no_mangle))]
 unsafe extern "C" fn rsf_core_xessvk_shutdown(ops: Option<&'static XessOps>) -> i32 {
     if ops.is_none() {
         return 0;

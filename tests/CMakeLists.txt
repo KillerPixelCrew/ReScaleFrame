@@ -47,6 +47,8 @@ foreach(feature wsi-dispatch streamline-selected streamline-dispatch xess-sr xes
     string(MAKE_C_IDENTIFIER "${feature}" name)
     rsf_add_rust_static(rsf_vulkan_fg_${name}_rust rsf_rust_vulkan_fg_${name}
         rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features ${feature})
+    # The crate links the Rust Runtime, so its archives take what rsf_orchestrator_rust takes.
+    target_link_libraries(rsf_vulkan_fg_${name}_rust INTERFACE rsf_runtime_leaves minhook)
 endforeach()
 # rsf-capture-fixtures: each capture path calls the Runtime's dump entries for its API, which only its
 # own executable links.

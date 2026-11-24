@@ -96,6 +96,11 @@ if(BUILD_TESTING)
 endif()
 # version: the provider version reads in mfg_provider.rs (forwarded by the dinput8 proxy itself).
 target_link_libraries(rsf_orchestrator_rust INTERFACE minhook rsf_runtime_leaves version)
+# vulkan_fg.rs creates the XeSS FG provider through rsf_xessgvk_create, the C leaf in rsf_native_vulkan
+# (native_fg_xess_vulkan_present.c) that binds the XeSS bridge.
+if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_FG)
+    target_link_libraries(rsf_orchestrator_rust INTERFACE rsf_native_vulkan)
+endif()
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_orchestrator_rust)
 target_link_libraries(rsf_native_cpu INTERFACE rsf_orchestrator_rust)
 target_link_libraries(rsf_frame_dump INTERFACE rsf_orchestrator_rust)
