@@ -367,8 +367,7 @@ const EMPTY_SLOT: Slot = Slot {
 };
 
 // Render-thread state of the observed context. Reached once the reentry depth says a call is the
-// game's, so a callback's nested hooks never alias it. Uninstall reaches it from its own thread,
-// as the native owner did.
+// game's, so a callback's nested hooks never alias it. Uninstall reaches it from its own thread.
 struct Render {
     slots: [Slot; VIEWS],
     occupied: [u64; VIEWS / 64],

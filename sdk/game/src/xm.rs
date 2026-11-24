@@ -4,8 +4,8 @@
 //! Scalar transcription of the DirectXMath matrix operations the Fallout 4 camera and the SR
 //! singularity gate use.
 //!
-//! The former native code included the Windows SDK 10.0.26100 DirectXMath 3.20 headers. Both
-//! builds for x64 without `/arch`, so `_XM_SSE_INTRINSICS_` is the only path: no FMA3,
+//! The reference is the Windows SDK 10.0.26100 DirectXMath 3.20 header, built for x64 without
+//! `/arch`, so `_XM_SSE_INTRINSICS_` is the only path: no FMA3,
 //! no SSE3 `hadd` and no SSE4 `dp`. Each SSE lane is one IEEE single operation, so performing
 //! the same operations on the same lanes in the same order reproduces every result bit for bit.
 //! The bodies below follow `XMMatrixMultiply`, `XMMatrixInverse` and `XMVector4Dot` line by line;

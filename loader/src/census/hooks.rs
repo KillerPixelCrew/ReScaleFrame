@@ -362,8 +362,7 @@ fn loader_word(cfg: &Config, base: usize, offset: usize) -> Option<usize> {
 }
 
 fn scan_modules(cfg: &Config) {
-    // Windows x64 TEB->PEB->Ldr->InLoadOrderModuleList. This walk uses the same
-    // loader list as the native DllMain implementation and never waits for its lock.
+    // Windows x64 TEB->PEB->Ldr->InLoadOrderModuleList. The walk never waits for the loader lock.
     let teb = unsafe { cfg.platform.current_teb.unwrap()() } as usize;
     let Some(ldr) = loader_word(cfg, teb, 0x60).and_then(|peb| loader_word(cfg, peb, 0x18)) else {
         return;

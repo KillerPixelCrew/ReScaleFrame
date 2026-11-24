@@ -406,7 +406,7 @@ fn register_info_queue(device: Ptr, cookie: &mut u32) -> i32 {
         .0
     };
     if status >= 0 {
-        // Keep the callback's COM reference alive for the same process lifetime as the native path.
+        // The registered callback keeps this reference for the process lifetime.
         let _ = queue.into_raw();
     }
     status
