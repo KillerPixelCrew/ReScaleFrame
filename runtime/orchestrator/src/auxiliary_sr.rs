@@ -356,15 +356,15 @@ pub(crate) struct AuxiliarySr {
 }
 
 impl AuxiliarySr {
-    pub(crate) fn new() -> Option<Self> {
-        Some(Self {
+    pub(crate) fn new() -> Self {
+        Self {
             owner: None,
             pipeline: None,
             depth: None,
             colours: [const { None }; MAX_SURFACES],
             backups: [None, None],
             frame: None,
-        })
+        }
     }
 
     fn on_owner_thread(&self) -> bool {
@@ -1128,7 +1128,7 @@ mod tests {
         let main = FakeCom::new(8);
         let unreadable = FakeCom::new(0);
         let auxiliary = FakeCom::new(8);
-        let mut owner = AuxiliarySr::new().expect("owner");
+        let mut owner = AuxiliarySr::new();
         owner.pipeline = Some(Pipeline {
             vertex: unsafe { com_ref::retain(context.raw()) },
             pixel: unsafe { com_ref::retain(context.raw()) },

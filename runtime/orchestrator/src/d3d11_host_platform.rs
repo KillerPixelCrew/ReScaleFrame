@@ -78,7 +78,7 @@ pub(super) use crate::sys::{
 type Raw = *mut c_void;
 
 pub(super) fn auxiliary_products() -> Option<Box<dyn Products>> {
-    let owner = NonNull::new(crate::allocate_handle(AuxiliarySr::new()?))?;
+    let owner = NonNull::new(crate::allocate_handle(AuxiliarySr::new()))?;
     Some(unsafe { Box::from_raw(owner.as_ptr()) })
 }
 

@@ -145,7 +145,7 @@ struct Transaction(RefCell<AuxiliarySr>);
 
 impl Transaction {
     fn new() -> Self {
-        Self(RefCell::new(AuxiliarySr::new().expect("owner")))
+        Self(RefCell::new(AuxiliarySr::new()))
     }
 
     fn reserve(&self, rig: &Device, pass: &Pass, surfaces: &[Surface], recovery: bool) -> bool {
