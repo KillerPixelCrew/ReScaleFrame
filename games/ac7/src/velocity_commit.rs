@@ -165,7 +165,7 @@ pub(crate) fn profile_sample(sample: &ProfileSample) {
 
 /// The totals restart on every renderer frame end, even without a log attachment.
 #[cfg(windows)]
-pub(crate) fn log_frame_end(shader_objects: u32, models: usize) {
+pub(crate) fn log_frame_end(shader_objects: u32, models: usize, variants: usize) {
     let (report, log) = {
         let mut pass = lock();
         (pass.profile.end_frame(), pass.log)
@@ -183,7 +183,7 @@ pub(crate) fn log_frame_end(shader_objects: u32, models: usize) {
         report.peak_ms,
         report.largest_records,
         models,
-        crate::velocity_pass_cache::variant_count(),
+        variants,
     );
     if let Ok(message) = CString::new(message) {
         log.emit(&message);

@@ -4,7 +4,6 @@
 use super::d3d11::{Pipeline, Renderer, clock_ms};
 use crate::sys::rsf_frame_tap_geometry;
 use crate::velocity_commit::{Log, refused, reset_profile, set_log};
-use crate::velocity_pass_cache;
 use crate::velocity_stream::draw_admitted;
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::rsf_game_render_pass;
@@ -79,7 +78,8 @@ pub(crate) unsafe extern "C" fn rsf_ac7_velocity_geometry(draw: *const rsf_frame
         return;
     };
     // A different device gets a new renderer, which starts without variants, history or
-    // profile. A failed creation keeps the current renderer and refuses the draw.
+    // profile. A failed creation keeps the current renderer and refuses the draw. The old
+    // renderer's variants and history go with it.
     if renderer
         .as_ref()
         .is_none_or(|renderer| renderer.device.as_raw() != device.as_raw())
@@ -88,9 +88,7 @@ pub(crate) unsafe extern "C" fn rsf_ac7_velocity_geometry(draw: *const rsf_frame
             refused(c"device-side pass initialization failed");
             return;
         };
-        // The old renderer goes before the resets.
         *renderer = Some(made);
-        velocity_pass_cache::reset_variants();
         reset_profile();
     }
     if let Some(renderer) = renderer.as_mut() {
@@ -147,7 +145,7 @@ pub(crate) fn shader_creation_count() -> u32 {
 pub(crate) fn rsf_ac7_velocity_release() {
     let mut renderer = lock();
     *renderer = None;
-    velocity_pass_cache::release();
+    crate::velocity_pass_cache::release();
     reset_profile();
     let _ = SCOPE.replace(None);
 }

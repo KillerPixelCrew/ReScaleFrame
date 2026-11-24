@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! The translucent velocity pass's observed shader sources and input layouts, and its variant
-//! admission: stage-checked source lookup, the beam/trail layout decision, the history identity of
-//! generated geometry, variant identity, reuse and the refusal cache. The device owner builds
-//! and retains D3D11 variants at the slots recorded here.
+//! The translucent velocity pass's observed shader sources and input layouts, and what a variant
+//! needs of them: stage-checked source lookup, the beam/trail layout decision, the history identity
+//! of generated geometry and the variant identity. The device owner (velocity_device.rs) keeps the
+//! built variants and the refusals by that identity.
 
 use crate::contact_shadow::container_crc;
 use crate::sys::rsf_observer_layout_element as LayoutElement;
@@ -14,7 +14,6 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 const SOURCE_BUDGET: usize = 64 * 1024 * 1024;
 const MAX_LAYOUTS: usize = 4096;
 const MAX_LAYOUT_ELEMENTS: usize = 16;
-const NO_VARIANT: u32 = u32::MAX;
 
 // D3D11 observer stages, also the order in which the builder receives their bytecode.
 const VERTEX: usize = 0;
@@ -23,16 +22,6 @@ const GEOMETRY: usize = 2;
 const HULL: usize = 3;
 const DOMAIN: usize = 4;
 const STAGES: usize = 5;
-
-/// What the device owner's builder made of a variant.
-pub(crate) enum Built {
-    /// The variant's slot in the native variant list.
-    Slot(u32),
-    /// Cached, so the same key is not built again.
-    Refused,
-    /// Left unrecorded, so a later draw builds again.
-    Retry,
-}
 
 // The beam/trail vertex factory declaration: semantics 0 to 4 once each in stream 0 of an
 // 80-byte vertex, an optional semantic 5 at the start of stream 1, all per vertex, float4 except
@@ -71,7 +60,7 @@ pub(crate) struct VariantSources<'a> {
 /// Interface addresses alone are not identity: D3D11 reuses released addresses, so the
 /// bytecode hashes and the layout's creation serial are part of the key.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct VariantKey {
+pub(crate) struct VariantKey {
     shaders: [usize; STAGES],
     layout: usize,
     serial: u64,
@@ -81,7 +70,7 @@ struct VariantKey {
 }
 
 /// Retains the original bytecode for the builder after the cache lock is released.
-struct Lease {
+pub(crate) struct Lease {
     bytes: [Option<Arc<Vec<u8>>>; STAGES],
     elements: Vec<LayoutElement>,
     vertex_hash: u32,
@@ -89,10 +78,28 @@ struct Lease {
     beam_layout: bool,
 }
 
-enum Admission {
+pub(crate) enum Prepared {
+    /// A required stage has no observed source of its stage.
     Unavailable,
-    Known(Option<u32>),
+    /// The device owner already holds this identity.
+    Known(VariantKey),
     Build(VariantKey, Lease),
+}
+
+impl Lease {
+    pub(crate) fn sources(&self) -> VariantSources<'_> {
+        VariantSources {
+            // The stage interfaces accept an empty span backed by a non-null pointer.
+            bytes: self
+                .bytes
+                .each_ref()
+                .map(|bytes| bytes.as_deref().map_or(&[][..], Vec::as_slice)),
+            elements: &self.elements,
+            vertex_hash: self.vertex_hash,
+            geometry_hash: self.geometry_hash,
+            beam_layout: self.beam_layout,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -102,10 +109,6 @@ struct Cache {
     layouts: HashMap<usize, Layout>,
     // Never reset, so a layout observed after a release cannot match an older key.
     layout_serial: u64,
-    // A slot in the native variant list, or None for a cached refusal.
-    variants: HashMap<VariantKey, Option<u32>>,
-    // Advanced whenever the native variant list is discarded.
-    generation: u64,
 }
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(Mutex::default);
@@ -191,7 +194,11 @@ impl Cache {
             .filter(|source| source.stage as usize == stage)
     }
 
-    fn prepare(&self, request: &VariantRequest) -> Admission {
+    fn prepare(
+        &self,
+        request: &VariantRequest,
+        known: impl FnOnce(&VariantKey) -> bool,
+    ) -> Prepared {
         // A bound native geometry shader, or either tessellation stage, must have its own
         // observed source. The draw callback already refuses a partial tessellation pipeline.
         let tessellated = !request.shaders[HULL].is_null() || !request.shaders[DOMAIN].is_null();
@@ -205,7 +212,7 @@ impl Cache {
             };
             if required {
                 let Some(source) = self.source(shader, stage) else {
-                    return Admission::Unavailable;
+                    return Prepared::Unavailable;
                 };
                 *slot = Some(source);
             }
@@ -222,13 +229,13 @@ impl Cache {
             material_blend: request.material_blend,
             beam_layout,
         };
-        if let Some(&slot) = self.variants.get(&key) {
-            return Admission::Known(slot);
+        if known(&key) {
+            return Prepared::Known(key);
         }
 
         let bytes = sources.map(|source| source.map(|source| Arc::clone(&source.bytes)));
         let Some(leased_elements) = copy_of(elements) else {
-            return Admission::Unavailable;
+            return Prepared::Unavailable;
         };
         // Generated geometry keeps separate history per native producer.
         let geometry_hash = match (sources[HULL], sources[DOMAIN], sources[GEOMETRY]) {
@@ -236,7 +243,7 @@ impl Cache {
             (_, _, Some(geometry)) => geometry.hash,
             _ => 0,
         };
-        Admission::Build(
+        Prepared::Build(
             key,
             Lease {
                 bytes,
@@ -248,61 +255,12 @@ impl Cache {
         )
     }
 
-    fn record(&mut self, generation: u64, key: VariantKey, slot: Option<u32>) -> u32 {
-        if self.generation != generation {
-            return NO_VARIANT;
-        }
-        if self.variants.try_reserve(1).is_ok() {
-            self.variants.insert(key, slot);
-        }
-        slot.unwrap_or(NO_VARIANT)
-    }
-
-    fn reset_variants(&mut self) {
-        self.variants = HashMap::new();
-        self.generation = self.generation.wrapping_add(1);
-    }
-
     #[cfg(any(test, feature = "warp-fixture"))]
     fn release(&mut self) {
-        self.reset_variants();
         self.sources = HashMap::new();
         self.source_bytes = 0;
         self.layouts = HashMap::new();
     }
-}
-
-fn admit(
-    state: &Mutex<Cache>,
-    request: &VariantRequest,
-    build: impl FnOnce(&VariantSources<'_>) -> Built,
-) -> u32 {
-    let (generation, key, lease) = {
-        let cache = lock(state);
-        match cache.prepare(request) {
-            Admission::Unavailable => return NO_VARIANT,
-            Admission::Known(slot) => return slot.unwrap_or(NO_VARIANT),
-            Admission::Build(key, lease) => (cache.generation, key, lease),
-        }
-    };
-    let bytes = lease.bytes.each_ref().map(|bytes| {
-        // The stage interfaces accept an empty span backed by a non-null pointer.
-        bytes.as_deref().map_or(&[][..], Vec::as_slice)
-    });
-    let sources = VariantSources {
-        bytes,
-        elements: &lease.elements,
-        vertex_hash: lease.vertex_hash,
-        geometry_hash: lease.geometry_hash,
-        beam_layout: lease.beam_layout,
-    };
-    // The builder creates D3D11 shaders, whose creation callbacks report back into this cache.
-    let entry = match build(&sources) {
-        Built::Slot(slot) => Some(slot),
-        Built::Refused => None,
-        Built::Retry => return NO_VARIANT,
-    };
-    lock(state).record(generation, key, entry)
 }
 
 pub(crate) fn observes_stage(stage: u32) -> bool {
@@ -335,24 +293,14 @@ pub(crate) unsafe extern "C" fn rsf_ac7_velocity_layout_seen(
     lock(&CACHE).observe_layout(layout.addr(), elements);
 }
 
+/// The request's variant identity, and unless `known` holds it, a lease of its sources.
 #[cfg(windows)]
-pub(crate) fn admit_variant(
+pub(crate) fn prepare(
     request: &VariantRequest,
-    build: impl FnOnce(&VariantSources<'_>) -> Built,
-) -> u32 {
-    admit(&CACHE, request, build)
+    known: impl FnOnce(&VariantKey) -> bool,
+) -> Prepared {
+    lock(&CACHE).prepare(request, known)
 }
-
-#[cfg(windows)]
-pub(crate) fn variant_count() -> usize {
-    lock(&CACHE).variants.len()
-}
-
-/// The native variant list was discarded with its renderer (velocity_renderer/replay.rs).
-pub(crate) fn reset_variants() {
-    lock(&CACHE).reset_variants();
-}
-
 /// The pass was released (velocity_renderer/replay.rs).
 #[cfg(feature = "warp-fixture")]
 pub(crate) fn release() {

@@ -2,7 +2,7 @@
 //! Device-side shader and variant ownership for translucent velocity replay.
 use crate::velocity_commit::{FULLSCREEN_SOURCE, MERGE_SOURCE};
 use crate::velocity_geometry::GeometryRegisters;
-use crate::velocity_pass_cache::{Built, VariantRequest, VariantSources, admit_variant};
+use crate::velocity_pass_cache::{Prepared, VariantKey, VariantRequest, VariantSources, prepare};
 use crate::velocity_stage::{HISTORY_WRITER, compile_source};
 use crate::velocity_stream::INDIRECT_SOURCE;
 use crate::velocity_tessellation::DomainRegisters;
@@ -92,7 +92,8 @@ impl Kernels {
 pub(super) struct Device {
     device: ID3D11Device,
     pub(super) kernels: Kernels,
-    variants: Vec<Variant>,
+    // Built variants, and None for a cached refusal. Dropped with the renderer.
+    variants: HashMap<VariantKey, Option<Variant>>,
     vertex: HashMap<Vec<u8>, ID3D11VertexShader>,
     pixel: HashMap<Vec<u8>, ID3D11PixelShader>,
     hull: HashMap<Vec<u8>, ID3D11HullShader>,
@@ -112,7 +113,7 @@ impl Device {
         &mut self,
         sources: &VariantSources<'_>,
         request: &VariantRequest,
-    ) -> std::result::Result<u32, Failure> {
+    ) -> std::result::Result<Variant, Failure> {
         use Failure::{Refused, Retry};
         const TRANSFORM: Failure =
             Retry(Some(c"native material or vertex shader transform refused"));
@@ -263,10 +264,7 @@ impl Device {
         if made.capture.is_none() {
             return Err(Retry(Some(c"stream-output signature creation failed")));
         }
-        self.variants.try_reserve(1).map_err(|_| VARIANT)?;
-        let slot = self.variants.len() as u32;
-        self.variants.push(made);
-        Ok(slot)
+        Ok(made)
     }
 }
 
@@ -275,7 +273,7 @@ impl Device {
         Some(Self {
             device: device.clone(),
             kernels: Kernels::new(device)?,
-            variants: Vec::new(),
+            variants: HashMap::new(),
             vertex: HashMap::new(),
             pixel: HashMap::new(),
             hull: HashMap::new(),
@@ -286,17 +284,33 @@ impl Device {
         })
     }
 
+    /// The draw's variant: built once per identity, with a deterministic refusal cached and a
+    /// failed native creation left to build again.
     pub(super) fn variant(&mut self, request: &VariantRequest) -> Option<Variant> {
-        let slot = admit_variant(request, |sources| match self.build(sources, request) {
-            Ok(index) => Built::Slot(index),
-            Err(Failure::Refused) => Built::Refused,
+        let (key, lease) = match prepare(request, |key| self.variants.contains_key(key)) {
+            Prepared::Unavailable => return None,
+            Prepared::Known(key) => return self.variants.get(&key)?.clone(),
+            Prepared::Build(key, lease) => (key, lease),
+        };
+        // The builder creates D3D11 shaders, whose creation callbacks report into the source
+        // cache, so it runs on the lease without the cache lock.
+        let made = match self.build(&lease.sources(), request) {
+            Ok(made) => Some(made),
+            Err(Failure::Refused) => None,
             Err(Failure::Retry(reason)) => {
                 if let Some(reason) = reason {
                     crate::velocity_commit::refused(reason);
                 }
-                Built::Retry
+                return None;
             }
-        });
-        self.variants.get(slot as usize).cloned()
+        };
+        if self.variants.try_reserve(1).is_ok() {
+            self.variants.insert(key, made.clone());
+        }
+        made
+    }
+
+    pub(super) fn variant_count(&self) -> usize {
+        self.variants.len()
     }
 }

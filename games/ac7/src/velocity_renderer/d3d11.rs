@@ -461,7 +461,11 @@ impl Renderer {
 
     /// Advances the epoch and releases the models and views not used in the last two frames.
     pub(super) fn frame_end(&mut self) {
-        log_frame_end(self.count(), self.models.len());
+        log_frame_end(
+            self.count(),
+            self.models.len(),
+            self.shaders.variant_count(),
+        );
         self.epoch += 1;
         let epoch = self.epoch;
         self.models

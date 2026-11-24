@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::shader_hash::crc32c;
-use std::cell::Cell;
 use std::ptr::{null, null_mut, without_provenance_mut};
 
 fn address(value: usize) -> *mut c_void {
@@ -161,10 +160,17 @@ fn beam_layout_matches_only_the_factory_declaration() {
     assert!(!beam_layout(BEAM_STRIDE, &high));
 }
 
+/// The identity and lease of a request the device owner does not hold yet.
+fn build(cache: &Cache, request: &VariantRequest) -> (VariantKey, Lease) {
+    match cache.prepare(request, |_| false) {
+        Prepared::Build(key, lease) => (key, lease),
+        _ => panic!("expected a build"),
+    }
+}
+
 #[test]
 fn unobserved_or_mismatched_stages_are_unavailable() {
-    let state = Mutex::new(observed());
-    let build = |_: &VariantSources| -> Built { panic!("no build expected") };
+    let cache = observed();
     for shaders in [
         [0, PS, 0, 0, 0],
         [VS, 0, 0, 0, 0],
@@ -175,108 +181,67 @@ fn unobserved_or_mismatched_stages_are_unavailable() {
         [VS, PS, 0, 0, DS],
         [VS, PS, 0, DS, HS],
     ] {
-        assert_eq!(admit(&state, &request(shaders, 0, 0), build), NO_VARIANT);
+        let unavailable = cache.prepare(&request(shaders, 0, 0), |_| panic!("no lookup expected"));
+        assert!(matches!(unavailable, Prepared::Unavailable));
     }
-    assert!(lock(&state).variants.is_empty());
 }
 
 #[test]
-fn built_variants_are_reused_and_refusals_cached() {
+fn identity_covers_blend_layout_serial_and_lends_the_sources() {
     let mut cache = observed();
     cache.observe_layout(LAYOUT, Some(beam(true).as_slice()));
     let vertex = cache.sources[&VS].hash;
-    let state = Mutex::new(cache);
-    let builds = Cell::new(0);
-
     let first = request([VS, PS, 0, 0, 0], LAYOUT, 2);
-    let slot = admit(&state, &first, |sources| {
-        builds.set(builds.get() + 1);
-        assert!(sources.beam_layout);
-        assert_eq!(sources.elements.len(), 6);
-        assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 0, 0, 0]);
-        assert_eq!((sources.vertex_hash, sources.geometry_hash), (vertex, 0));
-        let lent = sources.bytes[PIXEL];
-        assert_eq!(lent, container(64, 2));
-        Built::Slot(3)
-    });
-    assert_eq!(slot, 3);
-    let again = admit(&state, &first, |_| panic!("reused"));
-    assert_eq!(again, 3);
+    let (key, lease) = build(&cache, &first);
+    let sources = lease.sources();
+    assert!(sources.beam_layout);
+    assert_eq!(sources.elements.len(), 6);
+    assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 0, 0, 0]);
+    assert_eq!((sources.vertex_hash, sources.geometry_hash), (vertex, 0));
+    assert_eq!(sources.bytes[PIXEL], container(64, 2));
+    // A held identity is not leased again.
+    assert!(
+        matches!(cache.prepare(&first, |held| *held == key), Prepared::Known(known) if known == key)
+    );
 
-    // Material blend is part of the identity, and a refusal is remembered.
-    let additive = request([VS, PS, 0, 0, 0], LAYOUT, 4);
-    let refuse = |_: &VariantSources| {
-        builds.set(builds.get() + 1);
-        Built::Refused
-    };
-    assert_eq!(admit(&state, &additive, refuse), NO_VARIANT);
-    assert_eq!(admit(&state, &additive, refuse), NO_VARIANT);
-    assert_eq!(builds.get(), 2);
-    assert_eq!(lock(&state).variants.len(), 2);
-
-    // A new layout object at the same address takes a new serial and a new variant.
-    lock(&state).observe_layout(LAYOUT, Some(beam(false).as_slice()));
-    let rebuilt = admit(&state, &first, |sources| {
-        assert_eq!(sources.elements.len(), 5);
-        Built::Slot(4)
-    });
-    assert_eq!(rebuilt, 4);
-    assert_eq!(lock(&state).variants.len(), 3);
-}
-
-#[test]
-fn unstored_outcomes_build_again() {
-    let state = Mutex::new(observed());
-    let plain = request([VS, PS, 0, 0, 0], 0, 0);
-    assert_eq!(admit(&state, &plain, |_| Built::Retry), NO_VARIANT);
-    assert!(lock(&state).variants.is_empty());
-    let slot = admit(&state, &plain, |sources| {
-        assert!(!sources.beam_layout);
-        assert_eq!(sources.elements.len(), 0);
-        Built::Slot(0)
-    });
-    assert_eq!(slot, 0);
+    // Material blend is part of the identity.
+    let (additive, _) = build(&cache, &request([VS, PS, 0, 0, 0], LAYOUT, 4));
+    assert!(additive != key);
+    // A new layout object at the same address takes a new serial and a new identity.
+    cache.observe_layout(LAYOUT, Some(beam(false).as_slice()));
+    let (rebuilt, lease) = build(&cache, &first);
+    assert!(rebuilt != key);
+    assert_eq!(lease.sources().elements.len(), 5);
 }
 
 #[test]
 fn beam_classification_separates_variants_for_the_same_layout() {
     let mut cache = observed();
     cache.observe_layout(LAYOUT, Some(&beam(false)));
-    let state = Mutex::new(cache);
     let mut draw = request([VS, PS, 0, 0, 0], LAYOUT, 0);
     draw.stride = 64;
-    assert_eq!(
-        admit(&state, &draw, |source| {
-            assert!(!source.beam_layout);
-            Built::Refused
-        }),
-        NO_VARIANT
-    );
+    let (narrow, lease) = build(&cache, &draw);
+    assert!(!lease.sources().beam_layout);
     draw.stride = BEAM_STRIDE;
-    assert_eq!(
-        admit(&state, &draw, |source| {
-            assert!(source.beam_layout);
-            Built::Slot(0)
-        }),
-        0
-    );
+    let (wide, lease) = build(&cache, &draw);
+    assert!(lease.sources().beam_layout);
+    assert!(narrow != wide);
 }
 
 #[test]
 fn builder_leases_payload_across_replacement() {
-    let cache = observed();
+    let mut cache = observed();
     let bytes = cache.sources[&VS].bytes.as_ptr();
-    let state = Mutex::new(cache);
     let draw = request([VS, PS, 0, 0, 0], 0, 0);
-    admit(&state, &draw, |source| {
-        lock(&state).observe_shader(VS, VERTEX as u32, None);
-        assert_eq!(source.bytes[VERTEX].as_ptr(), bytes);
-        // SAFETY: The callback still holds the lease after the cache forgot the source.
-        let lent = source.bytes[VERTEX];
-        assert_eq!(lent, container(64, 1));
-        Built::Refused
-    });
-    assert_eq!(admit(&state, &draw, |_| panic!("old source")), NO_VARIANT);
+    let (_, lease) = build(&cache, &draw);
+    cache.observe_shader(VS, VERTEX as u32, None);
+    let sources = lease.sources();
+    assert_eq!(sources.bytes[VERTEX].as_ptr(), bytes);
+    assert_eq!(sources.bytes[VERTEX], container(64, 1));
+    assert!(matches!(
+        cache.prepare(&draw, |_| false),
+        Prepared::Unavailable
+    ));
 }
 
 #[test]
@@ -287,50 +252,16 @@ fn generated_geometry_history_identity() {
         cache.sources[&HS].hash,
         cache.sources[&DS].hash,
     );
-    let state = Mutex::new(cache);
-    admit(&state, &request([VS, PS, GS, 0, 0], 0, 0), |sources| {
-        assert_eq!(sources.geometry_hash, gs);
-        assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 64, 0, 0]);
-        Built::Slot(0)
-    });
-    admit(&state, &request([VS, PS, 0, HS, DS], 0, 0), |sources| {
-        assert_eq!(sources.geometry_hash, hs ^ (ds << 1) ^ (ds >> 31));
-        assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 0, 64, 64]);
-        Built::Slot(1)
-    });
-    assert_eq!(lock(&state).variants.len(), 2);
-}
-
-#[test]
-fn reset_discards_slots_and_late_results() {
-    let state = Mutex::new(observed());
-    let plain = request([VS, PS, 0, 0, 0], 0, 0);
-    let slot = admit(&state, &plain, |_| {
-        // The native list is discarded while this build runs.
-        lock(&state).reset_variants();
-        Built::Slot(0)
-    });
-    assert_eq!(slot, NO_VARIANT);
-    assert!(lock(&state).variants.is_empty());
-
-    admit(&state, &plain, |_| Built::Slot(0));
-    lock(&state).reset_variants();
-    let builds = Cell::new(0);
-    admit(&state, &plain, |_| {
-        builds.set(1);
-        Built::Slot(0)
-    });
-    assert_eq!(builds.get(), 1);
-
-    lock(&state).release();
-    assert_eq!(admit(&state, &plain, |_| Built::Slot(0)), NO_VARIANT);
-    let cache = lock(&state);
-    assert!(cache.sources.is_empty() && cache.variants.is_empty() && cache.source_bytes == 0);
+    let (_, lease) = build(&cache, &request([VS, PS, GS, 0, 0], 0, 0));
+    assert_eq!(lease.sources().geometry_hash, gs);
+    assert_eq!(lease.sources().bytes.map(<[u8]>::len), [64, 64, 64, 0, 0]);
+    let (_, lease) = build(&cache, &request([VS, PS, 0, HS, DS], 0, 0));
+    assert_eq!(lease.sources().geometry_hash, hs ^ (ds << 1) ^ (ds >> 31));
+    assert_eq!(lease.sources().bytes.map(<[u8]>::len), [64, 64, 0, 64, 64]);
 }
 
 #[test]
 fn ffi_rejects_null_arguments() {
-    // The call returns before it touches the process cache. Variant admission is Rust-only
-    // (`admit_variant`), so it has no null-pointer FFI entry left to probe.
+    // The call returns before it touches the process cache.
     unsafe { rsf_ac7_velocity_layout_seen(null_mut(), null(), 0, 0) };
 }
