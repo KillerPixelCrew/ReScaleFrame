@@ -98,14 +98,15 @@ struct Tables {
     chain1: Table,
 }
 
-#[repr(C)]
-struct Platform {
-    window: unsafe extern "C" fn(u32, u32) -> Handle,
-    destroy_window: unsafe extern "C" fn(Handle),
-    create: unsafe extern "C" fn(Handle, u32, &Description, &mut Attempt),
-    query_chain1: unsafe extern "C" fn(Handle, &mut Handle, &mut i32) -> u32,
-    vtable: unsafe extern "C" fn(Handle, usize) -> Table,
+// Production creates the probe window, device and chain; unit tests call same-named fakes.
+#[cfg(not(test))]
+mod leaf {
+    pub(super) use super::resident_vtable as vtable;
+    pub(super) use super::rsf_observer11_probe_chain1 as query_chain1;
+    pub(super) use super::{create, destroy_window, window};
 }
+#[cfg(test)]
+use tests as leaf;
 
 unsafe extern "C" {
     fn rsf_observer11_guard_probe_create(
@@ -114,9 +115,11 @@ unsafe extern "C" {
         description: &DXGI_SWAP_CHAIN_DESC,
         out: &mut Attempt,
     );
+    #[cfg_attr(test, allow(dead_code))]
     fn rsf_observer11_probe_chain1(chain: Handle, extended: &mut Handle, result: &mut i32) -> u32;
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn create(
     window: Handle,
     driver: u32,
@@ -137,6 +140,7 @@ unsafe extern "C" fn create(
     unsafe { rsf_observer11_guard_probe_create(driver, description.feature_level, &desc, out) };
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn window(width: u32, height: u32) -> Handle {
     let instance = unsafe { GetModuleHandleW(null()) };
     let class = windows::core::w!("RsfObserverProbe");
@@ -167,12 +171,14 @@ unsafe extern "C" fn window(width: u32, height: u32) -> Handle {
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn destroy_window(window: Handle) {
     unsafe { DestroyWindow(window) };
 }
 
 // An object's private table can disappear when the last interface reference is released.
 // A table must have a complete readable span inside a pinned executable image.
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn resident_vtable(object: Handle, count: usize) -> Table {
     let table = unsafe { object.cast::<Table>().read() };
     let mut info = MEMORY_BASIC_INFORMATION::default();
@@ -216,20 +222,11 @@ unsafe extern "C" fn resident_vtable(object: Handle, count: usize) -> Table {
     table
 }
 
-const NATIVE: Platform = Platform {
-    window,
-    destroy_window,
-    create,
-    query_chain1: rsf_observer11_probe_chain1,
-    vtable: resident_vtable,
-};
-
 const _: () = {
     assert!(size_of::<Description>() == 28);
     assert!(size_of::<Attempt>() == 32);
     assert!(std::mem::offset_of!(Attempt, result) == 24);
     assert!(size_of::<Tables>() == 3 * size_of::<Handle>());
-    assert!(size_of::<Platform>() == 5 * size_of::<Handle>());
 };
 
 // The context, chain and device retire in the order used by the native probe.
@@ -245,9 +242,9 @@ enum CreateFailure {
 }
 
 impl Objects {
-    fn create(platform: &Platform, window: Handle, driver: u32) -> Result<Self, CreateFailure> {
+    fn create(window: Handle, driver: u32) -> Result<Self, CreateFailure> {
         let mut attempt = Attempt::default();
-        unsafe { (platform.create)(window, driver, &DESCRIPTION, &mut attempt) };
+        unsafe { leaf::create(window, driver, &DESCRIPTION, &mut attempt) };
         let objects = unsafe {
             Self {
                 _context: com_ref::owned(attempt.context),
@@ -265,21 +262,21 @@ impl Objects {
     }
 }
 
-fn probe(platform: &Platform, window: Handle) -> Option<Tables> {
-    let objects = match Objects::create(platform, window, HARDWARE) {
+fn probe(window: Handle) -> Option<Tables> {
+    let objects = match Objects::create(window, HARDWARE) {
         Ok(objects) => objects,
-        Err(CreateFailure::DriverRefused) => Objects::create(platform, window, WARP).ok()?,
+        Err(CreateFailure::DriverRefused) => Objects::create(window, WARP).ok()?,
         Err(CreateFailure::Exception) => return None,
     };
     let device_object = objects.device.as_ref()?.as_raw();
     let chain_object = objects.chain.as_ref()?.as_raw();
-    let device = unsafe { (platform.vtable)(device_object, DEVICE_SLOTS) };
-    let chain = unsafe { (platform.vtable)(chain_object, CHAIN_SLOTS) };
+    let device = unsafe { leaf::vtable(device_object, DEVICE_SLOTS) };
+    let chain = unsafe { leaf::vtable(chain_object, CHAIN_SLOTS) };
     if device.is_null() || chain.is_null() {
         return None;
     }
     let (mut extended, mut result) = (null_mut(), 0);
-    let returned = unsafe { (platform.query_chain1)(chain_object, &mut extended, &mut result) };
+    let returned = unsafe { leaf::query_chain1(chain_object, &mut extended, &mut result) };
     let extended = unsafe { com_ref::owned(extended) };
     if returned == 0 {
         return None;
@@ -287,7 +284,7 @@ fn probe(platform: &Platform, window: Handle) -> Option<Tables> {
     let chain1 = extended
         .filter(|_| result >= 0)
         .map_or(null_mut(), |extended| unsafe {
-            (platform.vtable)(extended.as_raw(), CHAIN1_SLOTS)
+            leaf::vtable(extended.as_raw(), CHAIN1_SLOTS)
         });
     Some(Tables {
         device,
@@ -302,7 +299,7 @@ pub(super) fn native_slots(slots: &mut [Slot; SLOT_COUNT]) -> Option<[Route; 2]>
         chain: null_mut(),
         chain1: null_mut(),
     };
-    if run(&NATIVE, &mut tables) == 0 {
+    if run(&mut tables) == 0 {
         return None;
     }
     let present = detours::hook_present as Handle;
@@ -359,13 +356,13 @@ pub(super) fn native_slots(slots: &mut [Slot; SLOT_COUNT]) -> Option<[Route; 2]>
     Some(routes)
 }
 
-fn run(platform: &Platform, tables: &mut Tables) -> u32 {
-    let window = unsafe { (platform.window)(DESCRIPTION.width, DESCRIPTION.height) };
+fn run(tables: &mut Tables) -> u32 {
+    let window = unsafe { leaf::window(DESCRIPTION.width, DESCRIPTION.height) };
     if window.is_null() {
         return 0;
     }
-    let result = probe(platform, window);
-    unsafe { (platform.destroy_window)(window) };
+    let result = probe(window);
+    unsafe { leaf::destroy_window(window) };
     if let Some(result) = result {
         *tables = result;
         1
@@ -426,12 +423,12 @@ mod tests {
         object
     }
 
-    unsafe extern "C" fn window(width: u32, height: u32) -> Handle {
+    pub(super) unsafe extern "C" fn window(width: u32, height: u32) -> Handle {
         assert_eq!((width, height), (8, 8));
         without_provenance_mut(1)
     }
 
-    unsafe extern "C" fn destroy_window(window: Handle) {
+    pub(super) unsafe extern "C" fn destroy_window(window: Handle) {
         assert_eq!(window.addr(), 1);
         FIXTURE.with_borrow_mut(|fixture| {
             assert_eq!(fixture.refs(), [1; 4]);
@@ -439,7 +436,7 @@ mod tests {
         });
     }
 
-    unsafe extern "C" fn create(
+    pub(super) unsafe extern "C" fn create(
         window: Handle,
         driver: u32,
         desc: &Description,
@@ -472,7 +469,11 @@ mod tests {
         });
     }
 
-    unsafe extern "C" fn query_chain1(chain: Handle, out: &mut Handle, result: &mut i32) -> u32 {
+    pub(super) unsafe extern "C" fn query_chain1(
+        chain: Handle,
+        out: &mut Handle,
+        result: &mut i32,
+    ) -> u32 {
         FIXTURE.with_borrow(|fixture| {
             assert_eq!(chain, raw(&fixture.chain));
             *out = owned(&fixture.extended);
@@ -481,7 +482,7 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn vtable(object: Handle, slot_count: usize) -> Table {
+    pub(super) unsafe extern "C" fn vtable(object: Handle, slot_count: usize) -> Table {
         FIXTURE.with_borrow(|fixture| {
             let (expected, resident) = if object == raw(&fixture.device) {
                 (DEVICE_SLOTS, fixture.resident_device)
@@ -496,14 +497,6 @@ mod tests {
         })
     }
 
-    static PLATFORM: Platform = Platform {
-        window,
-        destroy_window,
-        create,
-        query_chain1,
-        vtable,
-    };
-
     #[test]
     fn probe_refuses_unverified_device_table() {
         FIXTURE.with_borrow_mut(|fixture| {
@@ -515,7 +508,7 @@ mod tests {
             chain: null_mut(),
             chain1: null_mut(),
         };
-        assert_eq!(run(&PLATFORM, &mut tables), 0);
+        assert_eq!(run(&mut tables), 0);
         assert!(tables.device.is_null());
         FIXTURE.with_borrow(|fixture| {
             assert_eq!(fixture.windows_destroyed, 1);
@@ -535,7 +528,7 @@ mod tests {
                 chain: null_mut(),
                 chain1: null_mut(),
             };
-            assert_eq!(run(&PLATFORM, &mut tables), u32::from(!interrupted));
+            assert_eq!(run(&mut tables), u32::from(!interrupted));
             FIXTURE.with_borrow(|fixture| {
                 assert_eq!(fixture.windows_destroyed, 1);
                 if interrupted {

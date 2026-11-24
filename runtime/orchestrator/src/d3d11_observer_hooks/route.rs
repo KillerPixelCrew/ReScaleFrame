@@ -397,6 +397,7 @@ impl Setup {
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn detour(user: Handle, method: u32) -> i32 {
     let setup = unsafe { &mut *user.cast::<Setup>() };
     let method = method as usize;
@@ -416,6 +417,7 @@ pub(super) unsafe extern "C" fn detour(user: Handle, method: u32) -> i32 {
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn remove(target: Handle) -> i32 {
     match unsafe { MH_DisableHook(target) } {
         MH_ERROR_NOT_CREATED => 1,

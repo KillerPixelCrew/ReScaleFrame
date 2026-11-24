@@ -38,17 +38,19 @@ const EMPTY_SLOT: Slot = Slot {
 };
 const NO_DEVICE: i32 = -4;
 
-#[repr(C)]
-struct Platform {
-    read: unsafe extern "C" fn(*mut Handle) -> Handle,
-    replace: unsafe extern "C" fn(*mut Handle, Handle, Handle) -> i32,
-    detour: unsafe extern "C" fn(Handle, u32) -> i32,
-    remove: unsafe extern "C" fn(Handle) -> i32,
+// Production reads and patches the live vtable slots and routes through `route`; unit tests call
+// same-named fakes.
+#[cfg(not(test))]
+mod leaf {
+    pub(super) use super::read_slot as read;
+    pub(super) use super::route::{detour, remove};
+    pub(super) use super::rsf_graphics_replace_vtable_slot as replace;
 }
+#[cfg(test)]
+use tests as leaf;
 
 const _: () = {
     assert!(size_of::<Slot>() == 2 * size_of::<Handle>());
-    assert!(size_of::<Platform>() == 4 * size_of::<Handle>());
 };
 
 struct Route {
@@ -110,16 +112,16 @@ impl Hooks {
                 .any(|route| !route.target.load(Ordering::Relaxed).is_null())
     }
 
-    fn patch(&mut self, platform: &Platform, index: usize, slot: Slot) -> bool {
+    fn patch(&mut self, index: usize, slot: Slot) -> bool {
         if slot.address.is_null() {
             return false;
         }
-        let original = unsafe { (platform.read)(slot.address) };
+        let original = unsafe { leaf::read(slot.address) };
         if original.is_null() || original == slot.hook {
             return false;
         }
         ORIGINALS[index].store(original, Ordering::Release);
-        if unsafe { (platform.replace)(slot.address, original, slot.hook) } == 0 {
+        if unsafe { leaf::replace(slot.address, original, slot.hook) } == 0 {
             ORIGINALS[index].store(null_mut(), Ordering::Release);
             return false;
         }
@@ -127,7 +129,7 @@ impl Hooks {
         true
     }
 
-    fn retire(&mut self, platform: &Platform) -> bool {
+    fn retire(&mut self) -> bool {
         ACTIVE.store(false, Ordering::Release);
         d3d11_observer_callbacks::clear();
         for (index, patch) in self.patches.iter_mut().enumerate().rev() {
@@ -135,9 +137,9 @@ impl Hooks {
                 continue;
             };
             let original = ORIGINALS[index].load(Ordering::Relaxed);
-            let current = unsafe { (platform.read)(address) };
+            let current = unsafe { leaf::read(address) };
             if current == original
-                || (current == hook && unsafe { (platform.replace)(address, hook, original) } != 0)
+                || (current == hook && unsafe { leaf::replace(address, hook, original) } != 0)
             {
                 *patch = None;
                 ORIGINALS[index].store(null_mut(), Ordering::Release);
@@ -145,7 +147,7 @@ impl Hooks {
         }
         for route in ROUTES.iter().rev() {
             let target = route.target.load(Ordering::Relaxed);
-            if !target.is_null() && unsafe { (platform.remove)(target) } != 0 {
+            if !target.is_null() && unsafe { leaf::remove(target) } != 0 {
                 // The genuine trampoline page is process-lifetime, as before.
                 route.publish(null_mut(), null_mut(), null_mut());
             }
@@ -153,35 +155,30 @@ impl Hooks {
         !self.has_patches()
     }
 
-    fn install(
-        &mut self,
-        slots: &[Slot; SLOT_COUNT],
-        has_present1: u32,
-        user: Handle,
-        platform: &Platform,
-    ) -> i32 {
-        let required = self.patch(platform, TEXTURE, slots[TEXTURE])
-            && (slots[BUFFER].address.is_null() || self.patch(platform, BUFFER, slots[BUFFER]))
-            && (unsafe { (platform.detour)(user, 0) } != 0
+    fn install(&mut self, slots: &[Slot; SLOT_COUNT], has_present1: u32, user: Handle) -> i32 {
+        let required = self.patch(TEXTURE, slots[TEXTURE])
+            && (slots[BUFFER].address.is_null() || self.patch(BUFFER, slots[BUFFER]))
+            && (unsafe { leaf::detour(user, 0) } != 0
                 || (ROUTES[0].target.load(Ordering::Relaxed).is_null()
-                    && self.patch(platform, PRESENT, slots[PRESENT])));
+                    && self.patch(PRESENT, slots[PRESENT])));
         if !required {
-            if self.retire(platform) {
+            if self.retire() {
                 d3d11_observer_capture::clear();
             }
             return PATCH_FAILED;
         }
         for (index, &slot) in slots.iter().enumerate().skip(LAYOUT) {
-            self.patch(platform, index, slot);
+            self.patch(index, slot);
         }
         if has_present1 != 0 {
-            unsafe { (platform.detour)(user, 1) };
+            unsafe { leaf::detour(user, 1) };
         }
         ACTIVE.store(true, Ordering::Release);
         OK
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn rsf_graphics_replace_vtable_slot(
     address: *mut Handle,
     expected: Handle,
@@ -221,16 +218,10 @@ unsafe extern "C" {
     static rsf_observer11_callback_guards: Callbacks;
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn read_slot(address: *mut Handle) -> Handle {
     unsafe { AtomicPtr::from_ptr(address) }.load(Ordering::Acquire)
 }
-
-const NATIVE: Platform = Platform {
-    read: read_slot,
-    replace: rsf_graphics_replace_vtable_slot,
-    detour: route::detour,
-    remove: route::remove,
-};
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_observer_install(options: *const Options) -> i32 {
@@ -262,27 +253,22 @@ unsafe extern "C" fn rsf_observer_install(options: *const Options) -> i32 {
         slots[STAGE_BASE..].fill(EMPTY_SLOT);
     }
     d3d11_observer_callbacks::configure(options, unsafe { &rsf_observer11_callback_guards });
-    state.install(
-        &slots,
-        has_present1,
-        std::ptr::from_mut(&mut setup).cast(),
-        &NATIVE,
-    )
+    state.install(&slots, has_present1, std::ptr::from_mut(&mut setup).cast())
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_observer_uninstall() -> i32 {
-    uninstall(&NATIVE)
+    uninstall()
 }
 
-fn uninstall(platform: &Platform) -> i32 {
+fn uninstall() -> i32 {
     let Some(mut state) = lifecycle() else {
         return NOT_READY;
     };
     if !state.has_patches() || present_calls() != 0 {
         return NOT_READY;
     }
-    if !state.retire(platform) {
+    if !state.retire() {
         return PATCH_FAILED;
     }
     d3d11_observer_capture::clear();
@@ -321,11 +307,11 @@ mod tests {
 
     const REFUSED: usize = 40;
 
-    unsafe extern "C" fn read(address: *mut Handle) -> Handle {
+    pub(super) unsafe extern "C" fn read(address: *mut Handle) -> Handle {
         unsafe { address.read() }
     }
 
-    unsafe extern "C" fn replace(
+    pub(super) unsafe extern "C" fn replace(
         address: *mut Handle,
         expected: Handle,
         replacement: Handle,
@@ -337,20 +323,13 @@ mod tests {
         1
     }
 
-    unsafe extern "C" fn detour(_: Handle, _: u32) -> i32 {
-        assert_eq!(uninstall(&PLATFORM), NOT_READY);
+    pub(super) unsafe extern "C" fn detour(_: Handle, _: u32) -> i32 {
+        assert_eq!(uninstall(), NOT_READY);
         0
     }
-    unsafe extern "C" fn remove(_: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn remove(_: Handle) -> i32 {
         1
     }
-
-    static PLATFORM: Platform = Platform {
-        read,
-        replace,
-        detour,
-        remove,
-    };
 
     #[test]
     fn required_present_failure_restores_both_creation_hooks() {
@@ -367,10 +346,7 @@ mod tests {
                 hook: without_provenance_mut(hook),
             };
         }
-        assert_eq!(
-            state.install(&slots, 0, null_mut(), &PLATFORM),
-            PATCH_FAILED
-        );
+        assert_eq!(state.install(&slots, 0, null_mut()), PATCH_FAILED);
         assert_eq!(table, [native; 3]);
         assert!(!state.has_patches());
         assert!(original(TEXTURE).is_null());
