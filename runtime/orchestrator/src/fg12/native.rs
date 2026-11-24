@@ -106,17 +106,14 @@ pub(super) unsafe fn dump_record(
 }
 
 pub(super) unsafe fn dump_flush() {
-    unsafe { capture::rsf_core_capture12_flush(CAPTURE.load(Ordering::Acquire), u32::MAX, 1) };
+    if let Some(owner) = unsafe { CAPTURE.load(Ordering::Acquire).as_ref() } {
+        owner.flush_slot(u32::MAX, true);
+    }
 }
 
 pub(super) unsafe fn dump_submitted(queue: *mut c_void, record: *const rsf_frame_record) {
-    unsafe {
-        capture::rsf_core_capture12_submitted(
-            CAPTURE.load(Ordering::Acquire),
-            queue,
-            u32::MAX,
-            record,
-        );
+    if let Some(owner) = unsafe { CAPTURE.load(Ordering::Acquire).as_ref() } {
+        owner.submitted(queue, u32::MAX, unsafe { record.as_ref() });
     }
 }
 

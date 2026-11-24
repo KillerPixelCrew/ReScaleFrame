@@ -135,7 +135,12 @@ impl Owner {
         }
     }
 
-    fn configure(&self, path: &CStr, first: u64, frames: u32) -> bool {
+    pub(super) fn force_reset(&self, frame: u64) -> bool {
+        let state = self.lock();
+        state.reset_sr && state.legacy.wants(frame)
+    }
+
+    pub(super) fn configure(&self, path: &CStr, first: u64, frames: u32) -> bool {
         if path.is_empty() && frames == 0 {
             // Stop admitting new legacy captures. Existing readbacks still own their slots.
             self.lock().legacy = Legacy::default();
@@ -336,7 +341,7 @@ impl Owner {
         okay && written.is_ok()
     }
 
-    fn submitted(&self, queue: Handle, slot: u32, identity: Option<&Record>) -> bool {
+    pub(super) fn submitted(&self, queue: Handle, slot: u32, identity: Option<&Record>) -> bool {
         let mut state = self.lock();
         let matching = |value: &Readback| value.submitted_as(slot, identity);
         if queue.is_null() || !state.pending.iter().any(matching) {
@@ -365,6 +370,10 @@ impl Owner {
     // Snapshot the readbacks before asking the SDK to finish its submitted
     // Presents. Later recordings are outside that proof. Retained buffers
     // keep their identities unique if another call removes an entry.
+    pub(super) fn flush_slot(&self, slot: u32, ready_only: bool) -> bool {
+        self.flush(&mut self.lock(), slot, ready_only)
+    }
+
     pub(super) fn flush_after_queue(
         &self,
         queue: Handle,
@@ -514,35 +523,9 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_destroy(owner: *mut Owner) {
     }
 }
 
-pub(super) unsafe extern "C" fn rsf_core_capture12_enabled(owner: *const Owner) -> i32 {
-    i32::from(unsafe { owner.as_ref() }.is_some_and(|owner| owner.enabled()))
-}
-
-pub(super) unsafe extern "C" fn rsf_core_capture12_configure(
-    owner: *const Owner,
-    path: *const c_char,
-    first: u64,
-    frames: u32,
-) -> i32 {
-    match (unsafe { owner.as_ref() }, unsafe { text(path) }) {
-        (Some(owner), Some(path)) => i32::from(owner.configure(path, first, frames)),
-        _ => 0,
-    }
-}
-
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture12_wants(owner: *const Owner, frame: u64) -> i32 {
     i32::from(unsafe { owner.as_ref() }.is_some_and(|owner| owner.wants(frame)))
-}
-
-pub(super) unsafe extern "C" fn rsf_core_capture12_force_reset(
-    owner: *const Owner,
-    frame: u64,
-) -> i32 {
-    i32::from(unsafe { owner.as_ref() }.is_some_and(|owner| {
-        let state = owner.lock();
-        state.reset_sr && state.legacy.wants(frame)
-    }))
 }
 
 #[unsafe(no_mangle)]
@@ -609,26 +592,8 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_flush(
     ready_only: u32,
 ) -> i32 {
     unsafe { owner.as_ref() }.map_or(0, |owner| {
-        let mut state = owner.lock();
-        i32::from(owner.flush(&mut state, slot, ready_only != 0))
+        i32::from(owner.flush_slot(slot, ready_only != 0))
     })
-}
-
-pub(super) unsafe extern "C" fn rsf_core_capture12_submitted(
-    owner: *const Owner,
-    queue: Handle,
-    slot: u32,
-    identity: *const Record,
-) -> i32 {
-    unsafe { owner.as_ref() }.map_or(0, |owner| {
-        i32::from(owner.submitted(queue, slot, unsafe { identity.as_ref() }))
-    })
-}
-
-unsafe extern "C" fn rsf_core_capture12_abandon(owner: *const Owner, slot: u32) {
-    if let Some(owner) = unsafe { owner.as_ref() } {
-        owner.abandon(slot);
-    }
 }
 
 // Public capture readers use the same owner as the embedded backends without
@@ -712,7 +677,7 @@ unsafe extern "C" fn rsf_input_dump12_poll(owner: *const Owner) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID;
     };
-    if owner.flush(&mut owner.lock(), ALL_SLOTS, true) {
+    if owner.flush_slot(ALL_SLOTS, true) {
         OK
     } else {
         FEATURE_FAILED
@@ -721,7 +686,9 @@ unsafe extern "C" fn rsf_input_dump12_poll(owner: *const Owner) -> i32 {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_input_dump12_abandon(owner: *const Owner, slot: u32) {
-    unsafe { rsf_core_capture12_abandon(owner, slot) };
+    if let Some(owner) = unsafe { owner.as_ref() } {
+        owner.abandon(slot);
+    }
 }
 
 #[unsafe(no_mangle)]

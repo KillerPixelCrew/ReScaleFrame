@@ -523,7 +523,7 @@ fn reset_request_follows_the_legacy_window() {
         },
         true,
     );
-    let wants = |frame| unsafe { rsf_core_capture12_force_reset(&owner, frame) } != 0;
+    let wants = |frame| owner.force_reset(frame);
     assert!(wants(9) && !wants(10));
 }
 
@@ -650,38 +650,6 @@ fn destroy_fails_pending_tickets_and_releases_leases() {
         assert!(w.mapped.is_empty());
     });
     assert_eq!((refs(source), refs(readback), refs(fence)), (1, 0, 0));
-}
-
-#[test]
-fn null_arguments_are_refused_at_the_boundary() {
-    unsafe {
-        assert_eq!(rsf_core_capture12_enabled(std::ptr::null()), 0);
-        let owner = owner();
-        assert_eq!(
-            rsf_core_capture12_configure(&owner, std::ptr::null(), 1, 1),
-            0
-        );
-        assert_eq!(
-            rsf_core_capture12_record(
-                &owner,
-                LIST as Handle,
-                object() as Handle,
-                0,
-                std::ptr::null(),
-                c"x".as_ptr(),
-                0,
-                0,
-                NO_RESET,
-                DEFAULT_VIEW,
-                0.0
-            ),
-            0
-        );
-        assert_eq!(
-            rsf_core_capture12_submitted(&owner, std::ptr::null_mut(), 0, std::ptr::null()),
-            1
-        );
-    }
 }
 
 #[test]

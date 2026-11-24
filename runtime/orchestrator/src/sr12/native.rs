@@ -282,6 +282,10 @@ pub(super) unsafe extern "C" fn copy_motion_tile(
     unsafe { commands.CopyTextureRegion(&to, 0, 0, 0, &from, Some(&rectangle)) };
 }
 
+fn capture<'a>(owner: Handle) -> &'a Capture {
+    unsafe { &*owner.cast::<Capture>() }
+}
+
 pub(super) extern "C" fn capture_create() -> Handle {
     capture::rsf_core_capture12_create(1).cast()
 }
@@ -291,7 +295,7 @@ pub(super) unsafe extern "C" fn capture_destroy(owner: Handle) {
 }
 
 pub(super) unsafe extern "C" fn capture_enabled(owner: Handle) -> i32 {
-    unsafe { capture::rsf_core_capture12_enabled(owner.cast::<Capture>()) }
+    i32::from(capture(owner).enabled())
 }
 
 pub(super) unsafe extern "C" fn capture_configure(
@@ -300,13 +304,15 @@ pub(super) unsafe extern "C" fn capture_configure(
     first: u64,
     frames: u32,
 ) -> i32 {
-    unsafe {
-        capture::rsf_core_capture12_configure(owner.cast::<Capture>(), directory, first, frames)
-    }
+    // The public capture entry passes the caller's directory through.
+    i32::from(
+        !directory.is_null()
+            && capture(owner).configure(unsafe { CStr::from_ptr(directory) }, first, frames),
+    )
 }
 
 pub(super) unsafe extern "C" fn capture_flush(owner: Handle, slot: u32) -> i32 {
-    unsafe { capture::rsf_core_capture12_flush(owner.cast::<Capture>(), slot, 0) }
+    i32::from(capture(owner).flush_slot(slot, false))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -322,21 +328,10 @@ pub(super) unsafe extern "C" fn capture_record(
     reset: u32,
     preview: u32,
 ) -> i32 {
-    unsafe {
-        capture::rsf_core_capture12_record(
-            owner.cast::<Capture>(),
-            list,
-            source,
-            state,
-            record,
-            role,
-            slot,
-            ordinal,
-            reset,
-            preview,
-            0.0,
-        )
-    }
+    let (record, role) = unsafe { (&*record, CStr::from_ptr(role)) };
+    i32::from(capture(owner).record(
+        list, source, state, record, role, slot, ordinal, reset, preview, 0.0,
+    ))
 }
 
 pub(super) unsafe extern "C" fn capture_event(
@@ -347,22 +342,14 @@ pub(super) unsafe extern "C" fn capture_event(
     reset: u32,
     result: i32,
 ) -> i32 {
-    unsafe {
-        capture::rsf_core_capture12_event(
-            owner.cast::<Capture>(),
-            record,
-            name,
-            sequence,
-            reset,
-            result,
-        )
-    }
+    let (record, name) = unsafe { (&*record, CStr::from_ptr(name)) };
+    i32::from(capture(owner).event(record, name, sequence, reset != 0, result))
 }
 
 pub(super) unsafe extern "C" fn capture_wants(owner: Handle, frame: u64) -> i32 {
-    unsafe { capture::rsf_core_capture12_wants(owner.cast::<Capture>(), frame) }
+    i32::from(capture(owner).wants(frame))
 }
 
 pub(super) unsafe extern "C" fn capture_force_reset(owner: Handle, frame: u64) -> i32 {
-    unsafe { capture::rsf_core_capture12_force_reset(owner.cast::<Capture>(), frame) }
+    i32::from(capture(owner).force_reset(frame))
 }
