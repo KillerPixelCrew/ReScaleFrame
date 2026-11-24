@@ -14,6 +14,8 @@
 //! patched or called. The recorded RVAs are those of Steam build 9855922 (SHA-256 c7da97f5...,
 //! PE timestamp 6362748e). Ace7Game.exe's code is encrypted on disk, so the patterns were derived
 //! from and are tested against a decrypted image; docs/research/ue418-hook-map.md records how.
+// The WARP fixtures stand in for the recorded build, so they leave the scan unused.
+#![cfg_attr(feature = "warp-fixture", allow(dead_code))]
 
 use rsf_game_sys::signature::{self, EXECUTE, Find, Miss, Pattern, Refusal, Section, Signature};
 use std::sync::{Mutex, OnceLock};
@@ -91,6 +93,12 @@ pub enum Site {
 }
 
 const SITES: usize = Site::RecursivelyProcess as usize + 1;
+
+impl From<Site> for usize {
+    fn from(site: Site) -> usize {
+        site as usize
+    }
+}
 
 /// Hook indices of the sites that other features share.
 pub const POSTPROCESS: usize = 12;
@@ -393,7 +401,7 @@ const SHADER_DEPTH_NAME: &str = "shader depth gates";
 
 /// Every site's RVA or the refusal that names it, and the shader-depth gates.
 struct Found {
-    sites: Vec<Result<usize, Refusal>>,
+    sites: Sites,
     shader_depth: Result<Vec<usize>, Refusal>,
 }
 
@@ -504,10 +512,16 @@ fn live_code(base: usize) -> Option<Vec<(usize, Vec<u8>)>> {
     signature::mapped_sections(base, read_memory, |_, flags| flags & EXECUTE != 0)
 }
 
+/// The process executable's base.
+#[cfg(windows)]
+pub fn main_module() -> usize {
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    unsafe { GetModuleHandleW(None) }.map_or(0, |module| module.0 as usize)
+}
+
 #[cfg(all(windows, not(feature = "warp-fixture")))]
 fn discover() -> Result<Found, String> {
-    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-    let base = unsafe { GetModuleHandleW(None) }.map_or(0, |module| module.0 as usize);
+    let base = main_module();
     let code = live_code(base).ok_or("Ace7Game.exe sections unreadable")?;
     Ok(resolve_image(
         &signature::views(&code),
@@ -580,6 +594,13 @@ pub fn rva(site: usize) -> usize {
         .unwrap_or(0)
 }
 
+/// The name a refusal of a hook index or [`Site`] gives.
+pub fn name(site: usize) -> &'static str {
+    SIGNATURES
+        .get(site)
+        .map_or("unknown", |signature| signature.name)
+}
+
 /// The discovered shader-depth gates; empty until admitted.
 pub fn shader_depth_gates() -> &'static [usize] {
     found()
@@ -604,6 +625,14 @@ pub fn verify(base: usize, site: usize) -> bool {
                 text,
             )
         })
+}
+
+/// Copies the live bytes of a code site of the process executable into `out` once it still
+/// matches its pattern: the native bytes a patch keeps to restore.
+#[cfg(windows)]
+pub fn live(site: usize, out: &mut [u8]) -> bool {
+    let base = main_module();
+    verify(base, site) && read_bytes(base.wrapping_add(rva(site)), out)
 }
 
 /// The TrueSkyPluginRender_MT.dll sites of the native renderer's cloud patches and relays.
@@ -633,7 +662,10 @@ const TRUESKY: [Signature; 5] = [
 ];
 
 /// The plugin module base and its sites, discovered once before the first patch.
-static TRUESKY_FOUND: Mutex<Option<(usize, Vec<Result<usize, Refusal>>)>> = Mutex::new(None);
+static TRUESKY_FOUND: Mutex<Option<(usize, Sites)>> = Mutex::new(None);
+
+/// Each site's RVA or the refusal that names it.
+type Sites = Vec<Result<usize, Refusal>>;
 
 /// The RVA of a TrueSky site in the plugin loaded at `base`, discovered from the module's code
 /// sections on the first call for that base, before any of its sites is patched. The error names
@@ -650,7 +682,7 @@ pub fn truesky(base: usize, site: TrueSky) -> Result<usize, String> {
 }
 
 #[cfg(all(windows, not(feature = "warp-fixture")))]
-fn truesky_sites(base: usize) -> Vec<Result<usize, Refusal>> {
+fn truesky_sites(base: usize) -> Sites {
     match live_code(base) {
         Some(code) => signature::resolve_each(&signature::views(&code), &TRUESKY),
         None => truesky_refused(),
@@ -658,17 +690,17 @@ fn truesky_sites(base: usize) -> Vec<Result<usize, Refusal>> {
 }
 
 #[cfg(feature = "warp-fixture")]
-fn truesky_sites(_: usize) -> Vec<Result<usize, Refusal>> {
+fn truesky_sites(_: usize) -> Sites {
     TRUESKY_RECORDED.iter().map(|&rva| Ok(rva)).collect()
 }
 
 #[cfg(not(any(windows, feature = "warp-fixture")))]
-fn truesky_sites(_: usize) -> Vec<Result<usize, Refusal>> {
+fn truesky_sites(_: usize) -> Sites {
     truesky_refused()
 }
 
 #[cfg(not(feature = "warp-fixture"))]
-fn truesky_refused() -> Vec<Result<usize, Refusal>> {
+fn truesky_refused() -> Sites {
     TRUESKY
         .iter()
         .map(|signature| {

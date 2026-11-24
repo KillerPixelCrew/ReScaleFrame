@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-//! Ace Combat 7 (Steam build 9855922) code the carriers and the adapter DLL share: the C
-//! bindings of the AC7 headers, the exact-build code sites (`sites.rs`), the carrier policy
+//! Ace Combat 7 code the carriers and the adapter DLL share: the C bindings of the AC7 headers,
+//! the signature discovery of every code site and global (`discovery.rs`; researched on Steam
+//! build 9855922), the pass roles and depth gates (`sites.rs`), the carrier policy
 //! (`carrier.rs`, ac7_carrier.h: executable and window identifiers, GameSDK probe, decrypted
 //! patch policy), the view reader (`view.rs`), the F9 motion capture and the translucent velocity
 //! pass. The velocity pass keeps shader compilation, DXBC transforms, D3D11 shader objects and
@@ -79,8 +80,6 @@ mod view_fixture_probe;
 mod view_fixture_session;
 
 pub const AMD64: u16 = 0x8664;
-// The only recognized build. Every RVA and expected byte in sites.rs and in the plugin's
-// patches.rs and native_renderer.rs belongs to it.
+/// Recognized by name; whether this build is usable is decided by site discovery. The SHA-256 the
+/// carrier passes in the probe is evidence to log.
 pub const EXECUTABLE: &std::ffi::CStr = c"Ace7Game.exe";
-pub const EXECUTABLE_SHA256: &std::ffi::CStr =
-    c"c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f";

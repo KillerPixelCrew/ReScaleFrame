@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! AC7 policy shared by the dedicated and combined DirectInput carriers.
-use crate::sites::DEPTH_GATES;
+use crate::discovery::{self, Site};
+use crate::sites::depth_gates;
 use crate::sys::{
     RSF_AC7_CARRIER_ABI_VERSION, RSF_AC7_CARRIER_START_OPTION_COUNT,
     rsf_ac7_carrier_leaves as CarrierLeaves,
@@ -11,6 +12,7 @@ use rsf_game_sys::{rsf_game_log_fn, rsf_game_probe};
 use std::ffi::{CStr, CString, c_char, c_int, c_ulong};
 use std::mem::offset_of;
 use std::ptr::{null, null_mut};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 struct StartupOption {
@@ -103,16 +105,10 @@ unsafe extern "C" fn rsf_ac7_carrier_start_option(
 
 const PATCH_OK: i32 = 0;
 const PATCH_INVALID_ARGUMENT: i32 = -1;
-const JITTER_RVA: u32 = 0x112b1f3;
-const TRANSLUCENT_VELOCITY_RVA: u32 = 0x11823de;
-const SEPARATE_TRANSLUCENCY_RVA: u32 = 0x10be329;
 const SCALE_IMMEDIATE_OFFSET: usize = 7;
-const JITTER_GATE: &[u8; 6] = b"\x0f\x85\xdd\x03\x00\x00";
 const NOP6: &[u8; 6] = b"\x66\x0f\x1f\x44\x00\x00";
-const TRANSLUCENT_VELOCITY_GATE: &[u8; 6] = b"\x0f\x87\x68\x03\x00\x00";
-const SEPARATE_TRANSLUCENCY_GATE: &[u8; 15] =
-    b"\x73\x0d\x40\x84\xff\x74\x08\xf3\x0f\x10\x0d\x58\x61\x4b\x01";
-// A NOP, then mov eax, 1.0f and movd xmm1, eax. The immediate starts at RVA + 7.
+// Replaces `jae; test dil,dil; je; movss xmm1,[rip+half]`: a NOP, then mov eax, 1.0f and
+// movd xmm1, eax. The immediate starts at RVA + 7.
 const SEPARATE_TRANSLUCENCY_PATCH: &[u8; 15] =
     b"\x66\x0f\x1f\x44\x00\x00\xb8\x00\x00\x80\x3f\x66\x0f\x6e\xc8";
 
@@ -121,6 +117,8 @@ static GAME_DLL: [u16; b"ReScaleFrame.Game.AC7.dll\0".len()] =
 static WINDOW_CLASS: [u16; b"UnrealWindow\0".len()] = ascii_wide(b"UnrealWindow\0");
 static STARTUP_READY: AtomicBool = AtomicBool::new(false);
 static STARTUP_ATTEMPTED: AtomicBool = AtomicBool::new(false);
+/// The jitter gate's native `jne rel32`, read at its discovered site before the first toggle.
+static JITTER_NATIVE: OnceLock<[u8; 6]> = OnceLock::new();
 
 /// The native measure leaf writes the current entropy on success.
 #[cfg(windows)]
@@ -255,15 +253,15 @@ unsafe extern "C" fn rsf_ac7_carrier_patch_jitter(
     enabled: c_int,
     previous: *mut u8,
 ) -> i32 {
-    let Some(patch) = patch else {
+    let (Some(patch), Some(native)) = (patch, JITTER_NATIVE.get()) else {
         return PATCH_INVALID_ARGUMENT;
     };
     let (bytes, expected) = if enabled != 0 {
-        (NOP6, JITTER_GATE)
+        (NOP6, native)
     } else {
-        (JITTER_GATE, NOP6)
+        (native, NOP6)
     };
-    let count = JITTER_GATE.len() as u32;
+    let count = NOP6.len() as u32;
     unsafe {
         patch(
             rva,
@@ -276,10 +274,30 @@ unsafe extern "C" fn rsf_ac7_carrier_patch_jitter(
     }
 }
 
-fn apply_translucent_velocity(io: &PatchIo, rva: u32) {
-    let expected = Some(&TRANSLUCENT_VELOCITY_GATE[..]);
+/// The discovered RVA of a carrier patch site and its live native bytes, which its pattern fixes
+/// except for displacements; the error names the site.
+fn native_site<const N: usize>(site: Site) -> Result<(u32, [u8; N]), String> {
+    discovery::admit([site as usize])?;
+    let mut native = [0; N];
+    if !discovery::live(site as usize, &mut native) {
+        return Err(format!(
+            "site '{}' bytes differ in memory",
+            discovery::name(site as usize)
+        ));
+    }
+    Ok((discovery::rva(site as usize) as u32, native))
+}
+
+fn apply_translucent_velocity(io: &PatchIo) {
+    let (rva, native) = match native_site::<6>(Site::TranslucentVelocityGate) {
+        Ok(found) => found,
+        Err(reason) => {
+            io.log(&format!("translucent velocity gate NOT patched: {reason}"));
+            return;
+        }
+    };
     let mut previous = [0; 6];
-    let result = io.write(rva, NOP6, expected, &mut previous);
+    let result = io.write(rva, NOP6, Some(&native), &mut previous);
     if result == PATCH_OK {
         let [a, b, c, d, e, f] = previous;
         io.log(&format!(
@@ -295,10 +313,20 @@ fn apply_translucent_velocity(io: &PatchIo, rva: u32) {
 }
 
 fn apply_depth_gates(io: &PatchIo) -> bool {
+    let gates = match depth_gates() {
+        Ok(gates) => gates,
+        Err(reason) => {
+            io.log(&format!(
+                "translucency depth refused: {reason}; no gates changed. The layer stays at the scene's resolution"
+            ));
+            return false;
+        }
+    };
+    let rva = |gate: &crate::sites::Gate| gate.rva as u32;
     let mut previous = [0; 9];
     // An identical write performs the same native range and guard checks as a real patch.
-    for site in &DEPTH_GATES {
-        let result = io.write(site.rva, site.native, Some(site.native), &mut previous);
+    for site in &gates {
+        let result = io.write(rva(site), site.native, Some(site.native), &mut previous);
         if result != PATCH_OK {
             io.log(&format!(
                 "translucency preflight: {} at rva 0x{:x} refused, result {result}; no gates changed",
@@ -307,12 +335,12 @@ fn apply_depth_gates(io: &PatchIo) -> bool {
             return false;
         }
     }
-    for (index, site) in DEPTH_GATES.iter().enumerate() {
-        let result = io.write(site.rva, site.expected, Some(site.native), &mut previous);
+    for (index, site) in gates.iter().enumerate() {
+        let result = io.write(rva(site), site.expected, Some(site.native), &mut previous);
         if result != PATCH_OK {
-            for patched in DEPTH_GATES[..index].iter().rev() {
+            for patched in gates[..index].iter().rev() {
                 let restored = io.write(
-                    patched.rva,
+                    rva(patched),
                     patched.native,
                     Some(patched.expected),
                     &mut previous,
@@ -365,23 +393,39 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
     };
     let number = |name: &CStr, fallback| unsafe { read(name.as_ptr(), fallback) };
 
+    // The decrypted code is copied and every site discovered once, before any patch below.
+    let _ = discovery::admit([]);
+    io.log(&discovery::summary());
     let mode = number(JITTER.key, JITTER.fallback) as i32;
-    if mode != 0 {
-        let rva = number(c"RSF_JITTER_RVA", JITTER_RVA);
-        unsafe { jitter(mode, rva) };
-    } else {
-        // Reset the native mode just as the carrier did before skipping the other jitter settings.
-        unsafe { jitter(0, 0) };
+    let jitter_site = (mode != 0).then(|| native_site::<6>(Site::JitterGate));
+    match jitter_site {
+        Some(Ok((rva, native))) => {
+            let _ = JITTER_NATIVE.set(native);
+            unsafe { jitter(mode, rva) };
+        }
+        refused => {
+            if let Some(Err(reason)) = refused {
+                io.log(&format!(
+                    "jitter refused: {reason}; jitter stays off for this run"
+                ));
+            }
+            // Reset the native mode just as the carrier did before skipping the other jitter
+            // settings.
+            unsafe { jitter(0, 0) };
+        }
     }
     if number(TRANSLUCENT_VELOCITY.key, TRANSLUCENT_VELOCITY.fallback) != 0 {
-        apply_translucent_velocity(
-            &io,
-            number(c"RSF_TRANSLUCENT_VELOCITY_RVA", TRANSLUCENT_VELOCITY_RVA),
-        );
+        apply_translucent_velocity(&io);
     }
     let depth_conformed = apply_depth_gates(&io);
-    if number(FULL_TRANSLUCENCY.key, FULL_TRANSLUCENCY.fallback) != 0 {
-        let rva = number(c"RSF_FULL_TRANSLUCENCY_RVA", SEPARATE_TRANSLUCENCY_RVA);
+    let translucency = (number(FULL_TRANSLUCENCY.key, FULL_TRANSLUCENCY.fallback) != 0)
+        .then(|| native_site::<15>(Site::SeparateTranslucency));
+    if let Some(Err(reason)) = &translucency {
+        io.log(&format!(
+            "separate translucency halving NOT removed: {reason}"
+        ));
+    }
+    if let Some(Ok((rva, native))) = translucency {
         let target = number(c"RSF_TRANSLUCENCY_TARGET", 100);
         let (scale, refused) = translucency_scale(
             target,
@@ -401,7 +445,7 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
         let mut bytes = *SEPARATE_TRANSLUCENCY_PATCH;
         bytes[SCALE_IMMEDIATE_OFFSET..SCALE_IMMEDIATE_OFFSET + 4]
             .copy_from_slice(&scale.to_bits().to_le_bytes());
-        let expected = Some(&SEPARATE_TRANSLUCENCY_GATE[..]);
+        let expected = Some(&native[..]);
         let mut previous = [0; 15];
         let result = io.write(rva, &bytes, expected, &mut previous);
         if result == PATCH_OK {

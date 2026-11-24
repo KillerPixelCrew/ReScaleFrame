@@ -94,9 +94,7 @@ post-process graph. Do not apply this flat AC7 configuration format to Unity's `
 | `RSF_RENDERDOC_DLL` | Explicit Windows RenderDoc DLL path |
 | `RSF_CAPTURE_PREFIX` | RenderDoc output prefix |
 | `RSF_ENABLE_JITTER` | Default `1`; `0` off; `1` patches the AA gate but opens it only while a reconstruction runs; `2` opens it from decryption to exit, which is what every result before this used |
-| `RSF_JITTER_RVA` | Default address `0x112b1f3` |
 | `RSF_TRANSLUCENT_VELOCITY` | `0`; set `1` to let translucent draws reach the velocity pass |
-| `RSF_TRANSLUCENT_VELOCITY_RVA` | Default address `0x11823de` |
 | `RSF_DLSS_PRESET` | DLSS model request: 0 Default, 5 E, 6 F, 10 J, 11 K, 12 L, 13 M. Separate from quality/render scale. Insert saves this in the user's AC7 preferences. Driver overrides may replace the request. |
 | `RSF_STREAMLINE_BIN` | Directory containing the vendor runtime |
 | `RSF_DLSS_QUALITY` | `3`: Performance; backend enum is Native=0, Quality=1, Balanced=2, Performance=3, Ultra Performance=4 |
@@ -107,9 +105,10 @@ post-process graph. Do not apply this flat AC7 configuration format to Unity's `
 | `RSF_OVERLAY_DLL` | Explicit path to `rescaleframe_overlay.dll`; otherwise looked for beside the proxy |
 | `RSF_RENDERDOC` | `0`; set `1` to load RenderDoc at attach for a capture session |
 | `RSF_FULL_TRANSLUCENCY` | `1`; patches the separate translucency halving out and carries the scale as a rewritable immediate |
-| `RSF_FULL_TRANSLUCENCY_RVA` | Default address `0x10be329` |
 | `RSF_TRANSLUCENCY_TARGET` | `100`; percent of output, independent of the scene preset. `0` explicitly matches the scene |
 | `RSF_TRANSLUCENCY_SCALE` | `0`; a direct multiplier in percent overriding the target |
+
+The jitter, translucent velocity and separate translucency sites are discovered by signature in the decrypted executable (`games/ac7/src/discovery.rs`); there is no address override.
 
 The keys the [representation plan](../docs/representation-plan.md) introduces (`RSF_UI_*`, `RSF_POLICY_*`, `RSF_PRESENTATION`, `RSF_FG*`, `RSF_SR_VENDOR`, vendor runtime directories) are documented here as each milestone lands, not before.
 

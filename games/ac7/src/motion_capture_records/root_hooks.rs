@@ -4,95 +4,64 @@
 #[cfg(all(windows, not(test)))]
 mod native;
 
-use crate::sites::{POSTPROCESS_ENTRY, POSTPROCESS_RVA, WIDGET_QUEUE_ENTRY, WIDGET_QUEUE_RVA};
+use crate::discovery::{self, POSTPROCESS, Site, WIDGET_QUEUE};
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-const RHI_WRITE_RVA: usize = 0x120e67c;
-const RHI_WRITE: &[u8] = &[0x48, 0x89, 0x05, 0xd5, 0x9c, 0xa6, 0x02];
-const CURRENT_COMMAND_RVA: usize = 0x3c78358;
-const VELOCITY_SIZE_RVA: usize = 0x10fdd09;
+/// `comiss xmm3,xmm5; jbe`: the size gate the native renderer's temporal velocity patch opens.
 const VELOCITY_SIZE_NATIVE: &[u8] = b"\x0f\x2f\xdd\x76\x38";
 const VELOCITY_SIZE_PATCHED: &[u8] = b"\x0f\x2f\xdd\x90\x90";
 
 // Order matches the typed Should, Has and History originals in the native capture.
-const ENGINE_SITES: [(usize, &[u8]); 3] = [
-    (
-        0x10fdc00,
-        b"\x40\x53\x48\x83\xec\x20\x4c\x8b\xda\x48\x8b\xd9\x45\x84\xc0",
-    ),
-    (
-        0x1183820,
-        b"\x40\x53\x48\x83\xec\x60\x80\xb9\x34\x0c\x00\x00",
-    ),
-    (
-        0x10ee670,
-        b"\x40\x53\x48\x83\xec\x20\x49\x8b\xd8\x48\x85\xd2\x74\x3a",
-    ),
+const ENGINE_SITES: [Site; 3] = [
+    Site::ShouldRenderVelocity,
+    Site::HasVelocity,
+    Site::VelocityHistory,
 ];
 
+/// A discovered entry and whether the native renderer hooks it itself.
 struct RootSite {
-    rva: usize,
-    expected: &'static [u8],
+    site: usize,
     native_owned: bool,
 }
 
-// Order matches the typed detour and original arrays in motion_capture_trampolines.c. Short stable
-// entry sequences omit the security-cookie displacement. MinHook relocates full instructions.
+// Order matches the typed detour and original arrays in motion_capture_trampolines.c. MinHook
+// relocates full instructions.
 const ROOT_SITES: [RootSite; 6] = [
     RootSite {
-        // Post-process
-        rva: POSTPROCESS_RVA as usize,
-        expected: POSTPROCESS_ENTRY,
+        site: POSTPROCESS,
         native_owned: true,
     },
     RootSite {
-        // Widget prepare
-        rva: 0x4d69a0,
-        expected: &[
-            0x4c, 0x8b, 0xdc, 0x55, 0x48, 0x81, 0xec, 0x10, 0x03, 0x00, 0x00,
-        ],
+        site: Site::PrepareSlateWindow as usize,
         native_owned: false,
     },
     RootSite {
-        // Widget queue
-        rva: WIDGET_QUEUE_RVA as usize,
-        expected: WIDGET_QUEUE_ENTRY.split_at(15).0,
+        site: WIDGET_QUEUE,
         native_owned: true,
     },
     RootSite {
         // Main temporal construction
-        rva: 0xff6ad0,
-        expected: &[
-            0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x7c, 0x24, 0x18, 0x55, 0x41, 0x54, 0x41,
-            0x55, 0x41, 0x56, 0x41, 0x57,
-        ],
+        site: Site::AddTemporalAa as usize,
         native_owned: false,
     },
     RootSite {
         // Main temporal execution
-        rva: 0x10aeca0,
-        expected: &[
-            0x40, 0x55, 0x53, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d,
-            0xac, 0x24, 0xf0, 0xfd, 0xff, 0xff,
-        ],
+        site: Site::TemporalAaProcess as usize,
         native_owned: false,
     },
     RootSite {
         // Recursive graph execution
-        rva: 0x10b3f10,
-        expected: &[
-            0x4c, 0x89, 0x44, 0x24, 0x18, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x53, 0x48, 0x83, 0xec,
-            0x30,
-        ],
+        site: Site::RecursivelyProcess as usize,
         native_owned: false,
     },
 ];
-
 enum RootInstall {
     AlreadyInstalled,
+    /// A site did not resolve; the text names it.
+    Undiscovered(String),
     RhiRefused,
     EntryRefused,
     RolledBack,
@@ -175,7 +144,7 @@ extern "C" fn rsf_ac7_motion_capture_native_owner(enabled: u32) {
 
 impl RootHookEffects {
     fn matches(&self, address: *const u8, expected: &[u8]) -> bool {
-        let mut actual = [0u8; 20];
+        let mut actual = [0u8; 8];
         let actual = &mut actual[..expected.len()];
         // SAFETY: The native leaf guards the source read and writes only the supplied length.
         (unsafe { (self.copy)(actual.as_mut_ptr().cast(), address.cast(), actual.len()) })
@@ -188,27 +157,32 @@ fn install_roots(base: *mut u8, effects: &RootHookEffects) -> RootInstall {
     if let Some(status) = registration.status() {
         return status;
     }
-    if base.is_null() || !effects.matches(base.wrapping_add(RHI_WRITE_RVA), RHI_WRITE) {
+    let sites = ROOT_SITES.iter().map(|root| root.site);
+    let globals = [Site::RhiWrite, Site::CurrentCommand].map(|site| site as usize);
+    if let Err(reason) = discovery::admit(sites.chain(globals)) {
+        return RootInstall::Undiscovered(reason);
+    }
+    if base.is_null() || !discovery::verify(base.addr(), Site::RhiWrite as usize) {
         return RootInstall::RhiRefused;
     }
 
     let native_owner = NATIVE_OWNER.load(Ordering::Acquire);
     let mut targets = [null_mut(); ROOT_SITES.len()];
-    for (target, site) in targets.iter_mut().zip(ROOT_SITES) {
-        if native_owner && site.native_owned {
+    for (target, root) in targets.iter_mut().zip(ROOT_SITES) {
+        if native_owner && root.native_owned {
             continue;
         }
-        let address = base.wrapping_add(site.rva);
-        if !effects.matches(address, site.expected) {
+        if !discovery::verify(base.addr(), root.site) {
             return RootInstall::EntryRefused;
         }
-        *target = address.cast();
+        *target = base.wrapping_add(discovery::rva(root.site)).cast();
     }
 
     let result = registration.install(targets, effects);
     if registration.installed {
         CURRENT_COMMAND.store(
-            base.wrapping_add(CURRENT_COMMAND_RVA).cast(),
+            base.wrapping_add(discovery::rva(Site::CurrentCommand as usize))
+                .cast(),
             Ordering::Release,
         );
     }
@@ -227,7 +201,11 @@ fn install_engine(base: *mut u8, effects: &RootHookEffects) -> RootInstall {
     if let Some(status) = engine.status() {
         return status;
     }
-    let size = base.wrapping_add(VELOCITY_SIZE_RVA);
+    let sites = ENGINE_SITES.map(|site| site as usize);
+    if let Err(reason) = discovery::admit(sites.into_iter().chain([Site::VelocitySize as usize])) {
+        return RootInstall::Undiscovered(reason);
+    }
+    let size = base.wrapping_add(discovery::rva(Site::VelocitySize as usize));
     if base.is_null()
         || !(effects.matches(size, VELOCITY_SIZE_NATIVE)
             || (NATIVE_OWNER.load(Ordering::Acquire)
@@ -236,12 +214,11 @@ fn install_engine(base: *mut u8, effects: &RootHookEffects) -> RootInstall {
         return RootInstall::EntryRefused;
     }
     let mut targets = [null_mut(); ENGINE_SITES.len()];
-    for (target, (rva, expected)) in targets.iter_mut().zip(ENGINE_SITES) {
-        let address = base.wrapping_add(rva);
-        if !effects.matches(address, expected) {
+    for (target, site) in targets.iter_mut().zip(sites) {
+        if !discovery::verify(base.addr(), site) {
             return RootInstall::EntryRefused;
         }
-        *target = address.cast();
+        *target = base.wrapping_add(discovery::rva(site)).cast();
     }
     engine.install(targets, effects)
 }

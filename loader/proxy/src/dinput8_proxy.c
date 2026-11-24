@@ -638,6 +638,8 @@ static int prepare_native_game(void)
     rsf_game_probe probe = {0};
     probe.struct_size = sizeof(probe);
     if (!rsf_ac7_carrier_probe(&probe, sha256)) return 0;
+    // Evidence only: the adapter recognizes the executable by name and discovers its sites.
+    note("executable SHA-256 %s", sha256);
     return rsf_bridge_prepare_game(path, &probe, observer_note, NULL);
 }
 static int accept_ac7_window(void* user, void* window)
@@ -647,8 +649,8 @@ static int accept_ac7_window(void* user, void* window)
     GetWindowThreadProcessId((HWND)window, &process);
     if (process != GetCurrentProcessId() || !GetClassNameW((HWND)window, name, 64) ||
         wcscmp(name, rsf_ac7_carrier_window_class()) != 0) return 0;
-    // Native preparation checks decrypted hook bytes and the executable fingerprint before
-    // the cold presentation host creates any D3D12 objects. A refusal keeps the original chain.
+    // Native preparation discovers and checks its sites in the decrypted image before the cold
+    // presentation host creates any D3D12 objects. A refusal keeps the original chain.
     return prepare_native_game();
 }
 static void fg_latency_event(void* user, const rsf_observer_present_event* event)

@@ -37,6 +37,10 @@ extern "C" fn rsf_ac7_motion_capture_install() -> i32 {
     let root = install_roots(base, &ROOT_EFFECTS);
     let message = match root {
         RootInstall::AlreadyInstalled => None,
+        RootInstall::Undiscovered(reason) => {
+            refused("renderer root capture refused: ", &reason);
+            None
+        }
         RootInstall::RhiRefused => Some(c"renderer root capture refused: RHI current-command write differs"),
         RootInstall::EntryRefused => Some(c"renderer root capture refused: expected AC7 entry bytes differ"),
         RootInstall::RolledBack => Some(c"renderer root capture failed and was rolled back"),
@@ -48,6 +52,10 @@ extern "C" fn rsf_ac7_motion_capture_install() -> i32 {
     }
     let (installed, message) = match install_engine(base, &ENGINE_EFFECTS) {
         RootInstall::AlreadyInstalled => return 1,
+        RootInstall::Undiscovered(reason) => {
+            refused("motion capture engine hooks refused: ", &reason);
+            return 0;
+        }
         RootInstall::RhiRefused | RootInstall::EntryRefused => (
             0,
             c"motion capture engine hooks refused: expected AC7 bytes differ",
@@ -64,6 +72,13 @@ extern "C" fn rsf_ac7_motion_capture_install() -> i32 {
     };
     say(message);
     installed
+}
+
+/// Logs a refusal that names the undiscovered site.
+fn refused(prefix: &str, reason: &str) {
+    if let Ok(text) = std::ffi::CString::new(format!("{prefix}{reason}")) {
+        say(&text);
+    }
 }
 
 #[unsafe(no_mangle)]

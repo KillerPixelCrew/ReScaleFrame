@@ -20,7 +20,7 @@ extern "C" {
 // The pixel uniform bind evidence hooks, inclusive. They are installed only with diagnostics.
 #define RSF_AC7_EVIDENCE_FIRST 38u
 #define RSF_AC7_EVIDENCE_LAST 43u
-// Bytes compared at each entry and helper site.
+// Capacity of a code patch record's byte arrays.
 #define RSF_AC7_SITE_BYTES 16u
 #define RSF_AC7_VELOCITY_PATCHES 3u
 
