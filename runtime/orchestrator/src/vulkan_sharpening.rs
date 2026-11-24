@@ -11,7 +11,7 @@ use crate::sys::rsf_sharpening_options as Options;
 
 use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup};
 use crate::vulkan_fg_resources::Image as OwnedImage;
-use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
+use crate::vulkan_fg_resources::{ensure_image, release_image};
 use crate::vulkan_sr::{R32_FLOAT, RGBA16_FLOAT, SHADER_READ, STORAGE_USAGE, TRANSFER_SRC_USAGE};
 use std::ffi::{c_char, c_void};
 use std::ptr;
@@ -159,7 +159,7 @@ fn release_views(leaf: *mut c_void, views: &mut [u64; 4]) {
 fn release_slot(leaf: *mut c_void, slot: &mut Slot) {
     release_views(leaf, &mut slot.views);
     let user = unsafe { leaf::image_user(leaf) };
-    rsf_core_vkfg_release_image(leaf::images(), user, &mut slot.scratch);
+    release_image(leaf::images(), user, &mut slot.scratch);
     unsafe { leaf::release_uniform(leaf, &mut slot.uniform) };
     *slot = Slot::default();
 }

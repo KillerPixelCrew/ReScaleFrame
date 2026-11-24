@@ -16,7 +16,7 @@ use crate::vulkan_fg_frames::Timeline as RecordingTimeline;
 use crate::vulkan_fg_frames::*;
 use crate::vulkan_fg_resources::Image as OwnedImage;
 use crate::vulkan_fg_resources::Platform as ImageOps;
-use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
+use crate::vulkan_fg_resources::{ensure_image, release_image};
 use crate::vulkan_sr::{SAMPLED_USAGE, TRANSFER_SRC_USAGE, valid_image};
 use ash::vk;
 use rsf_game_sys::{
@@ -1097,7 +1097,7 @@ impl Presentation {
         }
         if !self.vk.is_null() {
             for buffer in &mut self.buffers {
-                rsf_core_vkfg_release_image(unsafe { &*ops.images }, self.vk, &mut buffer.image);
+                release_image(unsafe { &*ops.images }, self.vk, &mut buffer.image);
             }
         }
         for slot in &mut self.slots {

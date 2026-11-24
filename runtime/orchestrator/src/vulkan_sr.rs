@@ -9,9 +9,7 @@ use crate::vulkan_dispatch::promoted_device_proc_alias;
 use crate::vulkan_fg_copy::{Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED};
 use crate::vulkan_fg_resources::Image as OwnedImage;
 use crate::vulkan_fg_resources::Platform as ImageOps;
-use crate::vulkan_fg_resources::{
-    MemoryChoice, ensure_image_with_memory, rsf_core_vkfg_release_image,
-};
+use crate::vulkan_fg_resources::{MemoryChoice, ensure_image_with_memory, release_image};
 use crate::vulkan_sr_split::normalize_frame;
 use ash::vk;
 use rsf_game_sys::backend_result::{
@@ -846,7 +844,7 @@ impl Drop for FidelityFx {
             if self.output.image != 0 || self.zero_mask.image != 0 {
                 let user = (self.ops.image_user)(self.handle);
                 for image in [&mut self.output, &mut self.zero_mask] {
-                    rsf_core_vkfg_release_image(self.ops.images, user, image);
+                    release_image(self.ops.images, user, image);
                 }
             }
             (self.ops.close)(self.handle);

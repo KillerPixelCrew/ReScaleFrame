@@ -13,7 +13,7 @@ use super::{
 };
 use crate::sys::{RSF_FGVK_ABI_VERSION, rsf_fgvk_frame, rsf_fgvk_status, rsf_srvk_image};
 use crate::vulkan_fg_resources::Image as rsf_vkfg_image;
-use crate::vulkan_fg_resources::{rsf_core_vkfg_ensure_image, rsf_core_vkfg_release_image};
+use crate::vulkan_fg_resources::{SAMPLED_TRANSFER, ensure_image, release_image};
 use ash::vk::{self, Handle};
 use rsf_game_sys::backend_result::{
     FEATURE_FAILED as FIXTURE_FEATURE_FAILED, INVALID_ARGUMENT as FIXTURE_INVALID_ARGUMENT,
@@ -336,29 +336,31 @@ fn submission() {
         let gpu = rsf_fixture_ffx_gpu();
         let mut cached = rsf_vkfg_image::default();
         assert!(
-            rsf_core_vkfg_ensure_image(
+            ensure_image(
                 rsf_fixture_ffx_platform(),
                 gpu,
                 &mut cached,
-                640,
-                360,
+                [640, 360],
                 RGBA8,
-                0
-            ) != 0,
+                SAMPLED_TRANSFER,
+                false
+            )
+            .is_ok(),
             "initial private image is fully bound"
         );
         let initial = cached.image;
         f!(reject_bind) = true;
         assert!(
-            rsf_core_vkfg_ensure_image(
+            ensure_image(
                 rsf_fixture_ffx_platform(),
                 gpu,
                 &mut cached,
-                1280,
-                720,
+                [1280, 720],
                 RGBA8,
-                0
-            ) == 0
+                SAMPLED_TRANSFER,
+                false
+            )
+            .is_err()
                 && cached.image == initial
                 && cached.width == 640
                 && f!(destroyed_images) == 1
@@ -366,7 +368,7 @@ fn submission() {
             "failed private image replacement rolls back without touching the committed cache"
         );
         f!(reject_bind) = false;
-        rsf_core_vkfg_release_image(rsf_fixture_ffx_platform(), gpu, &mut cached);
+        release_image(rsf_fixture_ffx_platform(), gpu, &mut cached);
         f!(destroyed_images) = 0;
         f!(freed_memories) = 0;
 

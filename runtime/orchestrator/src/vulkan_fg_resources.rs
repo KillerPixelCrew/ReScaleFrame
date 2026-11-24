@@ -62,15 +62,11 @@ struct Replacement<'a> {
 
 impl Drop for Replacement<'_> {
     fn drop(&mut self) {
-        rsf_core_vkfg_release_image(self.platform, self.user, &mut self.image);
+        release_image(self.platform, self.user, &mut self.image);
     }
 }
 
-pub(super) extern "C" fn rsf_core_vkfg_release_image(
-    platform: &Platform,
-    user: *mut c_void,
-    image: &mut Image,
-) {
+pub(super) fn release_image(platform: &Platform, user: *mut c_void, image: &mut Image) {
     unsafe {
         if image.view != 0 {
             (platform.destroy_view.unwrap())(user, image.view);
@@ -83,51 +79,6 @@ pub(super) extern "C" fn rsf_core_vkfg_release_image(
         }
     }
     *image = Image::default();
-}
-
-pub(super) extern "C" fn rsf_core_vkfg_ensure_image(
-    platform: &Platform,
-    user: *mut c_void,
-    current: &mut Image,
-    width: u32,
-    height: u32,
-    format: u32,
-    with_view: u32,
-) -> u32 {
-    rsf_core_vkfg_ensure_image_usage(
-        platform,
-        user,
-        current,
-        width,
-        height,
-        format,
-        SAMPLED_TRANSFER,
-        with_view,
-    )
-}
-
-pub(crate) extern "C" fn rsf_core_vkfg_ensure_image_usage(
-    platform: &Platform,
-    user: *mut c_void,
-    current: &mut Image,
-    width: u32,
-    height: u32,
-    format: u32,
-    usage: u32,
-    with_view: u32,
-) -> u32 {
-    u32::from(
-        ensure_image(
-            platform,
-            user,
-            current,
-            [width, height],
-            format,
-            usage,
-            with_view != 0,
-        )
-        .is_ok(),
-    )
 }
 
 pub(super) fn ensure_image(
@@ -249,7 +200,7 @@ fn wait_pending(platform: &Platform, user: *mut c_void, fence: u64, pending: boo
             && unsafe { (platform.wait_fence.unwrap())(user, fence, FENCE_TIMEOUT_NS) } == 0)
 }
 
-pub(super) extern "C" fn rsf_core_vkfg_prepare_fences(
+pub(super) fn prepare_fences(
     platform: &Platform,
     user: *mut c_void,
     slot: &mut Slot,
@@ -279,14 +230,14 @@ pub(super) extern "C" fn rsf_core_vkfg_prepare_fences(
     0
 }
 
-pub(super) extern "C" fn rsf_core_vkfg_fence_submission(
+pub(super) fn fence_submission(
     platform: &Platform,
     user: *mut c_void,
     slot: &mut Slot,
     fences: &Fences,
-    consumer: u32,
+    consumer: bool,
 ) {
-    let (fence, pending) = if consumer != 0 {
+    let (fence, pending) = if consumer {
         (fences.consumer, &mut slot.consumer_pending)
     } else {
         (fences.source, &mut slot.source_pending)
@@ -304,11 +255,7 @@ pub(super) extern "C" fn rsf_core_vkfg_fence_submission(
     }
 }
 
-pub(super) extern "C" fn rsf_core_vkfg_release_fences(
-    platform: &Platform,
-    user: *mut c_void,
-    fences: &mut Fences,
-) {
+pub(super) fn release_fences(platform: &Platform, user: *mut c_void, fences: &mut Fences) {
     for fence in [fences.source, fences.consumer] {
         if fence != 0 {
             unsafe { (platform.destroy_fence.unwrap())(user, fence) };

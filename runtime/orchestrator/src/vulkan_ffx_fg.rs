@@ -28,8 +28,7 @@ use crate::vulkan_fg_frames::*;
 use crate::vulkan_fg_resources::Fences;
 use crate::vulkan_fg_resources::Image as PrivateImage;
 use crate::vulkan_fg_resources::{
-    rsf_core_vkfg_ensure_image, rsf_core_vkfg_fence_submission, rsf_core_vkfg_prepare_fences,
-    rsf_core_vkfg_release_fences, rsf_core_vkfg_release_image,
+    SAMPLED_TRANSFER, ensure_image, fence_submission, prepare_fences, release_fences, release_image,
 };
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record as Record;
@@ -430,7 +429,7 @@ impl Owner {
             return NOT_READY;
         }
         unsafe { leaf::fence_timing(self.native, record.frame_id) };
-        let fences = rsf_core_vkfg_prepare_fences(
+        let fences = prepare_fences(
             leaf::resources(),
             self.resources,
             &mut slot.state,
@@ -479,15 +478,16 @@ impl Owner {
         {
             return INVALID_ARGUMENT;
         }
-        if rsf_core_vkfg_ensure_image(
+        if ensure_image(
             leaf::resources(),
             self.resources,
             &mut slot.color,
-            width,
-            height,
+            [width, height],
             RGBA8,
-            0,
-        ) == 0
+            SAMPLED_TRANSFER,
+            false,
+        )
+        .is_err()
         {
             return INIT_FAILED;
         }
@@ -529,12 +529,12 @@ impl Owner {
                 slot.color.initialized = 0;
             }
             if plan.fences & bit != 0 {
-                rsf_core_vkfg_fence_submission(
+                fence_submission(
                     leaf::resources(),
                     self.resources,
                     &mut slot.state,
                     &slot.fences,
-                    0,
+                    false,
                 );
             }
         }
@@ -607,12 +607,12 @@ impl Owner {
             // interpolation reading this HUD-less copy, then returns the result
             // of an earlier asynchronous present. Every configured source needs
             // its consumer fence, whatever that result is.
-            rsf_core_vkfg_fence_submission(
+            fence_submission(
                 leaf::resources(),
                 self.resources,
                 &mut slot.state,
                 &slot.fences,
-                1,
+                true,
             );
         }
         self.timeline.presented(&slot.state, source_frame, identity);
@@ -720,8 +720,8 @@ impl Owner {
             self.wsi_registered = false;
         }
         for slot in &mut self.slots {
-            rsf_core_vkfg_release_image(leaf::resources(), self.resources, &mut slot.color);
-            rsf_core_vkfg_release_fences(leaf::resources(), self.resources, &mut slot.fences);
+            release_image(leaf::resources(), self.resources, &mut slot.color);
+            release_fences(leaf::resources(), self.resources, &mut slot.fences);
         }
         // Keep admission through module unload, after the WSI table no longer points at the host.
         unsafe { leaf::close(native) };

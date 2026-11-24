@@ -22,8 +22,7 @@ use crate::vulkan_fg_resources::Fences;
 use crate::vulkan_fg_resources::Image;
 use crate::vulkan_fg_resources::Platform as Gpu;
 use crate::vulkan_fg_resources::{
-    rsf_core_vkfg_ensure_image, rsf_core_vkfg_fence_submission, rsf_core_vkfg_prepare_fences,
-    rsf_core_vkfg_release_fences, rsf_core_vkfg_release_image,
+    SAMPLED_TRANSFER, ensure_image, fence_submission, prepare_fences, release_fences, release_image,
 };
 use crate::vulkan_ownership::Claim;
 use crate::vulkan_streamline_camera::camera_constants;
@@ -142,9 +141,9 @@ impl Drop for Owner {
         if !self.gpu.is_null() {
             for slot in &mut self.slots {
                 for image in &mut slot.images {
-                    rsf_core_vkfg_release_image(self.gpu_platform, self.gpu, image);
+                    release_image(self.gpu_platform, self.gpu, image);
                 }
-                rsf_core_vkfg_release_fences(self.gpu_platform, self.gpu, &mut slot.fences);
+                release_fences(self.gpu_platform, self.gpu, &mut slot.fences);
             }
         }
         if self.chain != 0 {
@@ -442,7 +441,7 @@ impl Owner {
             if !slot.frame.can_prepare() || !slot.inputs.retire(self.wsi.as_ref().unwrap()) {
                 return NOT_READY;
             }
-            let result = rsf_core_vkfg_prepare_fences(
+            let result = prepare_fences(
                 self.gpu_platform,
                 self.gpu,
                 &mut slot.frame,
@@ -457,8 +456,16 @@ impl Owner {
                 (rw, rh, RG16F),
                 (width, height, RGBA8),
             ]) {
-                if rsf_core_vkfg_ensure_image(self.gpu_platform, self.gpu, image, w, h, format, 1)
-                    == 0
+                if ensure_image(
+                    self.gpu_platform,
+                    self.gpu,
+                    image,
+                    [w, h],
+                    format,
+                    SAMPLED_TRANSFER,
+                    true,
+                )
+                .is_err()
                 {
                     return INIT_FAILED;
                 }
@@ -551,12 +558,12 @@ impl Owner {
                 }
             }
             if plan.fences & bit != 0 {
-                rsf_core_vkfg_fence_submission(
+                fence_submission(
                     self.gpu_platform,
                     self.gpu,
                     &mut slot.frame,
                     &slot.fences,
-                    0,
+                    false,
                 );
             }
         }
@@ -599,12 +606,12 @@ impl Owner {
         let accepted = matches!(result, OK | SUBOPTIMAL);
         if active && accepted {
             let slot = &mut self.slots[index];
-            rsf_core_vkfg_fence_submission(
+            fence_submission(
                 self.gpu_platform,
                 self.gpu,
                 &mut slot.frame,
                 &slot.fences,
-                1,
+                true,
             );
         }
         let (state, sample) = self.sample();

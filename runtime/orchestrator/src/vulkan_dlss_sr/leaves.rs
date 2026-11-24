@@ -15,7 +15,7 @@ use crate::vulkan_fg_resources::device::{
     DEVICE_PLATFORM, Device, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory,
     rsf_core_vkfg_load_device,
 };
-use crate::vulkan_fg_resources::{rsf_core_vkfg_ensure_image_usage, rsf_core_vkfg_release_image};
+use crate::vulkan_fg_resources::{ensure_image, release_image};
 use crate::vulkan_sharpening::Host as Sharpen;
 use crate::vulkan_sharpening::{
     rsf_sharpenvk_host_clear, rsf_sharpenvk_host_destroy, rsf_sharpenvk_host_retire,
@@ -197,21 +197,23 @@ unsafe extern "C" fn rsf_core_vkdlss_sdk_allocate(
     usage: u32,
 ) -> u32 {
     let gpu = native(handle).gpu;
-    rsf_core_vkfg_ensure_image_usage(
-        &DEVICE_PLATFORM,
-        gpu.cast(),
-        unsafe { &mut *image },
-        width,
-        height,
-        format,
-        usage,
-        1,
+    u32::from(
+        ensure_image(
+            &DEVICE_PLATFORM,
+            gpu.cast(),
+            unsafe { &mut *image },
+            [width, height],
+            format,
+            usage,
+            true,
+        )
+        .is_ok(),
     )
 }
 
 unsafe extern "C" fn rsf_core_vkdlss_sdk_free_image(handle: *mut c_void, image: *mut Image) {
     let gpu = native(handle).gpu;
-    rsf_core_vkfg_release_image(&DEVICE_PLATFORM, gpu.cast(), unsafe { &mut *image });
+    release_image(&DEVICE_PLATFORM, gpu.cast(), unsafe { &mut *image });
 }
 
 unsafe extern "C" fn rsf_core_vkdlss_sdk_constants(

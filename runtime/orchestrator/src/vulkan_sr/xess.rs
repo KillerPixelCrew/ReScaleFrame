@@ -11,7 +11,7 @@ use crate::vulkan_fg_copy::{
 };
 use crate::vulkan_fg_resources::Image as OwnedImage;
 use crate::vulkan_fg_resources::Platform as ImageOps;
-use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
+use crate::vulkan_fg_resources::{ensure_image, release_image};
 use rsf_game_sys::backend_result::{FEATURE_FAILED, LOAD_FAILED, MISSING_ENTRY_POINT};
 use std::ffi::CString;
 use std::sync::{Arc, PoisonError};
@@ -613,7 +613,7 @@ impl Drop for XessOwner {
                 &mut self.motion,
                 &mut self.output,
             ] {
-                rsf_core_vkfg_release_image(ops.images, image_user, image);
+                release_image(ops.images, image_user, image);
             }
             (ops.close)(self.native);
         }
