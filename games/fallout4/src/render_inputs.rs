@@ -9,13 +9,14 @@
 mod native;
 
 use crate::build_layout::{
-    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_OBJECT, RENDERER_POINTER,
-    RENDERER_WINDOW,
+    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_WINDOW, renderer_object,
+    renderer_pointer,
 };
 use crate::camera::{self, CameraRaster, NativeCamera};
 use crate::creation;
 use crate::d3d11::same_native;
 use crate::depth_domains::{self, Snapshot};
+use crate::discovery::{self, CALL, Site, address, rva};
 use crate::sys::{
     NativeFramebufferReceipt as FramebufferReceipt, NativeInputHistoryReceipt as HistoryReceipt,
     NativeInputReceipt as Receipt, NativeInputResourceFacts as ResourceFacts,
@@ -27,7 +28,7 @@ use crate::sys::{
     native_input_pipboy as SLOT_PIPBOY, native_input_refraction_normals as SLOT_REFRACTION_NORMALS,
     native_input_vats as SLOT_VATS,
 };
-use crate::{Plain, bits, guard, image, load, read, same_object};
+use crate::{Plain, bits, image, load, read, same_object};
 use rsf_game_sys::RSF_SCREEN_UNKNOWN;
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_game_render_pass,
@@ -41,13 +42,6 @@ use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 type Flat = [f32; 16];
 pub(crate) type Report = Option<ReportFn>;
 type ReportFn = unsafe extern "C" fn(*const c_char);
-
-const STATE_RVA: usize = 0x3d871a0;
-const TARGETS_RVA: usize = 0x2f4d750;
-const WORLD_GRAPH_POINTER: usize = 0x32dd338;
-const DELTA_RVA: usize = 0x339f430;
-/// The guarded SR call site the raster pass is keyed by.
-const RASTER_PASS_RVA: usize = 0x21fa283;
 
 // Enumerators compared by value; render_inputs.c asserts each against the SDK headers.
 const DXGI_FORMAT_R11G11B10_FLOAT: u32 = 26;
@@ -293,7 +287,7 @@ fn depth_at(renderer: usize, slot: u32) -> usize {
 
 /// The platform slots of the logical colour, motion and depth targets, bounds-checked.
 fn slot_maps() -> Option<[u32; 3]> {
-    let targets = image().wrapping_add(TARGETS_RVA);
+    let targets = address(Site::Targets);
     let slot = |offset: usize, limit: u32| {
         read::<u32>(targets.wrapping_add(offset)).filter(|&slot| slot < limit)
     };
@@ -306,7 +300,7 @@ fn slot_maps() -> Option<[u32; 3]> {
 
 /// The logical-to-platform colour map entry for `logical`.
 fn colour_map(logical: u32) -> usize {
-    image().wrapping_add(TARGETS_RVA + 0xdf4 + logical as usize * 4)
+    address(Site::Targets).wrapping_add(0xdf4 + logical as usize * 4)
 }
 
 /// The fields `owner()` reads.
@@ -357,9 +351,9 @@ fn close_matrix(a: &Flat, b: &Flat) -> bool {
 /// The renderer owner, device, context, window, chain, native frame and output size.
 fn owner(out: &mut State) -> Result<(), Stage> {
     let base = image();
-    let graphics = base.wrapping_add(STATE_RVA);
-    if !load(base.wrapping_add(RENDERER_POINTER), &mut out.renderer)
-        || out.renderer != base.wrapping_add(RENDERER_OBJECT)
+    let graphics = base.wrapping_add(rva(Site::State));
+    if !load(renderer_pointer(base), &mut out.renderer)
+        || out.renderer != renderer_object(base)
         || !load(out.renderer.wrapping_add(RENDERER_DEVICE), &mut out.device)
         || out.device == 0
         || !load(
@@ -391,17 +385,17 @@ fn owner(out: &mut State) -> Result<(), Stage> {
 /// colour, motion and depth slot maps.
 fn state(out: &mut State) -> Result<(), Stage> {
     let base = image();
-    let graphics = base.wrapping_add(STATE_RVA);
-    let targets = base.wrapping_add(TARGETS_RVA);
+    let graphics = base.wrapping_add(rva(Site::State));
+    let targets = base.wrapping_add(rva(Site::Targets));
     let mut graph = 0usize;
     owner(out)?;
-    if !load(base.wrapping_add(DELTA_RVA), &mut out.delta_seconds)
+    if !load(base.wrapping_add(rva(Site::Delta)), &mut out.delta_seconds)
         || !out.delta_seconds.is_finite()
         || out.delta_seconds < 0.0
     {
         return Err(Stage::Delta);
     }
-    if !load(base.wrapping_add(WORLD_GRAPH_POINTER), &mut graph)
+    if !load(base.wrapping_add(rva(Site::WorldGraph)), &mut graph)
         || graph == 0
         || !load(graph.wrapping_add(0x140), &mut out.camera)
         || out.camera == 0
@@ -494,7 +488,7 @@ fn read_camera(entry: usize, out: &mut NativeCamera) -> bool {
         )
         && load(entry.wrapping_add(0x210), &mut out.position_adjust)
         && load(entry.wrapping_add(0x228), &mut out.previous_position_adjust)
-        && load(image().wrapping_add(STATE_RVA + 4), &mut out.jitter_ndc)
+        && load(address(Site::State).wrapping_add(4), &mut out.jitter_ndc)
 }
 
 /// The facts of one shader-resource view whose texture the lease holds in `slot`. `format` None
@@ -652,7 +646,7 @@ impl Reading {
     fn new() -> Self {
         Self {
             receipt: Receipt {
-                expected_renderer: image().wrapping_add(RENDERER_OBJECT) as u64,
+                expected_renderer: renderer_object(image()) as u64,
                 ..Receipt::default()
             },
             after: State::default(),
@@ -683,44 +677,28 @@ fn receipt(report: Report, stage: Stage, reading: &mut Reading) {
     };
 }
 
+/// The renderer initialisation, the graphics state, dynamic-resolution slot and viewport reads,
+/// the camera cache key and builder scale, the native frame and delta reads, the jitter store
+/// and scale, the viewport selector test, the shadow writer and the render target bind.
 pub(crate) fn verify() -> bool {
     VERIFIED.store(false, Ordering::Release);
-    let okay = guard(0x18a246, b"\x48\x8d\x1d\xc3\xba\x89\x03")
-        && guard(0x18a28c, b"\x48\x89\x1d\x0d\x71\x75\x03")
-        && guard(
-            0xc37dd0,
-            b"\x48\x8b\x05\x61\x55\x6a\x02\x48\x8b\x80\x40\x01\x00\x00\xc3",
-        )
-        && guard(0x21f0e3d, b"\x48\x8d\x0d\x5c\x63\xb9\x01")
-        && guard(0x1839be2, b"\x8b\xb4\x81\xf4\x0d\x00\x00")
-        && guard(0x1839cbb, b"\x8b\x8c\x81\x84\x0f\x00\x00")
-        && guard(
-            0x183a4a0,
-            b"\x48\x63\x8c\x81\x84\x0f\x00\x00\x48\x69\xc1\x98\x00\x00\x00",
-        )
-        && guard(
-            0x182bf4a,
-            b"\x48\x8d\xb1\x40\x01\x00\x00\x8b\x46\x10\x85\xc0\x74\x39",
-        )
-        && guard(
-            0x182bf6a,
-            b"\x49\x39\xb8\x38\x02\x00\x00\x75\x09\x41\x38\x98\x40\x02\x00\x00\x74\x09",
-        )
-        && guard(
-            0x182da63,
-            b"\xf3\x41\x0f\x59\x5e\x04\x0f\x57\xc0\xf3\x41\x0f\x59\x56\x08",
-        )
-        && guard(0x182e226, b"\x8b\x05\x0c\x90\x55\x02")
-        && guard(0xc33a60, b"\x48\x8d\x0d\xb9\xb9\x76\x02")
-        && guard(0x165ba9f, b"\xf3\x41\x0f\x11\x50\x10")
-        && guard(0x165bab0, b"\xf3\x41\x0f\x11\x40\x14")
-        && guard(0x165baba, b"\xf3\x0f\x59\x05\x76\xff\x8e\x01")
-        && guard(0x165bac6, b"\xf3\x41\x0f\x11\x40\x10")
-        && guard(0x29293f8, b"\x6f\x12\x83\x3a")
-        && guard(0x1839e34, b"\x80\xb9\xe4\x0f\x00\x00\x00")
-        && guard(0x1817fd1, b"\xf3\x0f\x59\x81\xd0\x06\x00\x00")
-        && guard(0x182430d, b"\x4c\x8d\x87\x90\x00\x00\x00")
-        && guard(0x182431c, b"\xff\x90\x60\x01\x00\x00");
+    let okay = discovery::verify_all(&[
+        Site::RendererInit,
+        Site::WorldGraph,
+        Site::WorldRanges,
+        Site::DrSelect,
+        Site::DrIndex,
+        Site::DrViewport,
+        Site::CameraRead,
+        Site::BuilderScale,
+        Site::FrameRead,
+        Site::DeltaRead,
+        Site::JitterStore,
+        Site::JitterScale,
+        Site::DrEntry,
+        Site::ShadowWriter,
+        Site::TargetBind,
+    ]);
     VERIFIED.store(okay, Ordering::Release);
     okay
 }
@@ -1157,7 +1135,7 @@ fn raster_pass(
         || frame.native_frame != u64::from(before.frame)
         || frame.window_key != before.window as u64
         || frame.swapchain as usize != before.chain
-        || !load(base.wrapping_add(WORLD_GRAPH_POINTER), &mut graph)
+        || !load(base.wrapping_add(rva(Site::WorldGraph)), &mut graph)
         || graph == 0
         || !load(graph.wrapping_add(0x140), &mut view)
         || view != frame.view_key
@@ -1219,7 +1197,10 @@ fn raster_pass(
     let (mut confirmed_graph, mut confirmed_view) = (0usize, 0u64);
     if owner(&mut after).is_err()
         || !same_native_owner(&before, &after)
-        || !load(base.wrapping_add(WORLD_GRAPH_POINTER), &mut confirmed_graph)
+        || !load(
+            base.wrapping_add(rva(Site::WorldGraph)),
+            &mut confirmed_graph,
+        )
         || confirmed_graph != graph
         || !load(graph.wrapping_add(0x140), &mut confirmed_view)
         || confirmed_view != view
@@ -1235,7 +1216,7 @@ fn raster_pass(
     }
     let mut pass = *frame;
     pass.role = RSF_GAME_RENDER_SR;
-    pass.pass_key = base.wrapping_add(RASTER_PASS_RVA) as u64;
+    pass.pass_key = (base + rva(Site::EffectsCall) - CALL) as u64;
     pass.flags |= RSF_GAME_RENDER_NO_FG;
     pass.screen = RSF_SCREEN_UNKNOWN;
     // SAFETY: both SDK records hold only integers and floats.

@@ -16,17 +16,18 @@
 mod native;
 
 use crate::build_layout::{
-    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_OBJECT, RENDERER_POINTER,
-    RENDERER_WINDOW,
+    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_WINDOW, renderer_object,
+    renderer_pointer,
 };
 use crate::camera::xm::{self, Matrix};
 use crate::camera::{self, CameraDepthBound, CameraRaster, above};
 use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::d3d11::same_native;
+use crate::discovery::{self, Site, address, rva};
 use crate::sys::rsf_fallout4_cpu_identity;
 pub(crate) use crate::sys::{NativeDepthCamera as DepthCamera, NativeDepthSnapshot as Snapshot};
 use crate::sys::{NativeDepthMaps as Maps, NativeDepthMathFailure as MathFailure};
-use crate::{bits, guard, image, load, same_object};
+use crate::{bits, image, load, same_object};
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR,
@@ -39,9 +40,6 @@ type Flat = [f32; 16];
 type Identity = rsf_fallout4_cpu_identity;
 type Report = Option<ReportFn>;
 type ReportFn = unsafe extern "C" fn(*const c_char);
-
-const GRAPHICS_RVA: usize = 0x3d871a0;
-const TARGETS_RVA: usize = 0x2f4d750;
 
 // Enumerators compared by value; depth_domains.c asserts each against the SDK headers.
 const DXGI_FORMAT_R24G8_TYPELESS: u32 = 44;
@@ -376,8 +374,8 @@ fn valid_camera(value: &DepthCamera) -> bool {
 /// The renderer owner's device, immediate context, window and chain; the immediate context must be
 /// the one the thread-local render context names.
 fn read_renderer(base: usize, tls_device_context: usize, out: &mut Snapshot) -> bool {
-    load(base.wrapping_add(RENDERER_POINTER), &mut out.renderer_key)
-        && out.renderer_key == base.wrapping_add(RENDERER_OBJECT) as u64
+    load(renderer_pointer(base), &mut out.renderer_key)
+        && out.renderer_key == renderer_object(base) as u64
         && load(at(out.renderer_key, RENDERER_DEVICE), &mut out.device_key)
         && out.device_key != 0
         && load(
@@ -405,8 +403,8 @@ fn read_depth_keys(out: &mut Snapshot) -> bool {
 /// three unique camera cache entries.
 fn sample(cpu: &Identity, out: &mut Snapshot, stage: &mut Stage) -> bool {
     let base = image();
-    let state = base.wrapping_add(GRAPHICS_RVA);
-    let targets = base.wrapping_add(TARGETS_RVA);
+    let state = base.wrapping_add(rva(Site::State));
+    let targets = base.wrapping_add(rva(Site::Targets));
     out.identity = *cpu;
     let mut graph_camera = 0u64;
     *stage = Stage::Tls;
@@ -459,12 +457,24 @@ fn sample(cpu: &Identity, out: &mut Snapshot, stage: &mut Stage) -> bool {
         return false;
     }
     *stage = Stage::Range;
-    if !load(base.wrapping_add(0x3e62250), &mut out.mode)
+    if !load(base.wrapping_add(rva(Site::DepthMode)), &mut out.mode)
         || out.mode != 0
-        || !load(base.wrapping_add(0x3e62190), &mut out.intervals[0])
-        || !load(base.wrapping_add(0x2f97b30), &mut out.intervals[1])
-        || !load(base.wrapping_add(0x3e62194), &mut out.intervals[2])
-        || !load(base.wrapping_add(0x2f97b34), &mut out.intervals[3])
+        || !load(
+            base.wrapping_add(rva(Site::NearInterval)),
+            &mut out.intervals[0],
+        )
+        || !load(
+            base.wrapping_add(rva(Site::WorldInterval)),
+            &mut out.intervals[1],
+        )
+        || !load(
+            base.wrapping_add(rva(Site::NearInterval) + 4),
+            &mut out.intervals[2],
+        )
+        || !load(
+            base.wrapping_add(rva(Site::WorldInterval) + 4),
+            &mut out.intervals[3],
+        )
     {
         return false;
     }
@@ -477,11 +487,16 @@ fn sample(cpu: &Identity, out: &mut Snapshot, stage: &mut Stage) -> bool {
         return false;
     }
     *stage = Stage::CameraOwner;
-    if !load(base.wrapping_add(0x3e622d0), &mut out.near_camera_key)
-        || out.near_camera_key == 0
-        || !load(base.wrapping_add(0x3e62210), &mut out.world_camera_key)
+    if !load(
+        base.wrapping_add(rva(Site::NearCamera)),
+        &mut out.near_camera_key,
+    ) || out.near_camera_key == 0
+        || !load(
+            base.wrapping_add(rva(Site::WorldCamera)),
+            &mut out.world_camera_key,
+        )
         || out.world_camera_key == 0
-        || !load(base.wrapping_add(0x32dd338), &mut out.graph_key)
+        || !load(base.wrapping_add(rva(Site::WorldGraph)), &mut out.graph_key)
         || out.graph_key == 0
         || !load(at(out.graph_key, 0x140), &mut graph_camera)
         || graph_camera != out.world_camera_key
@@ -744,7 +759,7 @@ fn producer_raster(s: &mut Snapshot, stage: &mut Stage, temporal: bool) -> bool 
         return false;
     }
     let shadow = at(s.context_key, 0x1b70);
-    let targets = image().wrapping_add(TARGETS_RVA);
+    let targets = address(Site::Targets);
     *stage = Stage::ProducerSelector;
     let mut cube = 0u32;
     if !load(shadow, &mut s.shadow_dirty)
@@ -902,15 +917,20 @@ fn producer_raster(s: &mut Snapshot, stage: &mut Stage, temporal: bool) -> bool 
 /// sample-validity predicate is admitted through this boundary.
 fn raster_owner(cpu: &Identity, out: &mut Snapshot) -> bool {
     let base = image();
-    let state = base.wrapping_add(GRAPHICS_RVA);
-    let targets = base.wrapping_add(TARGETS_RVA);
+    let state = base.wrapping_add(rva(Site::State));
+    let targets = base.wrapping_add(rva(Site::Targets));
     out.identity = *cpu;
     let mut frame = 0u32;
     let Some((context, Some(tls_device))) = crate::build_layout::render_context(base, true) else {
         return false;
     };
     out.context_key = context as u64;
-    if out.context_key == 0 && !load(base.wrapping_add(0x38e1398), &mut out.context_key) {
+    if out.context_key == 0
+        && !load(
+            base.wrapping_add(rva(Site::RenderContext)),
+            &mut out.context_key,
+        )
+    {
         return false;
     }
     if out.context_key == 0
@@ -922,7 +942,7 @@ fn raster_owner(cpu: &Identity, out: &mut Snapshot) -> bool {
         || out.height == 0
         || out.width > 16384
         || out.height > 16384
-        || !load(base.wrapping_add(0x32dd338), &mut out.graph_key)
+        || !load(base.wrapping_add(rva(Site::WorldGraph)), &mut out.graph_key)
         || out.graph_key == 0
         || !load(at(out.graph_key, 0x140), &mut out.world_camera_key)
         || out.world_camera_key == 0
@@ -997,91 +1017,32 @@ fn same_raster(a: &Snapshot, b: &Snapshot) -> bool {
         && keys(a) == keys(b)
 }
 
-/// Checks the expected bytes of every native site the snapshot depends on.
+/// Checks the expected bytes of every native site the snapshot depends on: the prepass with its
+/// camera update and render-context reads, the camera cache reads and the cache entry key, the
+/// camera builder's viewport, owner and slot writes, the depth camera matrices, the world depth
+/// ranges, the dynamic-resolution slots, selection, store and index, the render target selection,
+/// view and bind, and the shadow viewport writer.
 pub(crate) fn verify() -> bool {
-    let okay = guard(0x21f38b0, b"\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10")
-        && guard(0x21f9f69, b"\xe8\x42\x91\xff\xff")
-        && guard(0x21f9f73, b"\xe8\x38\x99\xff\xff")
-        && guard(
-            0x21f3294,
-            b"\x48\x8b\x15\x35\xf0\xc6\x01\x48\x8d\x0d\xfe\x3e\xb9\x01\x41\xb0\x01\xe8\x76\x8c\x63\xff",
-        )
-        && guard(
-            0x21f32aa,
-            b"\x48\x8b\x15\x5f\xef\xc6\x01\x48\x8d\x0d\xe8\x3e\xb9\x01\x41\xb0\x01\xe8\x60\x8c\x63\xff",
-        )
-        && guard(
-            0x21f32c0,
-            b"\x48\x8b\x15\x49\xef\xc6\x01\x48\x8d\x0d\xd2\x3e\xb9\x01\x45\x33\xc0\xe8\x4a\x8c\x63\xff",
-        )
-        && guard(0x182c02d, b"\xe8\x1e\x17\x00\x00")
-        && guard(0x182bf4a, b"\x48\x8d\xb1\x40\x01\x00\x00\x8b\x46\x10")
-        && guard(
-            0x182bf6a,
-            b"\x49\x39\xb8\x38\x02\x00\x00\x75\x09\x41\x38\x98\x40\x02\x00\x00",
-        )
-        && guard(
-            0x182d9d9,
-            b"\xe8\x52\x8a\xb0\xfe\x0f\x11\x83\xd0\x00\x00\x00\x0f\x11\x83\x10\x01\x00\x00",
-        )
-        && guard(
-            0x182da16,
-            b"\x41\x83\xbe\xac\x00\x00\x00\x00\x0f\x84\xc5\x00\x00\x00\x40\x84\xed\x0f\x84\xbc\x00\x00\x00",
-        )
-        && guard(0x21f38d1, b"\x44\x8b\x05\x40\xf7\xc7\x01")
-        && guard(
-            0x21f3920,
-            b"\x65\x48\x8b\x04\x25\x58\x00\x00\x00\x41\x8b\xf1\x4a\x8b\x3c\xc0\x49\x8b\x04\x39",
-        )
-        && guard(
-            0x21f3939,
-            b"\x48\x8b\x05\x58\xda\x6e\x01\x48\x05\x70\x1b\x00\x00",
-        )
-        && guard(
-            0x21f3b36,
-            b"\x0f\x10\x80\x60\x07\x00\x00\x48\x8d\x4c\x24\x40\x0f\x10\x88\x70\x07\x00\x00\x0f\x10\x90\x80\x07\x00\x00\x0f\x10\x98\x90\x07\x00\x00\xe8\xe4\x25\x14\xfe",
-        )
-        && guard(
-            0x21f3b94,
-            b"\x0f\x11\x9b\xa0\x08\x00\x00\x0f\x11\xa3\xb0\x08\x00\x00\x0f\x11\x8b\xc0\x08\x00\x00\x0f\x11\x83\xd0\x08\x00\x00",
-        )
-        && guard(0x21f3db6, b"\xe8\xc5\x7e\x63\xff")
-        && guard(
-            0x182db0f,
-            b"\x89\x83\x10\x02\x00\x00\x8b\x86\xa4\x00\x00\x00\x89\x83\x14\x02\x00\x00\x8b\x86\xa8\x00\x00\x00\x89\x83\x18\x02\x00\x00\x48\x89\xb3\x38\x02\x00\x00",
-        )
-        && guard(0x182db38, b"\x40\x88\xab\x40\x02\x00\x00")
-        && guard(0x21f0e25, b"\x84\xc0\x75\x04\x44\x0f\x28\xc8")
-        && guard(0x21f0e2d, b"\xf3\x44\x0f\x11\x0d\xfa\x6c\xda\x00")
-        && guard(0x21f0e44, b"\xf3\x0f\x11\x35\x48\x13\xc7\x01")
-        && guard(0x183985b, b"\x48\x63\x88\xf4\x1b\x00\x00")
-        && guard(
-            0x1839868,
-            b"\x85\xc9\x78\x0c\x48\x8b\xc1\x48\xc1\xe0\x05\x42\x8b\x04\x00",
-        )
-        && guard(0x1839bc9, b"\x85\xd2\x75\x07\x44\x89\x83\x84\x00\x00\x00")
-        && guard(0x1839bdf, b"\x49\x63\xc0\x8b\xb4\x81\xf4\x0d\x00\x00")
-        && guard(
-            0x1839c3c,
-            b"\x89\x74\xab\x2c\xc7\x43\x54\xff\xff\xff\xff\x89\x7c\xab\x5c\x83\x0b\x01",
-        )
-        && guard(
-            0x1839cb1,
-            b"\x48\x63\xc2\x41\x89\x92\x88\x00\x00\x00\x8b\x8c\x81\x84\x0f\x00\x00",
-        )
-        && guard(
-            0x1823db7,
-            b"\x48\x63\x47\xd0\x83\xf8\xff\x74\x47\x48\x8d\x0c\x40\x48\x8b\x05\xd5\xd5\x0b\x02\x48\x03\xc9\x83\x3f\x00\x48\x8b\x94\xc8\x68\x0a\x00\x00",
-        )
-        && guard(0x1823f14, b"\x48\x8b\x01\xff\x90\x08\x01\x00\x00")
-        && guard(0x1839878, b"\x48\x63\x88\x88\x00\x00\x00")
-        && guard(0x1839883, b"\x48\x6b\xc9\x1c\x42\x8b\x84\x01\x80\x0c\x00\x00")
-        && guard(0x18398df, b"\x48\xc1\xe0\x05\x42\x8b\x44\x00\x04")
-        && guard(0x181805f, b"\x83\x0b\x02\x89\x83\xa4\x00\x00\x00")
-        && guard(
-            0x182430d,
-            b"\x4c\x8d\x87\x90\x00\x00\x00\xba\x01\x00\x00\x00\x48\x8b\x01\xff\x90\x60\x01\x00\x00",
-        );
+    let okay = discovery::verify_all(&[
+        Site::Prepass,
+        Site::PrepassCall,
+        Site::CameraReads,
+        Site::BuilderCall,
+        Site::CameraRead,
+        Site::BuilderViewport,
+        Site::DepthCamera,
+        Site::DepthBuild,
+        Site::BuilderOwner,
+        Site::WorldRanges,
+        Site::DrSlots,
+        Site::DrSelect,
+        Site::DrStore,
+        Site::DrIndex,
+        Site::TargetSelect,
+        Site::TargetView,
+        Site::ShadowWriter,
+        Site::TargetBind,
+    ]);
     VERIFIED.store(okay, Ordering::Release);
     okay
 }

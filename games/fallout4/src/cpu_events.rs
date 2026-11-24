@@ -18,7 +18,8 @@
 mod handoff;
 mod native;
 
-use crate::build_layout::{RENDERER_OBJECT, RENDERER_POINTER, RENDERER_WINDOW};
+use crate::build_layout::{RENDERER_WINDOW, renderer_object, renderer_pointer};
+use crate::discovery::{Site, address, rva};
 use crate::sys::{
     RSF_FALLOUT4_CPU_HOOK_CONSUME, RSF_FALLOUT4_CPU_HOOK_COUNT, RSF_FALLOUT4_CPU_HOOK_IDLE,
     RSF_FALLOUT4_CPU_HOOK_JOB_END, RSF_FALLOUT4_CPU_HOOK_KEYBOARD, RSF_FALLOUT4_CPU_HOOK_MOUSE,
@@ -71,7 +72,7 @@ type CpuEvent = unsafe extern "C" fn(*mut c_void, *const rsf_game_cpu_event);
 // Native leaves.
 
 fn hook_target(hook: u32) -> *mut c_void {
-    (image() + native::HOOK_ENTRIES[hook as usize].0) as *mut c_void
+    address(native::HOOKS[hook as usize]) as *mut c_void
 }
 
 // Hook lifecycle is serialized by Session. The detours only load the published originals.
@@ -453,14 +454,14 @@ fn native_cycle(
     let (mut running, mut exiting, mut mode) = (0u8, 0u8, 0u32);
     let state_stage = snapshot(native, proof.main);
     let proved = t.test(0, state_stage == StateRead::Eligible)
-        && t.test(1, load(base + native::WORKER, &mut worker_address))
-        && t.test(2, worker_address == base + native::WORKER_OBJECT)
+        && t.test(1, load(base + rva(Site::Worker), &mut worker_address))
+        && t.test(2, worker_address == base + rva(Site::WorkerObject))
         && t.test(3, load(worker_address, &mut vtable))
-        && t.test(4, vtable == base + native::WORKER_VTABLE)
+        && t.test(4, vtable == base + rva(Site::WorkerVtable))
         && t.test(5, load(vtable, &mut destructor))
-        && t.test(6, destructor == base + native::WORKER_DESTRUCTOR)
+        && t.test(6, destructor == base + rva(Site::WorkerDestructor))
         && t.test(7, load(vtable + 8, &mut entry))
-        && t.test(8, entry == base + native::WORKER_ENTRY)
+        && t.test(8, entry == base + rva(Site::WorkerEntry))
         && t.test(
             9,
             load(
@@ -491,11 +492,17 @@ fn native_cycle(
         && t.test(18, exiting == 0)
         && t.test(19, load(native.main + native::MAIN_WINDOW, &mut window))
         && t.test(20, window != 0)
-        && t.test(21, load(base + RENDERER_POINTER, &mut renderer))
-        && t.test(22, renderer == base + RENDERER_OBJECT)
+        && t.test(21, load(renderer_pointer(base), &mut renderer))
+        && t.test(22, renderer == renderer_object(base))
         && t.test(23, load(renderer + RENDERER_WINDOW, &mut proof.window))
         && t.test(24, proof.window == window)
-        && t.test(25, load(base + native::NATIVE_FRAME, &mut proof.frame));
+        && t.test(
+            25,
+            load(
+                base + rva(Site::State) + native::NATIVE_FRAME,
+                &mut proof.frame,
+            ),
+        );
     if proved {
         proof.main = native.main;
         proof.worker = worker_address;
@@ -1196,7 +1203,7 @@ fn reserve_worker_poll(manager: usize, caller: usize) -> (bool, u64, u32) {
     let mut proof = c.key;
     let mut native = InputState::ZERO;
     let tid = thread_id();
-    let worker_call = caller == image() + native::WRAPPER_POLL_CALLER;
+    let worker_call = caller == address(Site::WrapperPollCall);
     let native_valid_before =
         worker_call && native_cycle(&mut proof, &mut native, false, CyclePhase::ReserveEntry);
     let (mut queued, mut consumed) = (0u32, 0u32);
@@ -1462,7 +1469,7 @@ fn begin_worker_consumer(receiver: usize, caller: usize) -> bool {
         && WORKER_SOURCE.get() == f.facts.cpu.source
         && delivery.queue == f.facts.predecessor.queue
         && delivery.receiver == receiver
-        && caller == image() + native::PLAYER_CONTROLS_CALLER;
+        && caller == address(Site::PlayerControlsCall);
     let mut proof = WorkerCycle::ZERO;
     let mut cursor = 0u32;
     let now = qpc();
@@ -1662,7 +1669,7 @@ extern "C" fn rsf_fallout4_cpu_peek_exit(
         && flags == PM_REMOVE
         && native::PEEK_CALLERS
             .iter()
-            .any(|&site| caller == base + site)
+            .any(|&site| caller == base + rva(site))
         && let Some(actual) = read::<MSG>(message as usize)
     {
         received(0, actual.message, true, actual.hwnd as usize as u64);
@@ -1677,13 +1684,13 @@ extern "C" fn rsf_fallout4_cpu_raw_enter(hook: u32, caller: usize) {
     RAW_WRITERS.fetch_add(1, SeqCst);
     RAW_REVISION.fetch_add(1, SeqCst);
     let selected = match hook {
-        RSF_FALLOUT4_CPU_HOOK_KEYBOARD => Some((native::KEYBOARD_CALLER, RSF_GAME_INPUT_KEYBOARD)),
-        RSF_FALLOUT4_CPU_HOOK_MOUSE => Some((native::MOUSE_CALLER, RSF_GAME_INPUT_MOUSE)),
+        RSF_FALLOUT4_CPU_HOOK_KEYBOARD => Some((Site::KeyboardCall, RSF_GAME_INPUT_KEYBOARD)),
+        RSF_FALLOUT4_CPU_HOOK_MOUSE => Some((Site::MouseCall, RSF_GAME_INPUT_MOUSE)),
         _ => None,
     };
     if let Some((expected_caller, kind)) = selected
         && ENABLED.load(Acquire)
-        && caller == image() + expected_caller
+        && caller == address(expected_caller)
     {
         received(kind, 0, false, 0);
     }
@@ -1714,7 +1721,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_idle_enter(
     let main = main as usize;
     let owns = ENABLED.load(Acquire)
         && IDLE_DEPTH.get() == 1
-        && caller == image() + native::IDLE_CALLER
+        && caller == address(Site::IdleCall)
         && IDLE_MAIN.get() == 0;
     if owns {
         IDLE_MAIN.set(main);
@@ -1787,11 +1794,11 @@ fn poll_receipt(r: &PollReceipt) {
         return;
     }
     let base = image();
-    let caller_class: u32 = if r.caller == base + native::MAIN_POLL_CALLER {
+    let caller_class: u32 = if r.caller == base + rva(Site::MainPollCall) {
         0
-    } else if r.caller == base + native::WRAPPER_POLL_CALLER {
+    } else if r.caller == base + rva(Site::WrapperPollCall) {
         1
-    } else if r.caller == base + native::WORKER_POLL_CALLER {
+    } else if r.caller == base + rva(Site::WorkerPollCall) {
         2
     } else {
         // Unknown native callers are forwarded, not classified.
@@ -1889,7 +1896,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_poll_enter(
     let idle_at_poll = IDLE_MAIN.get();
     let raw_at_poll = RAW_WRITERS.load(SeqCst);
     let candidate = lifecycle
-        && caller == image() + native::MAIN_POLL_CALLER
+        && caller == address(Site::MainPollCall)
         && depth_at_poll == 1
         && previous_polls == 0
         && source_at_poll == 0
@@ -2064,7 +2071,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_player_controls_enter(
 ) {
     enter();
     let receiver_address = receiver as usize;
-    let selected_caller = caller == image() + native::PLAYER_CONTROLS_CALLER;
+    let selected_caller = caller == address(Site::PlayerControlsCall);
     // The selected native dispatcher still holds its outer queue read lock here. Report delivery
     // before source adoption; this is independent of pending polls.
     let delivery = DELIVERY.get();
@@ -2184,8 +2191,8 @@ unsafe extern "C" fn rsf_fallout4_cpu_consume_enter(
     let parent = CONSUMER_ADMITTED.get();
     let parent_delivery = DELIVERY.get();
     let base = image();
-    let delivering = (caller == base + native::CONSUME_CALLER
-        || (WRAPPER_SELECTED.get() && caller == base + native::WORKER_CONSUME_CALLER))
+    let delivering = (caller == base + rva(Site::ConsumeCall)
+        || (WRAPPER_SELECTED.get() && caller == base + rva(Site::WorkerConsumeCall)))
         && native::delivery_current(ENABLED.load(Acquire), queue_address, receiver_address);
     DELIVERY.set(if delivering {
         Delivery {
@@ -2200,7 +2207,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_consume_enter(
         p.source != 0
             && !p.bound
             && IDLE_DEPTH.get() == 1
-            && caller == base + native::CONSUME_CALLER
+            && caller == base + rva(Site::ConsumeCall)
             && queue_address == p.state.queue
             && receiver_address == p.state.receiver,
     );
@@ -2253,7 +2260,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_swap_enter(
     SWAP_ADMITTED.set(false);
     let main = main as usize;
     let owns = ENABLED.load(Acquire)
-        && caller == image() + native::SWAP_CALLER
+        && caller == address(Site::SwapCall)
         && SWAP_DEPTH.get() == 1
         && IDLE_DEPTH.get() <= 1;
     open_scope(
@@ -2443,7 +2450,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_job_end_enter(
         enabled()
             && previous == 0
             && JOB_DEPTH.get() == 1
-            && caller == image() + native::JOB_CALLER
+            && caller == address(Site::JobCallback)
             && native_cycle(&mut proof, &mut native, false, CyclePhase::Other)
             && proof == c.key,
     );
@@ -2546,8 +2553,8 @@ unsafe extern "C" fn rsf_fallout4_cpu_wrapper_enter(
     WRAPPER_SELECTED.set(
         JOB_SELECTED.get()
             && WRAPPER_DEPTH.get() == 1
-            && caller == image() + native::WRAPPER_CALLER
-            && load(image() + native::MAIN, &mut actual_main)
+            && caller == address(Site::WrapperCall)
+            && load(address(Site::Main), &mut actual_main)
             && actual_main == main as usize,
     );
     open_scope(
@@ -2593,7 +2600,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_worker_join_enter(
     let mut native = InputState::ZERO;
     let mut entry_trace = PhaseChecks::new();
     let selected = entry_trace.test(0, enabled())
-        && entry_trace.test(1, caller == image() + native::JOIN_CALLER)
+        && entry_trace.test(1, caller == address(Site::JoinCall))
         && entry_trace.test(2, IDLE_DEPTH.get() == 1)
         && entry_trace.test(3, SWAP_DEPTH.get() == 0)
         && entry_trace.test(4, c.swapped)
@@ -2848,9 +2855,12 @@ pub(crate) fn render_source_is_current(expected: &CpuIdentity) -> bool {
         && c.cpu.session == expected.session
         && c.cpu.source == expected.source
         && c.cpu.submission == expected.submission
-        && load(base + native::NATIVE_FRAME, &mut native_frame)
+        && load(
+            base + rva(Site::State) + native::NATIVE_FRAME,
+            &mut native_frame,
+        )
         && native_frame == c.key.frame
-        && load(base + native::MAIN, &mut main)
+        && load(base + rva(Site::Main), &mut main)
         && main == c.key.main
 }
 
@@ -3040,7 +3050,7 @@ fn peek_cell() -> MutexGuard<'static, PeekCell> {
 }
 
 fn peek_slot() -> *mut *mut c_void {
-    (image() + native::PEEK_SLOT) as *mut *mut c_void
+    address(Site::PeekImport) as *mut *mut c_void
 }
 
 fn finish_peek_protection(cell: &mut PeekCell) -> bool {
@@ -3104,7 +3114,7 @@ fn prepare_peek(event: CpuEvent) -> bool {
         || cell.protection_pending
         || thunk == 0
         || !native::notification_guards()
-        || !load(image() + native::PEEK_SLOT, &mut current)
+        || !load(address(Site::PeekImport), &mut current)
         || current == 0
         || current == thunk
     {

@@ -1,82 +1,30 @@
 // SPDX-License-Identifier: MIT
-//! Fallout 4 AE 1.11.240 CPU event layout: hook and caller RVAs, the expected instruction bytes,
-//! and the guarded input-state snapshot. Every value belongs to the exact recognized build; the
+//! Fallout 4 AE CPU event layout: the discovered hook, caller and global sites (discovery.rs), the
+//! structure offsets the discovered patterns fix, and the guarded input-state snapshot. The
 //! evidence is in games/fallout4/engine.json and docs/research/fallout4-*.
-use crate::{guard, image, load, read};
+use crate::discovery::{Site, rva, verify_all};
+use crate::{image, load, read};
 
 // Hooked functions, in RSF_FALLOUT4_CPU_HOOK_* order.
-pub(super) const HOOK_ENTRIES: [(usize, &[u8]); 10] = [
-    (
-        0xc33250,
-        &[
-            0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x81, 0xec, 0x40, 0x01, 0x00, 0x00,
-        ],
-    ),
-    (
-        0x1675140,
-        &[0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18],
-    ),
-    (0x16754d0, &[0x0f, 0xb7, 0x42, 0x1c, 0xa8, 0x01, 0x74, 0x08]),
-    (
-        0xc339d0,
-        &[
-            0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70, 0x10,
-        ],
-    ),
-    (0x1672540, &[0x48, 0x83, 0xec, 0x38, 0x80, 0x79, 0x35, 0x00]),
-    (
-        0x1673ae0,
-        &[
-            0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x89, 0x6c, 0x24, 0x30,
-        ],
-    ),
-    (
-        0xddbe50,
-        &[0x48, 0x8b, 0xc4, 0x56, 0x57, 0x48, 0x83, 0xec, 0x68],
-    ),
-    (
-        0xbd6850,
-        &[0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30],
-    ),
-    (0xc34eb0, &[0x48, 0x83, 0xec, 0x28, 0xf3, 0x0f, 0x10, 0x0d]),
-    (
-        0xbd51c0,
-        &[
-            0x48, 0x8b, 0x0d, 0x29, 0xc1, 0x6c, 0x02, 0x48, 0x85, 0xc9, 0x74, 0x20,
-        ],
-    ),
+pub(super) const HOOKS: [Site; 10] = [
+    Site::Swap,
+    Site::Keyboard,
+    Site::Mouse,
+    Site::Idle,
+    Site::InputPoll,
+    Site::Consume,
+    Site::PlayerControls,
+    Site::JobEnd,
+    Site::Wrapper,
+    Site::WorkerJoin,
 ];
 
-// Exact return addresses that select each callback.
-pub(super) const SWAP_CALLER: usize = 0xc346b1;
-pub(super) const KEYBOARD_CALLER: usize = 0xc3a992;
-pub(super) const MOUSE_CALLER: usize = 0xc3a970;
-pub(super) const IDLE_CALLER: usize = 0xc315c0;
-pub(super) const MAIN_POLL_CALLER: usize = 0xc342ba;
-pub(super) const WRAPPER_POLL_CALLER: usize = 0xc34ec8;
-pub(super) const WORKER_POLL_CALLER: usize = 0xbd7653;
-pub(super) const CONSUME_CALLER: usize = 0xc342de;
-pub(super) const WORKER_CONSUME_CALLER: usize = 0xc34eec;
-pub(super) const PLAYER_CONTROLS_CALLER: usize = 0x1673b74;
-pub(super) const JOB_CALLER: usize = 0xbd76df;
-pub(super) const WRAPPER_CALLER: usize = 0xbd6945;
-pub(super) const JOIN_CALLER: usize = 0xc346c0;
-pub(super) const PEEK_CALLERS: [usize; 4] = [0xc338ea, 0xc3391e, 0xc3398b, 0xc339c1];
-// USER32 PeekMessageA import cell.
-pub(super) const PEEK_SLOT: usize = 0x2440a98;
+// The return addresses that select each callback are the call sites' discovered sites.
+pub(super) const PEEK_CALLERS: [Site; 4] = [Site::Peek1, Site::Peek2, Site::Peek3, Site::Peek4];
 
-// Globals and their layouts.
-pub(super) const MAIN: usize = 0x32dd130;
-const MANAGER: usize = 0x3e75cb8;
-pub(super) const QUEUE: usize = 0x3273ae0;
-pub(super) const RECEIVER: usize = 0x31f0b80;
-pub(super) const RECEIVER_VTABLE: usize = 0x2571a30;
-pub(super) const WORKER: usize = 0x32a12f0;
-pub(super) const WORKER_OBJECT: usize = 0x32a1320;
-pub(super) const WORKER_VTABLE: usize = 0x255e3b8;
-pub(super) const WORKER_DESTRUCTOR: usize = 0xbd72e0;
-pub(super) const WORKER_ENTRY: usize = 0xbd7430;
-pub(super) const NATIVE_FRAME: usize = 0x3d87238;
+// Structure offsets. The manager's polling flag is fixed by the poll entry pattern, the worker's
+// mode (+68) and completion event (+60) by the join pattern; the rest are documented in
+// games/fallout4/engine.json.
 const MANAGER_POLLING: usize = 0x35;
 const MAIN_FLAGS: usize = 0x24;
 const MAIN_MENU: usize = 0x1d0;
@@ -86,10 +34,12 @@ pub(super) const WORKER_COMPLETE: usize = 0x60;
 pub(super) const WORKER_MODE: usize = 0x68;
 pub(super) const WORKER_EXITING: usize = 0x6c;
 pub(super) const WORKER_RUNNING: usize = 0x6e;
-// The queue's enqueue sequence and the receiver's consumed cursor.
+// The queue's enqueue sequence and the receiver's consumed cursor, fixed by the consume and
+// enqueue patterns.
 pub(super) const QUEUE_SEQUENCE: usize = 0x1490;
 pub(super) const RECEIVER_CURSOR: usize = 8;
-
+/// The native frame counter in the graphics state, fixed by the native frame read.
+pub(super) const NATIVE_FRAME: usize = 0x98;
 /// The eligible Main/input owner snapshot.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct InputState {
@@ -166,13 +116,13 @@ pub(super) fn state(value: &mut InputState, main: usize) -> StateRead {
         return StateRead::IdleMain;
     }
     let base = image();
-    if !load(base + MAIN, &mut value.main) {
+    if !load(base + rva(Site::Main), &mut value.main) {
         return StateRead::MainRead;
     }
     if value.main != main {
         return StateRead::MainMatch;
     }
-    if !load(base + MANAGER, &mut value.manager) {
+    if !load(base + rva(Site::InputManager), &mut value.manager) {
         return StateRead::ManagerRead;
     }
     if value.manager == 0 {
@@ -184,13 +134,13 @@ pub(super) fn state(value: &mut InputState, main: usize) -> StateRead {
     if value.polling_enabled == 0 {
         return StateRead::PollingDisabled;
     }
-    if !load(base + QUEUE, &mut value.queue) {
+    if !load(base + rva(Site::EventQueue), &mut value.queue) {
         return StateRead::QueueRead;
     }
     if value.queue == 0 {
         return StateRead::QueueNull;
     }
-    if !load(base + RECEIVER, &mut value.receiver) {
+    if !load(base + rva(Site::Controls), &mut value.receiver) {
         return StateRead::ReceiverRead;
     }
     if value.receiver == 0 {
@@ -200,7 +150,7 @@ pub(super) fn state(value: &mut InputState, main: usize) -> StateRead {
     if !load(value.receiver, &mut vtable) {
         return StateRead::VtableRead;
     }
-    if vtable != base + RECEIVER_VTABLE {
+    if vtable != base + rva(Site::ControlsVtable) {
         return StateRead::VtableMatch;
     }
     if !load(value.main + MAIN_FLAGS, &mut value.flags) {
@@ -230,9 +180,11 @@ pub(super) fn state(value: &mut InputState, main: usize) -> StateRead {
 pub(super) fn delivery_current(enabled: bool, queue: usize, receiver: usize) -> bool {
     let base = image();
     enabled
-        && read::<usize>(base + QUEUE).is_some_and(|current| current != 0 && current == queue)
-        && read::<usize>(base + RECEIVER).is_some_and(|current| current != 0 && current == receiver)
-        && read::<usize>(receiver).is_some_and(|vtable| vtable == base + RECEIVER_VTABLE)
+        && read::<usize>(base + rva(Site::EventQueue))
+            .is_some_and(|current| current != 0 && current == queue)
+        && read::<usize>(base + rva(Site::Controls))
+            .is_some_and(|current| current != 0 && current == receiver)
+        && read::<usize>(receiver).is_some_and(|vtable| vtable == base + rva(Site::ControlsVtable))
 }
 
 /// The delivered event list holds a gamepad button or thumbstick event. Walks at most 256 nodes
@@ -259,124 +211,46 @@ pub(super) fn controller_delivered(events: usize) -> bool {
     false
 }
 
-/// The worker class, every hooked entry and every selecting call site.
+/// The worker's job, class and entries, every hooked entry and every selecting call site.
 pub(super) fn guards() -> bool {
-    const CHECKS: [(usize, &[u8]); 27] = [
-        HOOK_ENTRIES[7], // worker job end
-        HOOK_ENTRIES[8], // worker poll/consume wrapper
-        HOOK_ENTRIES[9], // post-Swap worker join
-        (
-            0xbd76d2,
-            &[
-                0x48, 0x8b, 0x47, 0x10, 0x48, 0x85, 0xc0, 0x74, 0x04, 0x33, 0xc9, 0xff, 0x10,
-            ],
-        ), // callback
-        (0xbd6940, &[0xe8, 0x6b, 0xe5, 0x05, 0x00]), // wrapper call
-        (0xc34ee7, &[0xe8, 0xf4, 0xeb, 0xa3, 0x00]), // worker consume
-        (0xc346bb, &[0xe8, 0x00, 0x0b, 0xfa, 0xff]), // join call
-        (
-            0xbd51cc,
-            &[
-                0x83, 0x79, 0x68, 0x01, 0x75, 0x1a, 0xc7, 0x41, 0x68, 0x00, 0x00, 0x00, 0x00,
-            ],
-        ), // join branch
-        (
-            0xbd51d9,
-            &[
-                0x45, 0x33, 0xc0, 0x48, 0x8b, 0x49, 0x60, 0xba, 0xff, 0xff, 0xff, 0xff,
-            ],
-        ), // join arguments
-        (0xbd51e5, &[0x48, 0xff, 0x25, 0x2c, 0xb1, 0x86, 0x01]), // join wait
-        HOOK_ENTRIES[0], // Swap
-        (0xc346ac, &[0xe8, 0x9f, 0xeb, 0xff, 0xff]), // Swap call
-        HOOK_ENTRIES[1], // keyboard RAWINPUT
-        HOOK_ENTRIES[2], // mouse RAWINPUT
-        (0xc3a98d, &[0xe8, 0xae, 0xa7, 0xa3, 0x00]), // keyboard call
-        (0xc3a96b, &[0xe8, 0x60, 0xab, 0xa3, 0x00]), // mouse call
-        HOOK_ENTRIES[3], // Main idle
-        HOOK_ENTRIES[4], // BSInputDeviceManager poll
-        HOOK_ENTRIES[5], // input event queue consume
-        (0xc342b5, &[0xe8, 0x86, 0xe2, 0xa3, 0x00]), // poll call
-        (0xc342d9, &[0xe8, 0x02, 0xf8, 0xa3, 0x00]), // consume call
-        (0xc315bb, &[0xe8, 0x10, 0x24, 0x00, 0x00]), // idle call
-        (0xc315b4, &[0x48, 0x8b, 0x0d, 0x75, 0xbb, 0x6a, 0x02]), // idle argument
-        (0xc342ae, &[0x48, 0x8b, 0x0d, 0x03, 0x1a, 0x24, 0x03]), // main poll argument
-        (0xc34ec3, &[0xe8, 0x78, 0xd6, 0xa3, 0x00]), // wrapper poll
-        (0xbd764e, &[0xe8, 0xed, 0xae, 0xa9, 0x00]), // worker poll
-        HOOK_ENTRIES[crate::sys::RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS as usize],
-    ];
-    // The worker job descriptor and name, then the worker class locator, destructor and entry.
-    let base = image();
-    read::<usize>(base + 0x2f30fc0) == Some(base + HOOK_ENTRIES[7].0)
-        && read::<usize>(base + 0x2f30fc8) == Some(base + 0x255dd10)
-        && read::<usize>(base + 0x255e3b0) == Some(base + 0x29c88d8)
-        && read::<usize>(base + WORKER_VTABLE) == Some(base + WORKER_DESTRUCTOR)
-        && read::<usize>(base + 0x255e3c0) == Some(base + WORKER_ENTRY)
-        && CHECKS.iter().all(|&(rva, expected)| guard(rva, expected))
+    verify_all(&HOOKS)
+        && verify_all(&[
+            Site::JobName,
+            Site::WorkerDestructor,
+            Site::WorkerEntry,
+            Site::JobCallback,
+            Site::WrapperCall,
+            Site::WorkerConsumeCall,
+            Site::JoinCall,
+            Site::SwapCall,
+            Site::KeyboardCall,
+            Site::MouseCall,
+            Site::MainPollCall,
+            Site::ConsumeCall,
+            Site::IdleCall,
+            Site::WrapperPollCall,
+            Site::WorkerPollCall,
+        ])
 }
 
 /// The PeekMessageA call sites and their import, and the PlayerControls and queue dispatch
 /// instructions the receipts depend on. Both callers first check guards(), including the
-/// PlayerControls hook entry.
+/// PlayerControls hook entry and the consume body.
 pub(super) fn notification_guards() -> bool {
-    const CHECKS: [(usize, &[u8]); 34] = [
-        (0xc338e4, &[0xff, 0x15, 0xae, 0xd1, 0x80, 0x01]),
-        (0xc33918, &[0xff, 0x15, 0x7a, 0xd1, 0x80, 0x01]),
-        (0xc33985, &[0xff, 0x15, 0x0d, 0xd1, 0x80, 0x01]),
-        (0xc339bb, &[0xff, 0x15, 0xd7, 0xd0, 0x80, 0x01]),
-        (0xc338d3, &[0xc7, 0x44, 0x24, 0x20, 0x01, 0x00, 0x00, 0x00]),
-        (0xc33907, &[0xc7, 0x44, 0x24, 0x20, 0x01, 0x00, 0x00, 0x00]),
-        (0xc33959, &[0xc7, 0x44, 0x24, 0x20, 0x01, 0x00, 0x00, 0x00]),
-        (0xc339a9, &[0xc7, 0x44, 0x24, 0x20, 0x01, 0x00, 0x00, 0x00]),
-        (0xc338ea, &[0x85, 0xc0, 0x74, 0x34]),
-        (0xc3391e, &[0x85, 0xc0, 0x75, 0xce]),
-        (0xc3398b, &[0x85, 0xc0, 0x74, 0x36]),
-        (0xc339c1, &[0x85, 0xc0, 0x75, 0xcb]),
-        (0xddbffb, &[0x48, 0x8b, 0x5b, 0x18]),
-        (0xddc44c, &[0x48, 0x63, 0x45, 0x10]),
-        (0x1673aeb, &[0x48, 0x8d, 0x99, 0x78, 0x14, 0x00, 0x00]),
-        (0x1673b00, &[0xe8, 0xfb, 0x58, 0xfe, 0xff]),
-        (0x1673b30, &[0xe8, 0xcb, 0x58, 0xfe, 0xff]),
-        (0x1673b64, &[0xe8, 0x67, 0x5b, 0xfe, 0xff]),
-        (0x1673b90, &[0xe9, 0x3b, 0x5b, 0xfe, 0xff]),
-        (0x1673b35, &[0x48, 0x8b, 0xbd, 0x80, 0x14, 0x00, 0x00]),
-        (0x1673b48, &[0x39, 0x47, 0x20]),
-        (
-            0x1673b53,
-            &[0x8b, 0x85, 0x90, 0x14, 0x00, 0x00, 0x89, 0x46, 0x08],
-        ),
-        (
-            0x1673b69,
-            &[
-                0x48, 0x8b, 0x06, 0x48, 0x8b, 0xd7, 0x48, 0x8b, 0xce, 0xff, 0x10,
-            ],
-        ),
-        (
-            0x167465c,
-            &[
-                0x8b, 0x86, 0x90, 0x14, 0x00, 0x00, 0x89, 0x47, 0x20, 0xff, 0x86, 0x90, 0x14, 0x00,
-                0x00,
-            ],
-        ),
-        (0x167466b, &[0x48, 0xc7, 0x47, 0x18, 0x00, 0x00, 0x00, 0x00]),
-        (0x16778a2, &[0xe8, 0x39, 0xe7, 0xff, 0xff]),
-        (0x16760df, &[0xe8, 0x1c, 0xdb, 0xff, 0xff]),
-        (0x1673d1c, &[0x44, 0x89, 0x7f, 0x08]),
-        (0x1677a5f, &[0xe8, 0x0c, 0xc7, 0xff, 0xff]),
-        (0x1677b02, &[0xe8, 0x69, 0xc6, 0xff, 0xff]),
-        (0x1674205, &[0x83, 0x78, 0x10, 0x04]),
-        (0x16742a4, &[0xc7, 0x47, 0x08, 0x02, 0x00, 0x00, 0x00]),
-        (0x16742d4, &[0xe8, 0x37, 0x03, 0x00, 0x00]),
-        (0x1677bb7, &[0xff, 0x25, 0x53, 0x93, 0xdc, 0x00]),
-    ];
-    if !CHECKS.iter().all(|&(rva, expected)| guard(rva, expected)) {
-        return false;
-    }
-    let base = image();
-    read::<u32>(base + 0x2ed1098) == Some(0x2ed1d60)
-        && read::<u32>(base + 0x2ed10a4) == Some(0x2ed3736)
-        && read::<u32>(base + 0x2ed10a8) == Some(0x2440a70)
-        && read::<u64>(base + 0x2ed1d88) == Some(0x2ed35fe)
-        && guard(0x2ed3736, b"USER32.dll\0")
-        && guard(0x2ed3600, b"PeekMessageA\0")
+    verify_all(&PEEK_CALLERS)
+        && verify_all(&[
+            Site::PeekImport,
+            Site::PlayerControlsCall,
+            Site::ControlsEvents,
+            Site::ControlsKind,
+            Site::EnqueueSequence,
+            Site::DeviceEnqueue1,
+            Site::DeviceEnqueue2,
+            Site::QueueDevice,
+            Site::DeviceEnqueue3,
+            Site::DeviceEnqueue4,
+            Site::QueueKind,
+            Site::QueueAppend,
+            Site::GamepadState,
+        ])
 }

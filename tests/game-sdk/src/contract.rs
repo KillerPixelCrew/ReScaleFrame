@@ -38,7 +38,7 @@ const FIXTURES: &[Fixture] = &[
         sha256: c"fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8",
         prepare_result: RSF_ERROR_NATIVE_REFUSED,
         strict_lifecycle: true,
-        recognition: Recognition::Fingerprint,
+        recognition: Recognition::Name,
     },
     Fixture {
         id: c"skyrim-se",

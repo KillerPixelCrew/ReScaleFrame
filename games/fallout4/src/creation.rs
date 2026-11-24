@@ -9,17 +9,17 @@
 //! uncaught, so an engine throw ends the process.
 use crate::build_layout::{
     RENDERER_CHAIN as CHAIN, RENDERER_CONTEXT as CONTEXT, RENDERER_DEVICE as DEVICE,
-    RENDERER_POINTER as OWNER_RVA, RENDERER_WINDOW as WINDOW,
+    RENDERER_WINDOW as WINDOW, renderer_pointer,
 };
+use crate::discovery::{Site, address, rva, verify_all};
 use crate::sys::{
     RSF_D3D11_HOST_ABI_VERSION, rsf_d3d11_creation_scope, rsf_d3d11_native_chain,
     rsf_d3d11_presentation_binding, rsf_fallout4_create_call,
 };
-use crate::{EXECUTABLE, EXECUTABLE_SHA256, Plain, RSF_ERROR_NOT_READY, RSF_OK};
+use crate::{Plain, RSF_ERROR_NOT_READY, RSF_OK};
 use crate::{image, read};
 use rsf_game_sys::ffi_util::lock_or_recover;
-use rsf_game_sys::win32::{module_path, typed_export};
-use rsf_game_sys::windows_path::leaf_is;
+use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{host_log, rsf_game_host_services};
 use std::ffi::c_void;
 use std::sync::Mutex;
@@ -32,13 +32,10 @@ use windows_sys::core::w;
 
 pub(crate) const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 
-// AE1.11.240 disassembly: creation1824930+410 -> thunk22C4CD9;
-// renderer owner38E13A0, native device48/context50/window58/chain70.
-const CALL_RVA: usize = 0x1824d40;
-const THUNK_RVA: usize = 0x22c4cd9;
-// CALL rel32 to the thunk, and the thunk's JMP [RIP+disp32] to the imported creation.
-const CALL_BYTES: [u8; 5] = [0xe8, 0x94, 0xff, 0xa9, 0x00];
-const THUNK_BYTES: [u8; 6] = [0xff, 0x25, 0x79, 0xca, 0x17, 0x00];
+// The renderer initializer's `call` of the D3D11CreateDeviceAndSwapChain import thunk
+// (`Site::CreateCall`, its return address) and the thunk's `jmp [rip+slot]` through the import
+// slot (`Site::CreateThunk`), both discovered; the renderer owner's device +48, context +50,
+// window +58 and chain +70 are in build_layout.rs.
 
 // DXGI_SWAP_CHAIN_DESC as the engine passes it. Only OutputWindow is compared, but the whole
 // description must be readable.
@@ -107,11 +104,11 @@ fn create_hook() -> bool {
 }
 
 fn hook_address() -> usize {
-    image() + THUNK_RVA
+    address(Site::CreateThunk)
 }
 
 fn renderer() -> Option<usize> {
-    read::<usize>(image() + OWNER_RVA)
+    read::<usize>(renderer_pointer(image()))
 }
 
 /// The renderer owner is absent or has not created its device.
@@ -123,9 +120,9 @@ extern "C" fn cold_owner() -> bool {
     }
 }
 
+/// The creation call still reaches the thunk, which still jumps through the import slot.
 fn expected_creation() -> bool {
-    read::<[u8; 5]>(image() + CALL_RVA) == Some(CALL_BYTES)
-        && read::<[u8; 6]>(image() + THUNK_RVA) == Some(THUNK_BYTES)
+    verify_all(&[Site::CreateCall, Site::CreateThunk])
 }
 
 /// The renderer owner's window, owned by this process.
@@ -143,23 +140,6 @@ pub(crate) fn accept_window(candidate: *mut c_void) -> bool {
     let mut process = 0;
     let owned = unsafe { GetWindowThreadProcessId(candidate, &mut process) } != 0;
     owned && process == unsafe { GetCurrentProcessId() }
-}
-
-/// Checks the executable name and recognized SHA-256 once for the preparing transaction.
-pub(crate) fn admit_build() -> bool {
-    unsafe extern "C" {
-        fn rsf_common_sha256_file_hex(path: *const u16, output: *mut [u8; 64]) -> u32;
-    }
-    let Some(path) = (unsafe { module_path(std::ptr::null_mut()) }) else {
-        return false;
-    };
-    if !leaf_is(path.units(), EXECUTABLE) {
-        return false;
-    }
-    let mut digest = [0; 64];
-    let hashed =
-        unsafe { rsf_common_sha256_file_hex(path.terminated().as_ptr(), &raw mut digest) } != 0;
-    hashed && digest == *EXECUTABLE_SHA256.to_bytes()
 }
 
 pub(crate) fn preflight() -> bool {
@@ -207,10 +187,12 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> bool {
         bind,
     };
     *lock_or_recover(&SCOPED) = Some(scoped);
-    let _ = crate::log_host(
-        services,
-        c"Fallout4 AE cold creation prepared at thunk22C4CD9, caller1824D40; native arguments and outer wrapper retained; scene admission remains separate.",
-    );
+    let prepared = crate::message(format!(
+        "Fallout4 AE cold creation prepared at thunk{:X}, caller{:X}; native arguments and outer wrapper retained; scene admission remains separate.",
+        rva(Site::CreateThunk),
+        rva(Site::CreateCall) - crate::discovery::CALL,
+    ));
+    let _ = crate::log_host(services, &prepared);
     true
 }
 
@@ -256,7 +238,7 @@ fn owner_call(
     caller: usize,
     call: &rsf_fallout4_create_call,
 ) -> Option<usize> {
-    if !ENABLED.load(Ordering::Acquire) || caller != image() + CALL_RVA + 5 {
+    if !ENABLED.load(Ordering::Acquire) || caller != address(Site::CreateCall) {
         return None;
     }
     let renderer = renderer().filter(|&renderer| renderer != 0)?;

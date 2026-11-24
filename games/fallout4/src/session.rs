@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The GameSDK lifecycle and its process-lived Runtime session.
 //!
-//! Prepare checks the exact build, the cold creation bytes and DPI startup before any hook,
+//! Prepare discovers every native site, checks the cold creation bytes and DPI startup before any hook,
 //! creates the Runtime's scoped D3D11 host once per process and then prepares creation, render
 //! and CPU hooks. A later prepare must present the original session. The host setup carries this
 //! adapter's facts and declared producers; the Runtime owns every vendor and pacing decision.
@@ -11,9 +11,8 @@ use crate::sys::{
     rsf_d3d11_host_setup, rsf_motion_decode_params,
 };
 use crate::{
-    EXECUTABLE_SHA256, PENDING, RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT,
-    RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw, cpu_events, dpi, pin,
-    render_hooks,
+    PENDING, RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED,
+    RSF_ERROR_NOT_READY, RSF_OK, Threw, cpu_events, discovery, dpi, pin, render_hooks,
 };
 use rsf_game_sys::call_header::validate;
 use rsf_game_sys::ffi_util::lock_or_recover;
@@ -136,7 +135,7 @@ impl Session {
         setup.configuration_section = w!("Rendering");
         setup.runtime_directory = directory.as_ptr();
         setup.identity_utf8 = c"fallout4".as_ptr();
-        setup.executable_sha256 = EXECUTABLE_SHA256.as_ptr();
+        setup.executable_sha256 = discovery::executable_sha256().as_ptr();
         setup.engine_version_utf8 = ENGINE_VERSION.as_ptr();
         setup.project_id_utf8 = PROJECT_ID.as_ptr();
         setup.units_to_meters = UNITS_TO_METERS;
@@ -172,12 +171,15 @@ impl Session {
         if self.prepared || self.busy() {
             return Ok(RSF_ERROR_BUSY);
         }
-        if !creation::admit_build() {
-            return self.refuse(
-                host,
-                c"Fallout4 cold creation refused: executable identity mismatch.",
-            );
+        if let Err(refusal) = discovery::admit() {
+            return self.refuse(host, refusal);
         }
+        // Evidence only: the hash names the build in the log, it admits nothing.
+        let evidence = crate::message(format!(
+            "Fallout4 native sites discovered in executable SHA-256 {}.",
+            discovery::executable_sha256().to_string_lossy()
+        ));
+        crate::log_host(host, &evidence)?;
         if !creation::preflight() {
             return self.refuse(
                 host,

@@ -3,9 +3,7 @@
 //!
 //! The request (`rsf_game_sys::dpi`) is safe only while the renderer owner has neither; this
 //! adapter refuses prepare when it is not verified.
-use crate::build_layout::{
-    RENDERER_DEVICE as DEVICE, RENDERER_POINTER as OWNER_RVA, RENDERER_WINDOW as WINDOW,
-};
+use crate::build_layout::{RENDERER_DEVICE as DEVICE, RENDERER_WINDOW as WINDOW, renderer_pointer};
 use crate::{Threw, image, read};
 use rsf_game_sys::{host_log, rsf_game_host_services};
 use std::ffi::CStr;
@@ -13,7 +11,7 @@ use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 
 /// The renderer owner's device and window, or None when the owner is unreadable.
 fn owner() -> Option<(usize, usize)> {
-    match read::<usize>(image() + OWNER_RVA)? {
+    match read::<usize>(renderer_pointer(image()))? {
         0 => Some((0, 0)),
         renderer => Some((
             read::<usize>(renderer.wrapping_add(DEVICE))?,

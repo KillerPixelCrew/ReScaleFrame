@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Fallout 4 AE 1.11.240 adapter policy: the exact recognized build, the GameSDK table, the plugin
+//! Fallout 4 AE adapter policy: native site discovery, the GameSDK table, the plugin
 //! lifecycle with its process-lived Runtime session, DPI startup, the cold native D3D11
 //! creation and presentation binding sequence, the CPU event owner (poll and worker source
 //! handoff, input receipts and their GameSDK facts), native depth-domain admission and
@@ -36,6 +36,7 @@ mod cpu_events;
 mod creation;
 mod d3d11;
 mod depth_domains;
+mod discovery;
 mod dpi;
 mod render_hooks;
 mod render_inputs;
@@ -67,11 +68,9 @@ use rsf_game_sys::{
     RSF_OK,
 };
 
-// The only recognized build: Fallout 4 AE 1.11.240.0. Every RVA and byte in this crate belongs
-// to it.
+// Recognized by name; whether the running build is usable is decided by site discovery at
+// prepare (discovery.rs).
 const EXECUTABLE: &CStr = c"Fallout4.exe";
-const EXECUTABLE_SHA256: &CStr =
-    c"fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8";
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 const PENDING: &CStr = c"Guarded native/reduced SR callbacks; game quality, FG admission and measured latency pending validation.";
 
@@ -222,18 +221,6 @@ pub(crate) fn load<T: Plain>(address: usize, into: &mut T) -> bool {
     read(address).map(|value| *into = value).is_some()
 }
 
-/// The guarded image bytes at `rva` equal `expected`. Startup verification only.
-pub(crate) fn guard(rva: usize, expected: &[u8]) -> bool {
-    let mut actual = vec![0u8; expected.len()];
-    (unsafe {
-        rsf_game_sys::win32::read_process(
-            image().wrapping_add(rva),
-            actual.as_mut_ptr().cast(),
-            actual.len(),
-        )
-    }) && actual == expected
-}
-
 /// Float arrays compared by bit pattern.
 pub(crate) fn bits<const N: usize>(values: &[f32; N]) -> [u32; N] {
     values.map(f32::to_bits)
@@ -262,7 +249,14 @@ pub(crate) fn message(text: String) -> CString {
 }
 
 unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> rsf_detection {
-    unsafe { Probe::detect(probe, |probe| probe.matches(EXECUTABLE, EXECUTABLE_SHA256)) }
+    unsafe {
+        Probe::detect(probe, |probe| {
+            probe
+                .executable
+                .to_bytes()
+                .eq_ignore_ascii_case(EXECUTABLE.to_bytes())
+        })
+    }
 }
 
 /// Publishes the exported Fallout 4 GameSDK table.

@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: MIT
-//! The render hooks of Fallout 4 AE 1.11.240: the eight hook records with their call-site and
-//! instruction guards, the hook lifecycle, and the calling thread's World that the detours drive:
-//! World and Present admission, the FRAME, SUBMISSION and WINDOW scope, the reduced-render
-//! recovery transaction, SR and HUDless publication, and the producer, imagespace, Effects and TAA
-//! seams. render_hooks.c keeps each typed detour with its MinHook trampoline, which it calls on its
-//! own C frame, the return addresses, the last-error saves and the guarded Runtime calls. Every
-//! value belongs to the exact recognized build; see docs/research/rust-fallout4-render-hooks.md.
+//! The render hooks of Fallout 4 AE: the eight hook records at their discovered sites with their
+//! call-site and instruction guards, the hook lifecycle, and the calling thread's World that the
+//! detours drive: World and Present admission, the FRAME, SUBMISSION and WINDOW scope, the
+//! reduced-render recovery transaction, SR and HUDless publication, and the producer, imagespace,
+//! Effects and TAA seams. render_hooks.c keeps each typed detour with its MinHook trampoline,
+//! which it calls on its own C frame, the return addresses, the last-error saves and the guarded
+//! Runtime calls. Sites are discovered (discovery.rs); see
+//! docs/research/rust-fallout4-render-hooks.md and docs/research/fallout4-site-discovery.md.
 
 use crate::build_layout::{
-    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_OBJECT, RENDERER_POINTER,
-    RENDERER_WINDOW,
+    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_DEVICE, RENDERER_WINDOW, renderer_object,
+    renderer_pointer,
 };
 use crate::cpu_events::{
     begin_present_phase, begin_render as cpu_begin_render, current_identity, end_present_phase,
@@ -18,10 +19,11 @@ use crate::cpu_events::{
 use crate::creation::accept_window;
 use crate::d3d11;
 use crate::depth_domains::{self, EMPTY as NO_SNAPSHOT, Snapshot};
+use crate::discovery::{self, CALL, Site, address, rva};
 use crate::render_inputs::{self, Inputs};
 use crate::resolution::{
-    self, EFFECTS_RETURNED, EVALUATED, HUDLESS, MANAGER, OUTPUT_READY, OutputOwner, PRE_SR,
-    SOURCE_RETIRED, TARGETS, UI_RESTORED, UI_RETURN, is_busy as resolution_busy,
+    self, EFFECTS_RETURNED, EVALUATED, HUDLESS, OUTPUT_READY, OutputOwner, PRE_SR, SOURCE_RETIRED,
+    UI_RESTORED, UI_RETURN, is_busy as resolution_busy,
 };
 use crate::screen::{self, NativeScreen as Screen, WORLD_LEASE_INVALID};
 use crate::sys::rsf_fallout4_cpu_identity as CpuIdentity;
@@ -30,7 +32,7 @@ use crate::sys::{
     native_input_pipboy as PIPBOY, native_input_refraction_normals as REFRACTION,
     native_input_vats as VATS,
 };
-use crate::{MH_OK, guard, image, message, read};
+use crate::{MH_OK, image, message, read};
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
@@ -67,154 +69,54 @@ use Ordering::{AcqRel, Acquire, Relaxed, Release};
 // ---------------------------------------------------------------------------------------------
 // Hook records and native guards.
 
-const REL32_CALL_SIZE: usize = 5;
-type CallSite = (usize, usize);
-const fn return_rva(site: CallSite) -> usize {
-    site.0 + REL32_CALL_SIZE
-}
-
-const OUTER_PRESENT_CALL: CallSite = (0xc335e7, 0x1818550);
-const PREPASS_CALL: CallSite = (0x21f9f73, 0x21f38b0);
-const DR_CALL: CallSite = (0x21f9f2f, 0x1839ed0);
-const ORDINARY_WORLD_CALL: CallSite = (0xc382a0, 0x21f0ac0);
-const EFFECTS_CALL: CallSite = (0x21fa283, 0x2185420);
-const HUDLESS_CALL: CallSite = (0x21fa2c5, 0x1839ec0);
-const IMAGESPACE_CALLS: [CallSite; 3] = [
-    (0xc383c2, 0x21fa200),
-    (0xc39d6a, 0x21fa200),
-    (0xc39e0e, 0x21fa200),
-];
-const PRESENT_RENDERER: usize = 0x3a2_5d00;
-// WorldBegin, the FRAME and SUBMISSION pass key.
-const FRAME_PASS: usize = 0x21f_0ac0;
-
-struct Hook {
-    rva: usize,
-    // Expected entry bytes, checked before creation and before every start.
-    entry: &'static [u8],
-}
-
 const HOOK_COUNT: usize = 8;
 
-// NativeRenderHook order, which is also the creation and enable order.
-const HOOKS: [Hook; HOOK_COUNT] = [
-    // Dynamic resolution writer.
-    Hook {
-        rva: 0x1839ed0,
-        entry: b"\x48\x83\xec\x18\x8b\x05\x5e\x48\x71\x01",
-    },
-    // Depth prepass.
-    Hook {
-        rva: 0x21f38b0,
-        entry: b"\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10",
-    },
-    // Native outer Present.
-    Hook {
-        rva: 0x1818550,
-        entry: b"\x40\x53\x48\x83\xec\x20",
-    },
-    // WorldBegin.
-    Hook {
-        rva: 0x21f0ac0,
-        entry: b"\x48\x8b\xc4\x53\x48\x81\xec\xb0\x00\x00\x00",
-    },
-    // Viewport selector store.
-    Hook {
-        rva: 0x1839ec0,
-        entry: b"\x88\x91\xe4\x0f\x00\x00\xc3",
-    },
-    // Imagespace.
-    Hook {
-        rva: 0x21fa200,
-        entry: b"\x48\x89\x5c\x24\x10\x56\x48\x83\xec\x40",
-    },
-    // Imagespace Effects range.
-    Hook {
-        rva: 0x2185420,
-        entry: b"\x48\x89\x5c\x24\x18\x55\x56\x57\x41\x55\x41\x56\x48\x83\xec\x30",
-    },
-    // Native TAA active query.
-    Hook {
-        rva: 0x2214fc0,
-        entry: b"\x83\x3d\x85\x22\xb7\x01\x01\x75\x12\x80\x79\x08\x00\x74\x0c\x83\x3d\x7a\x22\xb7\x01\x00\x75\x03\xb0\x01\xc3",
-    },
+// NativeRenderHook order, which is also the creation and enable order. Each entry is verified at
+// its discovered site before creation and before every start; the TAA query must still be slot 8
+// of ImageSpaceEffectTemporalAA's vtable.
+const HOOKS: [Site; HOOK_COUNT] = [
+    Site::DrWriter,
+    Site::Prepass,
+    Site::OuterPresent,
+    Site::WorldBegin,
+    Site::ViewportStore,
+    Site::Imagespace,
+    Site::Effects,
+    Site::TaaQuery,
 ];
 
-// The TAA effect vtable whose slot 8 must name the hooked TAA active query.
-const TAA_VTABLE: usize = 0x2915eb0;
-const TAA_SLOT: usize = 8;
-const TAA_HOOK: usize = 7;
-
-// Exact rel32 calls (call site, callee), checked in this order after the TAA slot: the outer
-// Swap's native Present, the selected prepass and DR calls, the camera update 0x21f30b0, its three
-// 0x182bf20 camera reads, the 0x182d750 builder call and the native camera-setter caller
-// (fallout4-depth-domains and fallout4-reduced-consumers notes).
-const PRODUCER_CALLS: [CallSite; 9] = [
-    OUTER_PRESENT_CALL,
-    PREPASS_CALL,
-    DR_CALL,
-    (0x21f9f69, 0x21f30b0),
-    (0x21f32a5, 0x182bf20),
-    (0x21f32bb, 0x182bf20),
-    (0x21f32d1, 0x182bf20),
-    (0x182c02d, 0x182d750),
-    (0x182c597, 0x1817ef0),
+const IMAGESPACE_CALLS: [Site; 3] = [
+    Site::ImagespaceCall1,
+    Site::ImagespaceCall2,
+    Site::ImagespaceCall3,
 ];
 
-// Outer Present instructions the owner reader depends on: the renderer argument (0x3a25d00),
-// both loads of the renderer-window cell (0x38e13b0), the chain at +0x18 and the
-// IDXGISwapChain::Present slot (+0x40) calls.
-const PRESENT_GUARDS: [(usize, &[u8]); 7] = [
-    (0xc335e0, b"\x48\x8d\x0d\x19\x27\xdf\x02"),
-    (0x1818572, b"\x48\x8b\x05\x37\x8e\x0c\x02"),
-    (0x181858a, b"\x48\x8b\x48\x18"),
-    (0x181859b, b"\x41\xff\x51\x40"),
-    (0x18185b6, b"\x48\x8b\x05\xf3\x8d\x0c\x02"),
-    (0x18185c4, b"\x48\x8b\x48\x18"),
-    (0x18185d5, b"\x41\xff\x51\x40"),
-];
-
-// The ordinary MainDraw WorldBegin call, WorldBegin's viewport selection and temporal update
-// calls, the Effects and HUDless viewport calls inside imagespace, and the three selected
-// imagespace calls.
-const WORLD_CALLS: [CallSite; 8] = [
-    ORDINARY_WORLD_CALL,
-    (0x21f0ae6, 0x1839ec0),
-    (0x21f0e4c, 0x182d580),
-    EFFECTS_CALL,
-    HUDLESS_CALL,
-    IMAGESPACE_CALLS[0],
-    IMAGESPACE_CALLS[1],
-    IMAGESPACE_CALLS[2],
-];
-
-/// The rel32 call at `rva` targets `target`.
-fn call(rva: usize, target: usize) -> bool {
-    let Some(bytes) = read::<[u8; REL32_CALL_SIZE]>(image() + rva) else {
-        return false;
-    };
-    let relative = i32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
-    bytes[0] == 0xe8
-        && (rva as isize + REL32_CALL_SIZE as isize + relative as isize) as usize == target
-}
-
-/// Every hook entry, the resolution, screen and depth-domain guards, the TAA slot, then the call
-/// sites and Present instructions, in the original order.
+/// Every hook entry, the resolution, screen and depth-domain guards, then the call sites: the
+/// outer Swap's native Present with its renderer argument (the Present pattern covers both
+/// window-cell loads, the chain at +18 and the IDXGISwapChain::Present slot +40), the selected
+/// prepass and DR calls with the camera update, its three camera reads, the builder call and
+/// the native camera-setter caller (fallout4-depth-domains and fallout4-reduced-consumers
+/// notes); then the ordinary MainDraw WorldBegin call, WorldBegin's viewport selection (in its
+/// pattern) and temporal update calls, the Effects and HUDless calls inside imagespace, and the
+/// three selected imagespace calls.
 pub(crate) fn verify() -> bool {
-    let base = image();
-    HOOKS.iter().all(|hook| guard(hook.rva, hook.entry))
+    discovery::verify_all(&HOOKS)
         && resolution::verify()
         && screen::verify_queries()
         && depth_domains::verify()
-        && read::<usize>(base + TAA_VTABLE + TAA_SLOT * size_of::<usize>())
-            == Some(base + HOOKS[TAA_HOOK].rva)
-        && PRODUCER_CALLS
-            .iter()
-            .all(|&(rva, target)| call(rva, target))
-        && PRESENT_GUARDS
-            .iter()
-            .all(|&(rva, expected)| guard(rva, expected))
-        && WORLD_CALLS.iter().all(|&(rva, target)| call(rva, target))
+        && discovery::verify_all(&[
+            Site::PresentCall,
+            Site::PrepassCall,
+            Site::DrCall,
+            Site::CameraReads,
+            Site::BuilderCall,
+            Site::SetterCall,
+            Site::WorldCall,
+            Site::WorldRanges,
+            Site::EffectsCall,
+            Site::HudlessCall,
+        ])
+        && discovery::verify_all(&IMAGESPACE_CALLS)
 }
 
 /// The render hook guards, then the render-input reader guards.
@@ -339,8 +241,8 @@ fn bound() -> Bound {
     *lock_or_recover(&BOUND)
 }
 
-fn target(hook: &Hook) -> *mut c_void {
-    (image() + hook.rva) as *mut c_void
+fn target(hook: &Site) -> *mut c_void {
+    address(*hook) as *mut c_void
 }
 
 fn report(text: &CStr) {
@@ -634,14 +536,14 @@ struct Owner {
 
 fn read_owner(base: usize) -> Option<Owner> {
     let renderer =
-        read::<usize>(base + RENDERER_POINTER).filter(|&value| value == base + RENDERER_OBJECT)?;
+        read::<usize>(renderer_pointer(base)).filter(|&value| value == renderer_object(base))?;
     let device = read::<usize>(renderer + RENDERER_DEVICE).filter(|&value| value != 0)?;
     let context = read::<usize>(renderer + RENDERER_CONTEXT).filter(|&value| value != 0)?;
     let window = read::<usize>(renderer + RENDERER_WINDOW).filter(|&value| value != 0)?;
     let chain = read::<usize>(renderer + RENDERER_CHAIN).filter(|&value| value != 0)?;
-    let graph = read::<usize>(base + 0x32dd338).filter(|&value| value != 0)?;
+    let graph = read::<usize>(base + rva(Site::WorldGraph)).filter(|&value| value != 0)?;
     let view = read::<usize>(graph + 0x140).filter(|&value| value != 0)?;
-    let frame = read::<u32>(base + 0x3d871a0 + 0x98)?;
+    let frame = read::<u32>(base + rva(Site::State) + 0x98)?;
     accept_window(window as *mut c_void).then_some(Owner {
         renderer,
         device,
@@ -703,7 +605,7 @@ fn begin_scope(world: &mut World) -> bool {
     frame.viewport_key = before.window as u64;
     frame.window_key = before.window as u64;
     frame.rhi_viewport_key = before.window as u64;
-    frame.pass_key = (image() + FRAME_PASS) as u64;
+    frame.pass_key = address(Site::WorldBegin) as u64;
     frame.swapchain = before.chain as *mut c_void;
     world.submission_pass = world.frame_pass;
     world.submission_pass.role = RSF_GAME_RENDER_SUBMISSION;
@@ -1273,7 +1175,7 @@ fn publish_sr(world: &mut World) {
     let mut pass = inputs.pass;
     identify(&mut pass, &world.cpu);
     pass.role = RSF_GAME_RENDER_SR;
-    pass.pass_key = (image() + EFFECTS_CALL.0) as u64;
+    pass.pass_key = (address(Site::EffectsCall) - CALL) as u64;
     if !resolution::inputs_match(&pass) {
         diagnostic(
             c"Fallout4 SR refused: actual producer LTRB crop/camera/output extents disagree.",
@@ -1487,7 +1389,7 @@ extern "C" fn rsf_fallout4_render_begin_world(caller: usize, ordinary_world: boo
     let cpu = current_identity();
     with_world(|world| {
         let admitted = live()
-            && caller == image() + return_rva(ORDINARY_WORLD_CALL)
+            && caller == address(Site::WorldCall)
             && cpu.session == bound().services.session_id
             && cpu.source != 0
             && cpu.submission == 0
@@ -1518,7 +1420,7 @@ extern "C" fn rsf_fallout4_render_begin_world(caller: usize, ordinary_world: boo
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fallout4_render_after_viewport(caller: usize, manager: usize, enabled: bool) {
     let base = image();
-    let targets = manager == base + TARGETS;
+    let targets = manager == base + rva(Site::Targets);
     with_world(|world| {
         if targets && !resolution::native_viewport(enabled) {
             world.refused = true;
@@ -1526,7 +1428,7 @@ extern "C" fn rsf_fallout4_render_after_viewport(caller: usize, manager: usize, 
                 c"Fallout4 owned full-output selector write failed after native viewport intent; scope retained.",
             );
         }
-        if live() && targets && caller == base + return_rva(HUDLESS_CALL) {
+        if live() && targets && caller == base + rva(Site::HudlessCall) {
             world.report_state(HUDLESS, RSF_OK);
             emit_hudless(world);
         }
@@ -1552,7 +1454,7 @@ extern "C" fn rsf_fallout4_render_before_dynamic_resolution() {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fallout4_render_after_dynamic_resolution(caller: usize, manager: usize) {
     let base = image();
-    let targets = manager == base + TARGETS;
+    let targets = manager == base + rva(Site::Targets);
     with_world(|world| {
         let overlapping = targets && resolution_busy();
         if overlapping {
@@ -1565,7 +1467,7 @@ extern "C" fn rsf_fallout4_render_after_dynamic_resolution(caller: usize, manage
             }
         }
         if live()
-            && caller == base + return_rva(DR_CALL)
+            && caller == base + rva(Site::DrCall)
             && targets
             && !overlapping
             && world.frame_open
@@ -1609,7 +1511,7 @@ extern "C" fn rsf_fallout4_render_before_prepass(
         // FRAME admission records the ordinary parent beyond WorldBegin's return.
         let selected = (live() || world.recovery.token != 0)
             && depth == 1
-            && caller == image() + return_rva(PREPASS_CALL)
+            && caller == address(Site::PrepassCall)
             && world.frame_open
             && world.submission_open
             && !world.inputs;
@@ -1677,7 +1579,7 @@ extern "C" fn rsf_fallout4_render_enter_imagespace(caller: usize) -> bool {
             && ((live() && world.same_source()) || world.recovery.token != 0)
             && IMAGESPACE_CALLS
                 .iter()
-                .any(|&site| caller == base + return_rva(site));
+                .any(|&site| caller == base + rva(site));
         if selected {
             world.in_imagespace = true;
         }
@@ -1730,14 +1632,15 @@ extern "C" fn rsf_fallout4_render_before_effects(
     admitted: &mut CpuIdentity,
 ) -> bool {
     let base = image();
-    if caller != base + return_rva(EFFECTS_CALL) || (first, last, mode, flags) != (0, 13, 1, 1) {
+    if caller != base + rva(Site::EffectsCall) || (first, last, mode, flags) != (0, 13, 1, 1) {
         return false;
     }
     with_world(|world| {
         if !world.in_imagespace
             || !world.frame_open
             || world.cpu.source == 0
-            || read::<usize>(base + MANAGER).filter(|&native| native != 0) != Some(manager)
+            || read::<usize>(base + rva(Site::ImagespaceManager)).filter(|&native| native != 0)
+                != Some(manager)
         {
             return false;
         }
@@ -1871,7 +1774,7 @@ extern "C" fn rsf_fallout4_render_before_present(
     phase: &mut CpuIdentity,
 ) -> bool {
     let base = image();
-    if caller != base + return_rva(OUTER_PRESENT_CALL) || renderer != base + PRESENT_RENDERER {
+    if caller != base + rva(Site::PresentCall) || renderer != base + rva(Site::PresentRenderer) {
         return false;
     }
     with_world(|world| {
@@ -1879,7 +1782,7 @@ extern "C" fn rsf_fallout4_render_before_present(
             return false;
         }
         let matched = read_owner(base).is_some_and(|current| {
-            let window = read::<usize>(base + 0x38e13b0)
+            let window = read::<usize>(base + rva(Site::RendererWindow))
                 .filter(|&cell| cell == current.renderer + RENDERER_WINDOW);
             window.and_then(|cell| read::<usize>(cell + 0x18)) == Some(world.chain() as usize)
                 && leased(world, &current)

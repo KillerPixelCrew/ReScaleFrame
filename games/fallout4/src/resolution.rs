@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: MIT
-//! Producer resolution and the synchronous full-output borrow for Fallout 4 AE 1.11.240.
+//! Producer resolution and the synchronous full-output borrow for Fallout 4 AE.
 
 use crate::build_layout::{
-    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_OBJECT, RENDERER_POINTER, RENDERER_WINDOW,
+    RENDERER_CHAIN, RENDERER_CONTEXT, RENDERER_WINDOW, renderer_object, renderer_pointer,
 };
 use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::depth_domains::{self, Snapshot};
+use crate::discovery::{self, Site, rva};
 use crate::screen::{WORLD_LEASE_INVALID, ordinary_refusals};
 pub(crate) use crate::sys::NativeOutputOwner as OutputOwner;
 use crate::sys::NativeResolutionReceipt as Receipt;
-use crate::{Plain, guard, image, read};
+use crate::{Plain, image, read};
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SR, rsf_game_host_services,
     rsf_game_render_config, rsf_game_render_pass,
@@ -34,17 +35,25 @@ pub(crate) const UI_RETURN: u32 = 5;
 pub(crate) const UI_RESTORED: u32 = 6;
 pub(crate) const SOURCE_RETIRED: u32 = 7;
 
-const STATE: usize = 0x3d871a0;
-pub(crate) const TARGETS: usize = 0x2f4d750;
-const RATIOS: usize = TARGETS + 0xfb8;
-const VIEWPORT: usize = TARGETS + 0xfe4;
-const ACTIVE: usize = TARGETS + 0xfe5;
-const DISABLED: usize = TARGETS + 0xfe8;
+// Render target fields: the ratios, the viewport selector (fixed by its store and the Effects
+// stride test), the DR active flag (fixed by the ratio store) and the DR disabled flag (fixed
+// by the DR writer's read).
+const RATIOS: usize = 0xfb8;
+const VIEWPORT: usize = 0xfe4;
+const ACTIVE: usize = 0xfe5;
+const DISABLED: usize = 0xfe8;
+
+/// The graphics state and the render targets of the image at `base`.
+fn state_at(base: usize) -> usize {
+    base + rva(Site::State)
+}
+
+fn targets_at(base: usize) -> usize {
+    base + rva(Site::Targets)
+}
 const SHADOW: usize = 0x1b70;
 const RASTER: usize = 0x90;
-pub(crate) const MANAGER: usize = 0x3e5e4b0;
 const SHADOW_VIEWPORT_DIRTY: u32 = 2;
-const VIEWPORT_UNIT: usize = 0x2929458;
 
 type ReportFn = unsafe extern "C" fn(*const c_char);
 type Report = Option<ReportFn>;
@@ -100,19 +109,19 @@ impl FrameOwner {
     }
 
     fn frame_size_current(self, base: usize) -> bool {
-        read::<u32>(base + STATE + 0x98).map(u64::from) == Some(self.native_frame)
-            && read::<u32>(base + STATE + 0x78) == Some(self.size[0])
-            && read::<u32>(base + STATE + 0x7c) == Some(self.size[1])
+        read::<u32>(state_at(base) + 0x98).map(u64::from) == Some(self.native_frame)
+            && read::<u32>(state_at(base) + 0x78) == Some(self.size[0])
+            && read::<u32>(state_at(base) + 0x7c) == Some(self.size[1])
     }
 
     fn renderer_current(self, base: usize) -> bool {
-        let renderer = base + RENDERER_OBJECT;
-        read::<usize>(base + RENDERER_POINTER) == Some(renderer)
+        let renderer = renderer_object(base);
+        read::<usize>(renderer_pointer(base)) == Some(renderer)
             && read::<usize>(renderer + RENDERER_WINDOW).map(|value| value as u64)
                 == Some(self.window)
             && read::<usize>(renderer + RENDERER_CONTEXT) == Some(self.device_context)
             && read::<usize>(renderer + RENDERER_CHAIN) == Some(self.chain)
-            && read::<usize>(base + 0x32dd338)
+            && read::<usize>(base + rva(Site::WorldGraph))
                 .filter(|&graph| graph != 0)
                 .and_then(|graph| read::<usize>(graph.wrapping_add(0x140)))
                 .map(|value| value as u64)
@@ -128,7 +137,8 @@ struct Geometry {
 
 impl Geometry {
     fn capture(base: usize) -> Option<Self> {
-        let manager = read::<usize>(base + MANAGER).filter(|&value| value != 0)?;
+        let manager =
+            read::<usize>(base + rva(Site::ImagespaceManager)).filter(|&value| value != 0)?;
         let [a, b, c] = Self::triangles(manager)?;
         (a != 0 && b != 0 && c != 0).then_some(Self {
             manager,
@@ -145,7 +155,7 @@ impl Geometry {
     }
 
     fn current(self, base: usize) -> bool {
-        read::<usize>(base + MANAGER) == Some(self.manager)
+        read::<usize>(base + rva(Site::ImagespaceManager)) == Some(self.manager)
             && Self::triangles(self.manager) == Some(self.triangles)
     }
 }
@@ -164,8 +174,8 @@ impl TargetValues {
 
     fn capture(base: usize) -> Option<Self> {
         Some(Self {
-            ratios: read(base + RATIOS)?,
-            active: read(base + ACTIVE)?,
+            ratios: read(targets_at(base) + RATIOS)?,
+            active: read(targets_at(base) + ACTIVE)?,
         })
     }
 
@@ -184,7 +194,7 @@ impl TargetWrites {
     fn write_ratios(&mut self, base: usize, values: TargetValues) -> bool {
         for (index, ratio) in values.ratios.iter().enumerate() {
             self.ratios[index] = true;
-            if !write(base + RATIOS + size_of::<f32>() * index, ratio) {
+            if !write(targets_at(base) + RATIOS + size_of::<f32>() * index, ratio) {
                 return false;
             }
         }
@@ -202,7 +212,7 @@ impl TargetWrites {
         let mut okay = true;
         for (index, pending) in self.ratios.iter_mut().enumerate() {
             okay &= restore(
-                base + RATIOS + size_of::<f32>() * index,
+                targets_at(base) + RATIOS + size_of::<f32>() * index,
                 saved.ratios[index],
                 owned.ratios[index],
                 pending,
@@ -211,7 +221,7 @@ impl TargetWrites {
             );
         }
         okay & restore(
-            base + ACTIVE,
+            targets_at(base) + ACTIVE,
             saved.active,
             owned.active,
             &mut self.active,
@@ -385,11 +395,11 @@ struct CleanupOwners {
 
 /// Revalidate live owners without treating a later frame as an automatic write refusal.
 fn cleanup_owners(base: usize, scope: &Scope, shadow: bool) -> Option<CleanupOwners> {
-    let frame = u64::from(read::<u32>(base + STATE + 0x98)?);
+    let frame = u64::from(read::<u32>(state_at(base) + 0x98)?);
     let advanced = frame != scope.frame.native_frame;
     let renderer = scope.frame.renderer_current(base)
-        && read::<u32>(base + STATE + 0x78) == Some(scope.frame.size[0])
-        && read::<u32>(base + STATE + 0x7c) == Some(scope.frame.size[1]);
+        && read::<u32>(state_at(base) + 0x78) == Some(scope.frame.size[0])
+        && read::<u32>(state_at(base) + 0x7c) == Some(scope.frame.size[1]);
     let context = if shadow {
         native_context(base)?
     } else {
@@ -413,10 +423,10 @@ fn native_context(base: usize) -> Option<usize> {
 }
 
 fn input_enabled(base: usize) -> bool {
-    read::<u32>(base + DISABLED) == Some(0)
-        && read::<u8>(base + VIEWPORT) == Some(1)
-        && read::<u32>(base + STATE + 0xac) == Some(1)
-        && read::<u32>(base + STATE + 0xb0) == Some(0)
+    read::<u32>(targets_at(base) + DISABLED) == Some(0)
+        && read::<u8>(targets_at(base) + VIEWPORT) == Some(1)
+        && read::<u32>(state_at(base) + 0xac) == Some(1)
+        && read::<u32>(state_at(base) + 0xb0) == Some(0)
 }
 
 fn output_size(pass: &rsf_game_render_pass) -> [u32; 2] {
@@ -469,14 +479,14 @@ pub(crate) fn preflight(pass: &rsf_game_render_pass, context: *mut c_void) -> Op
     );
     if !owner.renderer_current(base)
         || !owner.frame_size_current(base)
-        || read::<u32>(base + DISABLED) != Some(0)
+        || read::<u32>(targets_at(base) + DISABLED) != Some(0)
     {
         return None;
     }
     let shadow = engine.wrapping_add(SHADOW);
     let raster = read::<[f32; 6]>(shadow.wrapping_add(RASTER))?;
     read::<u32>(shadow)?;
-    let jitter = read::<[f32; 2]>(base + STATE + 4)?;
+    let jitter = read::<[f32; 2]>(state_at(base) + 4)?;
     let geometry = Geometry::capture(base)?;
     if !raster.into_iter().all(f32::is_finite) || !jitter.into_iter().all(f32::is_finite) {
         return None;
@@ -515,8 +525,8 @@ pub(crate) fn configure(
     }
     let base = image();
     let size = [
-        read::<u32>(base + STATE + 0x78)?,
-        read::<u32>(base + STATE + 0x7c)?,
+        read::<u32>(state_at(base) + 0x78)?,
+        read::<u32>(state_at(base) + 0x7c)?,
     ];
     if !size.iter().all(|value| (1..=16384).contains(value)) || !input_enabled(base) {
         return None;
@@ -569,7 +579,7 @@ pub(crate) fn configure(
     OWNERS.fetch_add(1, Ordering::AcqRel);
     let okay = scope.input_writes.write_ratios(base, scope.input_targets) && {
         scope.input_writes.active = true;
-        write(base + ACTIVE, &scope.input_targets.active)
+        write(targets_at(base) + ACTIVE, &scope.input_targets.active)
     };
     SCOPE.set(scope);
     if !okay {
@@ -583,7 +593,7 @@ pub(crate) fn configure(
     Some(())
 }
 
-/// The nonzero-width branch of the verified native builder at 0x1817ef0.
+/// The nonzero-width branch of the verified native viewport builder (`Site::ViewportBuilder`).
 fn replay_output_viewport(base: usize, scope: &Scope) -> Option<()> {
     let [width, height] = scope.frame.size;
     if width == 0 || height == 0 {
@@ -592,7 +602,7 @@ fn replay_output_viewport(base: usize, scope: &Scope) -> Option<()> {
     let width = width as f32;
     let height = height as f32;
     let shadow = scope.shadow();
-    let unit = read::<f32>(base + VIEWPORT_UNIT)?;
+    let unit = read::<f32>(base + rva(Site::ViewportUnit))?;
     if native_context(base)? != scope.context {
         return None;
     }
@@ -645,13 +655,13 @@ pub(crate) fn begin_output(snapshot: &Snapshot, pass: &rsf_game_render_pass) -> 
     scope.context = context;
     SCOPE.set(scope);
     let base = image();
-    if !scope.current(base, true) || read::<u32>(base + DISABLED) != Some(0) {
+    if !scope.current(base, true) || read::<u32>(targets_at(base) + DISABLED) != Some(0) {
         return None;
     }
     let shadow = scope.shadow();
     scope.full.targets = TargetValues::capture(base)?;
-    scope.full.viewport = read(base + VIEWPORT)?;
-    scope.full.jitter = read(base + STATE + 4)?;
+    scope.full.viewport = read(targets_at(base) + VIEWPORT)?;
+    scope.full.jitter = read(state_at(base) + 4)?;
     scope.full.geometry = Geometry::capture(base)?;
     scope.full.raster = read(shadow.wrapping_add(RASTER))?;
     scope.full.dirty = read(shadow)?;
@@ -669,9 +679,9 @@ pub(crate) fn begin_output(snapshot: &Snapshot, pass: &rsf_game_render_pass) -> 
         full.target_writes.active = true;
         full.viewport_owned = true;
         full.jitter_owned = true;
-        write(base + ACTIVE, &0u8)
-            && write(base + VIEWPORT, &0u8)
-            && write(base + STATE + 4, &[0.0f32; 2])
+        write(targets_at(base) + ACTIVE, &0u8)
+            && write(targets_at(base) + VIEWPORT, &0u8)
+            && write(state_at(base) + 4, &[0.0f32; 2])
     };
     if !okay {
         SCOPE.set(scope);
@@ -731,7 +741,7 @@ fn transfer_native_dr(base: usize, scope: &mut Scope) -> Option<()> {
             return None;
         }
         scope.full.target_writes.active = true;
-        if !write(base + ACTIVE, &0u8) {
+        if !write(targets_at(base) + ACTIVE, &0u8) {
             return None;
         }
     }
@@ -759,7 +769,7 @@ fn end_output(base: usize) -> bool {
         owners.renderer,
     );
     okay &= restore(
-        base + VIEWPORT,
+        targets_at(base) + VIEWPORT,
         full.viewport,
         0,
         &mut full.viewport_owned,
@@ -767,7 +777,7 @@ fn end_output(base: usize) -> bool {
         owners.renderer,
     );
     okay &= restore(
-        base + STATE + 4,
+        state_at(base) + 4,
         full.jitter,
         [0.0; 2],
         &mut full.jitter_owned,
@@ -852,7 +862,7 @@ fn finish_source(base: usize) -> bool {
 pub(crate) fn retry_retired(base: usize) {
     let scope = SCOPE.get();
     if (scope.input || scope.output)
-        && read::<u32>(base + STATE + 0x98)
+        && read::<u32>(state_at(base) + 0x98)
             .is_some_and(|frame| u64::from(frame) != scope.frame.native_frame)
     {
         let _ = finish_source(base);
@@ -902,11 +912,11 @@ fn in_receipt_budget(index: u32, pass: &rsf_game_render_pass, scope: &Scope) -> 
 }
 
 fn collect_scalars(base: usize, receipt: &mut Receipt) -> Option<()> {
-    receipt.ratio = read(base + RATIOS)?;
-    receipt.viewport = read(base + VIEWPORT)?;
-    receipt.active = read(base + ACTIVE)?;
-    receipt.frame = read(base + STATE + 0x98)?;
-    let manager = read::<usize>(base + MANAGER).filter(|&value| value != 0)?;
+    receipt.ratio = read(targets_at(base) + RATIOS)?;
+    receipt.viewport = read(targets_at(base) + VIEWPORT)?;
+    receipt.active = read(targets_at(base) + ACTIVE)?;
+    receipt.frame = read(state_at(base) + 0x98)?;
+    let manager = read::<usize>(base + rva(Site::ImagespaceManager)).filter(|&value| value != 0)?;
     receipt.partial = read(manager.wrapping_add(0x48))?;
     for (index, offset) in [0x28, 0x38, 0x40].into_iter().enumerate() {
         receipt.geometry[index] = read(manager.wrapping_add(offset))?;
@@ -921,38 +931,22 @@ fn collect_shadow(scope: &Scope, receipt: &mut Receipt) -> Option<()> {
     Some(())
 }
 
+/// The temporal update's size test and stores, the Effects vertex stride selection, the viewport
+/// selector store, the DR count and ratio stores, the DR entry, the explicit-size viewport builder
+/// and the common shadow writer through its return, and the viewport unit 1.0.
 pub(crate) fn verify() -> bool {
-    guard(0x182d586, b"\x83\xb9\xac\x00\x00\x00\x00")
-        && guard(0x182d647, b"\xf3\x0f\x11\x7f\x04\xf3\x0f\x11\x5f\x08")
-        && guard(0x21856f5,
-            b"\x80\x3d\x38\x90\xdc\x00\x00\xba\x38\x00\x00\x00\x75\x05\xba\x28\x00\x00\x00",
-        )
-        && guard(0x21856df,
-            b"\x80\x7d\x48\x00\x74\x07\xba\x40\x00\x00\x00",
-        )
-        && guard(0x1839ec0, b"\x88\x91\xe4\x0f\x00\x00\xc3")
-        && guard(0x183a2d4, b"\xf0\xff\x81\xe8\x0f\x00\x00")
-        && guard(0x183a278, b"\x41\xc6\x82\xe5\x0f\x00\x00\x01")
-        && guard(0x181801e, b"\xf3\x0f\x11\x83\x98\x00\x00\x00")
-        && guard(0x1839e00, b"\x48\x83\xec\x38\x8b\x15\x0e\x92\x63\x02")
-        // Guard the explicit-size entry and the common shadow writer through RET.
-        && guard(0x1817ef0, b"\x40\x53\x48\x83\xec\x60\x0f\x29\x74\x24\x50\x48\x8b\xda\xf3\x0f\x10\x35\
-            \x52\x15\x11\x01\x0f\x29\x7c\x24\x40\x44\x0f\x29\x44\x24\x30\x44\x0f\x28\
-            \xc6\x44\x0f\x29\x4c\x24\x20\x44\x0f\x28\xce\x45\x85\xc0\x74\x10\x41\x8b\
-            \xc0\x0f\x57\xff\xf3\x48\x0f\x2a\xf8\x41\x8b\xc1\xeb\x63")
-        && guard(0x1817f97, b"\x8b\x0d\x7b\xb0\x65\x02\x0f\x57\xd2\xf3\x48\x0f\x2a\xd0\x65\x48\x8b\x04\
-            \x25\x58\x00\x00\x00\xba\x20\x0b\x00\x00\x48\x8b\x04\xc8\x48\x8b\x0c\x02\
-            \x48\x85\xc9\x75\x07\x48\x8b\x0d\xd1\x93\x0c\x02\x48\x81\xc1\x70\x1b\x00\
-            \x00\x0f\x28\xc7\xf3\x0f\x59\x81\xd0\x06\x00\x00\xf3\x0f\x11\x83\x90\x00\
-            \x00\x00\xf3\x0f\x5c\xb1\xd8\x06\x00\x00\xf3\x0f\x59\xf2\xf3\x0f\x11\xb3\
-            \x94\x00\x00\x00\xf3\x0f\x10\x81\xd4\x06\x00\x00\xf3\x0f\x5c\x81\xd0\x06\
-            \x00\x00\x0f\x28\x74\x24\x50\xf3\x0f\x59\xc7\x0f\x28\x7c\x24\x40\xf3\x41\
-            \x0f\x59\xc0\x44\x0f\x28\x44\x24\x30\xf3\x0f\x11\x83\x98\x00\x00\x00\xf3\
-            \x0f\x10\x89\xd8\x06\x00\x00\xf3\x0f\x5c\x89\xdc\x06\x00\x00\xf3\x0f\x59\
-            \xca\xf3\x41\x0f\x59\xc9\x44\x0f\x28\x4c\x24\x20\xf3\x0f\x11\x8b\x9c\x00\
-            \x00\x00\x8b\x81\xe0\x06\x00\x00\x89\x83\xa0\x00\x00\x00\x8b\x81\xe4\x06\
-            \x00\x00\x83\x0b\x02\x89\x83\xa4\x00\x00\x00\x48\x83\xc4\x60\x5b\xc3")
-        && guard(VIEWPORT_UNIT, &1.0_f32.to_le_bytes())
+    discovery::verify_all(&[
+        Site::TemporalUpdate,
+        Site::TemporalSize,
+        Site::EffectsSize,
+        Site::ViewportStore,
+        Site::DrCount,
+        Site::DrRatio,
+        Site::DrEntry,
+        Site::ViewportBuilder,
+        Site::ShadowWriter,
+        Site::ViewportUnit,
+    ])
 }
 
 pub(crate) fn inputs_match(pass: &rsf_game_render_pass) -> bool {
@@ -991,7 +985,7 @@ pub(crate) fn native_viewport(enabled: bool) -> bool {
         scope.full.native_full_viewport = true;
     }
     SCOPE.set(scope);
-    !enabled || write(image() + VIEWPORT, &0u8)
+    !enabled || write(targets_at(image()) + VIEWPORT, &0u8)
 }
 
 pub(crate) fn end_current_output() -> bool {
@@ -1105,11 +1099,12 @@ mod tests {
 
     #[test]
     fn world_retry_waits_for_frame_advance_and_retires_the_input_scope() {
-        let mut native = vec![0_u8; STATE + 0x9c];
+        // Unresolved sites are zero: the state and the targets both start at the buffer.
+        let mut native = vec![0_u8; RATIOS + 0x10];
         let base = native.as_mut_ptr() as usize;
-        let native_frame = base + STATE + 0x98;
+        let native_frame = state_at(base) + 0x98;
         assert!(write(native_frame, &7_u32));
-        assert!(write(base + RATIOS, &0.5_f32));
+        assert!(write(targets_at(base) + RATIOS, &0.5_f32));
         let count = OWNERS.fetch_add(1, Ordering::AcqRel);
         SCOPE.set(Scope {
             frame: FrameOwner {
@@ -1135,11 +1130,11 @@ mod tests {
         assert!(SCOPE.get().input && SCOPE.get().input_writes.ratios[0]);
 
         assert!(write(native_frame, &8_u32));
-        assert!(write(base + RATIOS, &0.75_f32));
+        assert!(write(targets_at(base) + RATIOS, &0.75_f32));
         retry_retired(base);
         assert!(!SCOPE.get().input);
         assert_eq!(OWNERS.load(Ordering::Acquire), count);
-        assert_eq!(read::<f32>(base + RATIOS), Some(0.75));
+        assert_eq!(read::<f32>(targets_at(base) + RATIOS), Some(0.75));
     }
 
     #[test]
