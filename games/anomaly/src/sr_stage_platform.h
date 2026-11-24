@@ -11,9 +11,7 @@
 #include <stdint.h>
 #include "sr_swap_platform.h"
 
-struct rsf_camera_frame;
 struct rsf_game_render_pass;
-struct rsf_sr_draw_views;
 
 typedef void (*rsf_anomaly_sr_log)(void*, const char*);
 

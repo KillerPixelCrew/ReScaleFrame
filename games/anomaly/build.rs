@@ -48,10 +48,7 @@ fn bindings() {
     let builder = rsf_bindgen::owner(&headers, &[], &["games/anomaly"], &[], &[])
         .parse_callbacks(Box::new(rsf_bindgen::Derives(derives)))
         // The adapter declares the C calls it makes by hand, with Rust types.
-        .ignore_functions()
-        // sr_stage_platform.h only forward-declares the D3D11 draw views; Rust owns that record.
-        .blocklist_type("rsf_sr_draw_views")
-        .raw_line("pub(crate) use crate::sr_d3d11::DrawViews as rsf_sr_draw_views;");
+        .ignore_functions();
     rsf_bindgen::write(builder, "sys.rs");
 }
 
