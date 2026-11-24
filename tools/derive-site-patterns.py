@@ -6,12 +6,16 @@ Reads a PE32+ executable (or a decrypted image dump whose RVAs equal file offset
 for every site in a spec file, prints the shortest pattern found that matches exactly once in the
 executable sections and resolves back to the site's recorded RVA:
 
-  code NAME RVA     pattern starts at the site; rel32 branches and RIP displacements are wildcards
-  data NAME RVA     pattern starts at an instruction whose RIP-relative operand addresses the global
-                    (or, for a function, at a rel32 call or jump to it); the operand is decoded
+  code NAME RVA [LEN]  pattern starts at the site and covers at least LEN bytes of it; rel32
+                       branches and RIP displacements are wildcards. When no pattern starting at
+                       the site is unique, it starts at an earlier instruction (an interior site)
+  data NAME RVA        pattern starts at an instruction whose RIP-relative operand addresses the
+                       global (or, for a function, at a rel32 call or jump to it); the operand is
+                       decoded
 
 Output is one line per site: NAME KIND PATTERN [disp NEXT] -> RVA, the kind being `at` (the site
-is the pattern start) or `rip` (the site is the decoded RIP-relative target). Usage:
+is the pattern start), `at+N` (the site is N bytes into the pattern) or `rip` (the site is the
+decoded RIP-relative target). Usage:
 
   py -3 tools/derive-site-patterns.py IMAGE SPEC [--mapped]
 
@@ -60,6 +64,20 @@ class Image:
             self.bytes = bytes(image)
         self.code = [(va, va + max(vsize, 1)) for va, vsize, _, _, flags in sections
                      if flags & 0x20000000]
+        # Function starts from the exception directory (data directory 3), for true instruction
+        # boundaries before an interior site.
+        pdata, pdata_size = struct.unpack_from('<II', self.bytes, nt + 24 + 112 + 3 * 8)
+        self.functions = sorted(
+            struct.unpack_from('<II', self.bytes, entry)
+            for entry in range(pdata, pdata + pdata_size - 11, 12))
+
+    def function_start(self, rva):
+        """The start of the function (or unwind chunk) containing rva, or None."""
+        import bisect
+        index = bisect.bisect_right(self.functions, (rva, 1 << 32)) - 1
+        if index >= 0 and self.functions[index][0] <= rva < self.functions[index][1]:
+            return self.functions[index][0]
+        return None
 
     def matches(self, regex, limit=3):
         found = []
@@ -180,9 +198,35 @@ def references(image, target):
     return result
 
 
-def derive(image, kind, rva):
+def instruction_starts_before(image, rva, reach=64):
+    """Instruction starts within reach before rva, nearest first, decoded from the start of the
+    function containing rva so that every start is a real instruction boundary."""
+    start = image.function_start(rva)
+    if start is None or start == rva:
+        return []
+    starts, end = [], start
+    for instruction in DISASM.disasm(image.bytes[start:rva], start):
+        starts.append(instruction.address)
+        end = instruction.address + instruction.size
+    if end != rva:
+        return []
+    return [begin for begin in reversed(starts) if rva - begin <= reach]
+
+
+def derive(image, kind, rva, length=0):
     if kind == 'code':
-        pattern = grow(image, rva, MIN_CODE_LENGTH)
+        cover = max(MIN_CODE_LENGTH, length)
+        limit = max(MAX_BYTES, cover + 32)
+        pattern = grow(image, rva, cover, limit)
+        if pattern is not None:
+            return ('at', pattern, None)
+        # Then a pattern that starts at an earlier instruction of the same function, and only
+        # then a longer one from the site, which may run into the next function.
+        for begin in instruction_starts_before(image, rva):
+            pattern = grow(image, begin, rva - begin + cover, limit + rva - begin)
+            if pattern is not None:
+                return (f'at+{rva - begin}', pattern, None)
+        pattern = grow(image, rva, cover, 2 * limit)
         if pattern is not None:
             return ('at', pattern, None)
     best = None
@@ -200,8 +244,8 @@ def resolve(image, kind, pattern, operand):
     hits = image.matches(regex_of(pattern))
     if len(hits) != 1:
         return None
-    if kind == 'at':
-        return hits[0]
+    if kind.startswith('at'):
+        return hits[0] + int(kind[3:] or 0)
     _, disp, size = operand
     return hits[0] + size + struct.unpack_from('<i', image.bytes, hits[0] + disp)[0]
 
@@ -222,9 +266,9 @@ def main():
             line = line.split('#', 1)[0].strip()
             if not line:
                 continue
-            kind, name, value = line.split()
+            kind, name, value, *length = line.split()
             rva = int(value, 16)
-            result = derive(image, kind, rva)
+            result = derive(image, kind, rva, int(length[0]) if length else 0)
             if result is None:
                 print(f'{name} {kind} NOT-FOUND -> {rva:#x}')
                 failed += 1
