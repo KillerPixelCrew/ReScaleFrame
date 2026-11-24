@@ -564,7 +564,7 @@ impl AuxiliarySr {
         Some(())
     }
 
-    fn reserve(
+    fn reserve_frame(
         &mut self,
         context: *mut c_void,
         pass: &rsf_game_render_pass,
@@ -649,8 +649,10 @@ impl AuxiliarySr {
         Some(())
     }
 
-    fn refine(&mut self, inputs: &[rsf_d3d11_auxiliary_surface]) -> bool {
-        if !self.on_owner_thread() {
+    // Host-only, like the transaction block below.
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn refine(&mut self, inputs: &[rsf_d3d11_auxiliary_surface]) -> bool {
+        if inputs.len() > MAX_SURFACES || !self.on_owner_thread() {
             return false;
         }
         let Some(frame) = &mut self.frame else {
@@ -673,7 +675,9 @@ impl AuxiliarySr {
         true
     }
 
-    fn original_colour(&self) -> Texture {
+    // Host-only, like the transaction block below.
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn original_colour(&self) -> Texture {
         let Some(frame) = &self.frame else {
             return ptr::null_mut();
         };
@@ -792,7 +796,7 @@ impl AuxiliarySr {
         true
     }
 
-    fn cancel(&mut self) -> bool {
+    pub(crate) fn cancel(&mut self) -> bool {
         if !self.on_owner_thread()
             || self
                 .frame
@@ -805,7 +809,9 @@ impl AuxiliarySr {
         true
     }
 
-    fn commit(&mut self, temporal: bool) -> bool {
+    // Host-only, like the transaction block below.
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn commit(&mut self, temporal: bool) -> bool {
         if !self.on_owner_thread() {
             return false;
         }
@@ -853,7 +859,7 @@ impl AuxiliarySr {
         true
     }
 
-    fn restore(&mut self) -> bool {
+    pub(crate) fn restore(&mut self) -> bool {
         let Some(frame) = &mut self.frame else {
             return true;
         };
@@ -920,12 +926,16 @@ impl AuxiliarySr {
     }
 }
 
-impl crate::d3d11_host_reduced::Products for AuxiliarySr {
-    fn pending(&self) -> bool {
+/// The auxiliary SR transaction the D3D11 host drives (`d3d11_host_reduced::Products`): the bool
+/// contract over the owner, with the surface limits of each step. Under test the host calls its
+/// fake instead, so only this module's tests reach these.
+#[cfg_attr(test, allow(dead_code))]
+impl AuxiliarySr {
+    pub(crate) fn pending(&self) -> bool {
         self.frame.is_some()
     }
 
-    fn matches(&self, scope: [u64; 3]) -> bool {
+    pub(crate) fn matches(&self, scope: [u64; 3]) -> bool {
         self.on_owner_thread()
             && self
                 .frame
@@ -933,7 +943,7 @@ impl crate::d3d11_host_reduced::Products for AuxiliarySr {
                 .is_some_and(|frame| frame.scope == scope)
     }
 
-    fn reserve(
+    pub(crate) fn reserve(
         &mut self,
         context: *mut c_void,
         pass: &rsf_game_render_pass,
@@ -948,39 +958,32 @@ impl crate::d3d11_host_reduced::Products for AuxiliarySr {
             MAX_AUXILIARIES
         };
         inputs.len() <= limit
-            && Self::reserve(self, context, pass, inputs, log, user, recovery).is_some()
+            && self
+                .reserve_frame(context, pass, inputs, log, user, recovery)
+                .is_some()
     }
 
-    fn refine(&mut self, inputs: &[rsf_d3d11_auxiliary_surface]) -> bool {
-        inputs.len() <= MAX_SURFACES && Self::refine(self, inputs)
-    }
-
-    fn seal(&mut self) -> bool {
+    pub(crate) fn seal(&mut self) -> bool {
         self.render(true, None)
     }
 
-    fn cancel(&mut self) -> bool {
-        Self::cancel(self)
-    }
-
-    fn original_colour(&self) -> Texture {
-        Self::original_colour(self)
-    }
-
-    fn temporal_prepare(&mut self, inputs: &[rsf_d3d11_auxiliary_surface]) -> bool {
+    pub(crate) fn temporal_prepare(&mut self, inputs: &[rsf_d3d11_auxiliary_surface]) -> bool {
         inputs.len() <= MAX_SURFACES && self.render(false, Some(inputs))
     }
 
-    fn spatial_prepare(&mut self) -> bool {
+    pub(crate) fn spatial_prepare(&mut self) -> bool {
         self.render(false, None)
     }
 
-    fn commit(&mut self, temporal: bool) -> bool {
-        Self::commit(self, temporal)
-    }
-
-    fn restore(&mut self) -> bool {
-        Self::restore(self)
+    pub(crate) fn prepare(
+        &mut self,
+        context: *mut c_void,
+        pass: &rsf_game_render_pass,
+        inputs: &[rsf_d3d11_auxiliary_surface],
+        log: rsf_game_log_fn,
+        user: *mut c_void,
+    ) -> bool {
+        self.reserve(context, pass, inputs, log, user, false) && self.seal()
     }
 }
 
@@ -1148,11 +1151,7 @@ mod tests {
             ..Default::default()
         }];
 
-        assert!(
-            owner
-                .reserve(context.raw(), &pass, &inputs, None, ptr::null_mut(), false)
-                .is_none()
-        );
+        assert!(!owner.reserve(context.raw(), &pass, &inputs, None, ptr::null_mut(), false));
         assert!(owner.backups[0].is_some());
         assert!(owner.frame.is_none());
         assert_eq!(main.com.refs.get(), 1);
@@ -1160,11 +1159,7 @@ mod tests {
         assert_eq!(auxiliary.com.refs.get(), 1);
 
         pass.color_output_readable = ptr::null_mut();
-        assert!(
-            owner
-                .reserve(context.raw(), &pass, &inputs, None, ptr::null_mut(), false)
-                .is_some()
-        );
+        assert!(owner.reserve(context.raw(), &pass, &inputs, None, ptr::null_mut(), false));
         assert_eq!(main.com.refs.get(), 2);
         assert_eq!(auxiliary.com.refs.get(), 2);
         assert!(owner.cancel());

@@ -5,7 +5,6 @@ use crate::d3d11_host_abi::{
     Pass, RSF_D3D11_REDUCED_CANCELLED, RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED, Surface,
     rsf_d3d11_reduced_frame,
 };
-use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::c_void;
 use windows::core::{IUnknown, Interface};
 
@@ -14,39 +13,12 @@ pub(crate) const MAX_RESERVED: usize = 8;
 const MAX_SURFACES: usize = 10;
 const NOT_READY: i32 = -3;
 
-/// The auxiliary SR transaction used by temporal auxiliaries and reduced recovery.
-pub(crate) trait Products {
-    fn pending(&self) -> bool;
-    fn matches(&self, scope: [u64; 3]) -> bool;
-    fn reserve(
-        &mut self,
-        context: Raw,
-        pass: &Pass,
-        surfaces: &[Surface],
-        log: rsf_game_log_fn,
-        user: Raw,
-        recovery: bool,
-    ) -> bool;
-    fn refine(&mut self, surfaces: &[Surface]) -> bool;
-    fn seal(&mut self) -> bool;
-    fn cancel(&mut self) -> bool;
-    fn original_colour(&self) -> Raw;
-    fn temporal_prepare(&mut self, surfaces: &[Surface]) -> bool;
-    fn spatial_prepare(&mut self) -> bool;
-    fn commit(&mut self, temporal: bool) -> bool;
-    fn restore(&mut self) -> bool;
-
-    fn prepare(
-        &mut self,
-        context: Raw,
-        pass: &Pass,
-        surfaces: &[Surface],
-        log: rsf_game_log_fn,
-        user: Raw,
-    ) -> bool {
-        self.reserve(context, pass, surfaces, log, user, false) && self.seal()
-    }
-}
+/// The auxiliary SR transaction used by temporal auxiliaries and reduced recovery: the
+/// `AuxiliarySr` owner, swapped for the host tests' fake of the same methods.
+#[cfg(not(test))]
+pub(crate) type Products = crate::auxiliary_sr::AuxiliarySr;
+#[cfg(test)]
+pub(crate) type Products = crate::d3d11_host::tests::FakeProducts;
 
 pub(crate) fn zeroed_pass() -> Pass {
     // SAFETY: the render pass is a C aggregate of integers, floats, nullable
@@ -57,7 +29,7 @@ pub(crate) fn zeroed_pass() -> Pass {
 /// One reduced-frame obligation. Scalar identity and explicit resource
 /// leases survive the callback; borrowed pass resources do not.
 pub(crate) struct Ticket {
-    pub(crate) products: Box<dyn Products>,
+    pub(crate) products: Box<Products>,
     pub(crate) owner: Pass,
     pub(crate) surfaces: [Surface; MAX_SURFACES],
     pub(crate) leases: Vec<IUnknown>,
@@ -77,7 +49,7 @@ pub(crate) struct Ticket {
 }
 
 impl Ticket {
-    pub(crate) fn new(products: Box<dyn Products>) -> Self {
+    pub(crate) fn new(products: Box<Products>) -> Self {
         Self {
             products,
             owner: zeroed_pass(),

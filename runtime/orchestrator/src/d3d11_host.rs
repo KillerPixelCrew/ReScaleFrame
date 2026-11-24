@@ -161,7 +161,7 @@ impl CaptureBudget {
 /// State owned by the admitted graphics callback. Every field is reached only
 /// under the callback lease; a contended lease refuses rather than waits.
 struct Graphics {
-    auxiliaries: Option<Box<dyn Products>>,
+    auxiliaries: Option<Box<Products>>,
     reduced: Option<Ticket>,
     next_reduced_token: u64,
     sampler_bias: Raw,
@@ -2771,4 +2771,4 @@ unsafe extern "C" fn rsf_d3d11_host_capture_texture(
 
 #[cfg(test)]
 #[path = "d3d11_host_tests.rs"]
-mod tests;
+pub(crate) mod tests;

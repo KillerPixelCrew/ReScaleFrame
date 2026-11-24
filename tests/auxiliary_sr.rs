@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::d3d11_host_reduced::Products;
 use crate::native_regions::rsf_native_regions_release;
 use rsf_game_sys::{
     RSF_D3D11_AUXILIARY_COLOUR as COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL as DEPTH,
@@ -140,7 +139,7 @@ fn scalar(bytes: &[u8], index: usize) -> f32 {
     f32::from_bits(word(bytes, index).unwrap_or_default())
 }
 
-// One auxiliary SR owner driven through the Products interface the reduced host calls.
+// One auxiliary SR owner driven through the transaction methods the reduced host calls.
 struct Transaction(RefCell<AuxiliarySr>);
 
 impl Transaction {
@@ -151,15 +150,9 @@ impl Transaction {
     fn reserve(&self, rig: &Device, pass: &Pass, surfaces: &[Surface], recovery: bool) -> bool {
         let context = rig.context.as_raw();
         let user = ptr::null_mut();
-        Products::reserve(
-            &mut *self.0.borrow_mut(),
-            context,
-            pass,
-            surfaces,
-            None,
-            user,
-            recovery,
-        )
+        self.0
+            .borrow_mut()
+            .reserve(context, pass, surfaces, None, user, recovery)
     }
 
     fn prepare(&self, rig: &Device, pass: &Pass, surfaces: &[Surface]) -> bool {
@@ -167,29 +160,29 @@ impl Transaction {
     }
 
     fn pending(&self) -> bool {
-        Products::pending(&*self.0.borrow())
+        self.0.borrow().pending()
     }
     fn seal(&self) -> bool {
-        Products::seal(&mut *self.0.borrow_mut())
+        self.0.borrow_mut().seal()
     }
     fn cancel(&self) -> bool {
-        Products::cancel(&mut *self.0.borrow_mut())
+        self.0.borrow_mut().cancel()
     }
     fn spatial(&self) -> bool {
-        Products::spatial_prepare(&mut *self.0.borrow_mut())
+        self.0.borrow_mut().spatial_prepare()
     }
     fn commit(&self) -> bool {
-        Products::commit(&mut *self.0.borrow_mut(), false)
+        self.0.borrow_mut().commit(false)
     }
     fn restore(&self) -> bool {
-        Products::restore(&mut *self.0.borrow_mut())
+        self.0.borrow_mut().restore()
     }
     fn matches(&self, frame: u64) -> bool {
-        Products::matches(&*self.0.borrow(), [1, frame, 91])
+        self.0.borrow().matches([1, frame, 91])
     }
 
     fn temporal(&self, surfaces: &[Surface]) -> bool {
-        Products::temporal_prepare(&mut *self.0.borrow_mut(), surfaces)
+        self.0.borrow_mut().temporal_prepare(surfaces)
     }
 }
 fn pass(output: &Texture2D, frame: u64, in_place: bool) -> Pass {

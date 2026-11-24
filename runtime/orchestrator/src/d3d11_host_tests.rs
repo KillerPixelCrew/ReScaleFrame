@@ -293,19 +293,20 @@ pub(super) unsafe extern "C" fn ini_write(
     OK
 }
 #[derive(Default)]
-struct FakeProducts {
+pub(crate) struct FakeProducts {
     frame: bool,
     sealed: bool,
 }
 
-impl Products for FakeProducts {
-    fn pending(&self) -> bool {
+// `d3d11_host_reduced::Products` under test: the methods `AuxiliarySr` gives the host.
+impl FakeProducts {
+    pub(crate) fn pending(&self) -> bool {
         self.frame
     }
-    fn matches(&self, _: [u64; 3]) -> bool {
+    pub(crate) fn matches(&self, _: [u64; 3]) -> bool {
         self.frame
     }
-    fn reserve(
+    pub(crate) fn reserve(
         &mut self,
         _: Raw,
         _: &Pass,
@@ -322,40 +323,50 @@ impl Products for FakeProducts {
         self.sealed = false;
         true
     }
-    fn refine(&mut self, _: &[Surface]) -> bool {
+    pub(crate) fn refine(&mut self, _: &[Surface]) -> bool {
         self.frame && !self.sealed
     }
-    fn seal(&mut self) -> bool {
+    pub(crate) fn seal(&mut self) -> bool {
         self.sealed = self.frame;
         self.frame
     }
-    fn cancel(&mut self) -> bool {
+    pub(crate) fn cancel(&mut self) -> bool {
         let unused = self.frame && !self.sealed;
         if unused {
             self.frame = false;
         }
         unused
     }
-    fn original_colour(&self) -> Raw {
+    pub(crate) fn original_colour(&self) -> Raw {
         null_mut()
     }
-    fn temporal_prepare(&mut self, _: &[Surface]) -> bool {
+    pub(crate) fn temporal_prepare(&mut self, _: &[Surface]) -> bool {
         self.sealed
     }
-    fn spatial_prepare(&mut self) -> bool {
+    pub(crate) fn spatial_prepare(&mut self) -> bool {
         self.sealed
     }
-    fn commit(&mut self, _: bool) -> bool {
+    pub(crate) fn commit(&mut self, _: bool) -> bool {
         self.sealed
     }
-    fn restore(&mut self) -> bool {
+    pub(crate) fn restore(&mut self) -> bool {
         self.frame = false;
         self.sealed = false;
         true
     }
+    pub(crate) fn prepare(
+        &mut self,
+        context: Raw,
+        pass: &Pass,
+        surfaces: &[Surface],
+        log: rsf_game_log_fn,
+        user: Raw,
+    ) -> bool {
+        self.reserve(context, pass, surfaces, log, user, false) && self.seal()
+    }
 }
 
-pub(super) fn auxiliary_products() -> Option<Box<dyn Products>> {
+pub(super) fn auxiliary_products() -> Option<Box<Products>> {
     Some(Box::<FakeProducts>::default())
 }
 
