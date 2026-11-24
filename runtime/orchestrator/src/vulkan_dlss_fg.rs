@@ -728,7 +728,8 @@ unsafe fn matches_present(chain: u64, info: *const c_void) -> bool {
 /// Creates an owner over `platform`: `leaves::LEAVES` for [`rsf_dlssgvk_create`], a fixture's table in
 /// fixture.rs and owner_tests.rs.
 unsafe fn rsf_core_dlgvk_create(
-    platform: *const Platform,
+    platform: Option<&'static Platform>,
+
     setup: *const Setup,
     out: *mut *mut Owner,
     chain: *mut u64,
@@ -765,7 +766,7 @@ unsafe fn rsf_core_dlgvk_create(
     {
         return INVALID;
     }
-    let Some(platform) = (unsafe { platform.as_ref() }) else {
+    let Some(platform) = platform else {
         return NOT_COMPILED;
     };
     let Some(gpu_platform) = (unsafe { platform.gpu.as_ref() }) else {
@@ -1004,11 +1005,7 @@ pub(crate) unsafe fn rsf_dlssgvk_create(
     out: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
-    let platform = if cfg!(feature = "streamline-vk") {
-        &leaves::LEAVES as *const Platform
-    } else {
-        ptr::null()
-    };
+    let platform = cfg!(feature = "streamline-vk").then_some(&leaves::LEAVES);
     unsafe { rsf_core_dlgvk_create(platform, setup, out, chain) }
 }
 

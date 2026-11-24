@@ -308,7 +308,7 @@ pub(super) unsafe fn create(
         Variant::CaptureRequired => &tables[1],
         Variant::CaptureRefused => &tables[2],
     };
-    unsafe { super::rsf_core_dlgvk_create(selected, setup, owner, chain) }
+    unsafe { super::rsf_core_dlgvk_create(Some(selected), setup, owner, chain) }
 }
 
 static SYNTHETIC_CAPTURE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());

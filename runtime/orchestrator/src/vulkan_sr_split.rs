@@ -28,14 +28,10 @@ pub(crate) struct Provider {
     pub(crate) info: unsafe fn(*const c_void, *mut Info) -> i32,
 }
 
-/// The provider of this build; null reports NOT_COMPILED (CMake sets `fsr4-vk` with the
+/// The provider of this build; None reports NOT_COMPILED (CMake sets `fsr4-vk` with the
 /// FidelityFX DX12 SR runtime).
-fn provider() -> *const Provider {
-    if cfg!(feature = "fsr4-vk") {
-        &crate::vulkan_fsr4_sr::PROVIDER
-    } else {
-        ptr::null()
-    }
+fn provider() -> Option<&'static Provider> {
+    cfg!(feature = "fsr4-vk").then_some(&crate::vulkan_fsr4_sr::PROVIDER)
 }
 
 #[unsafe(no_mangle)]
@@ -145,7 +141,7 @@ pub(super) fn private_setup_result(error: i32) -> i32 {
 }
 
 unsafe fn rsf_core_srvk_fsr4_create(
-    provider: *const Provider,
+    provider: Option<&Provider>,
     setup: *const Setup,
     handoff: *const Handoff,
     owner: *mut Handle,
@@ -158,14 +154,14 @@ unsafe fn rsf_core_srvk_fsr4_create(
         Ok(records) => records,
         Err(error) => return error,
     };
-    let Some(provider) = (unsafe { provider.as_ref() }) else {
+    let Some(provider) = provider else {
         return NOT_COMPILED;
     };
     public_result(unsafe { (provider.create)(&setup, &handoff, owner) })
 }
 
 unsafe fn rsf_core_srvk_fsr4_plan(
-    provider: *const Provider,
+    provider: Option<&Provider>,
     owner: *const c_void,
     width: *mut u32,
     height: *mut u32,
@@ -181,7 +177,7 @@ unsafe fn rsf_core_srvk_fsr4_plan(
     if owner.is_null() || width.is_null() || height.is_null() {
         return INVALID_ARGUMENT;
     }
-    let Some(provider) = (unsafe { provider.as_ref() }) else {
+    let Some(provider) = provider else {
         return NOT_COMPILED;
     };
     public_result(unsafe { (provider.plan)(owner, width, height) })
@@ -212,7 +208,7 @@ pub(super) unsafe fn normalize_frame(frame: *const Frame) -> Result<Frame, i32> 
 }
 
 unsafe fn rsf_core_srvk_fsr4_evaluate(
-    provider: *const Provider,
+    provider: Option<&Provider>,
     owner: Handle,
     commands: Handle,
     frame: *const Frame,
@@ -246,49 +242,49 @@ unsafe fn rsf_core_srvk_fsr4_evaluate(
     if frame.reactive.image != 0 || frame.composition.image != 0 {
         return NOT_SUPPORTED;
     }
-    let Some(provider) = (unsafe { provider.as_ref() }) else {
+    let Some(provider) = provider else {
         return NOT_COMPILED;
     };
     // The provider owns any committed split. Keep its continuation on error.
     public_result(unsafe { (provider.evaluate)(owner, commands, &frame, continuation) })
 }
 
-unsafe fn rsf_core_srvk_fsr4_destroy(provider: *const Provider, owner: Handle) -> i32 {
+unsafe fn rsf_core_srvk_fsr4_destroy(provider: Option<&Provider>, owner: Handle) -> i32 {
     if owner.is_null() {
         return 0;
     }
-    let Some(provider) = (unsafe { provider.as_ref() }) else {
+    let Some(provider) = provider else {
         return NOT_COMPILED;
     };
     public_result(unsafe { (provider.destroy)(owner) })
 }
 
 unsafe fn rsf_core_srvk_fsr4_retire_commands(
-    provider: *const Provider,
+    provider: Option<&Provider>,
     owner: Handle,
     commands: Handle,
 ) {
-    if let Some(provider) = unsafe { provider.as_ref() } {
+    if let Some(provider) = provider {
         unsafe { (provider.retire)(owner, commands) };
     }
 }
 
 unsafe fn rsf_core_srvk_fsr4_submitted(
-    provider: *const Provider,
+    provider: Option<&Provider>,
     owner: Handle,
     commands: Handle,
 ) -> i32 {
     if owner.is_null() || commands.is_null() {
         return INVALID_ARGUMENT;
     }
-    let Some(provider) = (unsafe { provider.as_ref() }) else {
+    let Some(provider) = provider else {
         return NOT_COMPILED;
     };
     public_result(unsafe { (provider.submitted)(owner, commands) })
 }
 
 unsafe fn rsf_core_srvk_fsr4_info(
-    provider: *const Provider,
+    provider: Option<&Provider>,
     owner: *const c_void,
     out: *mut Info,
 ) -> i32 {
@@ -307,7 +303,7 @@ unsafe fn rsf_core_srvk_fsr4_info(
     if owner.is_null() {
         return INVALID_ARGUMENT;
     }
-    let Some(provider) = (unsafe { provider.as_ref() }) else {
+    let Some(provider) = provider else {
         return NOT_COMPILED;
     };
     public_result(unsafe { (provider.info)(owner, out) })
@@ -428,7 +424,7 @@ mod tests {
 
     #[test]
     fn split_admission_and_disabled_outputs() {
-        let disabled = ptr::null();
+        let disabled = None;
         let (setup, handoff, mut record) = records();
         let commands = ptr::dangling_mut::<u8>().cast();
         let mut owner = commands;
@@ -723,14 +719,23 @@ mod tests {
         };
         unsafe {
             assert_eq!(
-                rsf_core_srvk_fsr4_create(&STUB, &setup, &handoff, &mut owner),
+                rsf_core_srvk_fsr4_create(Some(&STUB), &setup, &handoff, &mut owner),
                 0
             );
             let (mut w, mut h) = (0, 0);
-            assert_eq!(rsf_core_srvk_fsr4_plan(&STUB, owner, &mut w, &mut h), 0);
+            assert_eq!(
+                rsf_core_srvk_fsr4_plan(Some(&STUB), owner, &mut w, &mut h),
+                0
+            );
             assert_eq!((w, h), (320, 180));
-            assert_eq!(rsf_core_srvk_fsr4_submitted(&STUB, owner, commands), 0);
-            assert_eq!(rsf_core_srvk_fsr4_info(&STUB, owner, &mut extended.info), 0);
+            assert_eq!(
+                rsf_core_srvk_fsr4_submitted(Some(&STUB), owner, commands),
+                0
+            );
+            assert_eq!(
+                rsf_core_srvk_fsr4_info(Some(&STUB), owner, &mut extended.info),
+                0
+            );
             assert_eq!(
                 (
                     extended.info.adapter_luid,
@@ -742,19 +747,19 @@ mod tests {
                 (0x123456789abcdef0, 0x456789abcdef0123, 0x10de, 1, 0xcafe)
             );
             assert_eq!(
-                rsf_core_srvk_fsr4_evaluate(&STUB, owner, commands, &input, &mut next),
+                rsf_core_srvk_fsr4_evaluate(Some(&STUB), owner, commands, &input, &mut next),
                 0
             );
-            assert_eq!(rsf_core_srvk_fsr4_destroy(&STUB, owner), 0);
+            assert_eq!(rsf_core_srvk_fsr4_destroy(Some(&STUB), owner), 0);
 
             handoff.abi_version = RSF_SRVK_SPLIT_TRACKED_ABI_VERSION;
             assert_eq!(
-                rsf_core_srvk_fsr4_create(&STUB, &setup, &handoff, &mut owner),
+                rsf_core_srvk_fsr4_create(Some(&STUB), &setup, &handoff, &mut owner),
                 -71
             );
             assert!(!owner.is_null());
             assert_eq!(
-                rsf_core_srvk_fsr4_info(&STUB, owner, &mut extended.info),
+                rsf_core_srvk_fsr4_info(Some(&STUB), owner, &mut extended.info),
                 -71
             );
             assert_eq!(
@@ -767,15 +772,18 @@ mod tests {
                 ),
                 (0, 0, 0, 0, 0xcafe)
             );
-            assert_eq!(rsf_core_srvk_fsr4_submitted(&STUB, owner, commands), -71);
             assert_eq!(
-                rsf_core_srvk_fsr4_evaluate(&STUB, owner, commands, &input, &mut next),
+                rsf_core_srvk_fsr4_submitted(Some(&STUB), owner, commands),
+                -71
+            );
+            assert_eq!(
+                rsf_core_srvk_fsr4_evaluate(Some(&STUB), owner, commands, &input, &mut next),
                 -71
             );
             assert_eq!(next, ptr::dangling_mut::<u16>().cast());
-            assert_eq!(rsf_core_srvk_fsr4_destroy(&STUB, owner), -71);
+            assert_eq!(rsf_core_srvk_fsr4_destroy(Some(&STUB), owner), -71);
             owner.cast::<i32>().write(0);
-            assert_eq!(rsf_core_srvk_fsr4_destroy(&STUB, owner), 0);
+            assert_eq!(rsf_core_srvk_fsr4_destroy(Some(&STUB), owner), 0);
         }
     }
 

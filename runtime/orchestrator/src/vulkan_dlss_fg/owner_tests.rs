@@ -348,7 +348,7 @@ fn create(test: &mut Harness) -> *mut Owner {
     let mut owner = ptr::null_mut();
     let mut chain = 0;
     assert_eq!(
-        unsafe { rsf_core_dlgvk_create(&PLATFORM, &setup, &mut owner, &mut chain) },
+        unsafe { rsf_core_dlgvk_create(Some(&PLATFORM), &setup, &mut owner, &mut chain) },
         OK
     );
     assert_eq!(chain, 3);
