@@ -545,14 +545,16 @@ replacement, `__try/__finally` (MSVC) or a cleanup handler (GCC,
 exception leaves the original, the SEH calls to `R_xforms::set_P`,
 `SetMipLODBias` and `GetCBuffer`, the guarded copy, the log-sink boundary on
 the MSVC C++ exception code `0xE06D7363` (the former `catch (...)`), the hook
-set and the bootstrap/observer entries. It lends these through one 128-byte
-`rsf_anomaly_sr_native` table.
+set and the bootstrap/observer entries. Rust calls them by name
+(`rsf_anomaly_sr_native_*`; round 5 removed the 128-byte `rsf_anomaly_sr_native`
+table).
 
-`sr_stage/native.rs` builds the production `rsf_anomaly_sr_stage_platform`
-over that table, one Rust function per former C++ lambda, and reads every
+`sr_stage/native.rs` holds the production leaves (`sr_stage::native::leaves`),
+one Rust function per former C++ lambda (round 5 replaced the 80-entry
+`rsf_anomaly_sr_stage_platform` with these direct calls), and reads every
 address from `sr_profile.rs` and `native_profile.rs` through a `Build` record
 named by the native_profile.rs index (`BUILDS`). It hosts the swap owner's
-platform (`make_twins` keeps the former log texts and their 259-character
+host leaves (`swap_host`; `make_twins` keeps the former log texts and their 259-character
 limit), the position-constant layout (the geometry constant-buffer offsets
 now re-exported from `native_geometry/vertex_constants.rs`) and the D3D11
 resource handle. The SR guard check (`engine_guards/sr.rs`) runs over the Rust

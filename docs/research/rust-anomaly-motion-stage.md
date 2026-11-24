@@ -431,9 +431,10 @@ build order with each build stating its own sites, guards, caller frame and hex 
 guard check (`engine_guards/motion.rs` over the Rust record), derives the caller-frame layout and the
 engine compiler profile, and lends the three detour sites to the native leaf, which only adds its
 trampolines. The stage selects the record from the SHA-256 the native installer passes, and refuses when
-none matches. `rsf_anomaly_motion_platform` is ABI 13 (272 bytes): `guards`, `shader_profile` and
+none matches. `rsf_anomaly_motion_platform` was ABI 13 (272 bytes): `guards`, `shader_profile` and
 `frame_layout` are gone, `copy` (the guarded copy behind the guard image) and the site list in
-`install_hooks` are new. `tools/anomaly_motion_evidence.py` and the motion case of
+`install_hooks` are new. Round 5 removed the table: Rust calls the `rsf_anomaly_motion_native_*` leaves
+by name. `tools/anomaly_motion_evidence.py` and the motion case of
 `tools/anomaly_profile_evidence.py` parse the Rust profile; the parser was checked offline against both
 build sections (5 sites, 12 integer fields, 3 hex guards, 2 hull/domain sites, 1 unique guard per build,
 hex lengths equal to the removed C++ table). The evidence scripts themselves need the installed
