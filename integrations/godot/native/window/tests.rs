@@ -252,7 +252,7 @@ fn pings_and_present_markers_use_the_admitted_window() {
 fn explicit_present_forwards_one_matching_source_even_after_window_release() {
     let window = admitted();
     window.bind_cpu_service(Some(&fake::VK_CPU));
-    let mut pass = crate::d3d12::empty_pass();
+    let mut pass = rsf_game_render_pass::default();
     pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
     pass.role = RSF_GAME_RENDER_PRESENT;
     pass.session_id = 7;

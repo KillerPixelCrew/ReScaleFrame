@@ -17,7 +17,7 @@ fn configure(control: &Control, change: impl FnOnce(&mut Settings)) {
 }
 
 fn pass(role: u32, frame: u64) -> rsf_game_render_pass {
-    let mut pass = empty_pass();
+    let mut pass = rsf_game_render_pass::default();
     pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
     pass.role = role;
     pass.session_id = 42;

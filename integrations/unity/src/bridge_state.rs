@@ -770,7 +770,7 @@ pub(crate) fn rsf_unity_frames_flush_sources(
     let (flushed, count) = lock().take_flushed(window.session_id, window.source_frame_id);
     for source in &flushed[..count] {
         // The submission pass carries identity only. Unity has already flushed its lists.
-        let mut submission: rsf_game_render_pass = unsafe { std::mem::zeroed() };
+        let mut submission: rsf_game_render_pass = Default::default();
         submission.struct_size = size_of::<rsf_game_render_pass>() as u32;
         submission.role = RSF_GAME_RENDER_SUBMISSION;
         submission.session_id = source.session_id;
@@ -913,7 +913,7 @@ mod tests {
     }
 
     fn camera() -> rsf_camera_frame {
-        let mut camera: rsf_camera_frame = unsafe { std::mem::zeroed() };
+        let mut camera: rsf_camera_frame = Default::default();
         camera.struct_size = size_of::<rsf_camera_frame>() as u32;
         camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
         camera.render_width = 1280;

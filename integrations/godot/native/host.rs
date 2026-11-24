@@ -104,11 +104,6 @@ extern "C" fn rsf_godot_host_unload() {
     drop(binding);
 }
 
-fn empty_frame_record() -> rsf_frame_record {
-    // The public C record contains only scalar fields and arrays of scalar fields.
-    unsafe { std::mem::zeroed() }
-}
-
 impl Capture {
     fn event(&self, session: u64, frame: u64, name: &CStr, result: i32) {
         unsafe {
@@ -116,7 +111,7 @@ impl Capture {
                 let identity = rsf_frame_record {
                     session_id: session,
                     frame_id: frame,
-                    ..empty_frame_record()
+                    ..Default::default()
                 };
                 rsf_core_capture12_event(self.0, &identity, name.as_ptr(), frame, 0, result);
             }
@@ -146,7 +141,7 @@ impl Capture {
             frame_time_ms: pass.camera.frame_time_seconds * 1000.0,
             output_width: pass.camera.output_width,
             output_height: pass.camera.output_height,
-            ..empty_frame_record()
+            ..Default::default()
         };
         unsafe {
             rsf_core_capture12_record(

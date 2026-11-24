@@ -57,7 +57,7 @@ unsafe fn prepare_device(host: &rsf_game_host_services, out: &mut DeviceHandles)
     let context11 = context.cast::<ID3D11DeviceContext4>().ok()?;
     out.device11 = device11.into_raw();
     out.context11 = context11.into_raw();
-    let mut graphics: rsf_streamline_graphics = unsafe { std::mem::zeroed() };
+    let mut graphics: rsf_streamline_graphics = Default::default();
     graphics.struct_size = size_of::<rsf_streamline_graphics>() as u32;
     if unsafe { rsf_d3d11_present_graphics(&mut graphics) } != 0 {
         // Shared textures and command lists use the Runtime's native device and queue.

@@ -651,11 +651,6 @@ struct Recording<'a> {
     plan: [u32; 2],
 }
 
-fn empty_frame_record() -> rsf_frame_record {
-    // Generated from game_frame.h: numeric values and fixed numeric arrays.
-    unsafe { std::mem::zeroed() }
-}
-
 unsafe fn render(
     commands: Handle,
     packet: *const rsf_godot_vk_packet,
@@ -707,7 +702,7 @@ unsafe fn render(
         } else {
             0
         },
-        ..empty_frame_record()
+        ..Default::default()
     };
     if features().capture.snapshot.is_some() {
         let backend = CONTROL.vulkan.settings().0.sr_backend;

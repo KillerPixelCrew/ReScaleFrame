@@ -256,7 +256,7 @@ impl Capture {
                 output_width: self.width,
                 output_height: self.height,
                 flags: RSF_FRAME_FLAG_NO_SR | RSF_FRAME_FLAG_NO_FG,
-                ..empty_frame_record()
+                ..Default::default()
             });
         if !begin {
             unsafe { rsf_input_dump_complete(&record, result) };

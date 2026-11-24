@@ -34,13 +34,6 @@ const SLOTS: u32 = 3;
 /// Refused passes whose inputs are logged.
 const DIAGNOSTIC_LIMIT: u32 = 4;
 
-/// A zeroed render pass: integers, floats and null pointers.
-pub(crate) fn empty_pass() -> rsf_game_render_pass {
-    // SAFETY: every field of the generated record is an integer, a float, an array of them, a
-    // raw pointer or a record of the same, all valid when zero.
-    unsafe { std::mem::zeroed() }
-}
-
 /// The pass identity Present reuses. The engine's borrowed texture handles are cleared.
 #[derive(Clone, Copy)]
 struct Rendered(rsf_game_render_pass);
@@ -496,7 +489,7 @@ impl D3d12 {
             pass
         } else {
             control.sr_missed();
-            let mut pass = empty_pass();
+            let mut pass = rsf_game_render_pass::default();
             pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
             pass.session_id = session;
             pass.source_frame_id = current;

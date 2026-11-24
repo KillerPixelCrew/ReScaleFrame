@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn routes_without_a_loaded_table() {
-        let pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
+        let pass: rsf_game_render_pass = Default::default();
         unsafe {
             render_callback(
                 std::ptr::null_mut(),

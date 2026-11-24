@@ -1748,8 +1748,7 @@ mod tests {
         without_provenance_mut(address)
     }
     fn sr_pass(view_key: u64, output: (u32, u32), render: (u32, u32)) -> rsf_game_render_pass {
-        // SAFETY: integers, floats and nullable pointers, for which zero is valid.
-        let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
+        let mut pass: rsf_game_render_pass = Default::default();
         pass.view_key = view_key;
         pass.camera_valid = 1;
         pass.screen = 7;
@@ -2082,8 +2081,7 @@ mod tests {
         }
         assert!(calls().is_empty());
         let (text, none) = (c"x".as_ptr(), std::ptr::null());
-        // SAFETY: integers, nullable function pointers and a nullable pointer.
-        let mut api: rsf_unity_native_api = unsafe { std::mem::zeroed() };
+        let mut api: rsf_unity_native_api = Default::default();
         let output = &raw mut api;
         unsafe {
             assert_eq!(rsfu_initialize(text, text, text, output), code::FAILED);

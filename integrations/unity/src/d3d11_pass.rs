@@ -23,8 +23,7 @@ use rsf_game_sys::{
 /// One SR pass for the packet's view, frame and camera, without native resources or route. A
 /// probe packet carries camera constants only, so its camera is not valid for reconstruction.
 pub(crate) fn base_pass(packet: &rsf_unity_packet) -> rsf_game_render_pass {
-    // Every field is an integer, float, pointer or array of them.
-    let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
+    let mut pass: rsf_game_render_pass = Default::default();
     pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
     pass.role = RSF_GAME_RENDER_SR;
     pass.session_id = packet.session_id;
@@ -321,7 +320,7 @@ mod tests {
     }
 
     fn packet() -> rsf_unity_packet {
-        let mut camera: rsf_camera_frame = unsafe { std::mem::zeroed() };
+        let mut camera: rsf_camera_frame = Default::default();
         camera.render_width = 1280;
         camera.render_height = 720;
         camera.output_width = 2560;
