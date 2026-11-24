@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::sys::{rsf_slvk_sdk_log, rsf_slvk_sdk_preferences};
 use std::cell::RefCell;
 
 const MODULE: usize = 0x1000;
@@ -77,7 +78,7 @@ impl System for Fake {
     }
 }
 
-unsafe extern "C" fn open_verified(_: *const u16) -> *mut c_void {
+pub(super) unsafe extern "C" fn open_verified(_: *const u16) -> *mut c_void {
     record("open");
     if STATE.with_borrow(|state| state.verified) {
         without_provenance_mut(HANDLE)
@@ -86,11 +87,14 @@ unsafe extern "C" fn open_verified(_: *const u16) -> *mut c_void {
     }
 }
 
-unsafe extern "C" fn resolve(_: *mut c_void) -> i32 {
+pub(super) unsafe extern "C" fn resolve(_: *mut c_void) -> i32 {
     STATE.with_borrow(|state| state.resolve)
 }
 
-unsafe extern "C" fn init(preferences: *const rsf_slvk_sdk_preferences, version: u64) -> i32 {
+pub(super) unsafe extern "C" fn init(
+    preferences: *const rsf_slvk_sdk_preferences,
+    version: u64,
+) -> i32 {
     record("init");
     let preferences = unsafe { &*preferences };
     assert_eq!(version, crate::sdk_api::SDK_VERSION);
@@ -110,24 +114,17 @@ unsafe extern "C" fn init(preferences: *const rsf_slvk_sdk_preferences, version:
     })
 }
 
-unsafe extern "C" fn shutdown(result: *mut i32) -> u32 {
+pub(super) unsafe extern "C" fn shutdown(result: *mut i32) -> u32 {
     record("shutdown");
     unsafe { *result = STATE.with_borrow(|state| state.shutdown) };
     1
 }
 
-unsafe extern "C" fn clear() {
+pub(super) unsafe extern "C" fn clear() {
     record("clear");
 }
 
-const PLATFORM: Platform = Platform {
-    open_verified,
-    resolve,
-    init,
-    shutdown,
-    clear,
-    log: None,
-};
+pub(super) const LOG: rsf_slvk_sdk_log = None;
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain([0]).collect()
@@ -136,15 +133,7 @@ fn wide(text: &str) -> Vec<u16> {
 fn start(lifecycle: &Lifecycle, directory: &str) -> i32 {
     let directory = wide(directory);
     let features = feature_mask(true, true, false);
-    unsafe {
-        lifecycle.initialize(
-            &Fake,
-            &PLATFORM,
-            directory.as_ptr(),
-            c"project".as_ptr(),
-            features,
-        )
-    }
+    unsafe { lifecycle.initialize(&Fake, directory.as_ptr(), c"project".as_ptr(), features) }
 }
 
 #[test]
@@ -177,15 +166,7 @@ fn verified_handle_spans_the_load_and_keeps_the_plugin_path() {
     let features = feature_mask(true, true, false);
     for (project, features) in [(c"other", features), (c"project", FEATURE_PCL)] {
         assert_eq!(
-            unsafe {
-                lifecycle.initialize(
-                    &Fake,
-                    &PLATFORM,
-                    directory.as_ptr(),
-                    project.as_ptr(),
-                    features,
-                )
-            },
+            unsafe { lifecycle.initialize(&Fake, directory.as_ptr(), project.as_ptr(), features,) },
             OTHER_CONFIGURATION
         );
     }
@@ -212,29 +193,29 @@ fn shutdown_keeps_vulkan_dispatch_until_explicit_unload() {
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
     take_events();
     assert_eq!(
-        lifecycle.with_sdk(-1, || unsafe { lifecycle.shutdown(&PLATFORM) }),
+        lifecycle.with_sdk(-1, || unsafe { lifecycle.shutdown() }),
         BUSY
     );
     assert!(take_events().is_empty());
     lifecycle.diagnostics.present_error(-3);
-    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
+    assert_eq!(unsafe { lifecycle.shutdown() }, 0);
     assert_eq!(take_events(), ["shutdown", "clear"]);
     assert_eq!(lifecycle.diagnostics.take_present_error(), 0);
     assert_eq!(lifecycle.with_sdk(-1, || 7), -1);
     assert!(lifecycle.module().is_null());
     assert_eq!(lifecycle.instance_proc().addr(), PROC);
     assert_eq!(lifecycle.device_proc().addr(), PROC);
-    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
+    assert_eq!(unsafe { lifecycle.shutdown() }, 0);
     assert!(take_events().is_empty());
 
     // A retained module is reinitialized only from the same directory.
     assert_eq!(start(&lifecycle, "C:\\other"), OTHER_DIRECTORY);
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
     assert_eq!(take_events(), ["init"]);
-    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
+    assert_eq!(unsafe { lifecycle.shutdown() }, 0);
     take_events();
 
-    assert_eq!(unsafe { lifecycle.unload(&Fake, &PLATFORM) }, 0);
+    assert_eq!(unsafe { lifecycle.unload(&Fake) }, 0);
     assert_eq!(take_events(), ["clear", "free"]);
     assert!(lifecycle.instance_proc().is_null());
     assert!(lifecycle.device_proc().is_null());
@@ -247,10 +228,10 @@ fn failed_shutdown_is_sticky_and_refuses_unload() {
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
     take_events();
     configure(|state| state.shutdown = 5);
-    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 5);
-    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 5);
+    assert_eq!(unsafe { lifecycle.shutdown() }, 5);
+    assert_eq!(unsafe { lifecycle.shutdown() }, 5);
     assert_eq!(start(&lifecycle, "C:\\sl"), 5);
-    assert_eq!(unsafe { lifecycle.unload(&Fake, &PLATFORM) }, 5);
+    assert_eq!(unsafe { lifecycle.unload(&Fake) }, 5);
     assert_eq!(take_events(), ["shutdown", "clear"]);
     assert_eq!(lifecycle.instance_proc().addr(), PROC);
 }
@@ -268,7 +249,7 @@ fn failed_initialization_releases_only_a_module_it_loaded() {
 
     configure(|state| state.init = 0);
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
-    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
+    assert_eq!(unsafe { lifecycle.shutdown() }, 0);
     take_events();
     configure(|state| state.init = 3);
     assert_eq!(start(&lifecycle, "C:\\sl"), 3);
@@ -289,8 +270,8 @@ fn overlapping_lifecycle_call_is_refused_without_waiting() {
     let lifecycle = Lifecycle::new();
     let held = lifecycle.session.lock().unwrap();
     assert_eq!(start(&lifecycle, "C:\\sl"), BUSY);
-    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, BUSY);
-    assert_eq!(unsafe { lifecycle.unload(&Fake, &PLATFORM) }, BUSY);
+    assert_eq!(unsafe { lifecycle.shutdown() }, BUSY);
+    assert_eq!(unsafe { lifecycle.unload(&Fake) }, BUSY);
     drop(held);
     assert!(take_events().is_empty());
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
@@ -328,8 +309,8 @@ fn reflex_token_borrow_allows_older_present_and_defers_shutdown() {
                     let _ = send.send(marker);
                 });
                 assert_eq!(receive.recv_timeout(Duration::from_secs(2)), Ok(0));
-                assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, BUSY);
-                assert_eq!(unsafe { lifecycle.unload(&Fake, &PLATFORM) }, BUSY);
+                assert_eq!(unsafe { lifecycle.shutdown() }, BUSY);
+                assert_eq!(unsafe { lifecycle.unload(&Fake) }, BUSY);
                 assert_eq!(lifecycle.module().addr(), MODULE);
                 assert!(take_events().is_empty());
                 0
@@ -337,7 +318,7 @@ fn reflex_token_borrow_allows_older_present_and_defers_shutdown() {
             0
         );
     });
-    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
+    assert_eq!(unsafe { lifecycle.shutdown() }, 0);
     assert_eq!(take_events(), ["shutdown", "clear"]);
     assert_eq!(tokens.current(), 0);
     assert_eq!(tokens.with_token(1, -1, |_| 0), -1);
@@ -362,7 +343,7 @@ fn symbol_lookups_follow_the_published_modules() {
             wide("C:\\sl\\sl.common.dll").strip_suffix(&[0]).unwrap()
         )
     });
-    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
-    assert_eq!(unsafe { lifecycle.unload(&Fake, &PLATFORM) }, 0);
+    assert_eq!(unsafe { lifecycle.shutdown() }, 0);
+    assert_eq!(unsafe { lifecycle.unload(&Fake) }, 0);
     assert!(unsafe { lifecycle.interposer_symbol(&Fake, name) }.is_null());
 }

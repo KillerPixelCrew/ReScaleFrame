@@ -5,6 +5,8 @@
 mod bridge;
 mod wsi;
 
+#[cfg(not(test))]
+pub(crate) use bridge::lifecycle_leaf;
 pub(crate) use bridge::{fg_apply, fg_options_bound, fg_release};
 
 use crate::lifecycle::{Lifecycle, System};
@@ -67,6 +69,7 @@ extern "C" fn rsf_vk_sl_worker_timeout_epoch() -> u64 {
 }
 
 /// Streamline's log callback (`sl::LogType`, message).
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn rsf_slvk_log_message(kind: u32, message: *const c_char) {
     if message.is_null() {
         return;

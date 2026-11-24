@@ -90,12 +90,7 @@ impl FrameGeneration {
         }
     }
 
-    pub(crate) unsafe fn set(
-        &mut self,
-        revision: u64,
-        enabled: bool,
-        requested: Options,
-    ) -> i32 {
+    pub(crate) unsafe fn set(&mut self, revision: u64, enabled: bool, requested: Options) -> i32 {
         // Off is the SDK default. Repeating Off can also interfere with a
         // provider switch when the SDK sees both requests before Present.
         if !enabled && !self.enabled {

@@ -4,9 +4,9 @@
 //! shuts down and unloads the interposer; these calls run under its session or
 //! frame-token lease. admission.rs admits the interposer by the digest the build
 //! selects.
-use super::{GetCurrentThreadId, GetProcAddress, LIFECYCLE, Win32, rsf_slvk_log_message};
+use super::{GetCurrentThreadId, GetProcAddress, LIFECYCLE, Win32};
 use crate::frame_generation::Options;
-use crate::lifecycle::{Platform, feature_mask};
+use crate::lifecycle::feature_mask;
 use crate::sdk_api::{self, FEATURE_DLSS_G, FEATURE_PCL, FEATURE_REFLEX, OK, guarded};
 use crate::sdk_fg_options::{self, Packed, Sample, State};
 use crate::sdk_records::{self, rsf_slvk_pack_legacy_camera, rsf_slvk_pack_legacy_tags};
@@ -78,13 +78,15 @@ fn bind<T: Copy>(entry: &Entry<T>, feature: u32, name: &CStr) -> bool {
     guarded(|| unsafe { get(feature, name.as_ptr(), &mut address) }) == OK && entry.set(address)
 }
 
-// Lifecycle leaves, in the owner's Platform order.
+// Lifecycle leaves, re-exported to the owner through lifecycle_leaf.
 
-unsafe extern "C" fn open_verified(path: *const u16) -> *mut c_void {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) unsafe extern "C" fn open_verified(path: *const u16) -> *mut c_void {
     unsafe { crate::admission::open_by_digest(path) }
 }
 
-unsafe extern "C" fn resolve(module: *mut c_void) -> i32 {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) unsafe extern "C" fn resolve(module: *mut c_void) -> i32 {
     let export = |name: &CStr| unsafe { GetProcAddress(module, name.as_ptr()) };
     let resolved = [
         INIT.set(export(c"slInit")),
@@ -103,7 +105,11 @@ unsafe extern "C" fn resolve(module: *mut c_void) -> i32 {
     }
 }
 
-unsafe extern "C" fn init(request: *const rsf_slvk_sdk_preferences, version: u64) -> i32 {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) unsafe extern "C" fn init(
+    request: *const rsf_slvk_sdk_preferences,
+    version: u64,
+) -> i32 {
     let Some(init) = INIT.get() else {
         return -4;
     };
@@ -111,7 +117,8 @@ unsafe extern "C" fn init(request: *const rsf_slvk_sdk_preferences, version: u64
 }
 
 /// Nonzero when slShutdown was called; result receives its result.
-unsafe extern "C" fn shutdown(result: *mut i32) -> u32 {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) unsafe extern "C" fn shutdown(result: *mut i32) -> u32 {
     let Some(shutdown) = SHUTDOWN.get() else {
         return 0;
     };
@@ -122,7 +129,8 @@ unsafe extern "C" fn shutdown(result: *mut i32) -> u32 {
 
 /// Clears the SDK entry points that slShutdown, a failed slInit or unload
 /// invalidates. The Vulkan dispatch entry points stay until unload.
-unsafe extern "C" fn clear() {
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) unsafe extern "C" fn clear() {
     INIT.clear();
     SHUTDOWN.clear();
     FEATURE.clear();
@@ -141,14 +149,13 @@ unsafe extern "C" fn clear() {
     FG_STATE.clear();
 }
 
-static LIFECYCLE_PLATFORM: Platform = Platform {
-    open_verified,
-    resolve,
-    init,
-    shutdown,
-    clear,
-    log: Some(rsf_slvk_log_message),
-};
+/// The lifecycle's native leaves. Unit tests call fakes, so these are unused there.
+#[cfg(not(test))]
+pub(crate) mod lifecycle_leaf {
+    pub(crate) use super::{clear, init, open_verified, resolve, shutdown};
+    use crate::sys::rsf_slvk_sdk_log;
+    pub(crate) const LOG: rsf_slvk_sdk_log = Some(super::super::rsf_slvk_log_message);
+}
 
 // Called by Streamline's present thread. The atomic store lets the render
 // thread report or recover on its next state query.
@@ -217,7 +224,7 @@ unsafe extern "C" fn rsf_vk_sl_initialize_features(
     super_resolution: u32,
 ) -> i32 {
     let features = feature_mask(reflex != 0, frame_generation != 0, super_resolution != 0);
-    unsafe { LIFECYCLE.initialize(&Win32, &LIFECYCLE_PLATFORM, directory, project, features) }
+    unsafe { LIFECYCLE.initialize(&Win32, directory, project, features) }
 }
 
 #[unsafe(no_mangle)]
@@ -236,7 +243,7 @@ unsafe extern "C" fn rsf_vk_sl_initialize(
 /// initialization and unload.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vk_sl_shutdown_checked() -> i32 {
-    unsafe { LIFECYCLE.shutdown(&LIFECYCLE_PLATFORM) }
+    unsafe { LIFECYCLE.shutdown() }
 }
 
 /// The original void ABI for hosts predating checked shutdown.
@@ -249,7 +256,7 @@ extern "C" fn rsf_vk_sl_shutdown() {
 /// object and API table that references it is destroyed.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vk_sl_unload_checked() -> i32 {
-    unsafe { LIFECYCLE.unload(&Win32, &LIFECYCLE_PLATFORM) }
+    unsafe { LIFECYCLE.unload(&Win32) }
 }
 
 #[unsafe(no_mangle)]
@@ -579,9 +586,7 @@ extern "C" fn rsf_vk_sl_set_frame_generation(
 /// release. Unused or disabled features return zero.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vk_sl_disable_frame_generation_for_release() -> i32 {
-    LIFECYCLE.with_frame_generation(0, |fg, revision| unsafe {
-        fg.disable(revision)
-    })
+    LIFECYCLE.with_frame_generation(0, |fg, revision| unsafe { fg.disable(revision) })
 }
 
 /// Frees DLSS-G resources after enablement is Off and the host drained proxy

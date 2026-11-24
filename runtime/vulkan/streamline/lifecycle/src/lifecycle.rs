@@ -8,7 +8,6 @@ use crate::frame_generation::{FrameGeneration, Swapchain};
 #[cfg(windows)]
 use crate::frame_token::FrameToken;
 use crate::sdk_records;
-use crate::sys::{rsf_slvk_sdk_log, rsf_slvk_sdk_preferences};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null, null_mut, without_provenance_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -58,27 +57,12 @@ pub(crate) fn feature_mask(reflex: bool, frame_generation: bool, super_resolutio
     features
 }
 
-/// Native leaves of the bridge. They own the SDK types, the typed entry points
-/// and the Authenticode and SHA-256 check of the interposer file.
-#[repr(C)]
-pub(crate) struct Platform {
-    /// Opens the file without write or delete sharing and verifies it through
-    /// that handle. Returns the open handle or INVALID_HANDLE_VALUE.
-    pub open_verified: unsafe extern "C" fn(*const u16) -> *mut c_void,
-    /// Resolves the typed SDK exports from the module. Zero when all resolve.
-    pub resolve: unsafe extern "C" fn(*mut c_void) -> i32,
-    /// Calls slInit with the packed preferences. The project and plugin-path
-    /// array stay live until the next initialization.
-    pub init: unsafe extern "C" fn(*const rsf_slvk_sdk_preferences, u64) -> i32,
-    /// Calls slShutdown when it was resolved and writes its result. Returns
-    /// nonzero when the SDK was called.
-    pub shutdown: unsafe extern "C" fn(*mut i32) -> u32,
-    /// Clears the typed SDK entry points.
-    pub clear: unsafe extern "C" fn(),
-    pub log: rsf_slvk_sdk_log,
-}
-
-const _: () = assert!(size_of::<Platform>() == 6 * size_of::<*mut c_void>());
+// The bridge's native leaves (they own the SDK types, the typed entry points and the Authenticode
+// and SHA-256 check of the interposer file) in production; unit tests call same-named fakes.
+#[cfg(not(test))]
+use crate::win32::lifecycle_leaf as leaf;
+#[cfg(test)]
+use tests as leaf;
 
 pub(crate) trait System {
     unsafe fn load(&self, path: *const u16) -> *mut c_void;
@@ -144,18 +128,14 @@ unsafe fn terminated(text: *const u16) -> Vec<u16> {
 
 // Admits only the interposer verified through the handle that stays open while
 // the loader maps it. The handle denies writes, renames and deletes.
-unsafe fn admit(
-    system: &impl System,
-    platform: &Platform,
-    directory: &[u16],
-) -> Result<NonNull<c_void>, i32> {
+unsafe fn admit(system: &impl System, directory: &[u16]) -> Result<NonNull<c_void>, i32> {
     let mut path = directory.to_vec();
     path.extend(INTERPOSER.encode_utf16());
     if path.len() >= MAX_PATH {
         return Err(PATH_TOO_LONG);
     }
     path.push(0);
-    let verified = unsafe { (platform.open_verified)(path.as_ptr()) };
+    let verified = unsafe { leaf::open_verified(path.as_ptr()) };
     if verified.is_null() || verified == INVALID_HANDLE {
         return Err(UNVERIFIED);
     }
@@ -242,7 +222,6 @@ impl Lifecycle {
     pub(crate) unsafe fn initialize(
         &self,
         system: &impl System,
-        platform: &Platform,
         directory: *const u16,
         project: *const c_char,
         features: u32,
@@ -277,7 +256,7 @@ impl Lifecycle {
                 }
                 module
             }
-            None => match unsafe { admit(system, platform, &directory) } {
+            None => match unsafe { admit(system, &directory) } {
                 Ok(module) => {
                     session.module = Some(module);
                     self.published
@@ -288,11 +267,11 @@ impl Lifecycle {
                 Err(result) => return result,
             },
         };
-        let resolved = unsafe { (platform.resolve)(module.as_ptr()) } == 0;
+        let resolved = unsafe { leaf::resolve(module.as_ptr()) } == 0;
         let instance = unsafe { system.symbol(module.as_ptr(), c"vkGetInstanceProcAddr".as_ptr()) };
         let device = unsafe { system.symbol(module.as_ptr(), c"vkGetDeviceProcAddr".as_ptr()) };
         if !resolved || instance.is_null() || device.is_null() {
-            unsafe { self.abandon(system, platform, &mut session, loaded_here) };
+            unsafe { self.abandon(system, &mut session, loaded_here) };
             return MISSING_EXPORT;
         }
         self.published.instance.store(instance, Ordering::Release);
@@ -318,10 +297,10 @@ impl Lifecycle {
         let verbose = system.verbose();
         self.diagnostics.set_verbose(verbose);
         let preferences =
-            sdk_records::preferences(&selected[..count], plugin, project, verbose, platform.log);
-        let result = unsafe { (platform.init)(&preferences, crate::sdk_api::SDK_VERSION) };
+            sdk_records::preferences(&selected[..count], plugin, project, verbose, leaf::LOG);
+        let result = unsafe { leaf::init(&preferences, crate::sdk_api::SDK_VERSION) };
         if result != 0 {
-            unsafe { self.abandon(system, platform, &mut session, loaded_here) };
+            unsafe { self.abandon(system, &mut session, loaded_here) };
             return result;
         }
         session.initialized = true;
@@ -332,7 +311,7 @@ impl Lifecycle {
         0
     }
 
-    pub(crate) unsafe fn shutdown(&self, platform: &Platform) -> i32 {
+    pub(crate) unsafe fn shutdown(&self) -> i32 {
         let Some(mut session) = self.session() else {
             return BUSY;
         };
@@ -352,7 +331,7 @@ impl Lifecycle {
         let mut result = 0;
         if session.initialized {
             let mut sdk_result = 0;
-            if unsafe { (platform.shutdown)(&mut sdk_result) } != 0 {
+            if unsafe { leaf::shutdown(&mut sdk_result) } != 0 {
                 result = sdk_result;
                 session.shutdown_result = Some(result);
             }
@@ -362,14 +341,14 @@ impl Lifecycle {
         // Only the Vulkan dispatch entry points remain valid after slShutdown.
         #[cfg(windows)]
         self.reset_frame_generation(&mut session);
-        unsafe { (platform.clear)() };
+        unsafe { leaf::clear() };
         self.diagnostics.present_error(0);
         result
     }
 
     // Call only after shutdown and after every Vulkan object and API table that
     // references the interposer is destroyed. A failed shutdown keeps the module.
-    pub(crate) unsafe fn unload(&self, system: &impl System, platform: &Platform) -> i32 {
+    pub(crate) unsafe fn unload(&self, system: &impl System) -> i32 {
         let Some(mut session) = self.session() else {
             return BUSY;
         };
@@ -383,26 +362,20 @@ impl Lifecycle {
         if !self.frame_token.try_close() {
             return BUSY;
         }
-        unsafe { self.release(system, platform, &mut session) };
+        unsafe { self.release(system, &mut session) };
         0
     }
 
-    unsafe fn abandon(
-        &self,
-        system: &impl System,
-        platform: &Platform,
-        session: &mut Session,
-        loaded_here: bool,
-    ) {
+    unsafe fn abandon(&self, system: &impl System, session: &mut Session, loaded_here: bool) {
         if loaded_here {
-            unsafe { self.release(system, platform, session) };
+            unsafe { self.release(system, session) };
         } else {
-            unsafe { (platform.clear)() };
+            unsafe { leaf::clear() };
         }
     }
 
     // Withdraws the published entry points before the loader can unmap them.
-    unsafe fn release(&self, system: &impl System, platform: &Platform, session: &mut Session) {
+    unsafe fn release(&self, system: &impl System, session: &mut Session) {
         self.published.initialized.store(false, Ordering::Release);
         self.published.instance.store(null_mut(), Ordering::Release);
         self.published.device.store(null_mut(), Ordering::Release);
@@ -410,7 +383,7 @@ impl Lifecycle {
         if let Some(module) = session.module.take() {
             #[cfg(windows)]
             self.reset_frame_generation(session);
-            unsafe { (platform.clear)() };
+            unsafe { leaf::clear() };
             unsafe { system.free(module) };
         }
     }
