@@ -2,7 +2,6 @@
 // Shared D3D11 frame tap. The Rust detours and platform leaves use the native COM ABI.
 mod detours;
 mod platform;
-pub use detours::rsf_frame_tap_set_sampler_bias;
 
 use crate::com_ref;
 use crate::sys::*;
@@ -70,6 +69,12 @@ thread_local! {
 
 fn inside() -> bool {
     INSIDE.with(|depth| depth.get() != 0)
+}
+
+/// The admission of a call the game made on the observed context: None for another context, a refused
+/// admission or a call a tap callback made itself.
+fn game_call(context: Handle) -> Option<Admission> {
+    Admission::enter(context).filter(|_| !inside())
 }
 
 struct Reentry;
@@ -249,7 +254,7 @@ fn patch(vtable: *mut Handle, hook: usize, replacement: Handle) -> bool {
     let slot = HOOK_TABLE.slots[hook].load(Relaxed);
     let current = unsafe { vtable.add(slot).read_volatile() };
     HOOK_TABLE.originals[hook].store(current, Release);
-    unsafe { platform::patch_slot(vtable, slot as u32, replacement) != 0 }
+    unsafe { platform::patch_slot(vtable, slot as u32, replacement) }
 }
 
 // Put back the originals of patched hooks, in the given order.
@@ -260,7 +265,7 @@ fn restore(vtable: *mut Handle, hooks: impl Iterator<Item = usize>) -> bool {
             continue;
         }
         let slot = HOOK_TABLE.slots[hook].load(Relaxed) as u32;
-        if unsafe { platform::patch_slot(vtable, slot, original(hook)) } != 0 {
+        if unsafe { platform::patch_slot(vtable, slot, original(hook)) } {
             HOOK_TABLE.replacements[hook].store(null_mut(), Release);
         } else {
             restored = false;
@@ -522,9 +527,7 @@ fn texture_behind(view: Handle) -> Option<IUnknown> {
 }
 
 fn facts_of(texture: Handle) -> rsf_texture_facts {
-    let mut facts = ZERO_FACTS;
-    unsafe { platform::texture_facts(texture, &mut facts) };
-    facts
+    unsafe { platform::texture_facts(texture) }
 }
 
 // The occupied slots of a snapshot, lowest first, so a visit may drop the slot it visits.
@@ -930,8 +933,7 @@ fn watched_buffer(render: &mut Render, resource: Handle, watched: u32) -> u32 {
     if render.verdicts[index] == (resource, 0) {
         return 0;
     }
-    let mut bind_flags = 0;
-    let width = unsafe { platform::buffer_width(resource, &mut bind_flags) };
+    let (width, bind_flags) = unsafe { platform::buffer_info(resource) };
     let wanted = if watched == 0 {
         width <= 4096
     } else {
@@ -987,7 +989,7 @@ unsafe fn rsf_core_frame_tap_install(
     HOOK_TABLE
         .sentinel
         .store(hooks[HOOK_DRAW].replacement, Relaxed);
-    let context1 = unsafe { platform::context1(context) } != 0;
+    let context1 = unsafe { platform::context1(context) };
     // Every slot at once, undone as a unit: bindings and draws only mean anything together.
     for (hook, entry) in hooks.iter().enumerate() {
         HOOK_TABLE.replacements[hook].store(null_mut(), Relaxed);
@@ -1014,7 +1016,8 @@ unsafe fn rsf_core_frame_tap_install(
     OK
 }
 
-fn rsf_core_frame_tap_uninstall() -> i32 {
+#[unsafe(no_mangle)]
+extern "C" fn rsf_frame_tap_uninstall() -> i32 {
     // Everything that can refuse comes before the first change. A caller inside a hook is refused
     // with INVALID_ARGUMENT when it would have to wait for another thread.
     let Some(lock) = control() else {
@@ -1067,7 +1070,8 @@ fn rsf_core_frame_tap_uninstall() -> i32 {
     if restored { OK } else { PATCH_FAILED }
 }
 
-fn rsf_core_frame_tap_refresh() -> i32 {
+#[unsafe(no_mangle)]
+extern "C" fn rsf_frame_tap_refresh() -> i32 {
     if !TAP.installed.load(Acquire) {
         return NOT_INSTALLED;
     }
@@ -1077,7 +1081,8 @@ fn rsf_core_frame_tap_refresh() -> i32 {
     OK
 }
 
-fn rsf_core_frame_tap_set_sampler_bias(bias: f32) -> i32 {
+#[unsafe(no_mangle)]
+pub extern "C" fn rsf_frame_tap_set_sampler_bias(bias: f32) -> i32 {
     if !bias.is_finite() || !(-16.0..=0.0).contains(&bias) {
         return INVALID;
     }
@@ -1158,7 +1163,12 @@ fn rsf_core_frame_tap_leave(admitted: u32) {
     }
 }
 
-unsafe fn rsf_core_frame_tap_views(context: Handle, start: u32, count: u32, views: *const Handle) {
+unsafe extern "system" fn rsf_core_frame_tap_views(
+    context: Handle,
+    start: u32,
+    count: u32,
+    views: *const Handle,
+) {
     refresh();
     let forward = original(HOOK_VIEWS);
     if forward.is_null() {
@@ -1269,12 +1279,9 @@ fn rsf_core_frame_tap_draw(context: Handle, hook: i32, call: &rsf_frame_tap_draw
 // Draws whose arguments live in a buffer or come from stream-out, after they are forwarded.
 fn rsf_core_frame_tap_indirect(context: Handle, kind: u32, arguments: Handle, offset: u32) {
     refresh();
-    let Some(_admission) = Admission::enter(context) else {
+    let Some(_admission) = game_call(context) else {
         return;
     };
-    if inside() {
-        return;
-    }
     let _guard = Reentry::enter();
     let call = rsf_frame_tap_draw_call {
         kind,
@@ -1303,12 +1310,9 @@ unsafe fn rsf_core_frame_tap_vertex_buffers(
     strides: *const u32,
     offsets: *const u32,
 ) {
-    let Some(_admission) = Admission::enter(context) else {
+    let Some(_admission) = game_call(context) else {
         return;
     };
-    if inside() {
-        return;
-    }
     let geometry = unsafe { &mut render().geometry };
     for index in 0..count as usize {
         let slot = start as usize + index;
@@ -1324,12 +1328,9 @@ unsafe fn rsf_core_frame_tap_vertex_buffers(
 }
 
 fn rsf_core_frame_tap_index_buffer(context: Handle, buffer: Handle, format: u32, offset: u32) {
-    let Some(_admission) = Admission::enter(context) else {
+    let Some(_admission) = game_call(context) else {
         return;
     };
-    if inside() {
-        return;
-    }
     let geometry = unsafe { &mut render().geometry };
     geometry.index_buffer = buffer;
     geometry.index_format = format;
@@ -1339,12 +1340,9 @@ fn rsf_core_frame_tap_index_buffer(context: Handle, buffer: Handle, format: u32,
 // The pipeline objects a draw is identified by. Recorded and nothing more: what they mean is
 // settled at creation and looked up by address.
 fn rsf_core_frame_tap_object(context: Handle, object: u32, value: Handle) {
-    let Some(_admission) = Admission::enter(context) else {
+    let Some(_admission) = game_call(context) else {
         return;
     };
-    if inside() {
-        return;
-    }
     let render = unsafe { render() };
     let field = match object {
         OBJECT_LAYOUT => &mut render.geometry.input_layout,
@@ -1358,9 +1356,29 @@ fn rsf_core_frame_tap_object(context: Handle, object: u32, value: Handle) {
 }
 
 fn rsf_core_frame_tap_topology(context: Handle, topology: u32) {
-    let admission = Admission::enter(context);
-    if !inside() && admission.is_some() {
+    if let Some(_admission) = game_call(context) {
         unsafe { render() }.geometry.topology = topology;
+    }
+}
+
+// Record `count` constant buffers bound from `start` into the stage array `stage` selects.
+unsafe fn record_constants(
+    context: Handle,
+    start: u32,
+    count: u32,
+    buffers: *const Handle,
+    stage: fn(&mut Render) -> &mut [Handle; STAGE_CONSTANTS],
+) {
+    let Some(_admission) = game_call(context) else {
+        return;
+    };
+    let constants = stage(unsafe { render() });
+    for index in 0..count as usize {
+        let slot = start as usize + index;
+        if slot >= STAGE_CONSTANTS {
+            break;
+        }
+        constants[slot] = unsafe { read_or(buffers, index, null_mut()) };
     }
 }
 
@@ -1370,19 +1388,10 @@ unsafe fn rsf_core_frame_tap_vertex_constants(
     count: u32,
     buffers: *const Handle,
 ) {
-    let Some(_admission) = Admission::enter(context) else {
-        return;
-    };
-    if inside() {
-        return;
-    }
-    let constants = unsafe { &mut render().geometry.vertex_constants };
-    for index in 0..count as usize {
-        let slot = start as usize + index;
-        if slot >= STAGE_CONSTANTS {
-            break;
-        }
-        constants[slot] = unsafe { read_or(buffers, index, null_mut()) };
+    unsafe {
+        record_constants(context, start, count, buffers, |render| {
+            &mut render.geometry.vertex_constants
+        })
     }
 }
 
@@ -1392,35 +1401,22 @@ unsafe fn rsf_core_frame_tap_pixel_constants(
     count: u32,
     buffers: *const Handle,
 ) {
-    let Some(_admission) = Admission::enter(context) else {
-        return;
-    };
-    if inside() {
-        return;
-    }
-    let constants = unsafe { &mut render().pixel_constants };
-    for index in 0..count as usize {
-        let slot = start as usize + index;
-        if slot >= STAGE_CONSTANTS {
-            break;
-        }
-        constants[slot] = unsafe { read_or(buffers, index, null_mut()) };
+    unsafe {
+        record_constants(context, start, count, buffers, |render| {
+            &mut render.pixel_constants
+        })
     }
 }
-
 fn rsf_core_frame_tap_invalidate(context: Handle, restore: u32) {
     if restore != 0 {
         return;
     }
-    let Some(_admission) = Admission::enter(context) else {
-        return;
-    };
-    if !inside() {
+    if let Some(_admission) = game_call(context) {
         invalidate_geometry(unsafe { render() });
     }
 }
 
-unsafe fn rsf_core_frame_tap_map(
+unsafe extern "system" fn rsf_core_frame_tap_map(
     context: Handle,
     resource: Handle,
     subresource: u32,
@@ -1478,7 +1474,11 @@ unsafe fn rsf_core_frame_tap_map(
     result
 }
 
-unsafe fn rsf_core_frame_tap_unmap(context: Handle, resource: Handle, subresource: u32) {
+unsafe extern "system" fn rsf_core_frame_tap_unmap(
+    context: Handle,
+    resource: Handle,
+    subresource: u32,
+) {
     refresh();
     let admission = Admission::enter(context);
     let forward: unsafe extern "system" fn(Handle, Handle, u32) =

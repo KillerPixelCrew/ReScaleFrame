@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
 
-pub(super) unsafe fn patch_slot(vtable: *mut Handle, index: u32, replacement: Handle) -> i32 {
+pub(super) unsafe fn patch_slot(vtable: *mut Handle, index: u32, replacement: Handle) -> bool {
     let entry = unsafe { vtable.add(index as usize) };
     let mut protection = 0;
     if unsafe {
@@ -23,19 +23,19 @@ pub(super) unsafe fn patch_slot(vtable: *mut Handle, index: u32, replacement: Ha
         )
     } == 0
     {
-        return 0;
+        return false;
     }
     let mut previous = 0;
     unsafe {
         entry.write_volatile(replacement);
         VirtualProtect(entry.cast(), size_of::<Handle>(), protection, &mut previous);
     }
-    1
+    true
 }
 
-pub(super) unsafe fn context1(context: Handle) -> i32 {
+pub(super) unsafe fn context1(context: Handle) -> bool {
     let context = unsafe { IUnknown::from_raw_borrowed(&context) };
-    i32::from(context.is_some_and(|context| context.cast::<ID3D11DeviceContext1>().is_ok()))
+    context.is_some_and(|context| context.cast::<ID3D11DeviceContext1>().is_ok())
 }
 
 pub(super) unsafe fn texture_behind(view: Handle) -> Handle {
@@ -47,19 +47,17 @@ pub(super) unsafe fn texture_behind(view: Handle) -> Handle {
     unsafe { rsf_d3d11_output_query_texture(resource.as_raw()) }
 }
 
-pub(super) unsafe fn texture_facts(texture: Handle, result: *mut rsf_texture_facts) {
+pub(super) unsafe fn texture_facts(texture: Handle) -> rsf_texture_facts {
     let desc = unsafe { texture_desc(texture) };
-    unsafe {
-        result.write(rsf_texture_facts {
-            struct_size: size_of::<rsf_texture_facts>() as u32,
-            width: desc.width,
-            height: desc.height,
-            format: desc.format,
-            bind_flags: desc.bind_flags,
-            mip_levels: desc.mips,
-            array_size: desc.layers,
-            sample_count: desc.samples,
-        });
+    rsf_texture_facts {
+        struct_size: size_of::<rsf_texture_facts>() as u32,
+        width: desc.width,
+        height: desc.height,
+        format: desc.format,
+        bind_flags: desc.bind_flags,
+        mip_levels: desc.mips,
+        array_size: desc.layers,
+        sample_count: desc.samples,
     }
 }
 
@@ -69,14 +67,10 @@ pub(super) unsafe fn target_format(view: Handle) -> u32 {
     desc.Format.0 as u32
 }
 
-pub(super) unsafe fn buffer_width(resource: Handle, bind_flags: *mut u32) -> u32 {
-    let Some((width, flags, _)) =
-        (unsafe { crate::constant_buffer_read::resource_buffer_info(resource) })
-    else {
-        return 0;
-    };
-    unsafe { bind_flags.write(flags) };
-    width
+/// A buffer's width and bind flags, zero for a resource that is not one.
+pub(super) unsafe fn buffer_info(resource: Handle) -> (u32, u32) {
+    unsafe { crate::constant_buffer_read::resource_buffer_info(resource) }
+        .map_or((0, 0), |(width, flags, _)| (width, flags))
 }
 
 pub(super) unsafe fn shader_views(context: Handle, views: *mut Handle) {

@@ -78,10 +78,6 @@ unsafe extern "system" fn constants<const HOOK: i32>(
     }
 }
 
-unsafe extern "system" fn views(context: Handle, start: u32, count: u32, views: *const Handle) {
-    unsafe { rsf_core_frame_tap_views(context, start, count, views) };
-}
-
 unsafe extern "system" fn targets(
     context: Handle,
     count: u32,
@@ -235,21 +231,6 @@ unsafe extern "system" fn execute(context: Handle, list: Handle, restore: i32) {
     rsf_core_frame_tap_invalidate(context, u32::from(restore != 0));
 }
 
-unsafe extern "system" fn map(
-    context: Handle,
-    resource: Handle,
-    subresource: u32,
-    kind: u32,
-    flags: u32,
-    mapped: *mut D3D11_MAPPED_SUBRESOURCE,
-) -> i32 {
-    unsafe { rsf_core_frame_tap_map(context, resource, subresource, kind, flags, mapped) }
-}
-
-unsafe extern "system" fn unmap(context: Handle, resource: Handle, subresource: u32) {
-    unsafe { rsf_core_frame_tap_unmap(context, resource, subresource) };
-}
-
 unsafe extern "system" fn dispatch(context: Handle, x: u32, y: u32, z: u32) {
     forward!(RSF_FRAME_TAP_HOOK_DISPATCH; context => Handle, x => u32, y => u32, z => u32);
     rsf_core_frame_tap_leave(0);
@@ -367,7 +348,7 @@ const DETOURS: [rsf_frame_tap_hook; HOOKS] = [
     ),
     hook(35, 0, blend as _),
     hook(36, 0, depth_stencil as _),
-    hook(8, 0, views as _),
+    hook(8, 0, rsf_core_frame_tap_views as _),
     hook(16, 0, constants::<RSF_FRAME_TAP_HOOK_PIXEL_CONSTANTS> as _),
     hook(10, 0, samplers as _),
     hook(12, 0, indexed as _),
@@ -377,8 +358,8 @@ const DETOURS: [rsf_frame_tap_hook; HOOKS] = [
     hook(44, 0, viewports as _),
     hook(45, 0, scissors as _),
     hook(50, 0, clear_target as _),
-    hook(14, 0, map as _),
-    hook(15, 0, unmap as _),
+    hook(14, 0, rsf_core_frame_tap_map as _),
+    hook(15, 0, rsf_core_frame_tap_unmap as _),
     hook(111, 0, flush as _),
     hook(41, 0, dispatch as _),
     hook(42, 0, dispatch_indirect as _),
@@ -402,19 +383,4 @@ unsafe extern "C" fn rsf_frame_tap_install(
     options: *const rsf_frame_tap_options,
 ) -> i32 {
     unsafe { rsf_core_frame_tap_install(context, options, DETOURS.as_ptr()) }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn rsf_frame_tap_set_sampler_bias(bias: f32) -> i32 {
-    rsf_core_frame_tap_set_sampler_bias(bias)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_frame_tap_refresh() -> i32 {
-    rsf_core_frame_tap_refresh()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_frame_tap_uninstall() -> i32 {
-    rsf_core_frame_tap_uninstall()
 }
