@@ -122,20 +122,6 @@ fn binding_refuses_cleanly_and_accepts_a_complete_table() {
     other.abi_version += 1;
     assert_eq!(validate(OK, &other).err().unwrap().status, API_REFUSED);
     assert!(bind(Some(good_query)).is_ok());
-
-    let mut out = rsf_overlay_api {
-        struct_size: 0x1234,
-        ..Default::default()
-    };
-    let mut reason = ptr::null();
-    let status = unsafe { rsf_anomaly_overlay_bind(Some(mismatched_query), &mut out, &mut reason) };
-    assert_eq!((status, out.struct_size), (API_REFUSED, 0x1234));
-    assert!(!reason.is_null());
-    assert_eq!(
-        unsafe { rsf_anomaly_overlay_bind(Some(good_query), &mut out, &mut reason) },
-        STARTED
-    );
-    assert_eq!(out.abi_version, RSF_OVERLAY_API_VERSION);
 }
 
 // ---- fake leaves ----
@@ -220,15 +206,14 @@ pub(super) mod leaves {
         }
         OK
     }
-    pub(in crate::overlay) fn install_input(_: &HookOps, _: &mut *const c_char) -> bool {
-        true
+    pub(in crate::overlay) fn install_input(_: &HookOps) -> Result<(), &'static CStr> {
+        Ok(())
     }
-    pub(in crate::overlay) fn install_present(_: &HookOps, reason: &mut *const c_char) -> bool {
+    pub(in crate::overlay) fn install_present(_: &HookOps) -> Result<(), &'static CStr> {
         if PRESENT_REFUSED.get() {
-            *reason = c"dummy swap chain creation failed".as_ptr();
-            return false;
+            return Err(c"dummy swap chain creation failed");
         }
-        true
+        Ok(())
     }
     pub(in crate::overlay) fn engine_window(_: *mut c_void) -> bool {
         true

@@ -78,8 +78,8 @@ pub(super) unsafe fn fg(
     }
 }
 
-pub(super) unsafe fn input_observation(reason: *mut *const c_char) -> bool {
-    unsafe { install_input(rsf_anomaly_minhook_ops(), &mut *reason) }
+pub(super) fn input_observation() -> Result<(), &'static std::ffi::CStr> {
+    install_input(unsafe { rsf_anomaly_minhook_ops() })
 }
 
 pub(super) unsafe fn overlay(runtime: HMODULE, ini: *const u16, log: rsf_game_log_fn) -> bool {
@@ -140,8 +140,8 @@ unsafe fn start_overlay(
         || status == RSF_ANOMALY_OVERLAY_ALREADY_STARTED as u32
 }
 
-unsafe extern "C" fn overlay_present(user: *mut c_void, chain: *mut rsf_anomaly_fg_swap_chain) {
-    rsf_anomaly_overlay_present(user, chain.cast());
+unsafe extern "C" fn overlay_present(_: *mut c_void, chain: *mut rsf_anomaly_fg_swap_chain) {
+    rsf_anomaly_overlay_present(chain.cast());
 }
 
 pub(super) unsafe fn overlay_sink() {

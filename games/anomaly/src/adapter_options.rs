@@ -41,17 +41,17 @@ pub(crate) unsafe fn register_option(
         get: Some(get),
         set: Some(set),
     };
-    unsafe { overlay::rsf_anomaly_overlay_option_add(&option) };
+    overlay::add_option(&option);
 }
 
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe extern "C" fn rsf_anomaly_sr_persist_int(key: *const c_char, value: i32) -> bool {
+pub(crate) unsafe fn rsf_anomaly_sr_persist_int(key: *const c_char, value: i32) -> bool {
     let key = unsafe { ini::widen(key) };
     write(key.as_ptr(), value)
 }
 
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe extern "C" fn rsf_anomaly_sr_persist_text(
+pub(crate) unsafe fn rsf_anomaly_sr_persist_text(
     key: *const c_char,
     value: *const c_char,
 ) -> bool {

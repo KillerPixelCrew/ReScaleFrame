@@ -197,17 +197,16 @@ enum InputInstallation {
 
 /// The engine input hook installs only after DirectInput observation, so its facts always have their receipts.
 fn install_input(mut state: InputInstallation, build: usize) -> InputInstallation {
-    let mut reason = ptr::null();
     if matches!(state, InputInstallation::Pending) {
-        if !unsafe { leaves::input_observation(&mut reason) } {
-            log_input_refusal(reason, b"Anomaly DirectInput observation refused.");
+        if let Err(reason) = leaves::input_observation() {
+            write_log(reason.to_bytes());
             return state;
         }
         unsafe { leaves::publish_input_observer() };
         state = InputInstallation::DirectInput;
     }
     if matches!(state, InputInstallation::DirectInput) {
-        reason = ptr::null();
+        let mut reason = ptr::null();
         let image = unsafe { GetModuleHandleW(ptr::null()) };
         if !unsafe { leaves::input_hook(image, build, &mut reason) } {
             log_input_refusal(reason, b"Anomaly input hook refused.");

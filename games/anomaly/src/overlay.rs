@@ -129,10 +129,8 @@ impl AdapterOption {
 /// Built at cold start, before the overlay starts. The panel sees the first `RSF_OVERLAY_SERVICE_OPTION_LIMIT`.
 static REGISTRY: Mutex<Vec<AdapterOption>> = Mutex::new(Vec::new());
 
-pub(crate) unsafe extern "C" fn rsf_anomaly_overlay_option_add(
-    option: *const rsf_anomaly_overlay_option,
-) {
-    if let Some(option) = unsafe { option.as_ref() }.and_then(AdapterOption::new) {
+pub(crate) fn add_option(option: &rsf_anomaly_overlay_option) {
+    if let Some(option) = AdapterOption::new(option) {
         lock(&REGISTRY).push(option);
     }
 }
@@ -158,9 +156,6 @@ type DiagnosticsFn = unsafe extern "C" fn(*mut rsf_overlay_diagnostics) -> i32;
 /// A validated table: every entry present, the size and version of this adapter's header.
 #[derive(Clone, Copy)]
 struct Api {
-    // The admitted table itself is returned only by the test bind entry.
-    #[cfg_attr(not(test), allow(dead_code))]
-    table: rsf_overlay_api,
     configure: unsafe extern "C" fn(*const rsf_overlay_service_setup) -> i32,
     present: unsafe extern "C" fn(*mut c_void, *mut u32) -> i32,
     notify: unsafe extern "C" fn(*mut c_void, u32) -> i32,
@@ -176,7 +171,6 @@ impl Api {
         table.status?;
         table.settings_apply?;
         Some(Self {
-            table: *table,
             configure: table.configure?,
             present: table.present?,
             notify: table.notify?,
@@ -233,34 +227,6 @@ fn bind(query: rsf_get_overlay_api_fn) -> Result<Api, Refusal> {
     validate(result, &table)
 }
 
-#[cfg(test)]
-unsafe fn rsf_anomaly_overlay_bind(
-    query: rsf_get_overlay_api_fn,
-    out: *mut rsf_overlay_api,
-    reason: *mut *const c_char,
-) -> u32 {
-    let result = if out.is_null() {
-        Err(Refusal::new(
-            API_MISSING,
-            c"the Runtime does not export rsf_get_overlay_api",
-        ))
-    } else {
-        bind(query)
-    };
-    match result {
-        Ok(api) => {
-            unsafe { out.write(api.table) };
-            STARTED
-        }
-        Err(refusal) => {
-            if let Some(reason) = unsafe { reason.as_mut() } {
-                *reason = refusal.reason;
-            }
-            refusal.status
-        }
-    }
-}
-
 // ---- native leaves -----------------------------------------------------------------------------------------------
 
 // The chain and backbuffer leaves, the hook installs, the SR and FG stage controls and the window and key reads of the
@@ -273,7 +239,7 @@ use self::tests::leaves;
 #[cfg(not(test))]
 mod native {
     pub(super) use super::win32::{engine_window, insert_held};
-    use super::{HookOps, c_char, c_void, rsf_anomaly_sr_settings, rsf_overlay_sr_report};
+    use super::{HookOps, c_void, rsf_anomaly_sr_settings, rsf_overlay_sr_report};
     pub(super) use crate::fg_stage::{
         foreign_chain as fg_foreign_chain, overlay_options as fg_options,
     };
@@ -281,12 +247,11 @@ mod native {
     pub(super) use crate::overlay_native::{capture_backbuffer, describe_chain as chain};
     use crate::sr_stage::{OverlayChoices, STAGE};
 
-    pub(super) fn install_present(hooks: &HookOps, reason: &mut *const c_char) -> bool {
+    pub(super) fn install_present(hooks: &HookOps) -> Result<(), &'static std::ffi::CStr> {
         crate::overlay_hooks::install_present(
             super::rsf_anomaly_overlay_present,
             super::rsf_anomaly_overlay_resize,
             hooks,
-            reason,
         )
     }
 
@@ -588,13 +553,13 @@ impl Service {
         }
     }
 
-    fn read_diagnostics(&self, out: &mut rsf_overlay_diagnostics) -> bool {
-        *out = rsf_overlay_diagnostics {
+    fn read_diagnostics(&self) -> Option<rsf_overlay_diagnostics> {
+        let mut out = rsf_overlay_diagnostics {
             struct_size: size_of::<rsf_overlay_diagnostics>() as u32,
             ..Default::default()
         };
-        self.diagnostics
-            .is_some_and(|diagnostics| unsafe { diagnostics(out) } == OK)
+        let diagnostics = self.diagnostics?;
+        (unsafe { diagnostics(&mut out) } == OK).then_some(out)
     }
 
     fn settings_changed(&self, applied: &rsf_render_settings) {
@@ -613,14 +578,13 @@ impl Service {
     }
 
     fn summary(&self, run: &PanelRun, when: &str) {
-        let mut now = rsf_overlay_diagnostics::default();
-        if !self.read_diagnostics(&mut now) || !run.have_base {
+        let Some(now) = self.read_diagnostics().filter(|_| run.have_base) else {
             self.say(format_args!(
                 "Anomaly overlay panel #{} {when}: present drawn {} of {} visible frames ({} refused, last result {}); input and settings counters unavailable.",
                 run.opens, run.drawn, run.frames, run.refused, run.last_result
             ));
             return;
-        }
+        };
         let b = &run.base;
         self.say(format_args!(
             "Anomaly overlay panel #{} {when}: present drawn {} of {} visible frames ({} refused, last result {}), target {}x{}; \
@@ -702,8 +666,7 @@ impl Service {
             self.summary(run, "closed");
             // The Runtime counts input only while the panel is open, so the next panel's counts start where this one
             // ended; events that arrive between the open request and its first presented frame still count.
-            let mut now = rsf_overlay_diagnostics::default();
-            if self.read_diagnostics(&mut now) {
+            if let Some(now) = self.read_diagnostics() {
                 run.base = now;
             }
         }
@@ -716,8 +679,7 @@ impl Service {
             run.last_result = 0;
             // The first panel's baseline is the zeroed counters of process start.
             run.have_base = self.diagnostics.is_some();
-            let mut now = rsf_overlay_diagnostics::default();
-            self.read_diagnostics(&mut now);
+            let now = self.read_diagnostics().unwrap_or_default();
             self.say(format_args!(
                 "Anomaly overlay panel #{} opened: target {}x{}, input layer installed {}, cursor freed {}.",
                 run.opens, target[0], target[1], now.input_installed, now.cursor_freed
@@ -952,28 +914,15 @@ impl Overlay {
         if options.install_hooks != 0 {
             let hooks = hooks.ok_or(Refusal::new(HOOKS_REFUSED, c"no hook operations"))?;
             // Input first: a panel that cannot keep the game from acting on mouse and keyboard must not open.
-            let mut reason = ptr::null();
-            if !leaves::install_input(hooks, &mut reason) {
+            let refuse = |what: &str, reason: &'static CStr| {
                 log.say(format_args!(
-                    "Anomaly overlay refused: DirectInput gate unavailable ({}). The panel will not start.",
-                    text(reason)
+                    "Anomaly overlay refused: {what} unavailable ({}). The panel will not start.",
+                    reason.to_string_lossy()
                 ));
-                return Err(Refusal {
-                    status: HOOKS_REFUSED,
-                    reason,
-                });
-            }
-            let mut reason = ptr::null();
-            if !leaves::install_present(hooks, &mut reason) {
-                log.say(format_args!(
-                    "Anomaly overlay refused: Present hook unavailable ({}). The panel will not start.",
-                    text(reason)
-                ));
-                return Err(Refusal {
-                    status: HOOKS_REFUSED,
-                    reason,
-                });
-            }
+                Refusal::new(HOOKS_REFUSED, reason)
+            };
+            leaves::install_input(hooks).map_err(|reason| refuse("DirectInput gate", reason))?;
+            leaves::install_present(hooks).map_err(|reason| refuse("Present hook", reason))?;
         }
         register_saved_options(options.runtime, ini, &log);
         self.started.store(true, Ordering::Release);
@@ -1068,7 +1017,7 @@ pub(super) extern "C" fn rsf_anomaly_overlay_capture_bits(_: *mut c_void) -> u32
 
 /// Present-owner thread, immediately before the real Present (never for DXGI_PRESENT_TEST).
 #[cfg_attr(test, allow(dead_code))]
-pub(super) extern "C" fn rsf_anomaly_overlay_present(_: *mut c_void, chain: *mut c_void) {
+pub(super) fn rsf_anomaly_overlay_present(chain: *mut c_void) {
     if chain.is_null() {
         return;
     }
@@ -1081,7 +1030,7 @@ pub(super) extern "C" fn rsf_anomaly_overlay_present(_: *mut c_void, chain: *mut
 
 /// Before ResizeBuffers or ResizeTarget is forwarded.
 #[cfg_attr(test, allow(dead_code))]
-extern "C" fn rsf_anomaly_overlay_resize(_: *mut c_void, chain: *mut c_void) {
+fn rsf_anomaly_overlay_resize(chain: *mut c_void) {
     if let Ok(panel) = PANEL.try_lock()
         && panel.chain != 0
         && panel.chain == chain.addr()

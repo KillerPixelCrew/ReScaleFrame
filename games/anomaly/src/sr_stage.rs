@@ -2680,7 +2680,7 @@ unsafe extern "C" fn rsf_anomaly_sr_stage_configure_ini(
 fn register_live_options() {
     for option in &live_options() {
         // The registry copies the entry; labels and functions are static.
-        unsafe { crate::overlay::rsf_anomaly_overlay_option_add(option) };
+        crate::overlay::add_option(option);
     }
 }
 

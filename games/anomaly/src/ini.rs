@@ -58,7 +58,7 @@ pub(crate) unsafe fn widen(text: *const c_char) -> Vec<u16> {
     bytes.iter().copied().map(u16::from).chain([0]).collect()
 }
 
-pub(crate) unsafe extern "C" fn rsf_anomaly_sr_ini_int(
+pub(crate) unsafe fn rsf_anomaly_sr_ini_int(
     path: *const c_void,
     key: *const c_char,
     fallback: i32,
@@ -67,7 +67,7 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_sr_ini_int(
     unsafe { read_int(path.cast(), key.as_ptr(), fallback) }
 }
 
-pub(crate) unsafe extern "C" fn rsf_anomaly_sr_ini_text(
+pub(crate) unsafe fn rsf_anomaly_sr_ini_text(
     path: *const c_void,
     key: *const c_char,
     fallback: *const c_char,

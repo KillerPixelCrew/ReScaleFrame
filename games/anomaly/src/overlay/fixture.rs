@@ -403,7 +403,7 @@ fn frames(graphics: &Graphics, count: usize) -> windows::core::Result<()> {
                     .ClearRenderTargetView(&view, &[0.1, 0.2, 0.3, 1.0]);
             }
         }
-        rsf_anomaly_overlay_present(ptr::null_mut(), graphics.chain.as_raw());
+        rsf_anomaly_overlay_present(graphics.chain.as_raw());
         unsafe { graphics.chain.Present(0, DXGI_PRESENT(0)) }.ok()?;
     }
     Ok(())

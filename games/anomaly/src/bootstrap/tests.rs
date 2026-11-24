@@ -51,9 +51,9 @@ pub(super) unsafe fn fg(
 pub(super) fn fg_installed() -> bool {
     FG.load(SeqCst) != 0
 }
-pub(super) unsafe fn input_observation(_: *mut *const c_char) -> bool {
+pub(super) fn input_observation() -> Result<(), &'static CStr> {
     RECEIPTS.fetch_add(1, SeqCst);
-    true
+    Ok(())
 }
 pub(super) unsafe fn publish_input_observer() {
     PUBLISHED.fetch_add(1, SeqCst);

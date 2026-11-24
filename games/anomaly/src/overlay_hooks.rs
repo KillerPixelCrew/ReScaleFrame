@@ -2,7 +2,7 @@
 // The overlay calls these installs directly; its unit tests swap in fakes, so under test only the fixtures reach them.
 #![cfg_attr(test, allow(dead_code))]
 use std::cell::Cell;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::ptr::{null, null_mut};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use windows_sys::Win32::Foundation::{HWND, MAX_PATH};
@@ -22,9 +22,9 @@ use std::mem::transmute;
 
 const MAX_HOOKS: usize = 32;
 
-type Reason = *const c_char;
 type Address = usize;
-type SinkCallback = unsafe extern "C" fn(*mut c_void, *mut c_void);
+/// The overlay callback the Present and resize detours call with the engine chain.
+type SinkCallback = fn(*mut c_void);
 type InputObserver = unsafe extern "C" fn(u8);
 type Refusal = &'static CStr;
 
@@ -216,8 +216,7 @@ fn probe_present(registration: &mut Registration<'_>) -> Result<Module, Refusal>
 #[derive(Clone, Copy)]
 struct PresentSink {
     before_present: SinkCallback,
-    resize: Option<SinkCallback>,
-    user: Address,
+    resize: SinkCallback,
 }
 
 #[derive(Clone, Copy)]
@@ -357,6 +356,14 @@ impl Hooks {
 }
 
 impl State {
+    // The trampoline of a hooked target, or the target itself when it is not hooked.
+    fn original(&self, target: Address) -> Address {
+        self.hooks
+            .iter()
+            .find(|hook| hook.target == target)
+            .map_or(target, |hook| hook.original)
+    }
+
     fn publish(&mut self, binding: Binding, active: bool) {
         match binding {
             Binding::Input(gate) => self.gate = if active { gate } else { 0 },
@@ -420,52 +427,34 @@ thread_local! {
     static IN_PRESENT: Cell<bool> = const { Cell::new(false) };
 }
 
-pub(super) fn install_input(platform: &HookOps, reason: &mut Reason) -> bool {
+pub(super) fn install_input(platform: &HookOps) -> Result<(), Refusal> {
     static GATE: LazyLock<Gate> = LazyLock::new(|| Gate::new(rsf_anomaly_overlay_capture_bits));
     let gate = std::ptr::from_ref(&*GATE).expose_provenance();
-    match HOOKS.install(Binding::Input(gate), platform, |registration| {
+    HOOKS.install(Binding::Input(gate), platform, |registration| {
         probe_input(registration).map(Some)
-    }) {
-        Ok(()) => true,
-        Err(message) => {
-            *reason = message.as_ptr();
-            false
-        }
-    }
+    })
 }
 
 pub(super) fn install_present(
     before_present: SinkCallback,
     resize: SinkCallback,
     platform: &HookOps,
-    reason: &mut Reason,
-) -> bool {
+) -> Result<(), Refusal> {
     let sink = PresentSink {
         before_present,
-        resize: Some(resize),
-        user: 0,
+        resize,
     };
-    match HOOKS.install(Binding::Present(sink), platform, |registration| {
+    HOOKS.install(Binding::Present(sink), platform, |registration| {
         probe_present(registration).map(Some)
-    }) {
-        Ok(()) => true,
-        Err(message) => {
-            *reason = message.as_ptr();
-            false
-        }
-    }
+    })
 }
 
-extern "C" fn rsf_anomaly_overlay_original(target: Address) -> Address {
-    HOOKS
-        .state()
-        .hooks
-        .iter()
-        .find(|hook| hook.target == target)
-        .map_or(target, |hook| hook.original)
+#[cfg(test)]
+fn rsf_anomaly_overlay_original(target: Address) -> Address {
+    HOOKS.state().original(target)
 }
 
-extern "C" fn rsf_anomaly_overlay_present_original(method: u32) -> Address {
+fn rsf_anomaly_overlay_present_original(method: u32) -> Address {
     HOOKS
         .state()
         .hooks
@@ -474,7 +463,7 @@ extern "C" fn rsf_anomaly_overlay_present_original(method: u32) -> Address {
         .map_or(0, |hook| hook.original)
 }
 
-extern "C" fn rsf_anomaly_overlay_input_gate() -> Address {
+fn rsf_anomaly_overlay_input_gate() -> Address {
     HOOKS.state().gate
 }
 
@@ -488,26 +477,29 @@ extern "C" fn rsf_anomaly_overlay_input_observer() -> Option<InputObserver> {
 
 // Each ANSI or Unicode DirectInput class reaches the original from its own vtable.
 unsafe fn real_method(object: Object, slot: usize) -> Address {
-    rsf_anomaly_overlay_original(unsafe { native::slot(object, slot) })
+    HOOKS.state().original(unsafe { native::slot(object, slot) })
 }
 
+// One registry lock for the four originals a device hook may forward to.
 unsafe fn device_calls(device: Object) -> DeviceCalls {
+    let state = HOOKS.state();
+    let real = |slot| state.original(unsafe { native::slot(device, slot) });
     unsafe {
         DeviceCalls {
-            acquire: transmute::<Address, unsafe extern "system" fn(Object) -> HRESULT>(
-                real_method(device, SLOT_ACQUIRE),
-            ),
-            unacquire: transmute::<Address, unsafe extern "system" fn(Object) -> HRESULT>(
-                real_method(device, SLOT_UNACQUIRE),
-            ),
+            acquire: transmute::<Address, unsafe extern "system" fn(Object) -> HRESULT>(real(
+                SLOT_ACQUIRE,
+            )),
+            unacquire: transmute::<Address, unsafe extern "system" fn(Object) -> HRESULT>(real(
+                SLOT_UNACQUIRE,
+            )),
             get_state: transmute::<
                 Address,
                 unsafe extern "system" fn(Object, u32, Object) -> HRESULT,
-            >(real_method(device, SLOT_GET_STATE)),
+            >(real(SLOT_GET_STATE)),
             get_data: transmute::<
                 Address,
                 unsafe extern "system" fn(Object, u32, *mut u8, *mut u32, u32) -> HRESULT,
-            >(real_method(device, SLOT_GET_DATA)),
+            >(real(SLOT_GET_DATA)),
         }
     }
 }
@@ -616,10 +608,8 @@ unsafe extern "system" fn hook_cooperative(device: Object, window: HWND, flags: 
 unsafe extern "system" fn hook_present(chain: Object, sync: u32, flags: u32) -> HRESULT {
     let original: unsafe extern "system" fn(Object, u32, u32) -> HRESULT =
         unsafe { transmute(rsf_anomaly_overlay_present_original(Method::Present as u32)) };
-    unsafe {
-        rsf_anomaly_overlay_before_present(chain, flags);
-        original(chain, sync, flags)
-    }
+    rsf_anomaly_overlay_before_present(chain, flags);
+    unsafe { original(chain, sync, flags) }
 }
 
 unsafe extern "system" fn hook_present1(
@@ -633,10 +623,8 @@ unsafe extern "system" fn hook_present1(
             Method::Present1 as u32,
         ))
     };
-    unsafe {
-        rsf_anomaly_overlay_before_present(chain, flags);
-        original(chain, sync, flags, parameters)
-    }
+    rsf_anomaly_overlay_before_present(chain, flags);
+    unsafe { original(chain, sync, flags, parameters) }
 }
 
 unsafe extern "system" fn hook_resize_buffers(
@@ -652,10 +640,8 @@ unsafe extern "system" fn hook_resize_buffers(
             Method::ResizeBuffers as u32,
         ))
     };
-    unsafe {
-        rsf_anomaly_overlay_before_resize(chain);
-        original(chain, count, width, height, format, flags)
-    }
+    rsf_anomaly_overlay_before_resize(chain);
+    unsafe { original(chain, count, width, height, format, flags) }
 }
 
 unsafe extern "system" fn hook_resize_target(chain: Object, mode: *const c_void) -> HRESULT {
@@ -664,13 +650,11 @@ unsafe extern "system" fn hook_resize_target(chain: Object, mode: *const c_void)
             Method::ResizeTarget as u32,
         ))
     };
-    unsafe {
-        rsf_anomaly_overlay_before_resize(chain);
-        original(chain, mode)
-    }
+    rsf_anomaly_overlay_before_resize(chain);
+    unsafe { original(chain, mode) }
 }
 
-unsafe extern "C" fn rsf_anomaly_overlay_before_present(chain: *mut c_void, flags: u32) {
+fn rsf_anomaly_overlay_before_present(chain: *mut c_void, flags: u32) {
     const DXGI_PRESENT_TEST: u32 = 1;
     if flags & DXGI_PRESENT_TEST != 0 || IN_PRESENT.get() {
         return;
@@ -679,16 +663,13 @@ unsafe extern "C" fn rsf_anomaly_overlay_before_present(chain: *mut c_void, flag
         return;
     };
     IN_PRESENT.set(true);
-    unsafe { (sink.before_present)(sink.user as *mut c_void, chain) };
+    (sink.before_present)(chain);
     IN_PRESENT.set(false);
 }
 
-unsafe extern "C" fn rsf_anomaly_overlay_before_resize(chain: *mut c_void) {
-    let Some(sink) = HOOKS.state().sink else {
-        return;
-    };
-    if let Some(callback) = sink.resize {
-        unsafe { callback(sink.user as *mut c_void, chain) };
+fn rsf_anomaly_overlay_before_resize(chain: *mut c_void) {
+    if let Some(sink) = HOOKS.state().sink {
+        (sink.resize)(chain);
     }
 }
 
@@ -757,10 +738,10 @@ mod tests {
         Ok(None)
     }
 
-    unsafe extern "C" fn callback(_user: *mut c_void, _chain: *mut c_void) {
+    fn callback(_chain: *mut c_void) {
         // A callback can reenter without waiting for the registry or routing itself twice.
         CALLS.with_borrow_mut(|calls| calls.push(('p', 0)));
-        unsafe { rsf_anomaly_overlay_before_present(null_mut(), 0) };
+        rsf_anomaly_overlay_before_present(null_mut(), 0);
     }
 
     const PLATFORM: HookOps = HookOps {
@@ -773,8 +754,7 @@ mod tests {
 
     const PRESENT: Binding = Binding::Present(PresentSink {
         before_present: callback,
-        resize: None,
-        user: 0,
+        resize: |_| {},
     });
 
     #[test]
@@ -826,10 +806,8 @@ mod tests {
             ]
         );
         HOOKS.state().publish(PRESENT, true);
-        unsafe {
-            rsf_anomaly_overlay_before_present(null_mut(), 1);
-            rsf_anomaly_overlay_before_present(null_mut(), 0);
-        }
+        rsf_anomaly_overlay_before_present(null_mut(), 1);
+        rsf_anomaly_overlay_before_present(null_mut(), 0);
         assert_eq!(CALLS.with_borrow(|calls| calls.len()), 12);
     }
 }
