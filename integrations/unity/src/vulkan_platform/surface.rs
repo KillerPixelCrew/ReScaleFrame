@@ -14,7 +14,7 @@ use windows::core::Interface;
 const FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
 const BUFFER_COUNT: u32 = 3;
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_create(
+pub(crate) unsafe fn rsf_uvk_gpu_chain_create(
     shared: *const DeviceHandles,
     window: *mut c_void,
     width: u32,
@@ -51,7 +51,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_create(
     chain.map_or(null_mut(), Interface::into_raw)
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_extent(
+pub(crate) unsafe fn rsf_uvk_gpu_chain_extent(
     chain: *mut c_void,
     width: *mut u32,
     height: *mut u32,
@@ -63,7 +63,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_extent(
     }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_resize(
+pub(crate) unsafe fn rsf_uvk_gpu_chain_resize(
     chain: *mut c_void,
     width: u32,
     height: u32,
@@ -75,7 +75,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_resize(
     }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_destroy(chain: *mut c_void) {
+pub(crate) unsafe fn rsf_uvk_gpu_chain_destroy(chain: *mut c_void) {
     unsafe { release::<IDXGISwapChain3>(chain) };
 }
 

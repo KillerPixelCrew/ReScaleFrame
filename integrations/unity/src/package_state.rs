@@ -386,7 +386,7 @@ thread_local! {
     static RECORDING: Cell<Option<(*mut c_void, Recording)>> = const { Cell::new(None) };
 }
 
-pub(crate) extern "C" fn rsf_unity_package_sr_ring_begin() -> u64 {
+pub(crate) fn rsf_unity_package_sr_ring_begin() -> u64 {
     NEXT_RING_EPOCH
         .fetch_update(SeqCst, SeqCst, |epoch| epoch.checked_add(1))
         .unwrap_or(0)
@@ -423,7 +423,7 @@ pub(super) extern "C" fn rsf_unity_package_sr_recording(
     )));
 }
 
-pub(crate) extern "C" fn rsf_unity_package_sr_ring_retired(epoch: u64) {
+pub(crate) fn rsf_unity_package_sr_ring_retired(epoch: u64) {
     if epoch != 0 {
         PACKAGE.lock_views().retire_ring(epoch);
         RECORDING.with(|record| {

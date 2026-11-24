@@ -4,10 +4,7 @@
 use super::*;
 use crate::d3d11_pass::base_pass;
 use crate::package_state::services::{editor, rsf_unity_package_log};
-use crate::package_state::{
-    rsf_unity_package_bridge_failed, rsf_unity_package_sr_ring_begin,
-    rsf_unity_package_sr_ring_retired,
-};
+use crate::package_state::rsf_unity_package_bridge_failed;
 use crate::sys::*;
 use crate::sys::{RSF_UNITY_PACKET_PROBE, RSF_UNITY_PREVIEW_SOURCE_COMMON};
 use crate::vulkan_platform::{commands::*, surface::*, *};
@@ -114,47 +111,42 @@ unsafe extern "C" fn rsf_uvk_bridge_create_device(
     created == 1
 }
 
-unsafe extern "C" fn report_created(services: *const rsf_game_host_services) {
+pub(super) unsafe fn report_created(services: *const rsf_game_host_services) {
     log(
         services,
         c"Unity Vulkan textures share same-adapter D3D12 resources and GPU fences.",
     );
 }
 
-static DEVICE_OPS: DeviceOps = DeviceOps {
-    create: rsf_uvk_foreign_create_device,
-    destroy: rsf_uvk_gpu_destroy_device,
-    create_pool: rsf_uvk_gpu_create_pool,
-    destroy_pool: rsf_uvk_gpu_destroy_pool,
-    create_slot: rsf_uvk_gpu_create_slot,
-    destroy_slot: rsf_uvk_gpu_destroy_slot,
-    create_image: rsf_uvk_gpu_create_image,
-    destroy_image: rsf_uvk_gpu_destroy_image,
-    fence_ready: rsf_uvk_gpu_fence_ready,
-    shared_completed: rsf_uvk_gpu_shared_completed,
-    drain_images: rsf_uvk_gpu_drain,
-    report_created,
-    ring_begin: rsf_unity_package_sr_ring_begin,
-    ring_retired: rsf_unity_package_sr_ring_retired,
-};
-
-static SURFACE_OPS: SurfaceOps = SurfaceOps {
-    create: rsf_uvk_gpu_chain_create,
-    extent: rsf_uvk_gpu_chain_extent,
-    drain: rsf_uvk_gpu_drain,
-    resize: rsf_uvk_gpu_chain_resize,
-    destroy: rsf_uvk_gpu_chain_destroy,
-};
-
+/// The device and surface leaves vulkan_state calls; its tests bind fakes with the same names.
+pub(super) mod ops {
+    pub(in crate::vulkan_state) use super::report_created;
+    pub(in crate::vulkan_state) use crate::package_state::{
+        rsf_unity_package_sr_ring_begin as ring_begin,
+        rsf_unity_package_sr_ring_retired as ring_retired,
+    };
+    pub(in crate::vulkan_state) use crate::sys::rsf_uvk_foreign_create_device as create_device;
+    pub(in crate::vulkan_state) use crate::vulkan_platform::surface::{
+        rsf_uvk_gpu_chain_create as chain_create, rsf_uvk_gpu_chain_destroy as chain_destroy,
+        rsf_uvk_gpu_chain_extent as chain_extent, rsf_uvk_gpu_chain_resize as chain_resize,
+    };
+    pub(in crate::vulkan_state) use crate::vulkan_platform::{
+        rsf_uvk_gpu_create_image as create_image, rsf_uvk_gpu_create_pool as create_pool,
+        rsf_uvk_gpu_create_slot as create_slot, rsf_uvk_gpu_destroy_device as destroy_device,
+        rsf_uvk_gpu_destroy_image as destroy_image, rsf_uvk_gpu_destroy_pool as destroy_pool,
+        rsf_uvk_gpu_destroy_slot as destroy_slot, rsf_uvk_gpu_drain as drain,
+        rsf_uvk_gpu_fence_ready as fence_ready, rsf_uvk_gpu_shared_completed as shared_completed,
+    };
+}
 fn initialize(services: *const rsf_game_host_services) -> Device {
     if !unsafe { rsf_uvk_foreign_available() } {
         return Device::Failed;
     }
-    initialize_device(services, &DEVICE_OPS)
+    initialize_device(services)
 }
 
 fn configure_surface(width: u32, height: u32) -> *mut c_void {
-    super::configure_surface(width, height, &SURFACE_OPS)
+    super::configure_surface(width, height)
 }
 
 struct Entry;

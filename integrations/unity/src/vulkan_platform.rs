@@ -212,7 +212,7 @@ unsafe fn create_dx_device(luid: LUID, shared: &mut DeviceHandles) -> bool {
     .unwrap_or(false)
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_destroy_device(shared: *const DeviceHandles) {
+pub(crate) unsafe fn rsf_uvk_gpu_destroy_device(shared: *const DeviceHandles) {
     let shared = unsafe { &*shared };
     if !shared.dispatch.is_null() {
         let dispatch = unsafe { Box::from_raw(shared.dispatch.cast::<Dispatch>()) };
@@ -233,7 +233,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_destroy_device(shared: *const Device
     }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_create_image(
+pub(crate) unsafe fn rsf_uvk_gpu_create_image(
     shared: *const DeviceHandles,
     width: u32,
     height: u32,
@@ -348,7 +348,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_create_image(
     unsafe { (dispatch.bind_image)(shared.vk_device(), image, memory, 0) == SUCCESS }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_destroy_image(
+pub(crate) unsafe fn rsf_uvk_gpu_destroy_image(
     shared: *const DeviceHandles,
     image: *const ImageHandles,
 ) {
@@ -371,7 +371,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_destroy_image(
     unsafe { release::<ID3D12Resource>(image.resource) };
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_create_pool(shared: *const DeviceHandles) -> u64 {
+pub(crate) unsafe fn rsf_uvk_gpu_create_pool(shared: *const DeviceHandles) -> u64 {
     let shared = unsafe { &*shared };
     let info = vk::CommandPoolCreateInfo::default()
         .queue_family_index(shared.vk_queue_family)
@@ -382,7 +382,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_create_pool(shared: *const DeviceHan
     if result == SUCCESS { pool.as_raw() } else { 0 }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_destroy_pool(shared: *const DeviceHandles, pool: u64) {
+pub(crate) unsafe fn rsf_uvk_gpu_destroy_pool(shared: *const DeviceHandles, pool: u64) {
     let shared = unsafe { &*shared };
     unsafe {
         (shared.dispatch().destroy_pool)(
@@ -393,7 +393,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_destroy_pool(shared: *const DeviceHa
     };
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_create_slot(
+pub(crate) unsafe fn rsf_uvk_gpu_create_slot(
     shared: *const DeviceHandles,
     pool: u64,
     slot: *mut CommandSlot,
@@ -443,7 +443,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_create_slot(
     }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_destroy_slot(
+pub(crate) unsafe fn rsf_uvk_gpu_destroy_slot(
     shared: *const DeviceHandles,
     slot: *const CommandSlot,
 ) {
@@ -463,7 +463,7 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_destroy_slot(
     }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_fence_ready(
+pub(crate) unsafe fn rsf_uvk_gpu_fence_ready(
     shared: *const DeviceHandles,
     fence: u64,
 ) -> bool {
@@ -473,11 +473,11 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_fence_ready(
     }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_shared_completed(shared: *const DeviceHandles) -> u64 {
+pub(crate) unsafe fn rsf_uvk_gpu_shared_completed(shared: *const DeviceHandles) -> u64 {
     unsafe { borrow::<ID3D12Fence>(&(*shared).fence).GetCompletedValue() }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_drain(shared: *const DeviceHandles) -> bool {
+pub(crate) unsafe fn rsf_uvk_gpu_drain(shared: *const DeviceHandles) -> bool {
     let shared = unsafe { &*shared };
     if unsafe { (shared.dispatch().queue_idle)(shared.vk_queue()) } != SUCCESS {
         return false;

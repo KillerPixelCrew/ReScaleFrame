@@ -160,31 +160,14 @@ impl DeviceHandles {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct DeviceOps {
-    create: unsafe extern "C" fn(*const rsf_game_host_services, *mut DeviceHandles) -> bool,
-    destroy: unsafe extern "C" fn(*const DeviceHandles),
-    create_pool: unsafe extern "C" fn(*const DeviceHandles) -> u64,
-    destroy_pool: unsafe extern "C" fn(*const DeviceHandles, u64),
-    create_slot: unsafe extern "C" fn(*const DeviceHandles, u64, *mut CommandSlot) -> bool,
-    destroy_slot: unsafe extern "C" fn(*const DeviceHandles, *const CommandSlot),
-    create_image:
-        unsafe extern "C" fn(*const DeviceHandles, u32, u32, u32, u32, *mut ImageHandles) -> bool,
-    destroy_image: unsafe extern "C" fn(*const DeviceHandles, *const ImageHandles),
-    fence_ready: unsafe extern "C" fn(*const DeviceHandles, u64) -> bool,
-    shared_completed: unsafe extern "C" fn(*const DeviceHandles) -> u64,
-    drain_images: unsafe extern "C" fn(*const DeviceHandles) -> bool,
-    report_created: unsafe extern "C" fn(*const rsf_game_host_services),
-    ring_begin: extern "C" fn() -> u64,
-    ring_retired: extern "C" fn(u64),
-}
-
-const _: () = assert!(size_of::<DeviceOps>() == 14 * size_of::<usize>());
+// The device and surface leaves: bridge::ops in production, the test fakes under test.
+#[cfg(not(test))]
+use bridge::ops;
+#[cfg(test)]
+use tests::ops;
 
 struct SharedDevice {
     handles: DeviceHandles,
-    ops: DeviceOps,
     pool: u64,
     slots: [CommandSlot; SLOTS],
     epoch: u64,
@@ -193,10 +176,9 @@ struct SharedDevice {
 }
 
 impl SharedDevice {
-    fn new(ops: DeviceOps) -> Self {
+    fn new() -> Self {
         Self {
             handles: DeviceHandles::EMPTY,
-            ops,
             pool: 0,
             slots: [CommandSlot::EMPTY; SLOTS],
             epoch: 0,
@@ -206,13 +188,13 @@ impl SharedDevice {
     }
 
     fn prepare(&mut self, services: *const rsf_game_host_services) -> bool {
-        if !unsafe { (self.ops.create)(services, &mut self.handles) } || !self.handles.complete() {
+        if !unsafe { ops::create_device(services, &mut self.handles) } || !self.handles.complete() {
             return false;
         }
-        self.pool = unsafe { (self.ops.create_pool)(&self.handles) };
+        self.pool = unsafe { ops::create_pool(&self.handles) };
         self.pool != 0
             && self.slots.iter_mut().all(|slot| {
-                let created = unsafe { (self.ops.create_slot)(&self.handles, self.pool, slot) };
+                let created = unsafe { ops::create_slot(&self.handles, self.pool, slot) };
                 created && slot.complete()
             })
     }
@@ -220,9 +202,9 @@ impl SharedDevice {
     fn retire_commands(&mut self) {
         if self.pool != 0 {
             for slot in &self.slots {
-                unsafe { (self.ops.destroy_slot)(&self.handles, slot) };
+                unsafe { ops::destroy_slot(&self.handles, slot) };
             }
-            unsafe { (self.ops.destroy_pool)(&self.handles, std::mem::take(&mut self.pool)) };
+            unsafe { ops::destroy_pool(&self.handles, std::mem::take(&mut self.pool)) };
         }
     }
 }
@@ -230,31 +212,18 @@ impl SharedDevice {
 impl Drop for SharedDevice {
     fn drop(&mut self) {
         self.retire_commands();
-        unsafe { (self.ops.destroy)(&self.handles) };
+        unsafe { ops::destroy_device(&self.handles) };
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct SurfaceOps {
-    create: unsafe extern "C" fn(*const DeviceHandles, *mut c_void, u32, u32) -> *mut c_void,
-    extent: unsafe extern "C" fn(*mut c_void, *mut u32, *mut u32),
-    drain: unsafe extern "C" fn(*const DeviceHandles) -> bool,
-    resize: unsafe extern "C" fn(*mut c_void, u32, u32) -> bool,
-    destroy: unsafe extern "C" fn(*mut c_void),
-}
-
-const _: () = assert!(size_of::<SurfaceOps>() == 5 * size_of::<usize>());
-
 struct Surface {
     chain: *mut c_void,
-    ops: SurfaceOps,
 }
 
 impl Drop for Surface {
     fn drop(&mut self) {
         // SAFETY: Creation transferred one IDXGISwapChain3 reference to this owner.
-        unsafe { (self.ops.destroy)(self.chain) };
+        unsafe { ops::chain_destroy(self.chain) };
     }
 }
 
@@ -507,7 +476,7 @@ enum Device {
 /// The shared device for the caller, who holds an entry or running event. While a claim is
 /// active, reentrant callers see busy and close refuses. All the native creation, reporting and
 /// rollback run outside the lock.
-fn initialize_device(services: *const rsf_game_host_services, ops: &DeviceOps) -> Device {
+fn initialize_device(services: *const rsf_game_host_services) -> Device {
     let claim = lock().claim_device();
     match claim {
         Claim::Ready(handles) => return Device::Ready(handles),
@@ -516,14 +485,14 @@ fn initialize_device(services: *const rsf_game_host_services, ops: &DeviceOps) -
         Claim::Create => {}
     }
 
-    let mut device = SharedDevice::new(*ops);
+    let mut device = SharedDevice::new();
     if !device.prepare(services) {
         drop(device);
         lock().creation.rolled_back(false);
         return Device::Failed;
     }
-    device.epoch = (ops.ring_begin)();
-    unsafe { (ops.report_created)(services) };
+    device.epoch = ops::ring_begin();
+    unsafe { ops::report_created(services) };
     let handles = device.handles;
     let previous = lock().creation.publish(device);
     drop(previous);
@@ -564,32 +533,27 @@ fn commands_retired() -> bool {
             return false;
         }
         state.creation.device.as_ref().map(|device| {
-            (
-                device.handles,
-                device.slots.map(|slot| slot.complete),
-                device.ops.fence_ready,
-                device.ops.shared_completed,
-            )
+            (device.handles, device.slots.map(|slot| slot.complete))
         })
     };
-    let Some((handles, fences, fence_ready, shared_completed)) = proof else {
+    let Some((handles, fences)) = proof else {
         return VULKAN.lock().drained(0);
     };
     if !fences
         .into_iter()
-        .all(|fence| unsafe { fence_ready(&handles, fence) })
+        .all(|fence| unsafe { ops::fence_ready(&handles, fence) })
     {
         return false;
     }
     // D3D12 reports device removal as UINT64_MAX. It is not a completion value.
-    let completed = unsafe { shared_completed(&handles) };
+    let completed = unsafe { ops::shared_completed(&handles) };
     VULKAN.lock().drained(completed)
 }
 
 /// The caller holds the presentation lease throughout native replacement.
 fn prepare_image(state: &Mutex<State>, index: usize, key: ImageKey) -> Option<ImageHandles> {
     let lock = || state.lock().unwrap_or_else(PoisonError::into_inner);
-    let (device, ops, replacing) = {
+    let (device, replacing) = {
         let state = lock();
         if !state.open() || state.partial_submission {
             return None;
@@ -599,16 +563,16 @@ fn prepare_image(state: &Mutex<State>, index: usize, key: ImageKey) -> Option<Im
         if let Some(image) = current.filter(|image| image.key == key) {
             return Some(image.handles);
         }
-        (device.handles, device.ops, current.is_some())
+        (device.handles, current.is_some())
     };
     // Every slot shares this image. The current slot's fence only makes its command
     // resources reusable. Drain both APIs before replacing an image in the shared store.
-    if replacing && !unsafe { (ops.drain_images)(&device) } {
+    if replacing && !unsafe { ops::drain(&device) } {
         return None;
     }
     let mut handles = ImageHandles::EMPTY;
     if !unsafe {
-        (ops.create_image)(
+        ops::create_image(
             &device,
             key.width,
             key.height,
@@ -618,14 +582,14 @@ fn prepare_image(state: &Mutex<State>, index: usize, key: ImageKey) -> Option<Im
         )
     } || !handles.complete()
     {
-        unsafe { (ops.destroy_image)(&device, &handles) };
+        unsafe { ops::destroy_image(&device, &handles) };
         return None;
     }
     let previous = {
         let mut state = lock();
         if !state.open() || state.partial_submission {
             drop(state);
-            unsafe { (ops.destroy_image)(&device, &handles) };
+            unsafe { ops::destroy_image(&device, &handles) };
             return None;
         }
         state.images[index].replace(Image {
@@ -636,7 +600,7 @@ fn prepare_image(state: &Mutex<State>, index: usize, key: ImageKey) -> Option<Im
         })
     };
     if let Some(previous) = previous {
-        unsafe { (ops.destroy_image)(&device, &previous.handles) };
+        unsafe { ops::destroy_image(&device, &previous.handles) };
     }
     Some(handles)
 }
@@ -718,10 +682,10 @@ fn release_closed() {
     };
     if let Some(device) = &mut device {
         if device.epoch != 0 {
-            (device.ops.ring_retired)(device.epoch);
+            ops::ring_retired(device.epoch);
         }
         for image in images.into_iter().flatten() {
-            unsafe { (device.ops.destroy_image)(&device.handles, &image.handles) };
+            unsafe { ops::destroy_image(&device.handles, &image.handles) };
         }
         device.retire_commands();
     }
@@ -738,7 +702,7 @@ fn surface_ready() -> bool {
 
 /// An entry keeps the shared device alive and the presentation lease serializes creation,
 /// resize and every use of the borrowed chain. No native operation runs under a state lock.
-fn configure_surface(width: u32, height: u32, ops: &SurfaceOps) -> *mut c_void {
+fn configure_surface(width: u32, height: u32) -> *mut c_void {
     let window = presentation().window;
     if window.is_null() {
         return ptr::null_mut();
@@ -756,24 +720,24 @@ fn configure_surface(width: u32, height: u32, ops: &SurfaceOps) -> *mut c_void {
             state
                 .surface
                 .as_ref()
-                .map(|surface| (surface.chain, surface.ops)),
+                .map(|surface| surface.chain),
         )
     };
-    if let Some((chain, ops)) = current {
+    if let Some(chain) = current {
         let (mut current_width, mut current_height) = (0, 0);
-        unsafe { (ops.extent)(chain, &mut current_width, &mut current_height) };
+        unsafe { ops::chain_extent(chain, &mut current_width, &mut current_height) };
         if (width, height) == (current_width, current_height)
-            || (unsafe { (ops.drain)(&device) } && unsafe { (ops.resize)(chain, width, height) })
+            || (unsafe { ops::drain(&device) } && unsafe { ops::chain_resize(chain, width, height) })
         {
             return chain;
         }
         // A refused drain or resize keeps the owned chain for the next Present to retry.
         return ptr::null_mut();
     }
-    let chain = unsafe { (ops.create)(&device, window, width, height) };
+    let chain = unsafe { ops::chain_create(&device, window, width, height) };
     if !chain.is_null() {
         // Only the holder of the presentation lease can publish a surface.
-        let mut pending = Some(Surface { chain, ops: *ops });
+        let mut pending = Some(Surface { chain });
         std::mem::swap(&mut lock().surface, &mut pending);
     }
     chain
@@ -1087,18 +1051,20 @@ mod tests {
         frame
     }
 
-    #[test]
-    fn shared_image_resize_preserves_old_owner_while_another_slot_is_outstanding() {
+    /// The device and surface leaves. Only the shared-image test reaches them: its drain needs
+    /// both APIs idle, and each image's handle is its width.
+    pub(super) mod ops {
+        use super::*;
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 
-        static VULKAN_IDLE: AtomicBool = AtomicBool::new(false);
-        static D3D12_IDLE: AtomicBool = AtomicBool::new(false);
-        static DESTROYED: AtomicUsize = AtomicUsize::new(0);
+        pub(crate) static VULKAN_IDLE: AtomicBool = AtomicBool::new(false);
+        pub(crate) static D3D12_IDLE: AtomicBool = AtomicBool::new(false);
+        pub(crate) static DESTROYED: AtomicUsize = AtomicUsize::new(0);
 
-        unsafe extern "C" fn drain(_: *const DeviceHandles) -> bool {
+        pub(crate) unsafe fn drain(_: *const DeviceHandles) -> bool {
             VULKAN_IDLE.load(Relaxed) && D3D12_IDLE.load(Relaxed)
         }
-        unsafe extern "C" fn create_image(
+        pub(crate) unsafe fn create_image(
             _: *const DeviceHandles,
             width: u32,
             _: u32,
@@ -1115,57 +1081,62 @@ mod tests {
             }
             true
         }
-        unsafe extern "C" fn destroy_image(_: *const DeviceHandles, image: *const ImageHandles) {
+        pub(crate) unsafe fn destroy_image(_: *const DeviceHandles, image: *const ImageHandles) {
             DESTROYED.store(unsafe { (*image).image } as usize, Relaxed);
         }
-        let ops = DeviceOps {
-            create: unused_create,
-            destroy: unused_device,
-            create_pool: unused_pool,
-            destroy_pool: unused_handle,
-            create_slot: unused_slot,
-            destroy_slot: unused_destroy_slot,
-            create_image,
-            destroy_image,
-            fence_ready: unused_fence,
-            shared_completed: unused_pool,
-            drain_images: drain,
-            report_created: unused_report,
-            ring_begin: unused_ring_begin,
-            ring_retired: unused_ring_retired,
-        };
-        unsafe extern "C" fn unused_create(
+        pub(crate) unsafe fn create_device(
             _: *const rsf_game_host_services,
             _: *mut DeviceHandles,
         ) -> bool {
             false
         }
-        unsafe extern "C" fn unused_device(_: *const DeviceHandles) {}
-        unsafe extern "C" fn unused_pool(_: *const DeviceHandles) -> u64 {
+        pub(crate) unsafe fn destroy_device(_: *const DeviceHandles) {}
+        pub(crate) unsafe fn create_pool(_: *const DeviceHandles) -> u64 {
             0
         }
-        unsafe extern "C" fn unused_handle(_: *const DeviceHandles, _: u64) {}
-        unsafe extern "C" fn unused_slot(
+        pub(crate) unsafe fn destroy_pool(_: *const DeviceHandles, _: u64) {}
+        pub(crate) unsafe fn create_slot(
             _: *const DeviceHandles,
             _: u64,
             _: *mut CommandSlot,
         ) -> bool {
             false
         }
-        unsafe extern "C" fn unused_destroy_slot(_: *const DeviceHandles, _: *const CommandSlot) {}
-        unsafe extern "C" fn unused_fence(_: *const DeviceHandles, _: u64) -> bool {
+        pub(crate) unsafe fn destroy_slot(_: *const DeviceHandles, _: *const CommandSlot) {}
+        pub(crate) unsafe fn fence_ready(_: *const DeviceHandles, _: u64) -> bool {
             false
         }
-        unsafe extern "C" fn unused_report(_: *const rsf_game_host_services) {}
-        extern "C" fn unused_ring_begin() -> u64 {
+        pub(crate) unsafe fn shared_completed(_: *const DeviceHandles) -> u64 {
             0
         }
-        extern "C" fn unused_ring_retired(_: u64) {}
+        pub(crate) unsafe fn report_created(_: *const rsf_game_host_services) {}
+        pub(crate) fn ring_begin() -> u64 {
+            0
+        }
+        pub(crate) fn ring_retired(_: u64) {}
+        pub(crate) unsafe fn chain_create(
+            _: *const DeviceHandles,
+            _: *mut c_void,
+            _: u32,
+            _: u32,
+        ) -> *mut c_void {
+            ptr::null_mut()
+        }
+        pub(crate) unsafe fn chain_extent(_: *mut c_void, _: *mut u32, _: *mut u32) {}
+        pub(crate) unsafe fn chain_resize(_: *mut c_void, _: u32, _: u32) -> bool {
+            false
+        }
+        pub(crate) unsafe fn chain_destroy(_: *mut c_void) {}
+    }
+    #[test]
+    fn shared_image_resize_preserves_old_owner_while_another_slot_is_outstanding() {
+        use ops::{D3D12_IDLE, DESTROYED, VULKAN_IDLE};
+        use std::sync::atomic::Ordering::Relaxed;
 
         let state = Mutex::new(State {
             creation: {
                 let mut creation = Creation::new();
-                creation.device = Some(SharedDevice::new(ops));
+                creation.device = Some(SharedDevice::new());
                 creation
             },
             ..State::new()
