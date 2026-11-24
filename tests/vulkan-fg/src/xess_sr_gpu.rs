@@ -110,7 +110,7 @@ impl Gpu {
                 .to_string_lossy()
                 .contains("VK_LAYER_KHRONOS_validation")
         }) {
-            let layer: Vec<_> = "VkLayer_khronos_validation.dll\0".encode_utf16().collect();
+            let layer = rsf_game_sys::ffi_util::wide("VkLayer_khronos_validation.dll");
             require(
                 !unsafe { GetModuleHandleW(layer.as_ptr()) }.is_null(),
                 "requested Khronos validation layer must be loaded",

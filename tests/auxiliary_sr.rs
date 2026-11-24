@@ -7,7 +7,6 @@ use rsf_game_sys::{
     RSF_D3D11_AUXILIARY_RESTORE_CONTENTS as RESTORE,
 };
 use std::cell::{Cell, RefCell};
-use std::slice;
 use windows::Win32::Graphics::{
     Direct3D::{D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_POINTLIST},
     Direct3D11::*,
@@ -103,37 +102,12 @@ impl Device {
     }
 
     fn read(&self, source: &Texture2D, stride: usize) -> Vec<u8> {
-        let read = || {
-            let mut desc = description(source);
-            desc.Usage = D3D11_USAGE_STAGING;
-            desc.BindFlags = 0;
-            desc.MiscFlags = 0;
-            desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-            let mut staging = None;
-            unsafe { self.device.CreateTexture2D(&desc, None, Some(&mut staging)) }.ok()?;
-            let staging = staging?;
-            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            unsafe {
-                self.context.CopyResource(&staging, source);
-                self.context
-                    .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-                    .ok()?;
-            }
-            let row = desc.Width as usize * stride;
-            let mut bytes = Vec::with_capacity(row * desc.Height as usize);
-            if !mapped.pData.is_null() && mapped.RowPitch as usize >= row {
-                for y in 0..desc.Height as usize {
-                    let start =
-                        unsafe { mapped.pData.cast::<u8>().add(y * mapped.RowPitch as usize) };
-                    bytes.extend_from_slice(unsafe { slice::from_raw_parts(start, row) });
-                }
-            }
-            unsafe { self.context.Unmap(&staging, 0) };
-            Some(bytes)
+        let gpu = rsf_test_support::device::Device {
+            device: self.device.clone(),
+            context: self.context.clone(),
         };
-        read().unwrap_or_default()
+        unsafe { gpu.read(source, &description(source), stride) }.unwrap_or_default()
     }
-
     fn target(&self, source: &Texture2D, label: &str) -> Option<ID3D11RenderTargetView> {
         let mut target = None;
         let ok = unsafe {

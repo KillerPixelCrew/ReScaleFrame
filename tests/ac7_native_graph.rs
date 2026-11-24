@@ -23,15 +23,15 @@ use crate::sys::{
 };
 use crate::sys::{rsf_ac7_native_renderer_options, rsf_ac7_render_scope, rsf_ac7_render_scope_fn};
 use rsf_game_sys::rsf_game_render_config;
+use rsf_test_support::device::Device;
 use std::cell::{Cell, OnceCell, UnsafeCell};
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::mem::{offset_of, size_of, zeroed};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, Ordering};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
-    D3D11_CREATE_DEVICE_FLAG, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_FLAG,
+    D3D11_TEXTURE2D_DESC, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
     ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC};
@@ -1078,34 +1078,16 @@ fn replay_graph(calls: &Calls, device: &ID3D11Device, immediate: &ID3D11DeviceCo
     put(scene.wrapping_add(0x68), 900u32);
     run();
     drain_retired(&renderer);
-    let read_desc = D3D11_TEXTURE2D_DESC {
-        BindFlags: 0,
-        Usage: D3D11_USAGE_STAGING,
-        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-        ..desc
+    let gpu = Device {
+        device: device.clone(),
+        context: immediate.clone(),
     };
-    let mut readback = None::<ID3D11Texture2D>;
-    verify(
-        unsafe { device.CreateTexture2D(&read_desc, None, Some(&mut readback)) }.is_ok(),
-        c"create fallback readback",
-    );
-    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-    match readback {
-        Some(readback) => {
-            unsafe { immediate.CopyResource(&readback, &color) };
-            if unsafe { immediate.Map(&readback, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }.is_ok()
-            {
-                let pixel = unsafe { std::slice::from_raw_parts(mapped.pData.cast::<u16>(), 4) };
-                verify(
-                    pixel == [0, 0, 0x3c00, 0x3c00],
-                    c"refused SR preserves the native blue fallback pixels",
-                );
-                unsafe { immediate.Unmap(&readback, 0) };
-            } else {
-                verify(false, c"read fallback pixels");
-            }
-        }
-        None => verify(false, c"read fallback pixels"),
+    match unsafe { gpu.read::<u16>(&color, &desc, 4) } {
+        Ok(pixels) => verify(
+            pixels[..4] == [0, 0, 0x3c00, 0x3c00],
+            c"refused SR preserves the native blue fallback pixels",
+        ),
+        Err(_) => verify(false, c"read fallback pixels"),
     }
     pool_ref(tonemap.out.pool, 0x30);
     pool_ref(anti_alias.out.pool, 0x30);
