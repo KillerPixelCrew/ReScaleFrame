@@ -50,9 +50,7 @@ use windows::Win32::Graphics::Direct3D::{
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11DeviceContext4, ID3D11Fence,
 };
-use windows::Win32::Graphics::Direct3D12::{
-    D3D12CreateDevice, ID3D12Device, ID3D12Fence, ID3D12Resource,
-};
+use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12Fence, ID3D12Resource};
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM,
 };
@@ -118,14 +116,8 @@ fn create_d3d12(device11: &ID3D11Device) -> Result<ID3D12Device, FixtureError> {
         .map_err(|error| {
             FixtureError::Skip("no DXGI adapter for the D3D11 device", error.code().0)
         })?;
-    let mut device12 = None;
-    unsafe { D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device12) }.map_err(
-        |error| FixtureError::Skip("no D3D12 device on the D3D11 adapter", error.code().0),
-    )?;
-    device12.ok_or(FixtureError::Skip(
-        "no D3D12 device on the D3D11 adapter",
-        0,
-    ))
+    rsf_test_support::d3d12_device(&adapter)
+        .map_err(|error| FixtureError::Skip("no D3D12 device on the D3D11 adapter", error.code().0))
 }
 
 fn surface_checks(device11: *mut c_void, device12: *mut c_void) -> Result<(), FixtureError> {

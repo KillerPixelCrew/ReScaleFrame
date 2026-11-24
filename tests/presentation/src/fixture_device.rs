@@ -2,19 +2,17 @@
 //! Device creation shared by the two linked presentation fixtures.
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
-use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN, D3D_DRIVER_TYPE_WARP,
-    D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0,
+    D3D_FEATURE_LEVEL,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
-    ID3D11DeviceContext,
+    D3D11_CREATE_DEVICE_FLAG, ID3D11Device, ID3D11DeviceContext,
 };
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_MESSAGE,
-    D3D12_MESSAGE_SEVERITY_ERROR, D3D12CreateDevice, D3D12GetDebugInterface, ID3D12CommandQueue,
-    ID3D12Debug, ID3D12Device, ID3D12InfoQueue,
+    D3D12_MESSAGE_SEVERITY_ERROR, D3D12GetDebugInterface, ID3D12CommandQueue, ID3D12Debug,
+    ID3D12Device, ID3D12InfoQueue,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ERROR_NOT_FOUND, IDXGIAdapter,
@@ -121,23 +119,8 @@ pub(crate) fn create11(
     driver: D3D_DRIVER_TYPE,
     levels: Option<&[D3D_FEATURE_LEVEL]>,
 ) -> Result<(ID3D11Device, ID3D11DeviceContext), i32> {
-    let mut device = None;
-    let mut context = None;
-    unsafe {
-        D3D11CreateDevice(
-            adapter,
-            driver,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_FLAG(0),
-            levels,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-    }
-    .map_err(|error| error.code().0)?;
-    device.zip(context).ok_or(0)
+    rsf_test_support::d3d11_device_on(adapter, driver, D3D11_CREATE_DEVICE_FLAG(0), levels)
+        .map_err(|error| error.code().0)
 }
 
 #[unsafe(no_mangle)]
@@ -164,11 +147,7 @@ pub(super) unsafe extern "C" fn rsf_present_fixture_device12(
     queue: *mut Raw,
 ) -> i32 {
     let adapter = unsafe { IUnknown::from_raw_borrowed(&adapter) };
-    let mut created: Option<ID3D12Device> = None;
-    if unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, &mut created) }.is_err() {
-        return 1;
-    }
-    let Some(created) = created else {
+    let Ok(created) = rsf_test_support::d3d12_device(adapter) else {
         return 1;
     };
     let desc = D3D12_COMMAND_QUEUE_DESC {

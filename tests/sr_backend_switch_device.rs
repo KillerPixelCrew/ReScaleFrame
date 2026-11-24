@@ -116,22 +116,13 @@ impl Rig {
             }
             index += 1;
         };
-        let (mut device, mut context) = (None, None);
-        unsafe {
-            D3D11CreateDevice(
-                &adapter,
-                D3D_DRIVER_TYPE_UNKNOWN,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_FLAG(0),
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                Some(&mut context),
-            )
-        }
+        let (device, context) = rsf_test_support::d3d11_device_on(
+            Some(&adapter),
+            D3D_DRIVER_TYPE_UNKNOWN,
+            D3D11_CREATE_DEVICE_FLAG(0),
+            None,
+        )
         .ok()?;
-        let (device, context) = (device?, context?);
         let texture = |format, width, height, bind, input| {
             let desc = D3D11_TEXTURE2D_DESC {
                 Width: width,

@@ -6,7 +6,6 @@ use std::ptr::null_mut;
 use windows::Win32::{
     Foundation::{CloseHandle, HWND, WAIT_OBJECT_0},
     Graphics::{
-        Direct3D::D3D_FEATURE_LEVEL_11_0,
         Direct3D12::*,
         Dxgi::{Common::DXGI_FORMAT_R8G8B8A8_UNORM, *},
     },
@@ -55,11 +54,7 @@ pub(super) fn adapter(factory: &IDXGIFactory4, vendor: u32) -> Result<Option<IDX
 pub(super) fn device_and_queue(
     adapter: &IDXGIAdapter1,
 ) -> Result<(ID3D12Device, ID3D12CommandQueue)> {
-    let mut device = None;
-    unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, &mut device)? };
-    let device: ID3D12Device = device.ok_or(windows::core::Error::from_hresult(
-        windows::Win32::Foundation::E_POINTER,
-    ))?;
+    let device = rsf_test_support::d3d12_device(adapter)?;
     let queue = unsafe {
         device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
             Type: D3D12_COMMAND_LIST_TYPE_DIRECT,

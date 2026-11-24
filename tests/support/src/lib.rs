@@ -26,7 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, UnregisterClassW,
     WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
 };
-use windows::core::{HSTRING, PCSTR, PCWSTR, Result};
+use windows::core::{HSTRING, IUnknown, PCSTR, PCWSTR, Param, Result};
 
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 
@@ -110,10 +110,20 @@ pub fn d3d11_device(
     flags: D3D11_CREATE_DEVICE_FLAG,
     levels: Option<&[D3D_FEATURE_LEVEL]>,
 ) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+    d3d11_device_on(None, driver, flags, levels)
+}
+
+/// [`d3d11_device`] on a chosen adapter, which needs `D3D_DRIVER_TYPE_UNKNOWN`.
+pub fn d3d11_device_on(
+    adapter: Option<&IDXGIAdapter>,
+    driver: D3D_DRIVER_TYPE,
+    flags: D3D11_CREATE_DEVICE_FLAG,
+    levels: Option<&[D3D_FEATURE_LEVEL]>,
+) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let (mut device, mut context) = (None, None);
     unsafe {
         D3D11CreateDevice(
-            None::<&IDXGIAdapter>,
+            adapter,
             driver,
             HMODULE::default(),
             flags,
@@ -181,13 +191,18 @@ pub fn enable_d3d12_debug_layer() -> bool {
     })
 }
 
+/// A feature level 11.0 D3D12 device on `adapter`.
+pub fn d3d12_device(adapter: impl Param<IUnknown>) -> Result<ID3D12Device> {
+    let mut device = None;
+    unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, &mut device) }?;
+    device.ok_or_else(|| E_POINTER.into())
+}
+
 /// A D3D12 device on the WARP adapter, with its factory.
 pub fn warp_d3d12() -> Result<(IDXGIFactory4, ID3D12Device)> {
     let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }?;
     let adapter: IDXGIAdapter = unsafe { factory.EnumWarpAdapter() }?;
-    let mut device = None;
-    unsafe { D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device) }?;
-    let device = device.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+    let device = d3d12_device(&adapter)?;
     Ok((factory, device))
 }
 
