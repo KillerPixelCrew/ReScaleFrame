@@ -194,6 +194,11 @@ fn read_view(data: &[u8], struct_size: u32) -> Result<rsf_ac7_view, rsf_ac7_view
     })
 }
 
+/// The decoded view of a complete view buffer, or None when it does not hold one.
+pub fn decode(data: &[u8; RSF_AC7_VIEW_BUFFER_BYTES as usize]) -> Option<rsf_ac7_view> {
+    read_view(data, size_of::<rsf_ac7_view>() as u32).ok()
+}
+
 /// The caller lends `buffer` for `bytes` and a size-prefixed writable output, or null.
 ///
 /// # Safety

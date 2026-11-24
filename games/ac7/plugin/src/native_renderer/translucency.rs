@@ -8,13 +8,11 @@ use super::graph::{
 };
 use super::views::for_each_view;
 use super::{
-    Guard, PassLease, Renderer, at, close, copy, engine, engine_add_ref, hook, installed, key,
-    method, move_uniform, open, open_leased, original, pass_lease, pool_ref, primary_view, read,
-    release_pass, scope,
+    Guard, PassLease, Renderer, at, cached_view, close, copy, engine, engine_add_ref, hook,
+    installed, key, method, move_uniform, open, open_leased, original, pass_lease, pool_ref,
+    primary_view, read, release_pass, scene_targets, scope,
 };
 use crate::sys::rsf_ac7_render_scope;
-use crate::sys::{RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view};
-use rsf_ac7::view::rsf_ac7_view_read;
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,
@@ -26,12 +24,6 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr::{null_mut, write_unaligned};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-
-type GetScene = unsafe extern "C" fn() -> *mut c_void;
-
-fn scene() -> *mut c_void {
-    unsafe { engine::<GetScene>(0x109_dc70)() }
-}
 
 static SIZE_REPORTED: AtomicBool = AtomicBool::new(false);
 
@@ -416,7 +408,7 @@ pub(super) unsafe extern "C" fn hooked_translucency_render(
     let _lifetime = Guard::outer();
     let previous = TRANSLUCENCY_RENDERER.replace(renderer);
     let owner = installed();
-    let scene = scene();
+    let scene = scene_targets();
     let mut layer_scale = 1.0f32;
     read(key(scene), 0x220, &mut layer_scale);
     let mut refused = false;
@@ -560,25 +552,11 @@ pub(super) unsafe extern "C" fn hooked_translucency_mesh(
                 unsafe { super::function(at(clip)) };
             mesh_scope.material_blend = unsafe { blend(at(material)) };
             mesh_scope.material_opacity_clip = unsafe { clip(at(material)) };
-            let mut bytes = [0u8; RSF_AC7_VIEW_BUFFER_BYTES as usize];
-            let mut camera = rsf_ac7_view {
-                struct_size: size_of::<rsf_ac7_view>() as u32,
-                ..Default::default()
-            };
             let opacity = mesh_scope.material_opacity_clip;
             if (2..=5).contains(&mesh_scope.material_blend)
                 && opacity.is_finite()
                 && (0.0..=1.0).contains(&opacity)
-                && copy(bytes.as_mut_ptr().cast(), at(cached), 0xcf0)
-                && unsafe {
-                    rsf_ac7_view_read(
-                        bytes.as_ptr().cast(),
-                        bytes.len() as u32,
-                        RSF_AC7_VIEW_ABI_VERSION,
-                        &mut camera,
-                    )
-                } == 0
-                && camera.has_jitter != 0
+                && let Some(camera) = cached_view(cached).filter(|camera| camera.has_jitter != 0)
             {
                 mesh_scope.role = RSF_GAME_RENDER_TRANSLUCENT_MESH;
                 mesh_scope.session_id = owner.options.session_id;

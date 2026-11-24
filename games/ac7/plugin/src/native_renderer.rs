@@ -17,16 +17,15 @@ use crate::render_scope::rsf_ac7_render_scope_open_leased;
 use crate::render_scope::rsf_ac7_render_scopes_destroy;
 use crate::render_scope::rsf_ac7_render_scopes_idle;
 use crate::render_scope::rsf_ac7_render_scopes_quiesce;
-use crate::sites::rsf_ac7_hook_role;
-use crate::sites::rsf_ac7_hook_rva;
+use crate::sites::{rsf_ac7_hook_role as hook_role, rsf_ac7_hook_rva as hook_rva};
 use crate::sys::rsf_ac7_scope_lease;
 use crate::sys::{
     RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches, rsf_ac7_native_calls, rsf_ac7_truesky_patches,
 };
 use crate::sys::{rsf_ac7_copy_memory, rsf_ac7_read_memory};
 use crate::sys::{
-    rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, rsf_ac7_render_scope,
-    rsf_ac7_render_scope_fn,
+    RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_native_renderer, rsf_ac7_native_renderer_options,
+    rsf_ac7_render_scope, rsf_ac7_render_scope_fn, rsf_ac7_view,
 };
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::rsf_game_render_config;
@@ -369,6 +368,19 @@ fn release_uniform(uniform: &mut u64) {
         (uniform as *mut u64).cast(),
         (&mut empty as *mut u64).cast(),
     );
+}
+
+/// FSceneRenderTargets::Get (RVA 0x109dc70).
+fn scene_targets() -> *mut c_void {
+    unsafe { engine::<unsafe extern "C" fn() -> *mut c_void>(0x109_dc70)() }
+}
+
+/// The view uniform parameters an FViewInfo caches at +0x1418, decoded, or None.
+fn cached_view(cached: u64) -> Option<rsf_ac7_view> {
+    let mut bytes = [0u8; RSF_AC7_VIEW_BUFFER_BYTES as usize];
+    copy(bytes.as_mut_ptr().cast(), at(cached), 0xcf0)
+        .then(|| rsf_ac7::view::decode(&bytes))
+        .flatten()
 }
 
 /// A render scope with every field zero except its size.
@@ -788,12 +800,4 @@ fn enqueue_leased(
 
 fn close(ticket: *mut c_void, list: *mut c_void) -> bool {
     unsafe { rsf_ac7_render_scope_close(ticket.cast(), list) != 0 }
-}
-
-fn hook_role(hook: u32) -> u32 {
-    rsf_ac7_hook_role(hook)
-}
-
-fn hook_rva(hook: u32) -> u32 {
-    rsf_ac7_hook_rva(hook)
 }

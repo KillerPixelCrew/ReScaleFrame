@@ -3,16 +3,15 @@
 //! descriptor hooks, the final scene and velocity scopes, and the generated view uniforms.
 use super::frame::renderer_identity;
 use super::{
-    Guard, PROCESS_HOOKS, PassLease, Renderer, UniformOwner, at, close, copy, drain_retired,
-    engine, engine_add_ref, engine_address, enqueue_leased, hook, hook_role, installed, key,
-    method, move_uniform, native_texture, open_leased, original, pass_lease, pool_ref,
-    pool_texture, primary_view, read, release_pass, release_uniform, scope, site_target,
+    Guard, PROCESS_HOOKS, PassLease, Renderer, UniformOwner, at, cached_view, close, copy,
+    drain_retired, engine, engine_add_ref, engine_address, enqueue_leased, hook, hook_role,
+    installed, key, method, move_uniform, native_texture, open_leased, original, pass_lease,
+    pool_ref, pool_texture, primary_view, read, release_pass, release_uniform, scene_targets,
+    scope, site_target,
 };
 use crate::sys::rsf_ac7_render_scope;
 use crate::sys::rsf_ac7_scope_lease;
 use crate::sys::{RSF_AC7_ROLE_SR, RSF_AC7_ROLE_TONEMAP};
-use crate::sys::{RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view};
-use rsf_ac7::view::rsf_ac7_view_read;
 use rsf_game_sys::ffi_util::{ascii_wide, try_box};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_PRIMARY,
@@ -24,8 +23,6 @@ use std::ffi::c_void;
 use std::mem::{offset_of, size_of, zeroed};
 use std::ptr::{copy_nonoverlapping, null_mut, write_bytes, write_unaligned};
 use std::sync::atomic::{AtomicU32, Ordering};
-
-const VIEW_OK: i32 = 0;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -60,22 +57,33 @@ const _: () = assert!(
 type GetPointer = unsafe extern "C" fn(*mut c_void, u32) -> *mut c_void;
 type Process = unsafe extern "C" fn(*mut c_void, *mut c_void);
 
-pub(super) fn input_ref(node: u64, index: u32) -> *mut NativeRef {
-    let entry = method(node, 8);
+/// The pointer the graph node's indexed getter at vtable `slot` returns, or null.
+fn node_pointer(node: u64, slot: u32, index: u32) -> *mut c_void {
+    let entry = method(node, slot);
     if entry == 0 {
         return null_mut();
     }
     let call: GetPointer = unsafe { super::function(at(entry)) };
-    unsafe { call(at(node), index) }.cast()
+    unsafe { call(at(node), index) }
+}
+
+pub(super) fn input_ref(node: u64, index: u32) -> *mut NativeRef {
+    node_pointer(node, 8, index).cast()
 }
 
 pub(super) fn node_output(node: u64, index: u32) -> *mut NativeOutput {
-    let entry = method(node, 0x38);
-    if entry == 0 {
-        return null_mut();
+    node_pointer(node, 0x38, index).cast()
+}
+
+/// The pool of the output that input `index` of a graph node references, or 0.
+fn input_pool(node: u64, index: u32) -> u64 {
+    let reference = key(input_ref(node, index).cast());
+    let (mut input, mut output) = (0u64, 0u32);
+    if read(reference, 0, &mut input) && read(reference, 8, &mut output) && input != 0 {
+        output_pool(input, output)
+    } else {
+        0
     }
-    let call: GetPointer = unsafe { super::function(at(entry)) };
-    unsafe { call(at(node), index) }.cast()
 }
 
 /// Calls `visit` for each dependency of a graph node until it returns false. True only when the
@@ -734,26 +742,13 @@ pub(super) fn make_plan(
     if !primary_view(p.view_key, &config) {
         return false;
     }
-    let mut bytes = [0u8; RSF_AC7_VIEW_BUFFER_BYTES as usize];
-    let mut view = rsf_ac7_view {
-        struct_size: size_of::<rsf_ac7_view>() as u32,
-        ..Default::default()
-    };
-    if !copy(bytes.as_mut_ptr().cast(), at(cached), 0xcf0)
-        || unsafe {
-            rsf_ac7_view_read(
-                bytes.as_ptr().cast(),
-                bytes.len() as u32,
-                RSF_AC7_VIEW_ABI_VERSION,
-                &mut view,
-            )
-        } != VIEW_OK
-        || view.has_jitter == 0
-        || view.view_width != (p.render_rect[2] - p.render_rect[0]) as u32
-        || view.view_height != (p.render_rect[3] - p.render_rect[1]) as u32
-    {
+    let Some(view) = cached_view(cached).filter(|view| {
+        view.has_jitter != 0
+            && view.view_width == (p.render_rect[2] - p.render_rect[0]) as u32
+            && view.view_height == (p.render_rect[3] - p.render_rect[1]) as u32
+    }) else {
         return false;
-    }
+    };
     let mut cursor = key(root);
     let mut tone = 0u64;
     let mut count = 0;
@@ -789,7 +784,7 @@ pub(super) fn make_plan(
     }
     plan.surface_extent = [config.output_width as i32, config.output_height as i32];
     plan.cached_parameters = cached;
-    plan.scene = unsafe { engine::<unsafe extern "C" fn() -> *mut c_void>(0x109_dc70)() };
+    plan.scene = scene_targets();
     plan.owner = owner;
     plan.velocity = POSTPROCESS_VELOCITY.get();
     if !read(key(plan.scene), 0x60, &mut plan.depth_pool)
@@ -1019,23 +1014,11 @@ pub(super) unsafe extern "C" fn hooked_process<const INDEX: u32>(
     let mut ticket = None;
     let mut leased: *mut PassLease = null_mut();
     if valid && let Some(mut lease) = PassLease::new(owner) {
-        let (mut input, mut output) = (0u64, 0u32);
-        let getter = method(pass.pass_key, 8);
-        if getter != 0 {
-            let call: GetPointer = unsafe { super::function(at(getter)) };
-            let reference = key(unsafe { call(node, 0) });
-            if read(reference, 0, &mut input) && read(reference, 8, &mut output) {
-                lease.input_pool = output_pool(input, output);
-            }
-        }
+        lease.input_pool = input_pool(pass.pass_key, 0);
         pool_ref(lease.input_pool, 0x28);
         if INDEX == hook::PROCESS_COMPOSITE {
-            let ui = input_ref(pass.pass_key, 1);
-            if !ui.is_null() && unsafe { (*ui).node } != 0 {
-                let ui = unsafe { *ui };
-                lease.ui_pool = output_pool(ui.node, ui.index);
-                pool_ref(lease.ui_pool, 0x28);
-            }
+            lease.ui_pool = input_pool(pass.pass_key, 1);
+            pool_ref(lease.ui_pool, 0x28);
         }
         if INDEX == hook::PROCESS_HUD {
             // All reviewed HUD shader variants bind view+0x13a0's render-target resource.
@@ -1058,14 +1041,8 @@ pub(super) unsafe extern "C" fn hooked_process<const INDEX: u32>(
         }
     }
     let replaced = INDEX == hook::PROCESS_AA && planned(pass.pass_key).is_some() && {
-        let input = input_ref(pass.pass_key, 0);
         let output = node_output(pass.pass_key, 0);
-        let pool = if input.is_null() {
-            0
-        } else {
-            let input = unsafe { *input };
-            output_pool(input.node, input.index)
-        };
+        let pool = input_pool(pass.pass_key, 0);
         if pool != 0 && !output.is_null() {
             pool_ref(pool, 0x28);
             pool_ref(unsafe { (*output).pool }, 0x30);
@@ -1120,7 +1097,7 @@ pub(super) unsafe extern "C" fn hooked_postprocess(
         pass.view_key = key(view);
         pass.pass_key = key(view);
         let (mut frame, mut depth) = (0u32, 0u64);
-        let scene = unsafe { engine::<unsafe extern "C" fn() -> *mut c_void>(0x109_dc70)() };
+        let scene = scene_targets();
         if owner
             .config()
             .is_some_and(|config| config.enabled != 0 && primary_view(pass.view_key, &config))

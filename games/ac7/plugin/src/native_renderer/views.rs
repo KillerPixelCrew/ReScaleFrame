@@ -2,7 +2,7 @@
 //! Renderer view preparation: the owned view rectangles at construction and the temporal
 //! jitter selection around visibility.
 use super::frame::bind_renderer;
-use super::{Guard, engine, hook, installed, key, original, primary_view, read};
+use super::{Guard, engine, hook, installed, key, original, primary_view, read, scene_targets};
 use rsf_game_sys::rsf_game_render_config;
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -162,19 +162,15 @@ pub(super) unsafe extern "C" fn hooked_temporal_sample_index(state: *mut c_void)
 
 static LAST_PHASES: AtomicU32 = AtomicU32::new(0);
 
-/// std::clamp(std::round(value), 8, 255) as the former code converted it. A NaN from an empty
-/// rectangle, which the former conversion left undefined and later divided by, keeps the stock
+/// The rounded phase count clamped to 8..=255. A NaN from an empty rectangle keeps the stock
 /// eight phases.
 fn sample_phases(value: f64) -> u32 {
     let rounded = value.round();
-    let clamped = if rounded.is_nan() || rounded < 8.0 {
-        8.0
-    } else if 255.0 < rounded {
-        255.0
+    if rounded.is_nan() {
+        8
     } else {
-        rounded
-    };
-    clamped as u32
+        rounded.clamp(8.0, 255.0) as u32
+    }
 }
 
 pub(super) unsafe extern "C" fn hooked_visibility(
@@ -186,12 +182,10 @@ pub(super) unsafe extern "C" fn hooked_visibility(
     let _guard = Guard::entry();
     let owner = installed();
     let mut views = [0u64; 16];
-    let mut modes = [0u32; 16];
     let mut selected = 0usize;
     let previous_samples = TEMPORAL_SAMPLE_OWNERS.replace([NO_SAMPLE_OWNER; 16]);
     let mut buffer = [0i32; 2];
-    let scene = unsafe { engine::<unsafe extern "C" fn() -> *mut c_void>(0x109_dc70)() };
-    read(key(scene), 0x208, &mut buffer);
+    read(key(scene_targets()), 0x208, &mut buffer);
     if let Some(owner) = owner
         && owner.active()
         && let Some(config) = owner.config()
@@ -235,7 +229,6 @@ pub(super) unsafe extern "C" fn hooked_visibility(
                 return true;
             }
             views[selected] = view;
-            modes[selected] = mode;
             selected += 1;
             let (mut temporal_state, mut family, mut frame) = (0u64, 0u64, 0u32);
             if read(view, 0x1410, &mut temporal_state)
@@ -278,8 +271,9 @@ pub(super) unsafe extern "C" fn hooked_visibility(
     let forward: unsafe extern "C" fn(*mut c_void, *mut c_void, usize, *mut c_void) =
         unsafe { original(hook::VISIBILITY) };
     unsafe { forward(renderer, list, third, fourth) };
-    for index in 0..selected {
-        write_mode(views[index], modes[index]);
+    // Every selected view was in mode 1.
+    for &view in &views[..selected] {
+        write_mode(view, 1);
     }
     TEMPORAL_SAMPLE_OWNERS.set(previous_samples);
 }
