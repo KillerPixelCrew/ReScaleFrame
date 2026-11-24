@@ -307,7 +307,7 @@ fn d3d_ring(bridge: u32) -> Option<MutexGuard<'static, ProducerRing>> {
         12 => &D3D12_RECORDINGS,
         _ => return None,
     };
-    Some(lock_or_recover(&owner))
+    Some(lock_or_recover(owner))
 }
 
 pub(crate) fn rsf_unity_package_sr_slot_reset(bridge: u32, commands: *mut c_void, slot: u32) {
@@ -1733,10 +1733,12 @@ mod tests {
         without_provenance_mut(address)
     }
     fn sr_pass(view_key: u64, output: (u32, u32), render: (u32, u32)) -> rsf_game_render_pass {
-        let mut pass: rsf_game_render_pass = Default::default();
-        pass.view_key = view_key;
-        pass.camera_valid = 1;
-        pass.screen = 7;
+        let mut pass = rsf_game_render_pass {
+            view_key,
+            camera_valid: 1,
+            screen: 7,
+            ..Default::default()
+        };
         (pass.camera.output_width, pass.camera.output_height) = output;
         (pass.camera.render_width, pass.camera.render_height) = render;
         pass.camera.depth_inverted = 1;

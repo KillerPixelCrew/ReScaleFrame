@@ -784,12 +784,14 @@ pub(crate) fn rsf_unity_frames_flush_sources(
     let (flushed, count) = lock().take_flushed(window.session_id, window.source_frame_id);
     for source in &flushed[..count] {
         // The submission pass carries identity only. Unity has already flushed its lists.
-        let mut submission: rsf_game_render_pass = Default::default();
-        submission.struct_size = size_of::<rsf_game_render_pass>() as u32;
-        submission.role = RSF_GAME_RENDER_SUBMISSION;
-        submission.session_id = source.session_id;
-        submission.source_frame_id = source.source_frame_id;
-        submission.view_key = source.view_key;
+        let submission = rsf_game_render_pass {
+            struct_size: size_of::<rsf_game_render_pass>() as u32,
+            role: RSF_GAME_RENDER_SUBMISSION,
+            session_id: source.session_id,
+            source_frame_id: source.source_frame_id,
+            view_key: source.view_key,
+            ..Default::default()
+        };
         unsafe { render(services.user, queue, &submission, 0) };
     }
 }
@@ -927,16 +929,17 @@ mod tests {
     }
 
     fn camera() -> rsf_camera_frame {
-        let mut camera: rsf_camera_frame = Default::default();
-        camera.struct_size = size_of::<rsf_camera_frame>() as u32;
-        camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-        camera.render_width = 1280;
-        camera.render_height = 720;
-        camera.output_width = 2560;
-        camera.output_height = 1440;
-        camera.near_plane = 0.1;
-        camera.far_plane = 1000.0;
-        camera
+        rsf_camera_frame {
+            struct_size: size_of::<rsf_camera_frame>() as u32,
+            abi_version: RSF_GAME_CAMERA_ABI_VERSION,
+            render_width: 1280,
+            render_height: 720,
+            output_width: 2560,
+            output_height: 1440,
+            near_plane: 0.1,
+            far_plane: 1000.0,
+            ..Default::default()
+        }
     }
 
     fn packet(frame_id: u64) -> rsf_unity_packet {

@@ -23,29 +23,39 @@ use rsf_game_sys::{
 /// One SR pass for the packet's view, frame and camera, without native resources or route. A
 /// probe packet carries camera constants only, so its camera is not valid for reconstruction.
 pub(crate) fn base_pass(packet: &rsf_unity_packet) -> rsf_game_render_pass {
-    let mut pass: rsf_game_render_pass = Default::default();
-    pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
-    pass.role = RSF_GAME_RENDER_SR;
-    pass.session_id = packet.session_id;
-    pass.family_key = packet.view_key;
-    pass.view_key = packet.view_key;
-    pass.history_key = packet.view_key;
-    pass.native_frame = packet.frame_id;
-    pass.source_frame_id = packet.frame_id;
-    pass.resource_generation = packet.generation;
-    // The package's SR pass replaces it from its gameplay setting (package_state.rs).
-    pass.screen = RSF_SCREEN_FLIGHT;
-    pass.flags = packet.flags & RSF_UNITY_PACKET_RESET;
-    pass.camera = packet.camera;
-    pass.camera_valid = u32::from(packet.flags & RSF_UNITY_PACKET_PROBE == 0);
-    pass.render_rect[2] = packet.camera.render_width as i32;
-    pass.render_rect[3] = packet.camera.render_height as i32;
-    pass.output_rect[2] = packet.camera.output_width as i32;
-    pass.output_rect[3] = packet.camera.output_height as i32;
-    pass.motion_to_uv = [1.0, 1.0];
-    pass.motion_camera_included = 1;
-    pass.previous_clip_to_clip = packet.previous_clip_to_clip;
-    pass
+    let camera = &packet.camera;
+    rsf_game_render_pass {
+        struct_size: size_of::<rsf_game_render_pass>() as u32,
+        role: RSF_GAME_RENDER_SR,
+        session_id: packet.session_id,
+        family_key: packet.view_key,
+        view_key: packet.view_key,
+        history_key: packet.view_key,
+        native_frame: packet.frame_id,
+        source_frame_id: packet.frame_id,
+        resource_generation: packet.generation,
+        // The package's SR pass replaces it from its gameplay setting (package_state.rs).
+        screen: RSF_SCREEN_FLIGHT,
+        flags: packet.flags & RSF_UNITY_PACKET_RESET,
+        camera: packet.camera,
+        camera_valid: u32::from(packet.flags & RSF_UNITY_PACKET_PROBE == 0),
+        render_rect: [
+            0,
+            0,
+            camera.render_width as i32,
+            camera.render_height as i32,
+        ],
+        output_rect: [
+            0,
+            0,
+            camera.output_width as i32,
+            camera.output_height as i32,
+        ],
+        motion_to_uv: [1.0, 1.0],
+        motion_camera_included: 1,
+        previous_clip_to_clip: packet.previous_clip_to_clip,
+        ..Default::default()
+    }
 }
 
 pub(crate) fn build_d3d12_pass(packet: &rsf_unity_packet) -> rsf_game_render_pass {
@@ -320,11 +330,13 @@ mod tests {
     }
 
     fn packet() -> rsf_unity_packet {
-        let mut camera: rsf_camera_frame = Default::default();
-        camera.render_width = 1280;
-        camera.render_height = 720;
-        camera.output_width = 2560;
-        camera.output_height = 1440;
+        let camera = rsf_camera_frame {
+            render_width: 1280,
+            render_height: 720,
+            output_width: 2560,
+            output_height: 1440,
+            ..Default::default()
+        };
         let mut clip = [0.0; 16];
         clip[5] = 2.0;
         rsf_unity_packet {

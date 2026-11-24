@@ -170,12 +170,13 @@ fn handlers() -> [usize; 7] {
 }
 
 fn request_for(method: u32, receiver: Receiver) -> rsf_d3d11_chain_dispatch {
-    let mut request: rsf_d3d11_chain_dispatch = Default::default();
-    request.struct_size = size_of::<rsf_d3d11_chain_dispatch>() as u32;
-    request.abi_version = RSF_D3D11_HOST_ABI_VERSION;
-    request.method = method;
-    request.receiver = receiver;
-    request
+    rsf_d3d11_chain_dispatch {
+        struct_size: size_of::<rsf_d3d11_chain_dispatch>() as u32,
+        abi_version: RSF_D3D11_HOST_ABI_VERSION,
+        method,
+        receiver,
+        ..Default::default()
+    }
 }
 
 fn relay() -> &'static Relay {

@@ -77,10 +77,12 @@ pub(super) fn procs(
 ) -> (rsf_vk_get_proc, rsf_vk_get_proc) {
     unsafe {
         (
-            Some(std::mem::transmute(
+            std::mem::transmute::<vk::PFN_vkGetInstanceProcAddr, rsf_vk_get_proc>(
                 entry.static_fn().get_instance_proc_addr,
-            )),
-            Some(std::mem::transmute(instance.fp_v1_0().get_device_proc_addr)),
+            ),
+            std::mem::transmute::<vk::PFN_vkGetDeviceProcAddr, rsf_vk_get_proc>(
+                instance.fp_v1_0().get_device_proc_addr,
+            ),
         )
     }
 }

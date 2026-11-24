@@ -486,13 +486,14 @@ impl D3d12 {
             pass
         } else {
             control.sr_missed();
-            let mut pass = rsf_game_render_pass::default();
-            pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
-            pass.session_id = session;
-            pass.source_frame_id = current;
-            pass.native_frame = current;
-            pass.screen = RSF_SCREEN_UNKNOWN;
-            pass
+            rsf_game_render_pass {
+                struct_size: size_of::<rsf_game_render_pass>() as u32,
+                session_id: session,
+                source_frame_id: current,
+                native_frame: current,
+                screen: RSF_SCREEN_UNKNOWN,
+                ..Default::default()
+            }
         };
         pass.role = RSF_GAME_RENDER_WINDOW;
         pass.swapchain = chain;

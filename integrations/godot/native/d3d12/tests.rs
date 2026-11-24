@@ -17,14 +17,16 @@ fn configure(control: &Control, change: impl FnOnce(&mut Settings)) {
 }
 
 fn pass(role: u32, frame: u64) -> rsf_game_render_pass {
-    let mut pass = rsf_game_render_pass::default();
-    pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
-    pass.role = role;
-    pass.session_id = 42;
-    pass.source_frame_id = frame;
-    pass.native_frame = frame;
-    pass.screen = RSF_SCREEN_FLIGHT;
-    pass.color_input = ptr::without_provenance_mut(0x40);
+    let mut pass = rsf_game_render_pass {
+        struct_size: size_of::<rsf_game_render_pass>() as u32,
+        role,
+        session_id: 42,
+        source_frame_id: frame,
+        native_frame: frame,
+        screen: RSF_SCREEN_FLIGHT,
+        color_input: ptr::without_provenance_mut(0x40),
+        ..Default::default()
+    };
     pass.camera.render_width = 1280;
     pass.camera.render_height = 720;
     pass.camera.output_width = 1920;

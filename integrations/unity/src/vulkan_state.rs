@@ -556,7 +556,7 @@ fn commands_retired() -> bool {
 
 /// The caller holds the presentation lease throughout native replacement.
 fn prepare_image(state: &Mutex<State>, index: usize, key: ImageKey) -> Option<ImageHandles> {
-    let lock = || lock_or_recover(&state);
+    let lock = || lock_or_recover(state);
     let (device, replacing) = {
         let state = lock();
         if !state.open() || state.partial_submission {
