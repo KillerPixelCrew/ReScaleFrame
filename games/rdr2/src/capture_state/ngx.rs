@@ -10,8 +10,7 @@ use crate::{
     layout,
     platform::{lock, read_bytes, worker_tls_slots},
 };
-use std::ffi::{CStr, c_char, c_void};
-use std::ptr::null;
+use std::ffi::{CStr, c_void};
 use windows_sys::Win32::System::{
     Performance::QueryPerformanceCounter, SystemInformation::GetTickCount64,
     Threading::GetCurrentThreadId,
@@ -23,10 +22,17 @@ const GET_INT: u32 = 11;
 const GET_UINT: u32 = 12;
 const GET_FLOAT: u32 = 14;
 
-unsafe fn get<T: Default>(parameters: *const c_void, slot: u32, key: *const c_char) -> Option<T> {
+unsafe fn get<T: Default>(parameters: *const c_void, slot: u32, key: &CStr) -> Option<T> {
     let mut value = T::default();
-    unsafe { (owner().read_ngx)(parameters, slot, key, (&mut value as *mut T).cast()) }
-        .then_some(value)
+    unsafe {
+        (owner().read_ngx)(
+            parameters,
+            slot,
+            key.as_ptr(),
+            (&mut value as *mut T).cast(),
+        )
+    }
+    .then_some(value)
 }
 
 fn camera(state: &Native, input: &InputId) {
@@ -62,34 +68,16 @@ fn camera(state: &Native, input: &InputId) {
             let mut bytes = [0u8; CAMERA_BYTES];
             read_bytes(facts.view as usize, &mut bytes).then_some(bytes)
         });
-    unsafe {
-        input_camera(
-            &state.capture,
-            input,
-            &facts,
-            camera.as_ref().map_or(null(), |bytes| bytes.as_ptr()),
-        )
-    };
+    unsafe { input_camera(&state.capture, input, &facts, camera) };
 }
 
-unsafe extern "C" fn read_scalar(
-    parameters: *const c_void,
-    key: *const c_char,
-    floating: bool,
-    output: &mut f64,
-) -> bool {
-    let value = if floating {
+unsafe fn read_scalar(parameters: *const c_void, key: &CStr, floating: bool) -> Option<f64> {
+    if floating {
         unsafe { get::<f32>(parameters, GET_FLOAT, key) }.map(f64::from)
     } else {
         unsafe { get::<u32>(parameters, GET_UINT, key) }
             .map(f64::from)
             .or_else(|| unsafe { get::<i32>(parameters, GET_INT, key) }.map(f64::from))
-    };
-    if let Some(value) = value {
-        *output = value;
-        true
-    } else {
-        false
     }
 }
 
@@ -102,7 +90,6 @@ fn resource(
     key: &CStr,
     required: bool,
 ) -> bool {
-    let key = key.as_ptr();
     let resource = unsafe { get::<*mut c_void>(parameters, GET_D3D12, key) }
         .or_else(|| unsafe { get::<*mut c_void>(parameters, GET_POINTER, key) })
         .filter(|resource| !resource.is_null());
@@ -130,7 +117,7 @@ pub(super) unsafe extern "C" fn created(
 ) {
     let flags = (feature == 1)
         .then(|| {
-            let key = c"DLSS.Feature.Create.Flags".as_ptr();
+            let key = c"DLSS.Feature.Create.Flags";
             unsafe { get::<i32>(parameters, GET_INT, key) }
                 .map(|value| value as u32)
                 .or_else(|| unsafe { get::<u32>(parameters, GET_UINT, key) })
@@ -138,19 +125,13 @@ pub(super) unsafe extern "C" fn created(
         .flatten();
     let state = owner();
     let _guard = lock(&state.observations);
-    unsafe {
-        record_feature(
-            &state.capture,
-            handle,
-            flags.as_ref().map_or(null(), std::ptr::from_ref),
-        )
-    };
+    unsafe { record_feature(&state.capture, handle, flags) };
 }
 
 pub(super) unsafe extern "C" fn released(handle: *mut c_void) {
     let state = owner();
     let _guard = lock(&state.observations);
-    unsafe { record_feature(&state.capture, handle, null()) };
+    unsafe { record_feature(&state.capture, handle, None) };
 }
 
 pub(super) unsafe extern "C" fn evaluate(
@@ -169,13 +150,16 @@ pub(super) unsafe extern "C" fn evaluate(
         return;
     }
     let guard = lock(&state.observations);
-    let mut input = InputId::default();
     let no_slot = if phase == 0 {
-        if !unsafe { begin_input(capture, list, handle, &mut input) } {
+        let Some(input) = (unsafe { begin_input(capture, list, handle) }) else {
             return;
-        }
+        };
         camera(state, &input);
-        unsafe { input_scalars(capture, &input, parameters, read_scalar) };
+        unsafe {
+            input_scalars(capture, &input, |key, floating| {
+                read_scalar(parameters, key, floating)
+            })
+        };
         let copied = [
             (0, c"Color", true),
             (1, c"Depth", true),
@@ -191,8 +175,8 @@ pub(super) unsafe extern "C" fn evaluate(
         }
         !copied
     } else {
-        let matched = unsafe { input_result(capture, list, result, &mut input) };
-        let copied = !matched || resource(capture, list, parameters, &input, 4, c"Output", true);
+        let copied = unsafe { input_result(capture, list, result) }
+            .is_none_or(|input| resource(capture, list, parameters, &input, 4, c"Output", true));
         unsafe { finish_input(capture) };
         !copied
     };

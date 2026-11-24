@@ -3,8 +3,7 @@
 use super::{Capture, has_inputs, try_entry};
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::ffi::{CStr, c_char, c_void};
-use std::ptr::from_ref;
+use std::ffi::{CStr, c_void};
 use std::sync::atomic::Ordering;
 
 const MAX_HDR_BYTES: usize = 1024;
@@ -32,10 +31,9 @@ const SCALAR_KEYS: [&CStr; 18] = [
 const FLOAT_SCALARS: usize = 7;
 const OUTPUT: usize = 4;
 pub(super) const RESOURCE_COUNT: usize = OUTPUT + 1;
-pub(super) const RESOURCE_ROLES: [&CStr; RESOURCE_COUNT] =
-    [c"color", c"depth", c"motion", c"exposure", c"output"];
+pub(super) const RESOURCE_ROLES: [&str; RESOURCE_COUNT] =
+    ["color", "depth", "motion", "exposure", "output"];
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct PresentationDesc {
     pub(super) format: u32,
@@ -71,14 +69,12 @@ pub(super) struct Presentation {
     pub(super) details: PresentationDetails,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct InputId {
     pub(super) sequence: u32,
     pub(super) index: u32,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct CameraFacts {
     pub(super) frame: u32,
@@ -89,12 +85,6 @@ pub(super) struct CameraFacts {
     pub(super) draw_context: u64,
     pub(super) job: u64,
 }
-
-const _: () = {
-    assert!(size_of::<PresentationDesc>() == 12);
-    assert!(size_of::<InputId>() == 8);
-    assert!(size_of::<CameraFacts>() == 48 && std::mem::offset_of!(CameraFacts, tick) == 8);
-};
 
 #[derive(Clone, Copy)]
 enum ResourceRefusal {
@@ -144,7 +134,7 @@ impl Temporal {
             .zip(RESOURCE_ROLES)
             .filter_map(|(refusal, role)| {
                 Some((
-                    role.to_str().ok()?,
+                    role,
                     match refusal.as_ref()? {
                         ResourceRefusal::Missing => "_missing",
                         ResourceRefusal::CopyUnavailable => "_state_or_copy_unavailable",
@@ -227,11 +217,10 @@ pub(super) unsafe fn record_hdr(
 }
 
 /// A successful release or a new creation without verified SR flags invalidates an old handle.
-/// A pointer to zero flags records a known feature.
-pub(super) unsafe fn record_feature(owner: &Capture, handle: *mut c_void, flags: *const u32) {
+pub(super) unsafe fn record_feature(owner: &Capture, handle: *mut c_void, flags: Option<u32>) {
     let features = &mut unsafe { &mut *owner.metadata.get() }.features;
     let handle = handle.addr();
-    if let Some(&flags) = unsafe { flags.as_ref() } {
+    if let Some(flags) = flags {
         if features.contains_key(&handle) || features.try_reserve(1).is_ok() {
             features.insert(handle, flags);
         }
@@ -242,7 +231,6 @@ pub(super) unsafe fn record_feature(owner: &Capture, handle: *mut c_void, flags:
 
 #[derive(Clone, Copy)]
 struct ActiveInput {
-    owner: *const Capture,
     depth: usize,
     id: InputId,
     committed: bool,
@@ -288,25 +276,20 @@ pub(super) unsafe fn begin_input(
     owner: &Capture,
     list: *mut c_void,
     handle: *mut c_void,
-    id: &mut InputId,
-) -> bool {
+) -> Option<InputId> {
     let ledger = unsafe { &mut *owner.ledger.get() };
     if list.is_null() || !ledger.dirty || !has_inputs(owner) {
-        return false;
+        return None;
     }
     EVALUATION.with(|thread| {
         let mut evaluation = thread.get();
         if evaluation.active.is_some() || evaluation.depth == 0 {
-            return false;
+            return None;
         }
         let metadata = unsafe { &mut *owner.metadata.get() };
-        let Some(&feature_flags) = metadata.features.get(&handle.addr()) else {
-            return false;
-        };
-        if metadata.temporal.try_reserve(1).is_err() {
-            return false;
-        }
-        *id = InputId {
+        let &feature_flags = metadata.features.get(&handle.addr())?;
+        metadata.temporal.try_reserve(1).ok()?;
+        let id = InputId {
             sequence: ledger.sequence,
             index: ledger.input_index,
         };
@@ -314,7 +297,7 @@ pub(super) unsafe fn begin_input(
         let list = list.addr();
         let generation = unsafe { &*owner.recordings.get() }.generation(list);
         metadata.temporal.push(Temporal {
-            id: *id,
+            id,
             feature_flags,
             list,
             generation,
@@ -325,14 +308,13 @@ pub(super) unsafe fn begin_input(
             resources: [None; RESOURCE_COUNT],
         });
         evaluation.active = Some(ActiveInput {
-            owner: from_ref(owner),
             depth: evaluation.depth,
-            id: *id,
+            id,
             committed: false,
             ending: false,
         });
         thread.set(evaluation);
-        true
+        Some(id)
     })
 }
 
@@ -345,8 +327,7 @@ pub(super) unsafe fn commit_input(owner: &Capture) -> bool {
             return false;
         };
         let ledger = unsafe { &mut *owner.ledger.get() };
-        if input.owner != from_ref(owner) || input.id.sequence != ledger.sequence || input.committed
-        {
+        if input.id.sequence != ledger.sequence || input.committed {
             return false;
         }
         let remaining = owner.inputs_remaining.load(Ordering::Acquire);
@@ -366,10 +347,7 @@ pub(super) unsafe fn commit_input(owner: &Capture) -> bool {
 pub(super) unsafe fn finish_input(owner: &Capture) {
     EVALUATION.with(|thread| {
         let mut evaluation = thread.get();
-        let Some(input) = evaluation
-            .active
-            .filter(|input| input.owner == from_ref(owner))
-        else {
+        let Some(input) = evaluation.active else {
             return;
         };
         evaluation.active = None;
@@ -387,33 +365,28 @@ pub(super) unsafe fn finish_input(owner: &Capture) {
     });
 }
 
-/// The native observer lends a full readable camera sample or null if its read failed.
+/// The camera sample is None when its read failed.
 pub(super) unsafe fn input_camera(
     owner: &Capture,
     id: &InputId,
     facts: &CameraFacts,
-    bytes: *const u8,
+    camera: Option<[u8; CAMERA_BYTES]>,
 ) {
     if let Some(input) = unsafe { &mut *owner.metadata.get() }.input(*id) {
         input.facts = *facts;
-        input.camera = unsafe { bytes.cast::<[u8; CAMERA_BYTES]>().as_ref() }.copied();
+        input.camera = camera;
     }
 }
 
-type ReadScalar = unsafe extern "C" fn(*const c_void, *const c_char, bool, &mut f64) -> bool;
-
+/// ead(key, floating) returns the NGX parameter value, if available.
 pub(super) unsafe fn input_scalars(
     owner: &Capture,
     id: &InputId,
-    parameters: *const c_void,
-    read: ReadScalar,
+    read: impl Fn(&CStr, bool) -> Option<f64>,
 ) {
     if let Some(input) = unsafe { &mut *owner.metadata.get() }.input(*id) {
         for (index, (key, scalar)) in SCALAR_KEYS.into_iter().zip(&mut input.scalars).enumerate() {
-            let mut value = 0.0;
-            let available =
-                unsafe { read(parameters, key.as_ptr(), index < FLOAT_SCALARS, &mut value) };
-            *scalar = (available && value.is_finite()).then_some(value);
+            *scalar = read(key, index < FLOAT_SCALARS).filter(|value| value.is_finite());
         }
     }
 }
@@ -442,27 +415,20 @@ pub(super) unsafe fn input_result(
     owner: &Capture,
     list: *mut c_void,
     result: u64,
-    id: &mut InputId,
-) -> bool {
-    let Some(active) = EVALUATION
+) -> Option<InputId> {
+    let active = EVALUATION
         .with(|thread| thread.get().active)
-        .filter(|input| input.owner == from_ref(owner) && input.committed && input.ending)
-    else {
-        return false;
-    };
-    let Some(input) = unsafe { &mut *owner.metadata.get() }.input(active.id) else {
-        return false;
-    };
+        .filter(|input| input.committed && input.ending)?;
+    let input = unsafe { &mut *owner.metadata.get() }.input(active.id)?;
     input.result = Some(result);
     if result as u32 != 1 {
-        return false;
+        return None;
     }
     let list = list.addr();
     let generation = unsafe { &*owner.recordings.get() }.generation(list);
     if input.list != list || input.generation != generation {
         input.resources[OUTPUT] = Some(ResourceRefusal::CopyUnavailable);
-        return false;
+        return None;
     }
-    *id = active.id;
-    true
+    Some(active.id)
 }

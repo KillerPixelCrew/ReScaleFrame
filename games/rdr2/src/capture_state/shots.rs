@@ -13,9 +13,7 @@ use super::recordings::{
 };
 use super::{Capture, INPUT_FRAMES, KEEP_TAIL, MAX_DRAW_COPIES, SAVE_DRAW, active, commit_draw};
 use std::cell::RefCell;
-#[cfg(all(windows, not(test)))]
-use std::ffi::c_char;
-use std::ffi::{CStr, c_void};
+use std::ffi::c_void;
 use std::ptr;
 
 const MAX_PENDING: usize = MAX_DRAW_COPIES as usize + INPUT_FRAMES as usize * RESOURCE_COUNT;
@@ -41,7 +39,6 @@ thread_local! {
     }) };
 }
 
-#[repr(C)]
 #[derive(Default)]
 pub(super) struct Image {
     pub(super) list: u64,
@@ -70,17 +67,12 @@ pub(super) struct Image {
     pub(super) pso: u64,
 }
 
-const _: () = {
-    assert!(size_of::<Image>() == 168);
-    assert!(std::mem::offset_of!(Image, pipeline) == 116);
-};
-
 pub(super) struct Shot {
     receipt: Readback,
     leases: ReadbackLeases,
     image: Image,
     #[cfg_attr(any(not(windows), test), allow(dead_code))]
-    role: &'static CStr,
+    role: &'static str,
     tail: bool,
 }
 
@@ -90,7 +82,7 @@ impl Default for Shot {
             receipt: Readback::default(),
             leases: ReadbackLeases::default(),
             image: Image::default(),
-            role: c"draw",
+            role: "draw",
             tail: false,
         }
     }
@@ -101,7 +93,7 @@ pub(super) type Completed = unsafe fn(*mut c_void) -> u64;
 pub(super) type DeviceRemoved = unsafe fn(*mut c_void) -> bool;
 type Copy = unsafe fn(*mut c_void, *mut c_void, u32, &mut ReadbackLeases, &mut Image) -> bool;
 #[cfg(all(windows, not(test)))]
-pub(super) type WriteImage = unsafe fn(&ReadbackLeases, &Image, *const c_char) -> bool;
+pub(super) type WriteImage = unsafe fn(&ReadbackLeases, &Image, &str) -> bool;
 
 impl Shot {
     fn completed(&self, sample: Completed) -> u64 {
@@ -422,7 +414,7 @@ pub(super) unsafe fn write_ready(owner: &Capture, index: usize, write: WriteImag
     ready
         .shots
         .get(index)
-        .is_some_and(|shot| unsafe { write(&shot.leases, &shot.image, shot.role.as_ptr()) })
+        .is_some_and(|shot| unsafe { write(&shot.leases, &shot.image, shot.role) })
 }
 
 /// The worker settles the tail under the capture mutex after accounting for the batch.

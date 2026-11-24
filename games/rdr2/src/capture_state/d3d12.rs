@@ -7,8 +7,9 @@ use super::gpu_leases::{
 use super::metadata::PresentationDesc;
 use super::shots::Image;
 use super::{Capture, active, arm, can_arm, end_draws};
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::mem::ManuallyDrop;
+use std::path::Path;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::{
     Direct3D12::*,
@@ -235,24 +236,26 @@ pub(super) unsafe fn d3d12_copy(
 }
 
 /// The worker calls this only after completion has admitted the shot for mapping.
+/// Err carries a failed Map HRESULT.
 pub(super) unsafe fn d3d12_write(
     leases: &ReadbackLeases,
     image: &Image,
-    directory: *const u16,
-    directory_len: usize,
+    directory: &Path,
     pid: u32,
-    role: *const c_char,
-    map_hresult: &mut i32,
-) -> bool {
+    role: &str,
+) -> Result<bool, i32> {
     let Some(buffer) = leases.buffer else {
-        return false;
+        return Ok(false);
     };
     let raw = buffer.as_ptr();
     let Some(buffer) = (unsafe { ID3D12Resource::from_raw_borrowed(&raw) }) else {
-        return false;
+        return Ok(false);
     };
-    let Some(bytes) = (image.pitch as usize).checked_mul(image.height as usize) else {
-        return false;
+    let Some(bytes) = (image.pitch as usize)
+        .checked_mul(image.height as usize)
+        .filter(|&bytes| bytes != 0 && bytes <= isize::MAX as usize)
+    else {
+        return Ok(false);
     };
     let range = D3D12_RANGE {
         Begin: 0,
@@ -260,22 +263,14 @@ pub(super) unsafe fn d3d12_write(
     };
     let mut data = null_mut();
     if let Err(error) = unsafe { buffer.Map(0, Some(&range), Some(&mut data)) } {
-        *map_hresult = error.code().0;
-        return false;
+        return Err(error.code().0);
     }
-    let saved = unsafe {
-        write_image(
-            image,
-            directory,
-            directory_len,
-            pid,
-            role,
-            data.cast(),
-            bytes,
-        )
-    };
+    let saved = !data.is_null()
+        && write_image(image, directory, pid, role, unsafe {
+            std::slice::from_raw_parts(data.cast::<u8>(), bytes)
+        });
     unsafe { buffer.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 })) };
-    saved
+    Ok(saved)
 }
 
 /// The native observer has verified the presenting owner and holds the capture mutex.

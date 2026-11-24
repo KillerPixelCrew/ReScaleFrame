@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The capture worker retires GPU leases and publishes detached artifacts.
+use super::artifacts::output_directory;
 use super::{
     bundle::{self, Bundle},
     d3d12,
@@ -7,7 +8,7 @@ use super::{
     mark_published, poll_request, readback_written, shots, timeout,
 };
 use crate::platform::lock;
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::sync::atomic::Ordering;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, Sleep};
@@ -15,37 +16,25 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcessId, Sleep};
 unsafe fn write(
     leases: &super::gpu_leases::ReadbackLeases,
     image: &shots::Image,
-    role: *const c_char,
+    role: &str,
 ) -> bool {
     let state = owner();
-    let mut result = 0;
-    let saved = unsafe {
-        d3d12::d3d12_write(
-            leases,
-            image,
-            state.directory.as_ptr(),
-            state.directory.len(),
-            GetCurrentProcessId(),
-            role,
-            &mut result,
-        )
-    };
-    if result != 0 {
+    let directory = output_directory(&state.directory);
+    let pid = unsafe { GetCurrentProcessId() };
+    unsafe { d3d12::d3d12_write(leases, image, &directory, pid, role) }.unwrap_or_else(|result| {
         state.log(format_args!(
-            "readback Map failed hr={:08x} role={:?}",
-            result as u32,
-            unsafe { std::ffi::CStr::from_ptr(role) }
+            "readback Map failed hr={:08x} role={role:?}",
+            result as u32
         ));
-    }
-    saved
+        false
+    })
 }
 
 pub(super) unsafe extern "system" fn worker(state: *mut c_void) -> u32 {
     let state = unsafe { &*state.cast::<Native>() };
     let capture = &state.capture;
     let bundle = Bundle {
-        directory: state.directory.as_ptr(),
-        directory_len: state.directory.len(),
+        directory: output_directory(&state.directory),
         base: state.base as u64,
         pid: unsafe { GetCurrentProcessId() },
     };

@@ -4,14 +4,11 @@
 use super::metadata::InputId;
 use super::recordings::Pipeline;
 use super::shots::Image;
-use std::ffi::{CStr, OsString, c_char};
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::os::windows::ffi::OsStringExt;
-#[cfg(not(test))]
-use std::path::Path;
-use std::path::PathBuf;
-use std::slice;
+use std::path::{Path, PathBuf};
 
 pub(super) fn output_directory(directory: &[u16]) -> PathBuf {
     PathBuf::from(OsString::from_wide(directory))
@@ -92,33 +89,15 @@ impl Image {
     }
 }
 
-/// The caller lends the directory array, known role string and mapped pixels for this call.
-pub(super) unsafe fn write_image(
+/// Writes the mapped pixels and their metadata. The role is a filename and JSON word.
+pub(super) fn write_image(
     image: &Image,
-    directory: *const u16,
-    directory_len: usize,
+    directory: &Path,
     pid: u32,
-    role: *const c_char,
-    data: *const u8,
-    bytes: usize,
+    role: &str,
+    pixels: &[u8],
 ) -> bool {
-    if data.is_null()
-        || bytes == 0
-        || bytes > isize::MAX as usize
-        || (image.pitch as usize).checked_mul(image.height as usize) != Some(bytes)
-    {
-        return false;
-    }
-    let Ok(role) = (unsafe { CStr::from_ptr(role) }).to_str() else {
-        return false;
-    };
-    // A role is an ASCII word used in both a filename and a JSON string.
-    if role.is_empty() || !role.bytes().all(|byte| byte.is_ascii_lowercase()) {
-        return false;
-    }
-    let directory = unsafe { slice::from_raw_parts(directory, directory_len) };
-    let mut path = output_directory(directory).join(image.file_stem(pid, role));
-    let pixels = unsafe { slice::from_raw_parts(data, bytes) };
+    let mut path = directory.join(image.file_stem(pid, role));
     path.set_extension("bin");
     if fs::write(&path, pixels).is_err() {
         return false;

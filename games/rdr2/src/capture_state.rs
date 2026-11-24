@@ -271,10 +271,9 @@ mod tests {
         unsafe {
             assert!(can_arm(&owner));
             arm(&owner, 100, null_mut(), &PresentationDesc::default());
-            metadata::record_feature(&owner, feature, &0);
+            metadata::record_feature(&owner, feature, Some(0));
             assert!(metadata::track_evaluation(false));
-            let mut input = metadata::InputId::default();
-            assert!(metadata::begin_input(&owner, list, feature, &mut input));
+            assert!(metadata::begin_input(&owner, list, feature).is_some());
             assert!(metadata::commit_input(&owner));
             assert!(!metadata::track_evaluation(false));
             assert!(!metadata::track_evaluation(true));

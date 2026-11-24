@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The poller publishes detached capture metadata without holding the graphics mutex.
 #[cfg(not(test))]
-use super::artifacts::{output_directory, pipeline_fields, write_camera};
+use super::artifacts::{pipeline_fields, write_camera};
 use super::metadata::{Presentation, Temporal};
 use super::recordings::Draw;
 use super::shots::settle_tail;
@@ -9,12 +9,11 @@ use super::{Capture, Progress, can_publish};
 #[cfg(not(test))]
 use std::fmt::Write as _;
 #[cfg(not(test))]
-use std::{fs, slice};
+use std::{fs, path::PathBuf};
 
 #[cfg(not(test))]
 pub(super) struct Bundle {
-    pub(super) directory: *const u16,
-    pub(super) directory_len: usize,
+    pub(super) directory: PathBuf,
     pub(super) base: u64,
     pub(super) pid: u32,
 }
@@ -143,12 +142,11 @@ pub(super) unsafe fn publish_bundle(owner: &Capture, bundle: &Bundle) -> Publish
 
 #[cfg(not(test))]
 unsafe fn write_bundle(snapshot: &Snapshot, bundle: &Bundle) -> bool {
-    let directory =
-        output_directory(unsafe { slice::from_raw_parts(bundle.directory, bundle.directory_len) });
+    let directory = &bundle.directory;
     let mut write_failed = snapshot.progress.write_failed != 0;
     for input in &snapshot.temporal {
         if let Some(camera) = &input.camera
-            && !write_camera(&directory, bundle.pid, input.id, camera)
+            && !write_camera(directory, bundle.pid, input.id, camera)
         {
             write_failed = true;
         }
