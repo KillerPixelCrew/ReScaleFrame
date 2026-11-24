@@ -201,12 +201,8 @@ fn handled(request: &mut rsf_d3d11_chain_dispatch) -> bool {
 // Steam's saved original method, unless it is missing or would re-enter this handler.
 fn continuation(method: u32) -> Option<usize> {
     let index = method as usize - 1;
-    let slot = relay().base.wrapping_add(SLOTS[index]);
-    let mut next = 0usize;
-    let copied = unsafe {
-        rsf_game_sys::win32::read_process(slot, (&raw mut next).cast(), size_of::<usize>())
-    };
-    (copied && next != 0 && next != handlers()[index]).then_some(next)
+    let next = rsf_game_sys::win32::read::<usize>(relay().base.wrapping_add(SLOTS[index]))?;
+    (next != 0 && next != handlers()[index]).then_some(next)
 }
 
 fn dispatch_present(receiver: Receiver, interval: u32, flags: u32) -> Option<i32> {
@@ -539,6 +535,9 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
         )
     };
     let mut targets = [null_mut::<c_void>(); HOOK_COUNT];
+    for (slot, rva) in targets[SITES.len()..].iter_mut().zip(PRESENT_ENTRIES) {
+        *slot = (base + rva) as *mut c_void;
+    }
     for (index, site) in SITES.iter().enumerate() {
         let stub = page.wrapping_add(index * STUB_BYTES);
         let target = base + site.rva;
@@ -587,35 +586,37 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
         );
     }
     *attempted = true; // Relays/modules/trampolines remain process-lived after hook publication.
+    // The Present entries keep their trampolines; the sites only run their relay stubs.
+    let entries: [(*mut c_void, &AtomicPtr<c_void>); 2] = [
+        (
+            present_entry as PresentFn as *mut c_void,
+            &ORIGINAL_PRESENT_ENTRY,
+        ),
+        (
+            present1_entry as Present1Fn as *mut c_void,
+            &ORIGINAL_PRESENT1_ENTRY,
+        ),
+    ];
     let mut created = 0;
-    while created < SITES.len()
-        && unsafe {
-            minhook::create(
-                targets[created],
-                page.wrapping_add(created * STUB_BYTES).cast(),
-                null_mut(),
-            )
+    while created < HOOK_COUNT {
+        let mut original = null_mut();
+        let entry = created.checked_sub(SITES.len()).map(|index| entries[index]);
+        let detour = match entry {
+            Some((detour, _)) => detour,
+            None => page.wrapping_add(created * STUB_BYTES).cast(),
+        };
+        let out = if entry.is_some() {
+            &mut original
+        } else {
+            null_mut()
+        };
+        if !unsafe { minhook::create(targets[created], detour, out) } {
+            break;
         }
-    {
+        if let Some((_, trampoline)) = entry {
+            trampoline.store(original, Ordering::Release);
+        }
         created += 1;
-    }
-    if created == SITES.len() {
-        targets[created] = (base + PRESENT_ENTRIES[0]) as *mut c_void;
-        let detour = present_entry as PresentFn as *mut c_void;
-        let mut original = null_mut();
-        if unsafe { minhook::create(targets[created], detour, &mut original) } {
-            ORIGINAL_PRESENT_ENTRY.store(original, Ordering::Release);
-            created += 1;
-        }
-    }
-    if created == SITES.len() + 1 {
-        targets[created] = (base + PRESENT_ENTRIES[1]) as *mut c_void;
-        let detour = present1_entry as Present1Fn as *mut c_void;
-        let mut original = null_mut();
-        if unsafe { minhook::create(targets[created], detour, &mut original) } {
-            ORIGINAL_PRESENT1_ENTRY.store(original, Ordering::Release);
-            created += 1;
-        }
     }
     let mut queued = created == HOOK_COUNT;
     if queued {
