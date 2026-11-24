@@ -132,13 +132,19 @@ endif()
 target_link_libraries(rsf_sdk_c_header PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 
 rsf_add_fixture_test(rsf_plugin_contract ENTRY rsf_test_plugin_contract LIBS rsf_game_sdk_fixtures_rust ReScaleFrame::GameSDK)
-add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_project_wingman rsf_game_rdr2 rsf_game_unity_mono)
-add_dependencies(rsf_plugin_contract rsf_game_skyrim_se)
-add_dependencies(rsf_plugin_contract rsf_game_fallout4)
-add_test(NAME game_fallout4_plugin_contract COMMAND rsf_plugin_contract
-    "$<TARGET_FILE_NAME:rsf_game_fallout4>" fallout4)
-set_tests_properties(game_fallout4_plugin_contract PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_fallout4>")
+# Each plugin is loaded by name from its own directory. That is how it is loaded in practice, and it
+# keeps the test runnable under a cross-build emulator, which cannot take a host path.
+function(rsf_add_plugin_contract test target id)
+    add_dependencies(rsf_plugin_contract ${target})
+    add_test(NAME ${test} COMMAND rsf_plugin_contract "$<TARGET_FILE_NAME:${target}>" ${id})
+    set_tests_properties(${test} PROPERTIES WORKING_DIRECTORY "$<TARGET_FILE_DIR:${target}>")
+endfunction()
+rsf_add_plugin_contract(game_plugin_contract rsf_game_ac7 ac7)
+rsf_add_plugin_contract(game_fallout4_plugin_contract rsf_game_fallout4 fallout4)
+rsf_add_plugin_contract(game_skyrim_se_plugin_contract rsf_game_skyrim_se skyrim-se)
+rsf_add_plugin_contract(game_project_wingman_plugin_contract rsf_game_project_wingman project-wingman)
+rsf_add_plugin_contract(game_rdr2_plugin_contract rsf_game_rdr2 rdr2)
+rsf_add_plugin_contract(game_unity_mono_plugin_contract rsf_game_unity_mono unity-mono)
 add_executable(rsf_unity_sr_d3d12_test unity_sr_d3d12_preset.c)
 set_target_properties(rsf_unity_sr_d3d12_test PROPERTIES LINKER_LANGUAGE CXX)
 # The toolchain CRT calls the C ABI main from the fixture archive.
@@ -204,27 +210,6 @@ if(MSVC)
     add_dependencies(rsf_shared_shim_exports rsf_proxy_dinput8)
     add_test(NAME shared_shim_exports COMMAND rsf_shared_shim_exports "$<TARGET_FILE:rsf_proxy_dinput8>")
 endif()
-# Load the plugin by name from its own directory. That is how it is loaded in practice, and it
-# keeps the test runnable under a cross-build emulator, which cannot take a host path.
-add_test(NAME game_plugin_contract COMMAND rsf_plugin_contract "$<TARGET_FILE_NAME:rsf_game_ac7>" ac7)
-add_test(NAME game_skyrim_se_plugin_contract COMMAND rsf_plugin_contract
-    "$<TARGET_FILE_NAME:rsf_game_skyrim_se>" skyrim-se)
-set_tests_properties(game_skyrim_se_plugin_contract PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_skyrim_se>")
-set_tests_properties(game_plugin_contract PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_ac7>")
-add_test(NAME game_project_wingman_plugin_contract COMMAND rsf_plugin_contract
-    "$<TARGET_FILE_NAME:rsf_game_project_wingman>" project-wingman)
-set_tests_properties(game_project_wingman_plugin_contract PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_project_wingman>")
-add_test(NAME game_rdr2_plugin_contract COMMAND rsf_plugin_contract
-    "$<TARGET_FILE_NAME:rsf_game_rdr2>" rdr2)
-set_tests_properties(game_rdr2_plugin_contract PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_rdr2>")
-add_test(NAME game_unity_mono_plugin_contract COMMAND rsf_plugin_contract
-    "$<TARGET_FILE_NAME:rsf_game_unity_mono>" unity-mono)
-set_tests_properties(game_unity_mono_plugin_contract PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_unity_mono>")
 add_executable(rsf_module_dump_entropy module_dump_entropy.c)
 target_link_libraries(rsf_module_dump_entropy PRIVATE ReScaleFrame::LoaderDiagnostics rsf_build_options)
 add_test(NAME module_dump_entropy COMMAND rsf_module_dump_entropy)
@@ -745,14 +730,16 @@ if(TARGET rsf_vendor_census)
     target_link_libraries(rsf_vendor_census_test PRIVATE
         rsf_loader_fixtures_rust ReScaleFrame::VendorCensus rsf_census_fx_fsr2 rsf_build_options)
     add_dependencies(rsf_vendor_census_test rsf_census_fx_ngx rsf_census_fx_nvapi rsf_census_fx_xess rsf_census_fx_vk rsf_census_fx_sl rsf_census_fx_ffx rsf_census_fx_creation rsf_census_asi)
-    add_test(NAME vendor_census COMMAND rsf_vendor_census_test functional "${CMAKE_CURRENT_BINARY_DIR}/census-functional")
-    add_test(NAME vendor_census_budget COMMAND rsf_vendor_census_test budget "${CMAKE_CURRENT_BINARY_DIR}/census-budget")
-    add_test(NAME vendor_census_vulkan_streamline COMMAND rsf_vendor_census_test vulkan "${CMAKE_CURRENT_BINARY_DIR}/census-vulkan")
-    add_test(NAME vendor_census_fidelityfx_api COMMAND rsf_vendor_census_test ffx "${CMAKE_CURRENT_BINARY_DIR}/census-ffx")
-    add_test(NAME vendor_census_dllmain COMMAND rsf_vendor_census_test dllmain "${CMAKE_CURRENT_BINARY_DIR}/census-dllmain")
-    add_test(NAME vendor_census_creation_identity COMMAND rsf_vendor_census_test creation "${CMAKE_CURRENT_BINARY_DIR}/census-creation")
-    set_tests_properties(vendor_census_creation_identity PROPERTIES TIMEOUT 30)
-    set_tests_properties(vendor_census vendor_census_budget vendor_census_vulkan_streamline vendor_census_fidelityfx_api vendor_census_dllmain PROPERTIES TIMEOUT 120)
+    function(rsf_census_test name mode timeout)
+        add_test(NAME ${name} COMMAND rsf_vendor_census_test ${mode} "${CMAKE_CURRENT_BINARY_DIR}/census-${mode}")
+        set_tests_properties(${name} PROPERTIES TIMEOUT ${timeout})
+    endfunction()
+    rsf_census_test(vendor_census functional 120)
+    rsf_census_test(vendor_census_budget budget 120)
+    rsf_census_test(vendor_census_vulkan_streamline vulkan 120)
+    rsf_census_test(vendor_census_fidelityfx_api ffx 120)
+    rsf_census_test(vendor_census_dllmain dllmain 120)
+    rsf_census_test(vendor_census_creation_identity creation 30)
 
     if(TARGET rsf_asi_rdr2)
         rsf_add_rust_static(rsf_rdr2_fixtures_rust rsf_rust_rdr2_fixtures rsf-rdr2 rsf_rdr2
