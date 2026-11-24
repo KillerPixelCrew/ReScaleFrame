@@ -11,7 +11,8 @@ recorded. Other Unity players, HDRP and built-in pipelines still need verified a
 [Project Wingman](project-wingman/README.md) remains a detection/lifecycle scaffold with rendering
 unsupported. [Red Dead Redemption 2](rdr2/README.md)
 has a forced-DX12 ASI with a guarded Social Club correction and recorded SR/FG acceptance for
-specific game and device paths.
+specific game and device paths. [Fallout 4](fallout4/README.md) has native D3D11 SR, HUDless and
+CPU source seams under validation.
 All native plugin APIs retain `rendering_ready = 0`; that flag is separate from
 individual deployed-path acceptance. [Current status](../docs/current-status.md) distinguishes
 source features, downloads and remaining validation.
