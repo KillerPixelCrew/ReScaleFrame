@@ -957,7 +957,6 @@ pub(super) unsafe fn rsf_native_regions_depth_valid(
     depth_constants(unsafe { facts.as_ref() }.copied(), format, region, false).is_some()
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_native_regions_prepare(
     context: Object,
     color: Object,
@@ -995,7 +994,6 @@ pub(super) unsafe extern "C" fn rsf_native_regions_prepare(
     true
 }
 
-#[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_native_regions_temporal_mask(
     context: Object,
     mask: Object,

@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 #include <rescaleframe/native_composition.h>
 #include <rescaleframe/native_translucency.h>
-#include "native_regions.h"
-#include "native_reinsert.h"
 #include <stdlib.h>
 
 void rsf_core_native_exposure_release(void);
+void rsf_native_regions_release(void);
+void rsf_native_reinsert_release(void);
 
 /* Covers DLL and embedded carrier unload if explicit graphics teardown was skipped. The release
    hook registers with atexit from a CRT initializer, which is what a C++ static destructor does,
