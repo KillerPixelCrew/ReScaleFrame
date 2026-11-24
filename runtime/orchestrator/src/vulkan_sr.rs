@@ -1187,4 +1187,4 @@ mod fallback;
 mod ffx_descriptors;
 #[cfg(windows)]
 mod graphics;
-mod xess;
+pub(crate) mod xess;

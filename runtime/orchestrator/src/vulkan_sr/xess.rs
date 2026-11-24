@@ -20,7 +20,7 @@ mod graphics;
 mod native;
 
 #[path = "xess_sdk_abi.rs"]
-mod sdk_abi;
+pub mod sdk_abi;
 use crate::sys::{
     RSF_XESSVK_REQUIREMENTS_ABI_VERSION as REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup as XessSetup,
 };

@@ -324,6 +324,10 @@ mod vulkan_fsr4_fg;
 mod vulkan_fsr4_sr;
 #[cfg(windows)]
 mod vulkan_latency;
+/// The XeSS SDK records, for the Vulkan XeSS fixtures in tests/vulkan-fg.
+#[cfg(all(windows, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub use vulkan_sr::xess::sdk_abi as xess_sdk_abi;
 /// The Vulkan latency owner's table and entry points, for the latency fixtures in tests/game-sdk.
 #[cfg(windows)]
 #[doc(hidden)]

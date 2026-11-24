@@ -22,7 +22,7 @@ xess-sr = ["dep:ash", "dep:windows-sys"]
 # registers the test only with the XeSS and FidelityFX Vulkan headers).
 xess-input-range = ["dep:ash", "rsf-orchestrator/test-fixtures", "rsf-orchestrator/xess-vk", "rsf-orchestrator/ffx-vk"]
 xess-device = [
-  "dep:ash", "dep:windows-sys", "windows-sys/Win32_Graphics_Gdi",
+  "dep:ash", "dep:rsf-vk-xess-fg", "dep:windows", "dep:windows-sys", "windows-sys/Win32_Graphics_Gdi",
   "windows-sys/Win32_UI_WindowsAndMessaging",
 ]
 
@@ -31,8 +31,10 @@ ash = { workspace = true, optional = true }
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
 rsf-test-support = { path = "../support" }
+rsf-vk-xess-fg = { path = "../../runtime/vulkan/xess-fg", optional = true }
 
 [target."cfg(windows)".dependencies]
+windows = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"], optional = true }
 windows-sys = { workspace = true, features = [
   "Win32_Foundation",
   "Win32_System_LibraryLoader",

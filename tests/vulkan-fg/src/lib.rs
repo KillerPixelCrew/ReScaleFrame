@@ -34,17 +34,10 @@ mod wsi_abi;
 mod xess_interop;
 
 #[cfg(feature = "xess-device")]
-#[path = "../../../runtime/vulkan/xess-fg/bridge_abi.rs"]
-mod xess_bridge_abi;
-
-#[cfg(feature = "xess-device")]
 mod xess_present;
 
 #[cfg(feature = "xess-input-range")]
 mod xess_input_range;
-#[cfg(feature = "xess-input-range")]
-#[path = "../../../runtime/orchestrator/src/vulkan_sr/xess_sdk_abi.rs"]
-mod xess_sdk_abi;
 #[cfg(feature = "xess-sr")]
 mod xess_sr;
 

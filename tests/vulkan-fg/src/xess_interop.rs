@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::rsf_dx12vk_shared_image;
 use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup, rsf_vk_function};
-use crate::xess_bridge_abi::{
-    RSF_XESS_BRIDGE_ABI_MISMATCH, RSF_XESS_BRIDGE_ABI_VERSION, RSF_XESS_BRIDGE_INVALID_ARGUMENT,
-    rsf_xess_bridge_create,
-};
 use ash::{Entry, StaticFn, vk, vk::Handle as _};
 use rsf_game_sys::ffi_util::wide;
 use rsf_test_support::Library;
+use rsf_vk_xess_fg::bridge_abi::{
+    RSF_XESS_BRIDGE_ABI_MISMATCH, RSF_XESS_BRIDGE_ABI_VERSION, RSF_XESS_BRIDGE_INVALID_ARGUMENT,
+    rsf_xess_bridge_create,
+};
 use std::{
     ffi::{c_char, c_void},
     mem,

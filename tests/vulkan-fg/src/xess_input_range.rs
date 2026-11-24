@@ -6,12 +6,12 @@ use crate::sys::{
     rsf_srvk_image, rsf_srvk_setup, rsf_vk_function,
 };
 use crate::sys::{RSF_XESSVK_REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup};
-use crate::xess_sdk_abi::{
+use ash::vk::{self, Handle as _};
+use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
+use rsf_orchestrator::xess_sdk_abi::{
     XESS_QUALITY_SETTING_QUALITY, xess_2d_t, xess_quality_settings_t, xess_version_t,
     xess_vk_execute_params_t, xess_vk_init_params_t,
 };
-use ash::vk::{self, Handle as _};
-use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
 use rsf_test_support::{frame_record, ignore_pipeline_barrier, vk_entry};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
