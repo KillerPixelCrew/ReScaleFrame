@@ -166,8 +166,7 @@ impl Stage {
         ));
         let mut reasons = String::from("Anomaly motion invalid reasons");
         for i in 1..now.reasons.len() {
-            let name = unsafe { CStr::from_ptr(rsf_anomaly_motion_history_reason_name(i as u8)) }
-                .to_string_lossy();
+            let name = history_reason_name(i as u8);
             let _ = write!(
                 reasons,
                 " {name}={}",
@@ -208,7 +207,6 @@ impl Stage {
         log.say(classes);
         let mut bands = String::from("Anomaly motion character bands");
         for (band, name) in DISTANCE_BANDS.iter().enumerate() {
-            let name = name.to_string_lossy();
             let _ = write!(
                 bands,
                 " | {name} valid={} invalid={} unpaired={} no_previous={} stale_palette={} hq={} lq={} tess={}",

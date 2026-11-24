@@ -512,12 +512,12 @@ struct CoreHistory {
     rigid: bool,
 }
 
-extern "C" fn rsf_anomaly_motion_pack_core_invalid(out: &mut MaybeUninit<[u8; CORE_BYTES]>) {
+fn rsf_anomaly_motion_pack_core_invalid(out: &mut MaybeUninit<[u8; CORE_BYTES]>) {
     initialized_invalid(out, CORE_HISTORY);
 }
 
 #[cfg(feature = "motion-device-fixture")]
-unsafe extern "C" fn rsf_anomaly_motion_pack_core(
+unsafe fn rsf_anomaly_motion_pack_core(
     wvp: &Mat4,
     bones: *const Mat4,
     count: usize,
@@ -562,11 +562,11 @@ unsafe fn pack_core(
 }
 
 #[cfg(any(feature = "motion-device-fixture", feature = "motion-binder-fixture"))]
-extern "C" fn rsf_anomaly_motion_pack_tess_invalid(out: &mut MaybeUninit<[u8; TESS_BYTES]>) {
+fn rsf_anomaly_motion_pack_tess_invalid(out: &mut MaybeUninit<[u8; TESS_BYTES]>) {
     initialized_invalid(out, TESS_HISTORY);
 }
 
-extern "C" fn rsf_anomaly_motion_pack_tess(
+fn rsf_anomaly_motion_pack_tess(
     wv: &Mat4,
     projection: &Mat4,
     valid: bool,
@@ -621,11 +621,11 @@ fn foliage_common(out: &mut [u8], clip: &Mat4, constants: &FoliageConstants, gro
     true
 }
 
-extern "C" fn rsf_anomaly_motion_pack_foliage_invalid(out: &mut MaybeUninit<[u8; FOLIAGE_BYTES]>) {
+fn rsf_anomaly_motion_pack_foliage_invalid(out: &mut MaybeUninit<[u8; FOLIAGE_BYTES]>) {
     out.write([0; FOLIAGE_BYTES]);
 }
 
-extern "C" fn rsf_anomaly_motion_pack_tree(
+fn rsf_anomaly_motion_pack_tree(
     clip: &Mat4,
     xform: &[f32; 12],
     constants: &FoliageConstants,
@@ -639,7 +639,7 @@ extern "C" fn rsf_anomaly_motion_pack_tree(
     true
 }
 
-unsafe extern "C" fn rsf_anomaly_motion_pack_detail(
+unsafe fn rsf_anomaly_motion_pack_detail(
     clip: &Mat4,
     constants: &FoliageConstants,
     items: *const FoliageItem,
@@ -678,7 +678,7 @@ pub(crate) struct PixelInputs {
     pub(crate) jitter: [f32; 4],
 }
 
-pub(crate) extern "C" fn rsf_anomaly_motion_pack_pixel(
+pub(crate) fn rsf_anomaly_motion_pack_pixel(
     input: &PixelInputs,
     out: &mut MaybeUninit<[u8; PIXEL_BYTES]>,
 ) -> bool {
@@ -726,31 +726,27 @@ enum HistoryReason {
     InvalidMatrix = 16,
 }
 
-extern "C" fn rsf_anomaly_motion_history_reason_name(reason: u8) -> *const c_char {
-    const NAMES: [&std::ffi::CStr; 17] = [
-        c"valid",
-        c"no_visual",
-        c"unidentified",
-        c"no_context",
-        c"unsupported_kind",
-        c"kind_mismatch",
-        c"no_previous_camera",
-        c"camera_conflict",
-        c"no_previous_instance",
-        c"too_many_bones",
-        c"foliage",
-        c"foliage_no_constants",
-        c"foliage_no_previous",
-        c"foliage_lod_changed",
-        c"foliage_xform_changed",
-        c"foliage_world",
-        c"invalid_matrix",
+fn history_reason_name(reason: u8) -> &'static str {
+    const NAMES: [&str; 17] = [
+        "valid",
+        "no_visual",
+        "unidentified",
+        "no_context",
+        "unsupported_kind",
+        "kind_mismatch",
+        "no_previous_camera",
+        "camera_conflict",
+        "no_previous_instance",
+        "too_many_bones",
+        "foliage",
+        "foliage_no_constants",
+        "foliage_no_previous",
+        "foliage_lod_changed",
+        "foliage_xform_changed",
+        "foliage_world",
+        "invalid_matrix",
     ];
-    NAMES
-        .get(reason as usize)
-        .copied()
-        .unwrap_or(c"unknown")
-        .as_ptr()
+    NAMES.get(reason as usize).copied().unwrap_or("unknown")
 }
 
 const IDENTIFIED: u8 = RSF_ANOMALY_DRAW_IDENTIFIED as u8;
@@ -949,16 +945,9 @@ unsafe fn decide_detail(input: &DetailDrawInput) -> Result<Mat4, HistoryReason> 
     ))
 }
 
-const DISTANCE_BANDS: [&std::ffi::CStr; 6] = [
-    c"0-20m",
-    c"20-50m",
-    c"50-100m",
-    c"100-150m",
-    c"150m+",
-    c"unknown",
-];
+const DISTANCE_BANDS: [&str; 6] = ["0-20m", "20-50m", "50-100m", "100-150m", "150m+", "unknown"];
 
-extern "C" fn rsf_anomaly_motion_distance_band(metres: f64) -> usize {
+fn rsf_anomaly_motion_distance_band(metres: f64) -> usize {
     if !metres.is_finite() || metres < 0. {
         DISTANCE_BANDS.len() - 1
     } else {
@@ -970,12 +959,8 @@ extern "C" fn rsf_anomaly_motion_distance_band(metres: f64) -> usize {
 }
 
 #[cfg(feature = "motion-binder-fixture")]
-extern "C" fn rsf_anomaly_motion_distance_band_name(band: usize) -> *const c_char {
-    DISTANCE_BANDS
-        .get(band)
-        .copied()
-        .unwrap_or(c"unknown")
-        .as_ptr()
+fn distance_band_name(band: usize) -> &'static str {
+    DISTANCE_BANDS.get(band).copied().unwrap_or("unknown")
 }
 
 fn distance_squared(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -987,7 +972,7 @@ fn translation(matrix: &Mat4) -> [f64; 3] {
     [matrix.0[3], matrix.0[7], matrix.0[11]]
 }
 
-extern "C" fn rsf_anomaly_motion_camera_distance(view: &Mat4, world: &Mat4) -> f64 {
+fn rsf_anomaly_motion_camera_distance(view: &Mat4, world: &Mat4) -> f64 {
     let v = &view.0;
     if v[12..] != [0., 0., 0., 1.] {
         return f64::NAN;
@@ -1005,7 +990,7 @@ enum ModelElement {
     Tessellated,
 }
 
-unsafe extern "C" fn rsf_anomaly_motion_model_element(
+unsafe fn rsf_anomaly_motion_model_element(
     root: *const u8,
     count: usize,
 ) -> ModelElement {
@@ -1021,7 +1006,7 @@ unsafe extern "C" fn rsf_anomaly_motion_model_element(
     }
 }
 
-unsafe extern "C" fn rsf_anomaly_motion_stale_palette(
+unsafe fn rsf_anomaly_motion_stale_palette(
     previous: &DrawSnapshotView,
     current: &DrawSnapshotView,
     min_move: f64,

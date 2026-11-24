@@ -395,12 +395,8 @@ pub(super) fn policy() {
         assert!(unsafe { decide_detail(&input) }.err() == Some(reason));
     }
     assert_eq!(
-        unsafe {
-            std::ffi::CStr::from_ptr(rsf_anomaly_motion_history_reason_name(
-                FoliageXformChanged as u8,
-            ))
-        },
-        c"foliage_xform_changed",
+        history_reason_name(FoliageXformChanged as u8),
+        "foliage_xform_changed"
     );
     assert_eq!(InvalidMatrix as u8 + 1, 17);
 }

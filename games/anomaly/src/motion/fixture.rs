@@ -578,11 +578,8 @@ fn far_diagnostics() {
     ] {
         assert_eq!(rsf_anomaly_motion_distance_band(distance), band);
     }
-    for (band, name) in [(2, c"50-100m"), (5, c"unknown"), (99, c"unknown")] {
-        assert_eq!(
-            unsafe { std::ffi::CStr::from_ptr(rsf_anomaly_motion_distance_band_name(band)) },
-            name
-        );
+    for (band, name) in [(2, "50-100m"), (5, "unknown"), (99, "unknown")] {
+        assert_eq!(distance_band_name(band), name);
     }
     let mut view = Mat4([
         0., 0., -1., -5., 0., 1., 0., -2., 1., 0., 0., -10., 0., 0., 0., 1.,
