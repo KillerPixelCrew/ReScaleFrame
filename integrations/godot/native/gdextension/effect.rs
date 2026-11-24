@@ -1,24 +1,25 @@
 // SPDX-License-Identifier: MIT
 //! `ReScaleFrameEffect`: a `CompositorEffect` with the `POST_TRANSPARENT` callback, resolved
-//! color and depth and motion vectors. Each instance owns one `effect.rs` probe. The callback's
-//! scene objects, RIDs and readback bytes live in `Call` for that callback only; the readback's
-//! shader, uniform and sampler objects live in `Readback` through the synchronous capture
-//! sequence that `Readback::record` drives.
+//! color and depth and motion vectors. Each callback publishes copied CPU facts of its scene
+//! buffers and, when one was requested, a classified motion readback; scene objects, RIDs and
+//! native pointers are borrowed only inside the callback, and no resource lease or GPU completion
+//! is implied. The probe reads no Runtime settings or status: `ReScaleFrameRuntime` reports
+//! active SR, FG and latency.
 use super::api::{self, Bind, GString, Godot, PackedBytes, Ref, StringName, TypedArray, arg};
 use super::sys::*;
 use super::{Dictionary, EFFECT_CLASS, Sink};
-use crate::effect::Effect;
-use crate::platform::{EFFECT_MOTION_FORMAT, EffectFrame, EffectReadback, EffectResources};
-use crate::properties::{Properties, Property};
+use crate::effect::{Capture, classify};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use std::ffi::{CStr, c_char, c_void};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// `CompositorEffect::EFFECT_CALLBACK_TYPE_POST_TRANSPARENT`.
 const POST_TRANSPARENT: i64 = 4;
 /// `_render_callback(int, RenderData)` in the pinned 4.7 API.
 const RENDER_CALLBACK_HASH: u32 = 2153422729;
-/// `RenderingDevice::DATA_FORMAT_R16G16_SFLOAT`, the velocity format `effect.rs` admits.
+/// `RenderingDevice::DATA_FORMAT_R16G16_SFLOAT`, the only velocity format read back.
 const DATA_FORMAT_R16G16_SFLOAT: i32 = 82;
-const _: () = assert!(DATA_FORMAT_R16G16_SFLOAT == EFFECT_MOTION_FORMAT);
 const SHADER_STAGE_COMPUTE: i64 = 4;
 const UNIFORM_TYPE_SAMPLER_WITH_TEXTURE: i64 = 1;
 const UNIFORM_TYPE_STORAGE_BUFFER: i64 = 8;
@@ -26,14 +27,109 @@ const DRIVER_RESOURCE_LOGICAL_DEVICE: i64 = 0;
 const DRIVER_RESOURCE_COMMAND_QUEUE: i64 = 3;
 const DRIVER_RESOURCE_TEXTURE: i64 = 5;
 
+const STAGE: &CStr = c"renderer_probe";
+const REASON: &CStr = c"Compositor motion producer/probe only. Query ReScaleFrameRuntime for active SR, FG and latency.";
+const SNAPSHOT_SCOPE: &CStr = c"last_post_transparent_callback";
+
+// Convert the sampleable velocity texture into an owned readback buffer.
+const MOTION_SHADER: &CStr = c"#version 450
+layout(local_size_x=8, local_size_y=8) in;
+layout(set=0,binding=0) uniform sampler2D motion_tex;
+layout(set=0,binding=1,std430) writeonly buffer Samples { vec2 velocity[]; };
+void main() {
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy), size=textureSize(motion_tex,0);
+    if(any(greaterThanEqual(p,size))) return;
+    velocity[p.y*size.x+p.x]=texelFetch(motion_tex,p,0).xy;
+}";
+
 unsafe extern "C" {
     /// The CMake project version (`runtime_platform.c`).
     fn rsf_godot_version() -> *const c_char;
 }
 
+/// The scene buffer facts of one callback; the godot-cpp defaults until they are read.
+#[derive(Clone, Copy)]
+struct Frame {
+    render_target: u64,
+    views: u32,
+    internal: [i32; 2],
+    output: [i32; 2],
+    camera_transform: [f32; 12],
+    jittered_projection: [f32; 16],
+    color_valid: bool,
+    depth_valid: bool,
+    motion_valid: bool,
+}
+
+impl Default for Frame {
+    fn default() -> Self {
+        let mut camera_transform = [0.0; 12];
+        let mut jittered_projection = [0.0; 16];
+        for axis in 0..3 {
+            camera_transform[axis * 3 + axis] = 1.0;
+        }
+        for axis in 0..4 {
+            jittered_projection[axis * 4 + axis] = 1.0;
+        }
+        Self {
+            render_target: 0,
+            views: 0,
+            internal: [0; 2],
+            output: [0; 2],
+            camera_transform,
+            jittered_projection,
+            color_valid: false,
+            depth_valid: false,
+            motion_valid: false,
+        }
+    }
+}
+
+/// The admitted buffers' formats and native handle facts; format -1 when not admitted.
+#[derive(Clone, Copy)]
+struct Resources {
+    color_format: i32,
+    depth_format: i32,
+    motion_format: i32,
+    native_device: bool,
+    native_queue: bool,
+    native_textures: bool,
+}
+
+impl Default for Resources {
+    fn default() -> Self {
+        Self {
+            color_format: -1,
+            depth_format: -1,
+            motion_format: -1,
+            native_device: false,
+            native_queue: false,
+            native_textures: false,
+        }
+    }
+}
+
+/// What the last callback published.
+#[derive(Clone, Copy, Default)]
+struct Snapshot {
+    callbacks: u64,
+    frame: Frame,
+    resources: Resources,
+    buffers_available: bool,
+}
+
+#[derive(Default)]
+struct Published {
+    snapshot: Snapshot,
+    capture: Capture,
+}
+
 /// The engine owns the object; the instance is the probe it lends to each callback and method.
+#[derive(Default)]
 struct Instance {
-    probe: Effect,
+    /// Set by `request_motion_capture` on any thread, taken by the next callback.
+    requested: AtomicBool,
+    published: Mutex<Published>,
 }
 
 /// `GDExtensionClassCreateInstance3`: the parent object, then the godot-cpp constructor's flags.
@@ -45,9 +141,7 @@ pub(super) unsafe extern "C" fn create(_: *mut c_void, notify_postinitialize: Gd
     if object.is_null() {
         return object;
     }
-    let instance = Box::into_raw(Box::new(Instance {
-        probe: Effect::default(),
-    }));
+    let instance = Box::into_raw(Box::new(Instance::default()));
     let class = StringName::new(godot, EFFECT_CLASS);
     unsafe { (godot.interface.object_set_instance)(object, class.ptr(), instance.cast()) };
     let (kind, enabled) = (POST_TRANSPARENT, 1u8);
@@ -81,7 +175,9 @@ pub(super) unsafe extern "C" fn get_virtual(
         .then_some(render_callback as CallVirtual)
 }
 
-/// `_render_callback(effect_callback_type, render_data)`.
+/// `_render_callback(effect_callback_type, render_data)` on the render thread. The request is
+/// taken first, so a callback that cannot read the motion still answers it with an unsucceeded
+/// capture.
 unsafe extern "C" fn render_callback(instance: *mut c_void, args: *const ConstTypePtr, _: TypePtr) {
     let (Some(godot), Some(instance)) = (api::godot(), unsafe {
         instance.cast::<Instance>().as_ref()
@@ -93,6 +189,7 @@ unsafe extern "C" fn render_callback(instance: *mut c_void, args: *const ConstTy
     if kind != POST_TRANSPARENT || data.is_null() {
         return;
     }
+    let requested = instance.requested.swap(false, Ordering::SeqCst);
     let mut call = Call {
         godot,
         data,
@@ -101,9 +198,58 @@ unsafe extern "C" fn render_callback(instance: *mut c_void, args: *const ConstTy
         color: 0,
         depth: 0,
         motion: 0,
-        bytes: None,
     };
-    instance.probe.render((&raw mut call).cast());
+    let mut next = Snapshot::default();
+    let mut sampled = Capture::default();
+    let mut frame = Frame::default();
+    if call.read_frame(&mut frame).is_some() {
+        next.frame = frame;
+        next.buffers_available = frame.views == 1
+            && frame.internal[0] > 0
+            && frame.internal[1] > 0
+            && frame.color_valid
+            && frame.depth_valid
+            && frame.motion_valid;
+        if next.buffers_available {
+            let mut resources = Resources::default();
+            if call.read_resources(&mut resources).is_some() {
+                next.resources = resources;
+            }
+            if requested && next.resources.motion_format == DATA_FORMAT_R16G16_SFLOAT {
+                // Explicit bounded diagnostics only: the readback stalls the GPU.
+                let [width, height] = frame.internal.map(i32::unsigned_abs);
+                let pixels = u64::from(width) * u64::from(height);
+                if let Some(bytes) = pixels
+                    .checked_mul(8)
+                    .and_then(|bytes| u32::try_from(bytes).ok())
+                {
+                    let mut readback = Readback::new(godot, call.device, call.motion);
+                    let recorded = readback.record(bytes, width.div_ceil(8), height.div_ceil(8));
+                    // The PackedByteArray owns the CPU copy until the classification.
+                    let data = readback.bytes.take();
+                    drop(readback);
+                    let (bytes, count) = data
+                        .as_ref()
+                        .filter(|_| recorded)
+                        .map_or((std::ptr::null(), 0), PackedBytes::data);
+                    let bytes = if bytes.is_null() || count == 0 {
+                        &[][..]
+                    } else {
+                        unsafe { std::slice::from_raw_parts(bytes, count as usize) }
+                    };
+                    sampled = classify(bytes, pixels);
+                }
+            }
+        }
+    }
+    let mut published = lock_or_recover(&instance.published);
+    next.callbacks = published.snapshot.callbacks.wrapping_add(1);
+    if requested {
+        sampled.count = published.capture.count.wrapping_add(1);
+        sampled.callback = next.callbacks;
+        published.capture = sampled;
+    }
+    published.snapshot = next;
 }
 
 /// `get_status()`.
@@ -111,17 +257,52 @@ unsafe extern "C" fn render_callback(instance: *mut c_void, args: *const ConstTy
 /// # Safety
 /// `instance` is a live instance from `create`.
 pub(super) unsafe fn get_status(godot: &'static Godot, instance: *mut c_void) -> Dictionary {
-    let mut dictionary = Dictionary::new(godot);
     let instance = unsafe { &*instance.cast::<Instance>() };
-    let rendering = godot.rendering_server();
+    let (snapshot, capture) = {
+        let published = lock_or_recover(&instance.published);
+        (published.snapshot, published.capture)
+    };
+    let mut dictionary = Dictionary::new(godot);
     let mut sink = Sink {
         godot,
+        rendering: godot.rendering_server(),
         dictionary: &mut dictionary,
-        rendering,
     };
-    let version = unsafe { CStr::from_ptr(rsf_godot_version()) };
-    let mut emit = |key: &CStr, property: Property| sink.put(key, property);
-    crate::effect::properties(&instance.probe, version, &mut Properties::new(&mut emit));
+    sink.text(c"version", unsafe { CStr::from_ptr(rsf_godot_version()) });
+    sink.text(c"stage", STAGE);
+    // A probe: SR, FG and latency are the Runtime's to report.
+    sink.boolean(c"rendering_ready", false);
+    sink.boolean(c"sr_active", false);
+    sink.boolean(c"fg_active", false);
+    sink.boolean(c"latency_active", false);
+    sink.text(c"reason", REASON);
+    sink.name(c"renderer", Bind::GET_RENDERING_METHOD);
+    sink.name(c"driver", Bind::GET_RENDERING_DRIVER_NAME);
+    sink.text(c"snapshot_scope", SNAPSHOT_SCOPE);
+    sink.integer(c"callbacks", snapshot.callbacks as i64);
+    let frame = &snapshot.frame;
+    sink.integer(c"render_target_id", frame.render_target as i64);
+    sink.integer(c"view_count", frame.views.into());
+    sink.extent(c"internal_size", frame.internal);
+    sink.extent(c"output_size", frame.output);
+    sink.transform(c"camera_transform", &frame.camera_transform);
+    sink.projection(c"jittered_projection", &frame.jittered_projection);
+    let resources = &snapshot.resources;
+    sink.integer(c"color_format", resources.color_format.into());
+    sink.integer(c"depth_format", resources.depth_format.into());
+    sink.integer(c"motion_format", resources.motion_format.into());
+    sink.boolean(c"buffers_available", snapshot.buffers_available);
+    sink.boolean(c"native_device_available", resources.native_device);
+    sink.boolean(c"native_queue_available", resources.native_queue);
+    sink.boolean(c"native_textures_available", resources.native_textures);
+    sink.integer(c"motion_captures", capture.count as i64);
+    sink.integer(c"capture_callback", capture.callback as i64);
+    sink.boolean(c"capture_succeeded", capture.succeeded);
+    sink.integer(c"capture_pixels", capture.pixels as i64);
+    sink.integer(c"capture_moving_pixels", capture.moving_pixels as i64);
+    sink.integer(c"capture_nonfinite_pixels", capture.nonfinite_pixels as i64);
+    sink.integer(c"capture_unwritten_pixels", capture.unwritten_pixels as i64);
+    sink.real(c"capture_max_abs_uv", capture.max_abs_uv);
     dictionary
 }
 
@@ -131,11 +312,11 @@ pub(super) unsafe fn get_status(godot: &'static Godot, instance: *mut c_void) ->
 /// `instance` is a live instance from `create`.
 pub(super) unsafe fn request_motion_capture(instance: *mut c_void) {
     unsafe { &*instance.cast::<Instance>() }
-        .probe
-        .request_capture();
+        .requested
+        .store(true, Ordering::SeqCst);
 }
 
-/// One `POST_TRANSPARENT` callback's borrowed scene state and owned readback bytes.
+/// One `POST_TRANSPARENT` callback's borrowed scene state.
 struct Call {
     godot: &'static Godot,
     data: ObjectPtr,
@@ -144,138 +325,95 @@ struct Call {
     color: u64,
     depth: u64,
     motion: u64,
-    bytes: Option<PackedBytes>,
 }
 
-fn layer(godot: &Godot, method: Bind, buffers: ObjectPtr) -> Option<u64> {
-    let (index, msaa) = (0i64, 0u8);
-    unsafe { godot.value(method, buffers, &[arg(&index), arg(&msaa)], 0u64) }
-}
-
-fn texture_valid(godot: &Godot, device: ObjectPtr, texture: u64) -> Option<u32> {
-    unsafe { godot.value(Bind::TEXTURE_IS_VALID, device, &[arg(&texture)], 0u8) }.map(u32::from)
-}
-
-/// The frame facts; `None` without a RenderingDevice, scene buffers or scene data.
-pub(crate) unsafe fn leaf_frame(call: *mut c_void) -> Option<EffectFrame> {
-    let call = unsafe { &mut *call.cast::<Call>() };
-    let mut frame = EffectFrame::default();
-    read_frame(call, &mut frame)?;
-    Some(frame)
-}
-
-fn read_frame(call: &mut Call, frame: &mut EffectFrame) -> Option<()> {
-    let godot = call.godot;
-    // Only RenderSceneBuffersRD converts to the Ref the scene reads use.
-    call.buffers = unsafe { godot.reference(Bind::GET_RENDER_SCENE_BUFFERS, call.data, &[]) }
-        .filter(|buffers| godot.is_class(buffers.object(), c"RenderSceneBuffersRD"));
-    let scene = unsafe {
-        godot.value(
-            Bind::GET_RENDER_SCENE_DATA,
-            call.data,
-            &[],
-            std::ptr::null_mut::<c_void>(),
-        )
-    }?;
-    let rendering = godot.rendering_server();
-    let device = if rendering.is_null() {
-        std::ptr::null_mut()
-    } else {
+impl Call {
+    fn layer(&self, method: Bind, buffers: ObjectPtr) -> Option<u64> {
+        let (index, msaa) = (0i64, 0u8);
         unsafe {
-            godot.value(
-                Bind::GET_RENDERING_DEVICE,
-                rendering,
-                &[],
-                std::ptr::null_mut::<c_void>(),
-            )
-        }?
-    };
-    let buffers = call.buffers.as_ref().map(Ref::object);
-    let (Some(buffers), false, false) = (buffers, device.is_null(), scene.is_null()) else {
-        return None;
-    };
-    call.device = device;
-    frame.render_target = unsafe { godot.value(Bind::GET_RENDER_TARGET, buffers, &[], 0u64) }?;
-    frame.views = unsafe { godot.value(Bind::GET_VIEW_COUNT, buffers, &[], 0i64) }? as u32;
-    let [internal_width, internal_height] =
-        unsafe { godot.value(Bind::GET_INTERNAL_SIZE, buffers, &[], [0i32; 2]) }?;
-    let [output_width, output_height] =
-        unsafe { godot.value(Bind::GET_TARGET_SIZE, buffers, &[], [0i32; 2]) }?;
-    frame.internal_width = internal_width;
-    frame.internal_height = internal_height;
-    frame.output_width = output_width;
-    frame.output_height = output_height;
-    // Transform3D is basis rows then origin, Projection is columns: both copy in memory order.
-    let camera = unsafe { godot.value(Bind::GET_CAM_TRANSFORM, scene, &[], [0f32; 12]) }?;
-    let projection = unsafe { godot.value(Bind::GET_CAM_PROJECTION, scene, &[], [0f32; 16]) }?;
-    frame.camera_transform = camera.map(f64::from);
-    frame.jittered_projection = projection.map(f64::from);
-    call.color = layer(godot, Bind::GET_COLOR_LAYER, buffers)?;
-    call.depth = layer(godot, Bind::GET_DEPTH_LAYER, buffers)?;
-    call.motion = layer(godot, Bind::GET_VELOCITY_LAYER, buffers)?;
-    frame.color_valid = texture_valid(godot, device, call.color)?;
-    frame.depth_valid = texture_valid(godot, device, call.depth)?;
-    frame.motion_valid = texture_valid(godot, device, call.motion)?;
-    Some(())
-}
-
-/// The formats and native handle facts, or `None` when an engine read failed.
-pub(crate) unsafe fn leaf_resources(call: *mut c_void) -> Option<EffectResources> {
-    let call = unsafe { &*call.cast::<Call>() };
-    let mut resources = EffectResources::default();
-    read_resources(call, &mut resources)?;
-    Some(resources)
-}
-
-fn read_resources(call: &Call, resources: &mut EffectResources) -> Option<()> {
-    let godot = call.godot;
-    let format = |texture: u64| -> Option<i32> {
-        let format =
-            unsafe { godot.reference(Bind::TEXTURE_GET_FORMAT, call.device, &[arg(&texture)]) }?;
-        unsafe { godot.value(Bind::TEXTURE_FORMAT_GET_FORMAT, format.object(), &[], 0i64) }
-            .map(|value| value as i32)
-    };
-    let driver = |resource: i64, rid: u64| -> Option<bool> {
-        let index = 0u64;
-        unsafe {
-            godot.value(
-                Bind::GET_DRIVER_RESOURCE,
-                call.device,
-                &[arg(&resource), arg(&rid), arg(&index)],
-                0u64,
-            )
+            self.godot
+                .value(method, buffers, &[arg(&index), arg(&msaa)], 0u64)
         }
-        .map(|handle| handle != 0)
-    };
-    resources.color_format = format(call.color)?;
-    resources.depth_format = format(call.depth)?;
-    resources.motion_format = format(call.motion)?;
-    resources.native_device = driver(DRIVER_RESOURCE_LOGICAL_DEVICE, 0)?.into();
-    resources.native_queue = driver(DRIVER_RESOURCE_COMMAND_QUEUE, 0)?.into();
-    resources.native_textures = (driver(DRIVER_RESOURCE_TEXTURE, call.color)?
-        && driver(DRIVER_RESOURCE_TEXTURE, call.depth)?
-        && driver(DRIVER_RESOURCE_TEXTURE, call.motion)?)
-    .into();
-    Some(())
-}
-
-/// The readback's bytes, kept in `call` until the callback returns; empty when the readback was
-/// refused.
-pub(crate) unsafe fn leaf_read_motion<'a>(call: *mut c_void, plan: &EffectReadback) -> &'a [u8] {
-    let call = unsafe { &mut *call.cast::<Call>() };
-    let mut readback = Readback::new(call.godot, call.device, call.motion);
-    let recorded = readback.record(plan);
-    // The PackedByteArray owns the CPU copy until the callback returns.
-    call.bytes = readback.bytes.take();
-    drop(readback);
-    let Some(bytes) = call.bytes.as_ref().filter(|_| recorded) else {
-        return &[];
-    };
-    let (data, count) = bytes.data();
-    if data.is_null() || count == 0 {
-        return &[];
     }
-    unsafe { std::slice::from_raw_parts(data, count as usize) }
+
+    fn texture_valid(&self, texture: u64) -> Option<bool> {
+        unsafe {
+            self.godot
+                .value(Bind::TEXTURE_IS_VALID, self.device, &[arg(&texture)], 0u8)
+        }
+        .map(|valid| valid != 0)
+    }
+
+    /// The frame facts; `None` without a RenderingDevice, scene buffers or scene data, or when an
+    /// engine read failed.
+    fn read_frame(&mut self, frame: &mut Frame) -> Option<()> {
+        let godot = self.godot;
+        // Only RenderSceneBuffersRD converts to the Ref the scene reads use.
+        self.buffers = unsafe { godot.reference(Bind::GET_RENDER_SCENE_BUFFERS, self.data, &[]) }
+            .filter(|buffers| godot.is_class(buffers.object(), c"RenderSceneBuffersRD"));
+        let null = std::ptr::null_mut::<c_void>();
+        let scene = unsafe { godot.value(Bind::GET_RENDER_SCENE_DATA, self.data, &[], null) }?;
+        let rendering = godot.rendering_server();
+        let device = if rendering.is_null() {
+            null
+        } else {
+            unsafe { godot.value(Bind::GET_RENDERING_DEVICE, rendering, &[], null) }?
+        };
+        let buffers = self.buffers.as_ref().map(Ref::object);
+        let (Some(buffers), false, false) = (buffers, device.is_null(), scene.is_null()) else {
+            return None;
+        };
+        self.device = device;
+        frame.render_target = unsafe { godot.value(Bind::GET_RENDER_TARGET, buffers, &[], 0u64) }?;
+        frame.views = unsafe { godot.value(Bind::GET_VIEW_COUNT, buffers, &[], 0i64) }? as u32;
+        frame.internal = unsafe { godot.value(Bind::GET_INTERNAL_SIZE, buffers, &[], [0i32; 2]) }?;
+        frame.output = unsafe { godot.value(Bind::GET_TARGET_SIZE, buffers, &[], [0i32; 2]) }?;
+        // Transform3D is basis rows then origin, Projection is columns: both copy in memory order.
+        frame.camera_transform =
+            unsafe { godot.value(Bind::GET_CAM_TRANSFORM, scene, &[], [0f32; 12]) }?;
+        frame.jittered_projection =
+            unsafe { godot.value(Bind::GET_CAM_PROJECTION, scene, &[], [0f32; 16]) }?;
+        self.color = self.layer(Bind::GET_COLOR_LAYER, buffers)?;
+        self.depth = self.layer(Bind::GET_DEPTH_LAYER, buffers)?;
+        self.motion = self.layer(Bind::GET_VELOCITY_LAYER, buffers)?;
+        frame.color_valid = self.texture_valid(self.color)?;
+        frame.depth_valid = self.texture_valid(self.depth)?;
+        frame.motion_valid = self.texture_valid(self.motion)?;
+        Some(())
+    }
+
+    /// The formats and native handle facts, or `None` when an engine read failed.
+    fn read_resources(&self, resources: &mut Resources) -> Option<()> {
+        let godot = self.godot;
+        let format = |texture: u64| -> Option<i32> {
+            let format = unsafe {
+                godot.reference(Bind::TEXTURE_GET_FORMAT, self.device, &[arg(&texture)])
+            }?;
+            unsafe { godot.value(Bind::TEXTURE_FORMAT_GET_FORMAT, format.object(), &[], 0i64) }
+                .map(|value| value as i32)
+        };
+        let driver = |resource: i64, rid: u64| -> Option<bool> {
+            let index = 0u64;
+            unsafe {
+                godot.value(
+                    Bind::GET_DRIVER_RESOURCE,
+                    self.device,
+                    &[arg(&resource), arg(&rid), arg(&index)],
+                    0u64,
+                )
+            }
+            .map(|handle| handle != 0)
+        };
+        resources.color_format = format(self.color)?;
+        resources.depth_format = format(self.depth)?;
+        resources.motion_format = format(self.motion)?;
+        resources.native_device = driver(DRIVER_RESOURCE_LOGICAL_DEVICE, 0)?;
+        resources.native_queue = driver(DRIVER_RESOURCE_COMMAND_QUEUE, 0)?;
+        resources.native_textures = driver(DRIVER_RESOURCE_TEXTURE, self.color)?
+            && driver(DRIVER_RESOURCE_TEXTURE, self.depth)?
+            && driver(DRIVER_RESOURCE_TEXTURE, self.motion)?;
+        Some(())
+    }
 }
 
 /// The capture's SDK objects and RIDs. Its references release after the RIDs were freed.
@@ -289,7 +427,7 @@ struct Readback {
     buffer: u64,
     uniform_set: u64,
     bytes: Option<PackedBytes>,
-    // Dropped in this order, the reverse of the former C++ member order.
+    // Dropped in this order, the reverse of the godot-cpp locals.
     uniforms: Option<TypedArray>,
     buffer_uniform: Option<Ref>,
     texture_uniform: Option<Ref>,
@@ -323,10 +461,10 @@ impl Readback {
         unsafe { self.godot.value(method, self.device, args, 0u64) }
     }
 
-    fn compile(&mut self, plan: &EffectReadback) -> Option<bool> {
+    fn compile(&mut self) -> Option<bool> {
         let godot = self.godot;
         let source = godot.instantiate(c"RDShaderSource")?;
-        let code = GString::new(godot, unsafe { CStr::from_ptr(plan.shader) });
+        let code = GString::new(godot, MOTION_SHADER);
         unsafe {
             godot.call(
                 Bind::SHADER_SOURCE_SET_STAGE_SOURCE,
@@ -380,7 +518,7 @@ impl Readback {
         Some(uniform)
     }
 
-    fn prepare(&mut self, plan: &EffectReadback) -> Option<()> {
+    fn prepare(&mut self, bytes: u32) -> Option<()> {
         let godot = self.godot;
         let constants = TypedArray::new(godot, c"RDPipelineSpecializationConstant");
         self.pipeline = self.rid(
@@ -391,8 +529,7 @@ impl Readback {
         let state = sampler_state.object();
         self.sampler_state = Some(sampler_state);
         self.sampler = self.rid(Bind::SAMPLER_CREATE, &[arg(&state)])?;
-        let (size, data, usage, creation) =
-            (i64::from(plan.bytes), PackedBytes::new(godot), 0i64, 0i64);
+        let (size, data, usage, creation) = (i64::from(bytes), PackedBytes::new(godot), 0i64, 0i64);
         self.buffer = self.rid(
             Bind::STORAGE_BUFFER_CREATE,
             &[arg(&size), data.ptr(), arg(&usage), arg(&creation)],
@@ -419,15 +556,10 @@ impl Readback {
         Some(())
     }
 
-    fn dispatch(&self, plan: &EffectReadback) -> Option<()> {
+    fn dispatch(&self, groups_x: u32, groups_y: u32) -> Option<()> {
         let godot = self.godot;
         let list = unsafe { godot.value(Bind::COMPUTE_LIST_BEGIN, self.device, &[], 0i64) }?;
-        let (set, x, y, z) = (
-            0i64,
-            i64::from(plan.groups_x),
-            i64::from(plan.groups_y),
-            1i64,
-        );
+        let (set, x, y, z) = (0i64, i64::from(groups_x), i64::from(groups_y), 1i64);
         unsafe {
             godot
                 .call(
@@ -484,13 +616,13 @@ impl Readback {
         freed
     }
 
-    /// Only the SDK leaves can allocate, record and release Godot resources. Finish by releasing
-    /// the resources created up to that point, even after a refusal.
-    fn record(&mut self, plan: &EffectReadback) -> bool {
-        let recorded = self.compile(plan) == Some(true)
-            && self.prepare(plan).is_some()
+    /// Compiles, records, dispatches and reads the conversion of `bytes` bytes, then releases the
+    /// resources created up to that point, even after a refusal.
+    fn record(&mut self, bytes: u32, groups_x: u32, groups_y: u32) -> bool {
+        let recorded = self.compile() == Some(true)
+            && self.prepare(bytes).is_some()
             && ![self.pipeline, self.sampler, self.buffer, self.uniform_set].contains(&0)
-            && self.dispatch(plan).is_some()
+            && self.dispatch(groups_x, groups_y).is_some()
             && self.read().is_some();
         self.free() && recorded
     }

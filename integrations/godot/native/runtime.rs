@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-//! Engine ABI entry points backed by the existing Rust session and execution receipts.
+//! The engine entries that route to the booted backend, the Vulkan Present markers and the WSI
+//! calls the engine driver makes outside the Vulkan session's guard.
 
-use crate::platform::{Settings, Setup};
 use crate::sys::*;
-use crate::vulkan::native::{vk_capture_present, vk_render_begin};
+use crate::vulkan_creation::VkFunction;
+use crate::{control, d3d12, vulkan, window};
 use rsf_game_sys::ffi_util::checked;
 use rsf_game_sys::{RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_PRESENT, rsf_game_render_pass};
 use std::cell::Cell;
@@ -17,92 +18,56 @@ thread_local! {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_boot(setup: *const Setup) -> i32 {
-    unsafe { crate::rsf_godot_boot(setup) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_create_swapchain(
-    factory: Handle,
-    queue: Handle,
-    window: Handle,
-    description: *const c_void,
-    out: *mut Handle,
-) -> i32 {
-    if !crate::CONTROL.booted() {
-        return windows::Win32::Graphics::Dxgi::DXGI_ERROR_UNSUPPORTED.0;
-    }
-    unsafe { rsf_d3d11_present_create_for_hwnd(factory, queue, window, description, out) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_configure(settings: *const Settings) -> i32 {
-    unsafe { crate::rsf_godot_configure(settings) }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_render(
-    device: Handle,
-    queue: Handle,
-    commands: Handle,
-    pass: *const rsf_game_render_pass,
-) -> i32 {
-    if !crate::CONTROL.booted() || device.is_null() || queue.is_null() || commands.is_null() {
-        return 0;
-    }
-    let Some(pass) = (unsafe { checked(pass) }) else {
-        return 0;
-    };
-    if rsf_game_sys::depth_domains_requested(&pass.depth_domains) {
-        return 0;
-    }
-    crate::CONTROL
-        .d3d12
-        .render(&crate::CONTROL, device, queue, commands, pass)
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsfg_render_begin(frame: u64) {
-    if crate::CONTROL.vulkan.booted() {
-        vk_render_begin(frame, false);
-    } else if crate::CONTROL.booted() {
-        crate::CONTROL.d3d12.render_begin(&crate::CONTROL, frame);
+    if vulkan::booted() {
+        vulkan::render_begin(frame, false);
+    } else if control::booted() {
+        d3d12::render_begin(frame);
     }
 }
 
+/// While the Vulkan session is booted, asks the input window admission and keeps the window as
+/// the session's primary window.
+#[unsafe(no_mangle)]
+extern "C" fn rsfg_vk_window(window: Handle) {
+    if vulkan::booted() {
+        window::accept(window);
+        vulkan::report_window(window);
+    }
+}
+
+/// Only the booted Vulkan session's admitted window marks its Present.
 #[unsafe(no_mangle)]
 extern "C" fn rsfg_vk_present_marker(window: u64, begin: u32) -> i32 {
-    let admitted: i32 = crate::CONTROL
-        .window
-        .present_marker(crate::CONTROL.vulkan.booted(), window, begin)
-        .into();
-    if admitted != 0 {
-        CAPTURE_NATIVE_PRESENT.set(begin != 0);
+    if !vulkan::booted() || !window::admits_present(window) {
+        return 0;
     }
-    admitted
+    unsafe { rsf_latencyvk_present(begin) };
+    CAPTURE_NATIVE_PRESENT.set(begin != 0);
+    1
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_vk_execution(pass: *const rsf_game_render_pass, begin: u32) -> i32 {
-    if !crate::CONTROL.vulkan.booted() {
+    if !vulkan::booted() {
         return 0;
     }
     let Some(pass) = (unsafe { checked(pass) }) else {
         return 0;
     };
     if pass.role == RSF_GAME_RENDER_FRAME {
-        vk_render_begin(pass.source_frame_id, true);
+        vulkan::render_begin(pass.source_frame_id, true);
         return 1;
     }
-    let admitted: i32 = crate::CONTROL.window.execution(pass, begin).into();
-    if admitted != 0 && pass.role == RSF_GAME_RENDER_PRESENT {
+    let admitted = window::execution(pass, begin);
+    if admitted && pass.role == RSF_GAME_RENDER_PRESENT {
         CAPTURE_NATIVE_PRESENT.set(begin != 0);
     }
-    admitted
+    admitted.into()
 }
 
 struct PresentCall {
-    callback: Option<crate::platform::VkFunction>,
+    callback: Option<VkFunction>,
     queue: Handle,
     info: *const c_void,
 }
@@ -119,20 +84,19 @@ unsafe extern "C" fn rsfg_vk_native_present(
     info: *const c_void,
 ) -> i32 {
     // The engine supplies the native function address in a uint64_t wire field (Windows x64).
-    let callback =
-        unsafe { std::mem::transmute::<u64, Option<crate::platform::VkFunction>>(callback) };
+    let callback = unsafe { std::mem::transmute::<u64, Option<VkFunction>>(callback) };
     let mut call = PresentCall {
         callback,
         queue,
         info,
     };
     if CAPTURE_NATIVE_PRESENT.get() {
-        vk_capture_present(info, 0, true);
+        vulkan::capture_present(info, 0, true);
     }
     let result =
         unsafe { rsf_slvk_without_dlssg(Some(present_call), std::ptr::from_mut(&mut call).cast()) };
     if CAPTURE_NATIVE_PRESENT.get() {
-        vk_capture_present(info, result, false);
+        vulkan::capture_present(info, result, false);
     }
     result
 }
@@ -160,15 +124,14 @@ unsafe extern "C" fn rsfg_vk_foreign_call(callback: rsf_vk_wsi_call, user: Handl
 
 #[unsafe(no_mangle)]
 extern "C" fn rsfg_shutdown() -> i32 {
-    let control = &crate::CONTROL;
-    control.window.release();
-    let result = if control.vulkan.booted() {
-        control.vulkan.shutdown()
+    window::release();
+    let result = if vulkan::booted() {
+        vulkan::shutdown()
     } else {
-        control.d3d12.shutdown(control)
+        d3d12::shutdown()
     };
     if result != 0 {
-        control.window.bind_cpu_service(None);
+        window::unbind_cpu_service();
     }
     result
 }

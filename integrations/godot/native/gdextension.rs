@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! The GDExtension entry and its two scene classes, implemented on Godot's C interface
 //! (`gdextension_interface.h`) instead of godot-cpp: `ReScaleFrameEffect` (a `CompositorEffect`
-//! whose `_render_callback` feeds `effect.rs`) and `ReScaleFrameRuntime` (a `RefCounted` whose
-//! methods reach `extension.rs` and the Runtime control). The interface functions, the method
-//! hashes and the builtin sizes are those of the pinned Godot 4.7 API, which the add-on's
-//! `compatibility_minimum` requires.
+//! motion probe) and `ReScaleFrameRuntime` (a `RefCounted` whose methods reach the Runtime
+//! control). The interface functions, the method hashes and the builtin sizes are those of the
+//! pinned Godot 4.7 API, which the add-on's `compatibility_minimum` requires.
 mod api;
-pub(crate) mod effect;
+mod effect;
 mod runtime;
 mod sys;
 
-use crate::properties::Property;
 use api::{Dictionary, GString, Godot, Interface, StringName, Variant};
 use std::ffi::{CStr, c_void};
 use sys::*;
@@ -450,8 +448,7 @@ unsafe extern "C" fn ptrcall(
     }
 }
 
-/// The property sink of `ScriptDictionary`: each `Property` becomes a Dictionary entry with
-/// godot-cpp's Variant conversions.
+/// A status Dictionary under construction; each entry uses godot-cpp's Variant conversions.
 struct Sink<'a> {
     godot: &'static Godot,
     dictionary: &'a mut Dictionary,
@@ -459,47 +456,55 @@ struct Sink<'a> {
 }
 
 impl Sink<'_> {
-    fn put(&mut self, key: &CStr, property: Property) {
+    fn put(&mut self, key: &CStr, from: FromTypeConstructor, value: ConstTypePtr) {
         let godot = self.godot;
         let key = Variant::string(godot, key);
         let slot = unsafe { api::dictionary_slot(godot, self.dictionary.ptr_mut(), &key) };
-        if slot.is_null() {
-            return;
+        if !slot.is_null() {
+            unsafe { api::assign(godot, slot, from, value) };
         }
-        let put = |from, value: ConstTypePtr| unsafe { api::assign(godot, slot, from, value) };
-        match property {
-            Property::Integer(value) => put(godot.from_int, api::arg(&value)),
-            Property::Bool(value) => put(godot.from_bool, api::arg(&u8::from(value))),
-            Property::Real(value) => put(godot.from_float, api::arg(&value)),
-            Property::Text(text) => {
-                let text = GString::new(godot, text);
-                put(godot.from_string, text.ptr());
-            }
-            Property::Extent(extent) => put(godot.from_vector2i, api::arg(&extent)),
-            Property::Transform(matrix) => {
-                // Basis rows then the origin: Transform3D's single-precision memory order.
-                let transform: [f32; 12] = matrix.map(|value| value as f32);
-                put(godot.from_transform3d, api::arg(&transform));
-            }
-            Property::Projection(matrix) => {
-                // Columns: Projection's single-precision memory order.
-                let projection: [f32; 16] = matrix.map(|value| value as f32);
-                put(godot.from_projection, api::arg(&projection));
-            }
-            Property::Renderer | Property::Driver => {
-                let method = if matches!(property, Property::Renderer) {
-                    api::Bind::GET_RENDERING_METHOD
-                } else {
-                    api::Bind::GET_RENDERING_DRIVER_NAME
-                };
-                let name = if self.rendering.is_null() {
-                    None
-                } else {
-                    unsafe { godot.string(method, self.rendering, &[]) }
-                };
-                let name = name.unwrap_or_else(|| GString::empty(godot));
-                put(godot.from_string, name.ptr());
-            }
-        }
+    }
+
+    fn integer(&mut self, key: &CStr, value: i64) {
+        self.put(key, self.godot.from_int, api::arg(&value));
+    }
+
+    fn boolean(&mut self, key: &CStr, value: bool) {
+        self.put(key, self.godot.from_bool, api::arg(&u8::from(value)));
+    }
+
+    fn real(&mut self, key: &CStr, value: f64) {
+        self.put(key, self.godot.from_float, api::arg(&value));
+    }
+
+    fn text(&mut self, key: &CStr, text: &CStr) {
+        let text = GString::new(self.godot, text);
+        self.put(key, self.godot.from_string, text.ptr());
+    }
+
+    fn extent(&mut self, key: &CStr, extent: [i32; 2]) {
+        self.put(key, self.godot.from_vector2i, api::arg(&extent));
+    }
+
+    /// Basis rows then the origin: Transform3D's single-precision memory order.
+    fn transform(&mut self, key: &CStr, matrix: &[f32; 12]) {
+        self.put(key, self.godot.from_transform3d, api::arg(matrix));
+    }
+
+    /// Columns: Projection's single-precision memory order.
+    fn projection(&mut self, key: &CStr, matrix: &[f32; 16]) {
+        self.put(key, self.godot.from_projection, api::arg(matrix));
+    }
+
+    /// The RenderingServer's current driver or method name, empty without a RenderingServer.
+    fn name(&mut self, key: &CStr, method: api::Bind) {
+        let godot = self.godot;
+        let name = if self.rendering.is_null() {
+            None
+        } else {
+            unsafe { godot.string(method, self.rendering, &[]) }
+        };
+        let name = name.unwrap_or_else(|| GString::empty(godot));
+        self.put(key, godot.from_string, name.ptr());
     }
 }

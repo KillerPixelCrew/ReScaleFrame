@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
+//! The Vulkan frame capture: the readable swapchain request, the Runtime's frame dump owner and
+//! the capture stages of the engine's final image.
 use super::*;
-use crate::vulkan::handle;
 use ash::vk::Handle as _;
 use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR};
+use std::ffi::c_char;
 
 const TRANSFER_SRC: vk::ImageUsageFlags = vk::ImageUsageFlags::TRANSFER_SRC;
 const SWAPCHAIN_IMAGES: usize = 16;
@@ -232,14 +234,16 @@ impl Capture {
         !self.owner.is_null()
     }
 
-    /// Returns whether the capture should emit a failure diagnostic outside the state lock.
+    /// Whether the snapshot of the presented image failed.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn present(
         &mut self,
         owner: *mut rsf_fgvk,
         info: *const c_void,
         result: i32,
         begin: bool,
-        view: &VkView,
+        session: u64,
+        backend: u32,
         frame: u64,
     ) -> bool {
         let Some(snapshot) = features().capture.snapshot else {
@@ -251,7 +255,7 @@ impl Capture {
             .unwrap_or_else(|| rsf_frame_record {
                 struct_size: size_of::<rsf_frame_record>() as u32,
                 abi_version: RSF_GAME_FRAME_ABI_VERSION,
-                session_id: view.session_id,
+                session_id: session,
                 frame_id: frame,
                 output_width: self.width,
                 output_height: self.height,
@@ -262,7 +266,7 @@ impl Capture {
             unsafe { rsf_input_dump_complete(&record, result) };
             return false;
         }
-        let _ = unsafe { rsf_input_dump_begin_record(&record, view.settings.sr_backend) };
+        let _ = unsafe { rsf_input_dump_begin_record(&record, backend) };
         if unsafe { rsf_input_dump_wants(&record) } == 0 {
             return false;
         }

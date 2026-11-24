@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
-use crate::platform::VkChainFacts;
+//! A private copy of the engine's device feature chain, which the XeSS and latency requirements
+//! patch without touching the engine's records.
 use ash::vk::{self, StructureType, TaggedStructure};
 use std::alloc::{Layout, alloc, dealloc};
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
 
-const LIMIT: usize = 64;
+pub(super) const LIMIT: usize = 64;
 
 /// `VkPhysicalDeviceAntiLagFeaturesAMD`; ash's Vulkan headers predate VK_AMD_anti_lag.
 #[repr(C)]
@@ -103,6 +104,18 @@ impl Chain {
         Ok(Some(copied))
     }
 
+    pub(super) fn contains(&self, tag: StructureType) -> bool {
+        let mut node = self.head;
+        // SAFETY: the copied nodes are owned by this chain and linked by copy and prepend.
+        while let Some(value) = unsafe { node.as_ref() } {
+            if value.s_type == tag {
+                return true;
+            }
+            node = value.p_next;
+        }
+        false
+    }
+
     /// The writable injected node lives in the same create call as this chain.
     pub(super) unsafe fn prepend(&mut self, node: *mut vk::BaseOutStructure<'static>) {
         unsafe { (*node).p_next = self.head };
@@ -129,56 +142,4 @@ impl Chain {
             link = unsafe { &raw mut (*node).p_next };
         }
     }
-}
-
-pub(super) unsafe fn chain_facts(request: *const c_void, out: *mut VkChainFacts) {
-    let info = unsafe { &*request.cast::<vk::DeviceCreateInfo<'static>>() };
-    let mut current = info.p_next.cast::<vk::BaseInStructure<'static>>();
-    let mut seen = [StructureType::default(); LIMIT];
-    let mut facts = VkChainFacts {
-        enabled_features: u32::from(!info.p_enabled_features.is_null()),
-        cloneable: 1,
-        ..Default::default()
-    };
-    for index in 0..LIMIT {
-        let Some(node) = (unsafe { current.as_ref() }) else {
-            break;
-        };
-        facts.cloneable &=
-            u32::from(layout(node.s_type).is_some() && !seen[..index].contains(&node.s_type));
-        seen[index] = node.s_type;
-        match node.s_type {
-            StructureType::PHYSICAL_DEVICE_FEATURES_2 => facts.features2 = 1,
-            StructureType::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES => {
-                facts.vulkan12 = 1;
-                let value = unsafe { &*current.cast::<vk::PhysicalDeviceVulkan12Features<'_>>() };
-                facts.timeline_semaphore |= u32::from(value.timeline_semaphore != 0);
-            }
-            StructureType::PHYSICAL_DEVICE_VULKAN_1_3_FEATURES => facts.vulkan13 = 1,
-            StructureType::PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES => facts.float16_int8 = 1,
-            StructureType::PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES => {
-                facts.scalar_block_layout = 1
-            }
-            StructureType::PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES => {
-                facts.integer_dot_product = 1
-            }
-            StructureType::PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES => {
-                let value =
-                    unsafe { &*current.cast::<vk::PhysicalDeviceTimelineSemaphoreFeatures<'_>>() };
-                facts.timeline_semaphore |= u32::from(value.timeline_semaphore != 0);
-            }
-            _ => (),
-        }
-        current = node.p_next;
-    }
-    facts.cloneable &= u32::from(current.is_null());
-    // Presence flags for an uncloneable chain do not enter XeSS negotiation.
-    if facts.cloneable == 0 {
-        facts = VkChainFacts {
-            enabled_features: facts.enabled_features,
-            timeline_semaphore: facts.timeline_semaphore,
-            ..Default::default()
-        };
-    }
-    unsafe { out.write(facts) };
 }

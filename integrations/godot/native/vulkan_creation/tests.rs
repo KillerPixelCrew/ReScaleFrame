@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::chain::{ANTI_LAG_FEATURES, AntiLagFeatures};
 use super::*;
-use crate::platform::VkChainFacts;
-use crate::platform::vulkan_negotiation::VK_ERROR_FEATURE_NOT_PRESENT;
+use rsf_game_sys::backend_result::NOT_SUPPORTED;
 use std::cell::RefCell;
 use std::ffi::CStr;
 use vk::StructureType as Tag;
@@ -69,7 +68,7 @@ thread_local! {
 }
 
 fn names(list: *const *const c_char, count: u32) -> Vec<String> {
-    unsafe { super::super::extension_list(list, count) }
+    unsafe { super::extension_list(list, count) }
         .iter()
         .map(|&name| {
             unsafe { CStr::from_ptr(name) }
@@ -325,9 +324,8 @@ pub(super) unsafe fn rsf_latencyvk_device_destroyed(device: *mut c_void) {
 
 #[test]
 fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
-    assert!(crate::vk_creation_resolver(None, true, None, ptr::null_mut()).is_none());
-    let begin =
-        |xess| crate::vk_creation_resolver(Some(mock_proc), xess, None, ptr::null_mut()).unwrap();
+    assert!(resolver(None, true, None, ptr::null_mut()).is_none());
+    let begin = |xess| resolver(Some(mock_proc), xess, None, ptr::null_mut()).unwrap();
     let gipa = begin(true);
     assert!(unsafe { gipa(ptr::null_mut(), ptr::null()) }.is_none());
     let create = unsafe {
@@ -406,7 +404,7 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
     CALLS.with_borrow_mut(|calls| calls.interop = true);
     let (status, device) = run(gipa, &info);
     assert!(status == vk::Result::SUCCESS && device.as_raw() as usize == DEVICE);
-    let receipt = crate::CONTROL.vulkan.creation().device_receipt(DEVICE);
+    let receipt = device_receipt(DEVICE);
     assert!(receipt.xess && receipt.interop);
     assert_eq!(receipt.adapter.unwrap().vendor, 0x8086);
     CALLS.with_borrow_mut(|calls| {
@@ -433,7 +431,7 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
     assert!(half.p_next.is_null());
 
     for refused in [
-        vk::Result::from_raw(VK_ERROR_FEATURE_NOT_PRESENT),
+        vk::Result::ERROR_FEATURE_NOT_PRESENT,
         vk::Result::ERROR_EXTENSION_NOT_PRESENT,
     ] {
         CALLS.with_borrow_mut(|calls| {
@@ -449,7 +447,7 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
     }
     CALLS.with_borrow_mut(|calls| calls.refuse_xess = true);
     assert!(run(begin(true), &info).0 == vk::Result::SUCCESS);
-    assert!(!crate::CONTROL.vulkan.creation().xess_ready());
+    assert!(!device_receipt(DEVICE).xess);
     CALLS.with_borrow_mut(|calls| {
         assert_eq!(
             calls.devices.pop().unwrap().request,
@@ -497,20 +495,13 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
             [DEVICE, DEVICE, (&raw const allocator).addr()]
         )
     });
-    assert!(
-        crate::CONTROL
-            .vulkan
-            .creation()
-            .device_receipt(DEVICE)
-            .adapter
-            .is_none()
-    );
+    assert!(device_receipt(DEVICE).adapter.is_none());
 }
 
-// The callee reads these records through the raw pointer it was given.
+// The callee reads these records through the raw pointers it was given.
 #[allow(unused_assignments)]
 #[test]
-fn typed_clone_promotes_existing_features2_without_editing_links() {
+fn clone_promotes_an_existing_features2_without_editing_links() {
     let mut root = vk::PhysicalDeviceFeatures2::default();
     let mut v13 =
         made(|v13: &mut vk::PhysicalDeviceVulkan13Features| v13.p_next = (&raw mut root).cast());
@@ -519,29 +510,11 @@ fn typed_clone_promotes_existing_features2_without_editing_links() {
         v12.timeline_semaphore = 1;
     });
     let info = made(|info: &mut vk::DeviceCreateInfo| info.p_next = (&raw const v12).cast());
-    let mut facts = VkChainFacts::default();
-    unsafe { chain_facts((&raw const info).cast(), &mut facts) };
-    let flags = crate::platform::vulkan_negotiation::xess_structures(&facts).unwrap();
-    assert_eq!(flags, 0);
-    let mut record = DeviceRecord::default();
-    let mut copied = ptr::null_mut();
-    assert_eq!(
-        unsafe {
-            xess_features(
-                (&raw mut record).cast(),
-                (&raw const info).cast(),
-                flags,
-                &mut copied,
-            )
-        },
-        1
-    );
-    assert!(!copied.is_null());
-    assert!(
-        unsafe { (*copied.cast::<vk::BaseOutStructure<'static>>()).s_type }
-            == Tag::PHYSICAL_DEVICE_FEATURES_2
-    );
-    assert_ne!(copied, (&raw mut root).cast());
+    let mut chain = unsafe { Chain::copy(info.p_next.cast()) }.unwrap().unwrap();
+    assert!(unsafe { timeline(&*(&raw const info).cast()) });
+    unsafe { chain.feature_root_first() };
+    assert!(unsafe { (*chain.head).s_type } == Tag::PHYSICAL_DEVICE_FEATURES_2);
+    assert_ne!(chain.head.cast(), (&raw mut root).cast::<c_void>());
     assert_eq!(v12.p_next, (&raw mut v13).cast());
     assert_eq!(v13.p_next, (&raw mut root).cast());
     assert!(root.p_next.is_null());
