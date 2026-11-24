@@ -243,8 +243,8 @@ pub(super) fn ensure_image_with_memory(
     Ok(())
 }
 
-fn wait_pending(platform: &Platform, user: *mut c_void, fence: u64, pending: u32) -> bool {
-    pending == 0
+fn wait_pending(platform: &Platform, user: *mut c_void, fence: u64, pending: bool) -> bool {
+    !pending
         || (fence != 0
             && unsafe { (platform.wait_fence.unwrap())(user, fence, FENCE_TIMEOUT_NS) } == 0)
 }
@@ -260,8 +260,8 @@ pub(super) extern "C" fn rsf_core_vkfg_prepare_fences(
     {
         return NOT_READY;
     }
-    slot.source_pending = 0;
-    slot.consumer_pending = 0;
+    slot.source_pending = false;
+    slot.consumer_pending = false;
     for fence in [&mut fences.source, &mut fences.consumer] {
         if *fence != 0 {
             continue;
@@ -298,9 +298,9 @@ pub(super) extern "C" fn rsf_core_vkfg_fence_submission(
     {
         // The actual engine or provider submission already happened. A
         // failed completion point must keep the slot unavailable for reuse.
-        slot.completion_unknown = 1;
+        slot.completion_unknown = true;
     } else {
-        *pending = 1;
+        *pending = true;
     }
 }
 

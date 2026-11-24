@@ -111,7 +111,7 @@ impl Slot {
             (self.frame.submitted_prepare, false),
             (self.frame.submitted_hudless, true),
         ] {
-            if submitted != 0 {
+            if submitted {
                 unsafe { (platform.capture_group)(native, self.frame.capture_group(hudless), 1) };
             }
         }
@@ -423,7 +423,7 @@ impl Owner {
         let index = slot_index(record.frame_id);
         if hudless {
             if !self.valid_image(&input.hudless, width, height, RGBA8)
-                || rsf_core_fgvk_hudless_begin(&mut self.slots[index].frame, record, commands) == 0
+                || !self.slots[index].frame.hudless_begin(record, commands)
             {
                 return INVALID;
             }
@@ -439,9 +439,7 @@ impl Owner {
                 return INVALID;
             }
             let slot = &mut self.slots[index];
-            if rsf_core_fgvk_can_prepare(&slot.frame) == 0
-                || !slot.inputs.retire(self.wsi.as_ref().unwrap())
-            {
+            if !slot.frame.can_prepare() || !slot.inputs.retire(self.wsi.as_ref().unwrap()) {
                 return NOT_READY;
             }
             let result = rsf_core_vkfg_prepare_fences(
@@ -465,7 +463,8 @@ impl Owner {
                     return INIT_FAILED;
                 }
             }
-            rsf_core_fgvk_prepare_begin(&mut self.timeline, &mut slot.frame, record, commands);
+            self.timeline
+                .prepare_begin(&mut slot.frame, record, commands);
         }
 
         let slot = &mut self.slots[index];
@@ -505,16 +504,16 @@ impl Owner {
         );
         self.status.sdk_result = work.sdk.result;
         if hudless {
-            slot.frame.recorded_hudless = u32::from(work.staged);
+            slot.frame.recorded_hudless = work.staged;
             if result == OK {
-                slot.frame.hudless = 1;
+                slot.frame.hudless = true;
                 self.status.presentation.tagged += 1;
             }
         } else {
-            slot.frame.recorded_prepare = u32::from(work.staged);
+            slot.frame.recorded_prepare = work.staged;
             if result == OK {
-                slot.frame.prepared = 1;
-                rsf_core_fgvk_prepare_accepted(&mut self.timeline, &mut slot.frame);
+                slot.frame.prepared = true;
+                self.timeline.prepare_accepted(&mut slot.frame);
                 self.status.presentation.prepared += 1;
                 unsafe {
                     (self.platform.remember)(
@@ -570,14 +569,13 @@ impl Owner {
         let id = source.frame(self.timeline.last_prepared.frame_id);
         let index = slot_index(id);
         let stored = self.slots[index].frame.record;
-        let identity = u32::from(source.matches(&stored));
-        let candidate = rsf_core_fgvk_present_candidate(
-            &self.timeline,
+        let identity = source.matches(&stored);
+        let candidate = self.timeline.present_candidate(
             &self.slots[index].frame,
             id,
             identity,
-            u32::from(self.requested && source.allows_fg()),
-        ) != 0;
+            self.requested && source.allows_fg(),
+        );
         let configuration = self.configure(candidate, candidate.then_some(&stored));
         let configuration_sdk = self.status.sdk_result;
         let active = candidate && configuration == OK;
@@ -628,40 +626,36 @@ impl Owner {
         }
         let error = take_api_error();
         self.status.asynchronous_present_result = error;
-        rsf_core_fgvk_presented(&mut self.timeline, &slot.frame, id, identity);
+        self.timeline.presented(&slot.frame, id, identity);
         self.status.presentation.source_frame = if active { id } else { 0 };
         self.status.presentation.enabled = u32::from(
             active
                 && accepted
                 && state == OK
                 && sample.semaphore != 0
-                && slot.frame.completion_unknown == 0
+                && !slot.frame.completion_unknown
                 && self.status.sdk_status == 0
                 && error == 0,
         );
-        self.status.presentation.result =
-            if !accepted || (active && self.status.sdk_status != 0) || error != 0 {
-                FEATURE_FAILED
-            } else if configuration != OK {
-                configuration
-            } else if active
-                && state == OK
-                && (sample.semaphore == 0 || slot.frame.completion_unknown != 0)
-            {
-                NOT_READY
-            } else {
-                state
-            };
+        self.status.presentation.result = if !accepted
+            || (active && self.status.sdk_status != 0)
+            || error != 0
+        {
+            FEATURE_FAILED
+        } else if configuration != OK {
+            configuration
+        } else if active && state == OK && (sample.semaphore == 0 || slot.frame.completion_unknown)
+        {
+            NOT_READY
+        } else {
+            state
+        };
         result
     }
 
     fn drain(&mut self) -> i32 {
         // An unsubmitted command buffer can still reference private and SDK resources.
-        if self
-            .slots
-            .iter()
-            .any(|slot| rsf_core_fgvk_unsubmitted(&slot.frame) != 0)
-        {
+        if self.slots.iter().any(|slot| slot.frame.unsubmitted()) {
             return NOT_READY;
         }
         let epoch = unsafe { (self.platform.timeout_epoch)() };
@@ -692,8 +686,8 @@ impl Owner {
         }
         for slot in &mut self.slots {
             slot.capture_retired(self.platform, self.native);
-            slot.frame.source_pending = 0;
-            slot.frame.consumer_pending = 0;
+            slot.frame.source_pending = false;
+            slot.frame.consumer_pending = false;
         }
         unsafe { (self.platform.flush)(self.native) };
         OK

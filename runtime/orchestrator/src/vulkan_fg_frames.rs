@@ -13,29 +13,28 @@ pub(crate) const FRAME_SLOTS: u32 = 6;
 const SLOTS: usize = FRAME_SLOTS as usize;
 
 /// One recording slot: the leased source record, its prepare and HUD-less command buffers and
-/// what was recorded, submitted and is still pending for them.
-#[repr(C)]
+/// what was recorded, submitted and is still pending for them. All-zero is the empty slot.
 #[derive(Clone, Copy)]
 pub(crate) struct FrameSlot {
     pub(crate) record: rsf_frame_record,
     pub(crate) recording_sequence: u64,
     pub(crate) prepare_commands: *mut c_void,
     pub(crate) hudless_commands: *mut c_void,
-    pub(crate) guides: u32,
-    pub(crate) prepared: u32,
-    pub(crate) hudless: u32,
-    pub(crate) submitted_prepare: u32,
-    pub(crate) submitted_hudless: u32,
-    pub(crate) recorded_prepare: u32,
-    pub(crate) recorded_hudless: u32,
-    pub(crate) source_pending: u32,
-    pub(crate) consumer_pending: u32,
-    pub(crate) completion_unknown: u32,
+    pub(crate) guides: bool,
+    pub(crate) prepared: bool,
+    pub(crate) hudless: bool,
+    pub(crate) submitted_prepare: bool,
+    pub(crate) submitted_hudless: bool,
+    pub(crate) recorded_prepare: bool,
+    pub(crate) recorded_hudless: bool,
+    pub(crate) source_pending: bool,
+    pub(crate) consumer_pending: bool,
+    pub(crate) completion_unknown: bool,
 }
 use self::FrameSlot as Slot;
 
 /// The owner's last prepared source and its recording and presented sequence numbers.
-#[repr(C)]
+/// All-zero is the initial timeline.
 #[derive(Clone, Copy)]
 pub(crate) struct Timeline {
     pub(crate) last_prepared: rsf_frame_record,
@@ -44,7 +43,6 @@ pub(crate) struct Timeline {
 }
 
 /// What one submission notification did: fences to arm and recordings it discarded.
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SubmitPlan {
     pub(crate) fences: u32,
@@ -61,6 +59,103 @@ const FG_VETO: u32 = RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID;
 impl Slot {
     pub(super) fn capture_group(&self, hudless: bool) -> u64 {
         (self.recording_sequence << 1) | u64::from(hudless)
+    }
+
+    pub(super) fn unsubmitted(&self) -> bool {
+        (self.recorded_prepare && !self.submitted_prepare)
+            || (self.recorded_hudless && !self.submitted_hudless)
+    }
+
+    pub(super) fn can_prepare(&self) -> bool {
+        !self.completion_unknown && !self.unsubmitted()
+    }
+
+    /// Admits the HUD-less recording of this slot's accepted guides.
+    pub(super) fn hudless_begin(
+        &mut self,
+        record: &rsf_frame_record,
+        commands: *mut c_void,
+    ) -> bool {
+        if !self.guides
+            || self.recorded_hudless
+            || self.record.frame_id != record.frame_id
+            || !same_producer(&self.record, record)
+        {
+            return false;
+        }
+        self.hudless_commands = commands;
+        true
+    }
+
+    fn recorded_for_submit(&self, command: *mut c_void) -> bool {
+        (self.recorded_prepare && self.prepare_commands == command && !self.submitted_prepare)
+            || (self.recorded_hudless
+                && self.hudless_commands == command
+                && !self.submitted_hudless)
+    }
+
+    fn matches(&self, source_frame: u64, identity_matches: bool) -> bool {
+        identity_matches && source_frame != 0 && self.record.frame_id == source_frame
+    }
+}
+
+impl Timeline {
+    pub(super) fn prepare_begin(
+        &mut self,
+        slot: &mut Slot,
+        record: &rsf_frame_record,
+        commands: *mut c_void,
+    ) {
+        let previous = &self.last_prepared;
+        let reset = previous.frame_id.checked_add(1) != Some(record.frame_id)
+            || !same_producer(previous, record);
+        self.recording_sequence += 1;
+        *slot = Slot {
+            record: *record,
+            recording_sequence: self.recording_sequence,
+            prepare_commands: commands,
+            hudless_commands: ptr::null_mut(),
+            guides: false,
+            prepared: false,
+            hudless: false,
+            submitted_prepare: false,
+            submitted_hudless: false,
+            recorded_prepare: false,
+            recorded_hudless: false,
+            ..*slot
+        };
+        if reset {
+            slot.record.flags |= RSF_FRAME_FLAG_RESET;
+        }
+    }
+
+    pub(super) fn prepare_accepted(&mut self, slot: &mut Slot) {
+        slot.guides = true;
+        self.last_prepared = slot.record;
+    }
+
+    pub(super) fn present_candidate(
+        &self,
+        slot: &Slot,
+        source_frame: u64,
+        identity_matches: bool,
+        requested: bool,
+    ) -> bool {
+        slot.matches(source_frame, identity_matches)
+            && requested
+            && slot.record.flags & FG_VETO == 0
+            && slot.recording_sequence > self.presented_sequence
+            && slot.prepared
+            && slot.hudless
+            && slot.submitted_prepare
+            && slot.submitted_hudless
+            && !slot.completion_unknown
+    }
+
+    pub(super) fn presented(&mut self, slot: &Slot, source_frame: u64, identity_matches: bool) {
+        if slot.matches(source_frame, identity_matches) {
+            self.presented_sequence = self.presented_sequence.max(slot.recording_sequence);
+        }
     }
 }
 
@@ -222,88 +317,17 @@ fn same_producer(a: &rsf_frame_record, b: &rsf_frame_record) -> bool {
         && a.resource_generation == b.resource_generation
 }
 
-fn unsubmitted(slot: &Slot) -> bool {
-    (slot.recorded_prepare != 0 && slot.submitted_prepare == 0)
-        || (slot.recorded_hudless != 0 && slot.submitted_hudless == 0)
-}
-
-pub(super) extern "C" fn rsf_core_fgvk_unsubmitted(slot: &Slot) -> u32 {
-    u32::from(unsubmitted(slot))
-}
-
-pub(super) extern "C" fn rsf_core_fgvk_can_prepare(slot: &Slot) -> u32 {
-    u32::from(slot.completion_unknown == 0 && !unsubmitted(slot))
-}
-
-pub(super) extern "C" fn rsf_core_fgvk_prepare_begin(
-    timeline: &mut Timeline,
-    slot: &mut Slot,
-    record: &rsf_frame_record,
-    commands: *mut c_void,
-) {
-    let previous = &timeline.last_prepared;
-    let reset = previous.frame_id.checked_add(1) != Some(record.frame_id)
-        || !same_producer(previous, record);
-    timeline.recording_sequence += 1;
-    slot.recording_sequence = timeline.recording_sequence;
-    slot.record = *record;
-    if reset {
-        slot.record.flags |= RSF_FRAME_FLAG_RESET;
-    }
-    slot.guides = 0;
-    slot.prepared = 0;
-    slot.hudless = 0;
-    slot.submitted_prepare = 0;
-    slot.submitted_hudless = 0;
-    slot.recorded_prepare = 0;
-    slot.recorded_hudless = 0;
-    slot.prepare_commands = commands;
-    slot.hudless_commands = ptr::null_mut();
-}
-
-pub(super) extern "C" fn rsf_core_fgvk_prepare_accepted(timeline: &mut Timeline, slot: &mut Slot) {
-    slot.guides = 1;
-    timeline.last_prepared = slot.record;
-}
-
-pub(super) extern "C" fn rsf_core_fgvk_hudless_begin(
-    slot: &mut Slot,
-    record: &rsf_frame_record,
-    commands: *mut c_void,
-) -> u32 {
-    if slot.guides == 0
-        || slot.recorded_hudless != 0
-        || slot.record.frame_id != record.frame_id
-        || !same_producer(&slot.record, record)
-    {
-        return 0;
-    }
-    slot.hudless_commands = commands;
-    1
-}
-
-fn recorded_for_submit(slot: &Slot, command: *mut c_void) -> bool {
-    (slot.recorded_prepare != 0 && slot.prepare_commands == command && slot.submitted_prepare == 0)
-        || (slot.recorded_hudless != 0
-            && slot.hudless_commands == command
-            && slot.submitted_hudless == 0)
-}
-
 pub(super) fn submission_plan(
     mut slots: [&mut Slot; SLOTS],
     commands: &[*mut c_void],
 ) -> SubmitPlan {
-    let mut out = SubmitPlan {
-        fences: 0,
-        discarded_prepare: 0,
-        discarded_hudless: 0,
-    };
+    let mut out = SubmitPlan::default();
     // A reset or re-recorded command list can reuse an old pointer. Only its
     // latest recording can prove a submission for these source leases.
     for &command in commands.iter().filter(|command| !command.is_null()) {
         let newest = slots
             .iter()
-            .filter(|slot| recorded_for_submit(slot, command))
+            .filter(|slot| slot.recorded_for_submit(command))
             .map(|slot| slot.recording_sequence)
             .max();
         let Some(newest) = newest else { continue };
@@ -311,100 +335,42 @@ pub(super) fn submission_plan(
             if slot.recording_sequence >= newest {
                 continue;
             }
-            if slot.prepare_commands == command && slot.submitted_prepare == 0 {
-                if slot.recorded_prepare != 0 {
+            if slot.prepare_commands == command && !slot.submitted_prepare {
+                if slot.recorded_prepare {
                     out.discarded_prepare |= 1 << index;
                 }
-                slot.guides = 0;
-                slot.prepared = 0;
-                slot.recorded_prepare = 0;
+                slot.guides = false;
+                slot.prepared = false;
+                slot.recorded_prepare = false;
                 slot.prepare_commands = ptr::null_mut();
             }
-            if slot.hudless_commands == command && slot.submitted_hudless == 0 {
-                if slot.recorded_hudless != 0 {
+            if slot.hudless_commands == command && !slot.submitted_hudless {
+                if slot.recorded_hudless {
                     out.discarded_hudless |= 1 << index;
                 }
-                slot.hudless = 0;
-                slot.recorded_hudless = 0;
+                slot.hudless = false;
+                slot.recorded_hudless = false;
                 slot.hudless_commands = ptr::null_mut();
             }
         }
     }
     for (index, slot) in slots.iter_mut().enumerate() {
-        let prepare = slot.recorded_prepare != 0
-            && slot.submitted_prepare == 0
+        let prepare = slot.recorded_prepare
+            && !slot.submitted_prepare
             && !slot.prepare_commands.is_null()
             && commands.contains(&slot.prepare_commands);
-        let hudless = slot.recorded_hudless != 0
-            && slot.submitted_hudless == 0
+        let hudless = slot.recorded_hudless
+            && !slot.submitted_hudless
             && !slot.hudless_commands.is_null()
             && commands.contains(&slot.hudless_commands);
-        slot.submitted_prepare |= u32::from(prepare);
-        slot.submitted_hudless |= u32::from(hudless);
-        if (prepare || hudless) && slot.completion_unknown == 0 {
+        slot.submitted_prepare |= prepare;
+        slot.submitted_hudless |= hudless;
+        if (prepare || hudless) && !slot.completion_unknown {
             out.fences |= 1 << index;
         }
     }
     out
 }
-
-// The former C entry over submission_plan; only the unit tests below still drive it.
-#[cfg(test)]
-unsafe extern "C" fn rsf_core_fgvk_submitted(
-    slots: *const *mut Slot,
-    commands: *const *mut c_void,
-    count: u32,
-    out: &mut SubmitPlan,
-) {
-    if commands.is_null() {
-        *out = SubmitPlan {
-            fences: 0,
-            discarded_prepare: 0,
-            discarded_hudless: 0,
-        };
-        return;
-    }
-    let slots = unsafe { slots.cast::<[*mut Slot; SLOTS]>().read() };
-    let commands = unsafe { std::slice::from_raw_parts(commands, count as usize) };
-    // The native caller supplies six distinct slots tied to its resource ring.
-    *out = submission_plan(slots.map(|slot| unsafe { &mut *slot }), commands);
-}
-
-fn matches_slot(slot: &Slot, source_frame: u64, identity_matches: u32) -> bool {
-    identity_matches != 0 && source_frame != 0 && slot.record.frame_id == source_frame
-}
-
-pub(super) extern "C" fn rsf_core_fgvk_present_candidate(
-    timeline: &Timeline,
-    slot: &Slot,
-    source_frame: u64,
-    identity_matches: u32,
-    requested: u32,
-) -> u32 {
-    u32::from(
-        matches_slot(slot, source_frame, identity_matches)
-            && requested != 0
-            && slot.record.flags & FG_VETO == 0
-            && slot.recording_sequence > timeline.presented_sequence
-            && slot.prepared != 0
-            && slot.hudless != 0
-            && slot.submitted_prepare != 0
-            && slot.submitted_hudless != 0
-            && slot.completion_unknown == 0,
-    )
-}
-
-pub(super) extern "C" fn rsf_core_fgvk_presented(
-    timeline: &mut Timeline,
-    slot: &Slot,
-    source_frame: u64,
-    identity_matches: u32,
-) {
-    if matches_slot(slot, source_frame, identity_matches) {
-        timeline.presented_sequence = timeline.presented_sequence.max(slot.recording_sequence);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,24 +471,23 @@ mod tests {
         slot.record.frame_id = 1;
         slot.record.session_id = 2;
         slot.recording_sequence = 1;
-        slot.prepared = 1;
-        slot.hudless = 1;
-        slot.submitted_prepare = 1;
-        slot.submitted_hudless = 1;
+        slot.prepared = true;
+        slot.hudless = true;
+        slot.submitted_prepare = true;
+        slot.submitted_hudless = true;
         let clean = slot.record;
         for explicit in [0, 1] {
             let source = unsafe { PresentSource::read(&clean, explicit) }.unwrap();
             for flags in [0, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_AMBIGUOUS_ID] {
                 slot.record.flags = flags;
                 assert_eq!(
-                    rsf_core_fgvk_present_candidate(
-                        &timeline,
+                    timeline.present_candidate(
                         &slot,
                         source.frame(1),
-                        u32::from(source.matches(&slot.record)),
-                        u32::from(source.allows_fg()),
+                        source.matches(&slot.record),
+                        source.allows_fg(),
                     ),
-                    u32::from(flags == 0),
+                    flags == 0,
                 );
             }
         }
@@ -537,16 +502,16 @@ mod tests {
         record.frame_id = 1;
         record.session_id = 1;
         record.resource_generation = 1;
-        rsf_core_fgvk_prepare_begin(&mut timeline, &mut slot, &record, commands);
-        rsf_core_fgvk_prepare_accepted(&mut timeline, &mut slot);
+        timeline.prepare_begin(&mut slot, &record, commands);
+        timeline.prepare_accepted(&mut slot);
         record.frame_id = 1 + SLOTS as u64;
         record.resource_generation = 2;
-        rsf_core_fgvk_prepare_begin(&mut timeline, &mut slot, &record, commands);
+        timeline.prepare_begin(&mut slot, &record, commands);
         assert_ne!(slot.record.flags & RSF_FRAME_FLAG_RESET, 0);
 
         record.frame_id = 2;
         record.resource_generation = 1;
-        rsf_core_fgvk_prepare_begin(&mut timeline, &mut slot, &record, commands);
+        timeline.prepare_begin(&mut slot, &record, commands);
         assert_eq!(slot.record.flags & RSF_FRAME_FLAG_RESET, 0);
         assert_eq!(timeline.last_prepared.frame_id, 1);
     }
@@ -555,43 +520,38 @@ mod tests {
     fn hudless_recording_cannot_overwrite_an_in_flight_copy() {
         let mut slot: Slot = unsafe { std::mem::zeroed() };
         // A capture-only source has guides even when interpolation is Off.
-        slot.guides = 1;
+        slot.guides = true;
         slot.record.frame_id = 1;
         slot.record.session_id = 1;
         let record = slot.record;
         let first = ptr::without_provenance_mut(1);
-        assert_eq!(rsf_core_fgvk_hudless_begin(&mut slot, &record, first), 1);
-        slot.recorded_hudless = 1;
+        assert!(slot.hudless_begin(&record, first));
+        slot.recorded_hudless = true;
         let duplicate = ptr::without_provenance_mut(2);
-        assert_eq!(
-            rsf_core_fgvk_hudless_begin(&mut slot, &record, duplicate),
-            0
-        );
+        assert!(!slot.hudless_begin(&record, duplicate));
         assert_eq!(slot.hudless_commands, first);
     }
 
     #[test]
     fn address_reuse_discards_only_abandoned_recordings() {
         let mut slots: [Slot; SLOTS] = unsafe { std::mem::zeroed() };
-        let mut plan: SubmitPlan = unsafe { std::mem::zeroed() };
         let command = ptr::without_provenance_mut(1);
         slots[0].recording_sequence = 1;
-        slots[0].guides = 1;
-        slots[0].recorded_prepare = 1;
+        slots[0].guides = true;
+        slots[0].recorded_prepare = true;
         slots[0].prepare_commands = command;
-        slots[0].recorded_hudless = 1;
+        slots[0].recorded_hudless = true;
         slots[0].hudless_commands = command;
         slots[1].recording_sequence = 2;
-        slots[1].recorded_prepare = 1;
+        slots[1].recorded_prepare = true;
         slots[1].prepare_commands = command;
-        let states: [*mut Slot; SLOTS] = std::array::from_fn(|i| &raw mut slots[i]);
-        unsafe { rsf_core_fgvk_submitted(states.as_ptr(), &command, 1, &mut plan) };
+        let plan = submission_plan(slots.each_mut(), &[command]);
         assert_eq!(plan.fences, 1 << 1);
         assert_eq!(plan.discarded_prepare, 1);
         assert_eq!(plan.discarded_hudless, 1);
-        assert_eq!(slots[0].guides, 0);
-        assert_eq!(slots[1].submitted_prepare, 1);
-        unsafe { rsf_core_fgvk_submitted(states.as_ptr(), &command, 1, &mut plan) };
+        assert!(!slots[0].guides);
+        assert!(slots[1].submitted_prepare);
+        let plan = submission_plan(slots.each_mut(), &[command]);
         assert_eq!(
             (plan.fences, plan.discarded_prepare, plan.discarded_hudless),
             (0, 0, 0)

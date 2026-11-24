@@ -426,7 +426,7 @@ impl Owner {
             return INVALID_ARGUMENT;
         }
         let slot = &mut self.slots[slot_index(record.frame_id)];
-        if rsf_core_fgvk_can_prepare(&slot.state) == 0 {
+        if !slot.state.can_prepare() {
             return NOT_READY;
         }
         unsafe { leaf::fence_timing(self.native, record.frame_id) };
@@ -440,18 +440,19 @@ impl Owner {
         if fences != OK {
             return fences;
         }
-        rsf_core_fgvk_prepare_begin(&mut self.timeline, &mut slot.state, record, commands);
+        self.timeline
+            .prepare_begin(&mut slot.state, record, commands);
         // Dispatch can record GPU work before reporting an error. Submission still
         // owns that recording even when it never becomes an accepted FG input.
-        slot.state.recorded_prepare = 1;
+        slot.state.recorded_prepare = true;
         if self.enabled {
             if unsafe { leaf::prepare(self.native, commands, frame) } != OK {
                 return FEATURE_FAILED;
             }
-            slot.state.prepared = 1;
+            slot.state.prepared = true;
             self.status.prepared += 1;
         }
-        rsf_core_fgvk_prepare_accepted(&mut self.timeline, &mut slot.state);
+        self.timeline.prepare_accepted(&mut slot.state);
         self.capture(commands, &frame.depth, record, c"fg-depth");
         self.capture(commands, &frame.motion, record, c"fg-motion-uv");
         OK
@@ -474,7 +475,7 @@ impl Owner {
             || input.width != width
             || input.height != height
             || input.layout != SHADER_READ
-            || rsf_core_fgvk_hudless_begin(&mut slot.state, record, commands) == 0
+            || !slot.state.hudless_begin(record, commands)
         {
             return INVALID_ARGUMENT;
         }
@@ -490,7 +491,7 @@ impl Owner {
         {
             return INIT_FAILED;
         }
-        slot.state.recorded_hudless = 1;
+        slot.state.recorded_hudless = true;
         unsafe {
             record_shader_read_copy(
                 leaf::barrier,
@@ -503,7 +504,7 @@ impl Owner {
             )
         };
         slot.color.initialized = 1;
-        slot.state.hudless = 1;
+        slot.state.hudless = true;
         let image = Image {
             device,
             image: slot.color.image,
@@ -581,13 +582,12 @@ impl Owner {
         // callback, rather than disabling the presenter and draining its queues
         // and pacing threads. Keep activation stable while this frame's
         // submitted input leases are valid.
-        let valid = rsf_core_fgvk_present_candidate(
-            &self.timeline,
+        let valid = self.timeline.present_candidate(
             &self.slots[index].state,
             source_frame,
-            u32::from(identity),
-            u32::from(self.enabled && source.allows_fg()),
-        ) != 0;
+            identity,
+            self.enabled && source.allows_fg(),
+        );
         let configured = self.configure(valid.then_some(index));
         if configured != OK {
             self.status.result = configured;
@@ -615,12 +615,7 @@ impl Owner {
                 1,
             );
         }
-        rsf_core_fgvk_presented(
-            &mut self.timeline,
-            &slot.state,
-            source_frame,
-            u32::from(identity),
-        );
+        self.timeline.presented(&slot.state, source_frame, identity);
         self.status.source_frame = if matches!(source, PresentSource::Explicit(_)) && !valid {
             0
         } else {
@@ -636,9 +631,7 @@ impl Owner {
     }
 
     fn unsubmitted(&self) -> bool {
-        self.slots
-            .iter()
-            .any(|slot| rsf_core_fgvk_unsubmitted(&slot.state) != 0)
+        self.slots.iter().any(|slot| slot.state.unsubmitted())
     }
 
     fn drain(&mut self) -> i32 {

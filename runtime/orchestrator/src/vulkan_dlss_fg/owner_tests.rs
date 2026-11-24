@@ -361,16 +361,15 @@ fn recorded(owner: &mut Owner, frame: u64, commands: Handle) {
     record.session_id = 3;
     record.frame_id = frame;
     let slot = &mut owner.slots[slot_index(frame)];
-    rsf_core_fgvk_prepare_begin(&mut owner.timeline, &mut slot.frame, &record, commands);
-    slot.frame.prepared = 1;
-    slot.frame.recorded_prepare = 1;
-    rsf_core_fgvk_prepare_accepted(&mut owner.timeline, &mut slot.frame);
-    assert_eq!(
-        rsf_core_fgvk_hudless_begin(&mut slot.frame, &record, commands),
-        1
-    );
-    slot.frame.hudless = 1;
-    slot.frame.recorded_hudless = 1;
+    owner
+        .timeline
+        .prepare_begin(&mut slot.frame, &record, commands);
+    slot.frame.prepared = true;
+    slot.frame.recorded_prepare = true;
+    owner.timeline.prepare_accepted(&mut slot.frame);
+    assert!(slot.frame.hudless_begin(&record, commands));
+    slot.frame.hudless = true;
+    slot.frame.recorded_hudless = true;
     slot.fences = Fences {
         source: 1,
         consumer: 2,

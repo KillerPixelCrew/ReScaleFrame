@@ -769,7 +769,7 @@ impl Presentation {
         }
         let index = slot_index(record.frame_id);
         let slot = &self.slots[index];
-        if rsf_core_fgvk_can_prepare(&slot.state) == 0 {
+        if !slot.state.can_prepare() {
             return Err(NOT_READY);
         }
         self.wait_timeline(slot.done, WAIT_NS)?;
@@ -814,7 +814,8 @@ impl Presentation {
         slot.scales = [frame.motion_scale_x, frame.motion_scale_y];
         let previous = &self.recording.last_prepared;
         let previous_extent = [previous.render_width, previous.render_height];
-        rsf_core_fgvk_prepare_begin(&mut self.recording, &mut slot.state, record, commands);
+        self.recording
+            .prepare_begin(&mut slot.state, record, commands);
         if previous_extent != [width, height] {
             slot.state.record.flags |= RSF_FRAME_FLAG_RESET;
         }
@@ -835,9 +836,9 @@ impl Presentation {
                 );
             }
         }
-        slot.state.recorded_prepare = 1;
-        slot.state.prepared = 1;
-        rsf_core_fgvk_prepare_accepted(&mut self.recording, &mut slot.state);
+        slot.state.recorded_prepare = true;
+        slot.state.prepared = true;
+        self.recording.prepare_accepted(&mut slot.state);
         self.status.prepared += 1;
         Ok(())
     }
@@ -854,7 +855,7 @@ impl Presentation {
         let slot = &mut self.slots[slot_index(record.frame_id)];
         if slot.state.record.render_width != record.render_width
             || slot.state.record.render_height != record.render_height
-            || rsf_core_fgvk_hudless_begin(&mut slot.state, record, commands) == 0
+            || !slot.state.hudless_begin(record, commands)
         {
             return Err(INVALID);
         }
@@ -875,8 +876,8 @@ impl Presentation {
                 slot.state.capture_group(true),
             );
         }
-        slot.state.recorded_hudless = 1;
-        slot.state.hudless = 1;
+        slot.state.recorded_hudless = true;
+        slot.state.hudless = true;
         self.status.tagged += 1;
         Ok(())
     }
@@ -903,8 +904,8 @@ impl Presentation {
             }
             // A joint notification uses one marker. Split notifications use
             // separate fences so neither has to wait in the submission callback.
-            let submitted =
-                (slot.state.submitted_prepare * GUIDES) | (slot.state.submitted_hudless * HUDLESS);
+            let submitted = (u32::from(slot.state.submitted_prepare) * GUIDES)
+                | (u32::from(slot.state.submitted_hudless) * HUDLESS);
             let pending = slot.fences[0].stages | slot.fences[1].stages;
             let fence = if slot.fences[0].stages == 0 {
                 &mut slot.fences[0]
@@ -913,14 +914,14 @@ impl Presentation {
             };
             let result = unsafe { (self.ops.mark_submit)(self.vk, fence.handle) };
             if result != 0 {
-                slot.state.completion_unknown = 1;
+                slot.state.completion_unknown = true;
                 self.terminal = true;
                 self.status.result = result;
                 return;
             }
             fence.stages = submitted & !pending;
-            slot.guides_initialized |= slot.state.submitted_prepare != 0;
-            slot.hudless_initialized |= slot.state.submitted_hudless != 0;
+            slot.guides_initialized |= slot.state.submitted_prepare;
+            slot.hudless_initialized |= slot.state.submitted_hudless;
         }
     }
 
@@ -954,13 +955,12 @@ impl Presentation {
         let slot_index = slot_index(source_frame);
         let slot = &self.slots[slot_index];
         let identity = source.matches(&slot.state.record);
-        let valid = rsf_core_fgvk_present_candidate(
-            &self.recording,
+        let valid = self.recording.present_candidate(
             &slot.state,
             source_frame,
-            u32::from(identity),
-            u32::from(self.requested && source.allows_fg()),
-        ) != 0;
+            identity,
+            self.requested && source.allows_fg(),
+        );
 
         let matched_source =
             identity && source_frame != 0 && slot.state.record.frame_id == source_frame;
@@ -1048,12 +1048,8 @@ impl Presentation {
         let (result, status) = submission.present(frame);
         self.terminal = status.terminal;
         buffer.acquired = false;
-        rsf_core_fgvk_presented(
-            &mut self.recording,
-            &slot.state,
-            source_frame,
-            u32::from(identity),
-        );
+        self.recording
+            .presented(&slot.state, source_frame, identity);
         self.status.source_frame = if matches!(source, PresentSource::Implicit) || valid {
             source_frame
         } else {
@@ -1074,12 +1070,7 @@ impl Presentation {
         if self.retiring {
             return Ok(());
         }
-        if self.terminal
-            || self
-                .slots
-                .iter()
-                .any(|slot| rsf_core_fgvk_unsubmitted(&slot.state) != 0)
-        {
+        if self.terminal || self.slots.iter().any(|slot| slot.state.unsubmitted()) {
             return Err(NOT_READY);
         }
         if self.vk.is_null() {
