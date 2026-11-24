@@ -2,9 +2,10 @@
 use crate::diagnostic_output::Output;
 use crate::sync::lock;
 use crate::sys::rsf_backend_log_fn as Log;
+use rsf_graphics::dump_options::Log as Listener;
 use crate::win32_diagnostics::module_location;
 use std::arch::naked_asm;
-use std::ffi::{CStr, CString, c_void};
+use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -216,27 +217,10 @@ fn install_hooks(hooks: &[Hook; HOOKS]) -> Install {
     Install::Retained
 }
 
-#[derive(Clone, Copy)]
-struct Listener {
-    log: Log,
-    user: usize,
-}
-
-impl Listener {
-    const NONE: Self = Self { log: None, user: 0 };
-
-    fn emit(self, text: &CStr) {
-        if let Some(log) = self.log {
-            unsafe { log(self.user as *mut c_void, text.as_ptr()) };
-        }
-    }
-
-    fn formatted(self, text: String) {
-        if let Ok(text) = CString::new(text) {
-            self.emit(&text);
-        }
-    }
-}
+const SILENT: Listener = Listener {
+    callback: None,
+    user: 0,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Source {
@@ -286,7 +270,7 @@ impl Audit {
 }
 
 static AUDIT: Mutex<Audit> = Mutex::new(Audit {
-    listener: Listener::NONE,
+    listener: SILENT,
     install: Install::Retry,
     seen: [None; SOURCES],
     lines: 0,
@@ -307,10 +291,7 @@ fn start(log: Log, user: *mut c_void) {
     let Some(_output) = Output::enter() else {
         return;
     };
-    let listener = Listener {
-        log,
-        user: user as usize,
-    };
+    let listener = Listener::new(log, user);
     {
         let mut audit = audit();
         if audit.install == Install::Retained {
@@ -328,26 +309,26 @@ fn start(log: Log, user: *mut c_void) {
     let mut state = audit();
     state.install = result;
     if result == Install::Retained {
-        state.listener = Listener::NONE;
+        state.listener = SILENT;
     }
     drop(state);
     let message = match result {
         Install::Installed => {
-            c"Reflex API audit installed: observing mode, sync and marker callers without filtering"
+            "Reflex API audit installed: observing mode, sync and marker callers without filtering"
         }
-        Install::Missing => c"Reflex API audit unavailable: NVAPI module/export absent",
+        Install::Missing => "Reflex API audit unavailable: NVAPI module/export absent",
         Install::Refused | Install::Retained => {
-            c"Reflex API audit refused: existing entry cannot be chained safely"
+            "Reflex API audit refused: existing entry cannot be chained safely"
         }
         _ => return,
     };
-    listener.emit(message);
+    listener.say(message);
 }
 
 pub(crate) fn rsf_reflex_audit_stop() {
     // If the listener calls stop, its own thread already owns the output lock.
     let _output = Output::enter();
-    audit().listener = Listener::NONE;
+    audit().listener = SILENT;
 }
 
 fn event(source: Source, settings: u64, format: impl FnOnce() -> String) {
@@ -356,7 +337,7 @@ fn event(source: Source, settings: u64, format: impl FnOnce() -> String) {
     };
     let listener = {
         let mut audit = audit();
-        if audit.listener.log.is_none()
+        if audit.listener.callback.is_none()
             || audit.lines >= LINE_LIMIT
             || !audit.changed(source, settings)
         {
@@ -365,7 +346,7 @@ fn event(source: Source, settings: u64, format: impl FnOnce() -> String) {
         audit.lines += 1;
         audit.listener
     };
-    listener.formatted(format());
+    listener.say(&format());
 }
 
 fn sync(mut report: SyncReport, enable: u32, disable: u32) {
@@ -400,7 +381,7 @@ fn report_sync() {
             1 => "1",
             _ => "unknown",
         };
-        listener.formatted(format!(
+        listener.say(&format!(
             "Reflex API sync caller={origin} device=0x{:x} enabled={enabled} queue_us={} target_us={} vblank_us={} fg={} dfg_max={} dfg_fps={} result={}",
             report.device, report.queue_us, report.target_us, report.vblank_us, report.fg,
             report.dfg_max, report.dfg_fps, report.result,
@@ -542,7 +523,7 @@ pub(crate) unsafe fn rsf_reflex_driver_sleep(device: *mut c_void, log: Log, user
         let mut foreground = 0;
         unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground) };
         let foreground = u32::from(foreground == unsafe { GetCurrentProcessId() });
-        Listener { log, user: user.addr() }.formatted(format!(
+        Listener::new(log, user).say(&format!(
             "Reflex driver sleep status={result} low_latency={} sleep_interval_us={} app_called_sleep={} vrr={} cpl_vsync={} fullscreen_iflip={} fg_multiplier={} dfg={} dfg_target_us={} foreground={foreground}",
             state.bLowLatencyMode, state.sleepIntervalUs, state.bUseGameSleep, state.bFsVrr,
             state.bCplVsyncOn, state.bFullscreenIFlip, state.fgMultiplier, state.bDfgControl,

@@ -37,10 +37,7 @@ pub(crate) extern "C" fn rsf_native_latency_claim(client: u32) -> i32 {
     }
     // The named event arbitrates between separate DLL copies in this process.
     let process = unsafe { GetCurrentProcessId() };
-    let name: Vec<u16> = format!("Local\\ReScaleFrame.LatencyOwner.{process}")
-        .encode_utf16()
-        .chain([0])
-        .collect();
+    let name = rsf_game_sys::ffi_util::wide(&format!("Local\\ReScaleFrame.LatencyOwner.{process}"));
     let (event, error) = unsafe {
         SetLastError(ERROR_SUCCESS);
         let event = CreateEventW(std::ptr::null(), 1, 0, name.as_ptr());
