@@ -56,15 +56,7 @@ impl Quality {
     /// panel exists to avoid.
     #[must_use]
     pub fn from_abi(value: abi::RsfOverlayQuality) -> Option<Self> {
-        match value {
-            abi::RSF_OVERLAY_QUALITY_NATIVE => Some(Self::Native),
-            abi::RSF_OVERLAY_QUALITY_QUALITY => Some(Self::Quality),
-            abi::RSF_OVERLAY_QUALITY_BALANCED => Some(Self::Balanced),
-            abi::RSF_OVERLAY_QUALITY_PERFORMANCE => Some(Self::Performance),
-            abi::RSF_OVERLAY_QUALITY_ULTRA_PERFORMANCE => Some(Self::UltraPerformance),
-            abi::RSF_OVERLAY_QUALITY_ULTRA_QUALITY => Some(Self::UltraQuality),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|level| level.to_abi() == value)
     }
 
     /// What the panel calls this level.
@@ -269,11 +261,7 @@ impl UiPreferences {
     /// Encode for the host.
     #[must_use]
     pub fn to_bits(self) -> u32 {
-        let size = PanelSize::ALL
-            .iter()
-            .position(|candidate| *candidate == self.size)
-            .unwrap_or(0) as u32;
-        size | (u32::from(self.right) << 2) | (u32::from(self.detailed_hud) << 3)
+        self.size as u32 | (u32::from(self.right) << 2) | (u32::from(self.detailed_hud) << 3)
     }
 }
 

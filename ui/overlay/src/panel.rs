@@ -18,7 +18,8 @@ use egui::{
 };
 
 use crate::model::{
-    GenerationStats, Intent, MAX_HOST_OPTIONS, PanelSize, Quality, Stats, UiPreferences,
+    GenerationStats, HostOption, Intent, MAX_HOST_OPTIONS, PanelSize, Quality, Stats,
+    UiPreferences,
 };
 use crate::performance::Rates;
 
@@ -133,7 +134,7 @@ impl Tab {
     }
 
     fn index(self) -> usize {
-        Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0)
+        self as usize
     }
 }
 
@@ -671,14 +672,16 @@ fn generation_cell(generation: &GenerationStats) -> Cell {
     }
 }
 
+fn format_rate(rate: Option<f64>, digits: usize) -> String {
+    rate.map_or_else(|| "--".to_owned(), |value| format!("{value:.digits$}"))
+}
+
 fn rates_cell(rates: Rates) -> Cell {
-    let format_rate =
-        |rate: Option<f64>| rate.map_or_else(|| "--".to_owned(), |v| format!("{v:.0}"));
     Cell {
         value: format!(
             "{} → {}",
-            format_rate(rates.rendered),
-            format_rate(rates.presented)
+            format_rate(rates.rendered, 0),
+            format_rate(rates.presented, 0)
         ),
         sub: "rendered → presented".to_owned(),
         dot: GREY_DOT,
@@ -892,15 +895,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         .map(|(id, name)| Segment {
             label: (*name).to_owned(),
             enabled: stats.backend_loaded && stats.backend_choices & (1 << id) != 0,
-            mark: if *id == shown_backend {
-                if selection.requested_backend.is_some() {
-                    Mark::Pending
-                } else {
-                    Mark::On
-                }
-            } else {
-                Mark::Off
-            },
+            mark: Mark::of(*id == shown_backend, selection.requested_backend.is_some()),
         })
         .collect();
     let (chosen, rects) = segments(ui, "sr-backend", &items);
@@ -952,15 +947,10 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
                 level.label().to_owned()
             },
             enabled: !stats.sr_quality_locked,
-            mark: if *level == selection.quality {
-                if selection.requested_quality.is_some() {
-                    Mark::Pending
-                } else {
-                    Mark::On
-                }
-            } else {
-                Mark::Off
-            },
+            mark: Mark::of(
+                *level == selection.quality,
+                selection.requested_quality.is_some(),
+            ),
         })
         .collect();
     let (chosen, rects) = segments(ui, "sr-quality", &items);
@@ -1062,11 +1052,7 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
         .map(|(id, name)| Segment {
             label: (*name).to_owned(),
             enabled: generation.backend_choices & (1 << id) != 0,
-            mark: if *id == generation.requested_backend {
-                if pending { Mark::Pending } else { Mark::On }
-            } else {
-                Mark::Off
-            },
+            mark: Mark::of(*id == generation.requested_backend, pending),
         })
         .collect();
     let (chosen, rects) = segments(ui, "fg-provider", &items);
@@ -1615,29 +1601,13 @@ fn game_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mut 
                 chosen = Some(i32::from(option.value == 0));
             }
         } else {
-            let divisor = f64::from(option.divisor.max(1));
-            let digits = decimals(option.divisor);
-            let [minimum, maximum, step] = option.range;
-            ui.add(Label::new(RichText::new(option.label).size(15.5).color(TEXT)).wrap());
+            option_label(ui, option);
             if let Some((text, color)) = &detail {
                 note(ui, text.as_str(), *color);
             }
-            let value = f64::from(option.value);
-            let (commit, rects) = stepper(
-                ui,
-                ("host-number", index),
-                value,
-                [option.value > minimum, option.value < maximum],
-                |current, direction| {
-                    (current + direction * f64::from(step))
-                        .clamp(f64::from(minimum), f64::from(maximum))
-                },
-                |current| format!("{:.digits$}", current / divisor),
-            );
+            let (commit, rects) = option_stepper(ui, ("host-number", index), option);
             controls.host_option[index] = Some(rects[1]);
-            if let Some(value) = commit {
-                chosen = Some(value.round() as i32);
-            }
+            chosen = commit;
         }
         separator(ui);
         if let Some(value) = chosen
@@ -1653,7 +1623,7 @@ fn game_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mut 
         let option = &saved.option;
         let mut action = None;
         if let Some(text) = saved.text {
-            ui.add(Label::new(RichText::new(option.label).size(15.5).color(TEXT)).wrap());
+            option_label(ui, option);
             if option.restart {
                 note(ui, "Applies at next start", BLUE_TEXT);
             }
@@ -1687,26 +1657,12 @@ fn game_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mut 
                 ));
             }
         } else {
-            ui.add(Label::new(RichText::new(option.label).size(15.5).color(TEXT)).wrap());
+            option_label(ui, option);
             if option.restart {
                 note(ui, "Applies at next start", BLUE_TEXT);
             }
-            let [minimum, maximum, step] = option.range;
-            let divisor = f64::from(option.divisor);
-            let digits = decimals(option.divisor);
-            let (commit, _) = stepper(
-                ui,
-                ("saved-number", index),
-                f64::from(option.value),
-                [option.value > minimum, option.value < maximum],
-                |value, direction| {
-                    (value + direction * f64::from(step))
-                        .clamp(f64::from(minimum), f64::from(maximum))
-                },
-                |value| format!("{:.digits$}", value / divisor),
-            );
-            if let Some(value) = commit {
-                action = Some((crate::abi::RSF_OVERLAY_SAVED_SET, value.round() as i32));
+            if let Some(value) = option_stepper(ui, ("saved-number", index), option).0 {
+                action = Some((crate::abi::RSF_OVERLAY_SAVED_SET, value));
             }
         }
         if saved.last_result != 0 {
@@ -1723,6 +1679,32 @@ fn game_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mut 
         }
         separator(ui);
     }
+}
+
+fn option_label(ui: &mut Ui, option: &HostOption<'_>) {
+    ui.add(Label::new(RichText::new(option.label).size(15.5).color(TEXT)).wrap());
+}
+
+/// The stepper for a numeric option, and the value to apply once a press or hold ends.
+fn option_stepper(
+    ui: &mut Ui,
+    salt: impl egui::AsIdSalt,
+    option: &HostOption<'_>,
+) -> (Option<i32>, [Rect; 2]) {
+    let divisor = f64::from(option.divisor.max(1));
+    let digits = decimals(option.divisor);
+    let [minimum, maximum, step] = option.range;
+    let (commit, rects) = stepper(
+        ui,
+        salt,
+        f64::from(option.value),
+        [option.value > minimum, option.value < maximum],
+        |value, direction| {
+            (value + direction * f64::from(step)).clamp(f64::from(minimum), f64::from(maximum))
+        },
+        |value| format!("{:.digits$}", value / divisor),
+    );
+    (commit.map(|value| value.round() as i32), rects)
 }
 
 fn display_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls: &mut Controls) {
@@ -1819,6 +1801,16 @@ enum Mark {
     Pending,
 }
 
+impl Mark {
+    fn of(chosen: bool, pending: bool) -> Self {
+        match (chosen, pending) {
+            (false, _) => Self::Off,
+            (true, false) => Self::On,
+            (true, true) => Self::Pending,
+        }
+    }
+}
+
 struct Segment {
     label: String,
     enabled: bool,
@@ -1830,7 +1822,7 @@ fn choice(label: &str, enabled: bool, chosen: bool) -> Segment {
     Segment {
         label: label.to_owned(),
         enabled,
-        mark: if chosen { Mark::On } else { Mark::Off },
+        mark: Mark::of(chosen, false),
     }
 }
 
@@ -2325,11 +2317,15 @@ fn decimals(divisor: u32) -> usize {
     digits
 }
 
-fn sr_name(backend: u32) -> &'static str {
-    SR_BACKENDS
+fn name_of(table: &[(u32, &'static str)], id: u32, unknown: &'static str) -> &'static str {
+    table
         .iter()
-        .find(|(id, _)| *id == backend)
-        .map_or("SR", |(_, name)| name)
+        .find(|(entry, _)| *entry == id)
+        .map_or(unknown, |(_, name)| name)
+}
+
+fn sr_name(backend: u32) -> &'static str {
+    name_of(&SR_BACKENDS, backend, "SR")
 }
 
 fn quality_label(stats: &Stats<'_>) -> String {
@@ -2345,10 +2341,7 @@ fn quality_level_label(backend: u32, raw: crate::abi::RsfOverlayQuality) -> Stri
 }
 
 fn fg_backend_name(backend: u32) -> &'static str {
-    FG_PROVIDERS
-        .iter()
-        .find(|(id, _)| *id == backend)
-        .map_or("Off", |(_, name)| name)
+    name_of(&FG_PROVIDERS, backend, "Off")
 }
 
 fn waiting_reason(reason: u32) -> &'static str {
@@ -2417,11 +2410,9 @@ impl HudCache {
         if self.key.as_ref() == Some(&key) {
             return;
         }
-        let format_rate =
-            |rate: Option<f64>| rate.map_or_else(|| "--".to_owned(), |value| format!("{value:.1}"));
         let mut rows = vec![
-            ("Rendered", format_rate(rates.rendered)),
-            ("Presented", format_rate(rates.presented)),
+            ("Rendered", format_rate(rates.rendered, 1)),
+            ("Presented", format_rate(rates.presented, 1)),
             (
                 "FG",
                 match state {
