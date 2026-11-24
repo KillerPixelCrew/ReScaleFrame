@@ -12,7 +12,8 @@ use crate::native_cpu::{
     observed_boundary, owns_session, pacing_boundary, record_pacing, rendered_source, reservation,
     rsf_native_cpu_is_ping_message, rsf_native_cpu_ping_message, rsf_native_cpu_release_session,
 };
-use crate::native_fg::{now_qpc, requested};
+use crate::native_fg::requested;
+use crate::now_qpc;
 use crate::sr_session::has_capacity;
 use crate::sync::lock;
 use crate::sys::rsf_native_latency_frame as LatencyFrame;

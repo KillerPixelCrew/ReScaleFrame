@@ -8,7 +8,7 @@ use rsf_game_sys::{
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+use windows_sys::Win32::System::Performance::QueryPerformanceFrequency;
 
 const EXPOSURE_SETTLE_FRAMES: u32 = 30;
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
@@ -131,12 +131,6 @@ impl Drop for Adapter {
     }
 }
 
-fn counter() -> i64 {
-    let mut now = 0;
-    unsafe { QueryPerformanceCounter(&mut now) };
-    now
-}
-
 unsafe fn create_adapter(
     setup: &rsf_sr_session_setup,
     units_to_meters: f32,
@@ -152,7 +146,7 @@ unsafe fn create_adapter(
     if unsafe { QueryPerformanceFrequency(&mut frequency) } == 0 || frequency <= 0 {
         return INIT_FAILED;
     }
-    let previous_qpc = counter();
+    let previous_qpc = crate::now_qpc() as i64;
     let mut setup = *setup;
     setup.open.hdr = 1;
     setup.open.dynamic_resolution = 1;
@@ -213,7 +207,7 @@ impl Adapter {
 
     fn record(&mut self, input: &Frame) -> rsf_frame_record {
         self.frame_id = self.frame_id.wrapping_add(1);
-        let now = counter();
+        let now = crate::now_qpc() as i64;
         let milliseconds = (now - self.previous_qpc) as f64 * 1000.0 / self.frequency as f64;
         self.previous_qpc = now;
         let mut record = rsf_frame_record {

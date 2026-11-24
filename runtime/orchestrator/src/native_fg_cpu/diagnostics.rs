@@ -4,7 +4,8 @@ use super::{
     AntiLag, Facts, Frame, LEDGER, OK, Pass, Reservation, Source, antilag, leaf, lock, win32,
 };
 use crate::native_cpu::counters;
-use crate::native_fg::{now_qpc, requested, sink};
+use crate::native_fg::{requested, sink};
+use crate::now_qpc;
 use crate::sys::RSF_FG_OFF;
 use crate::sys::rsf_native_cpu_counters;
 use rsf_game_sys::{

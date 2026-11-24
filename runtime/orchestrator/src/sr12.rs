@@ -4,6 +4,7 @@
 // history, the normalization dispatch, capture ordering, sharpening, output reinsertion and the
 // handoff of accepted normalized depth and motion to the D3D12 frame generation owner.
 // Its native calls go through `native` (sr12/native.rs; fakes under test).
+use crate::retain_object;
 use crate::com_ref;
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
@@ -103,10 +104,6 @@ pub(crate) struct TextureDesc {
     samples: u32,
     format: u32,
     srv_format: u32,
-}
-
-unsafe fn retain(object: Handle) -> Option<IUnknown> {
-    (!object.is_null()).then(|| unsafe { com_ref::retain(object) })
 }
 
 fn raw(object: Option<&IUnknown>) -> Handle {
@@ -639,7 +636,7 @@ impl Sr12 {
                 return false;
             }
             state.exposure_input =
-                unsafe { retain(pass.exposure) }.map(|texture| (texture, desc.srv_format));
+                unsafe { retain_object(pass.exposure) }.map(|texture| (texture, desc.srv_format));
         }
         let pointers = [pass.color_input, pass.depth, pass.motion, pass.color_output];
         let checked = |index: usize| index != OUTPUT || self.backend != RSF_SR_NONE;
@@ -682,7 +679,7 @@ impl Sr12 {
                 state.view_formats[index] = view;
             }
         }
-        state.validated = pointers.map(|resource| unsafe { retain(resource) });
+        state.validated = pointers.map(|resource| unsafe { retain_object(resource) });
         state.validated_generation = pass.resource_generation;
         true
     }
@@ -920,7 +917,7 @@ impl Sr12 {
             if !unsafe { self.owned(list) } {
                 return INVALID_ARGUMENT;
             }
-            state.validated_list = unsafe { retain(list) };
+            state.validated_list = unsafe { retain_object(list) };
         }
         unsafe {
             self.normalize(state, list, pass, slot);

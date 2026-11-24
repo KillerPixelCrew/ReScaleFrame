@@ -3,6 +3,7 @@
 // This module decides admission and
 // publication, provider switching, frame and slot sequencing, accepted Present,
 // fallback, resize and retirement, status and callback order, and latency routing.
+use crate::copy_c_string;
 use crate::com_ref;
 use crate::d3d11_host_abi::{
     RSF_D3D11_DISPATCH_PRESENT, RSF_D3D11_DISPATCH_PRESENT1, RSF_D3D11_DISPATCH_RELEASE,
@@ -241,14 +242,6 @@ fn log(text: &str) {
     }
 }
 
-unsafe fn copy_string(text: *const c_char, fallback: &CStr) -> CString {
-    if text.is_null() {
-        fallback.to_owned()
-    } else {
-        unsafe { CStr::from_ptr(text) }.to_owned()
-    }
-}
-
 fn sdk_directory(backend: u32) -> *const c_char {
     let setup = settings();
     match backend {
@@ -303,12 +296,12 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_prepare(
     let empty = CString::default();
     let strings = unsafe {
         [
-            copy_string(input.fsr3_directory_utf8, &runtime),
-            copy_string(input.fsr4_directory_utf8, &runtime),
-            copy_string(input.xess_directory_utf8, &runtime),
-            copy_string(input.streamline_directory_utf8, &runtime),
-            copy_string(input.engine_version_utf8, &empty),
-            copy_string(input.project_id_utf8, &empty),
+            copy_c_string(input.fsr3_directory_utf8, &runtime),
+            copy_c_string(input.fsr4_directory_utf8, &runtime),
+            copy_c_string(input.xess_directory_utf8, &runtime),
+            copy_c_string(input.streamline_directory_utf8, &runtime),
+            copy_c_string(input.engine_version_utf8, &empty),
+            copy_c_string(input.project_id_utf8, &empty),
             runtime,
         ]
     };
@@ -1757,7 +1750,7 @@ impl Owner {
             unsafe { callback(setup.user, event) };
         }
         if debug {
-            ticks[3] = tick();
+            ticks[3] = crate::now_qpc();
         }
         self.receipt("vendor-present-enter", S_OK);
         let result = unsafe { leaf::physical_present(chain, sync, flags) };
@@ -1767,7 +1760,7 @@ impl Owner {
             log("presentation bridge: shared Streamline common Present end refused");
         }
         if debug {
-            ticks[4] = tick();
+            ticks[4] = crate::now_qpc();
         }
         event.completed = 1;
         event.result = result;
@@ -1849,7 +1842,7 @@ impl Owner {
         }
         let mut ticks = [0_u64; 6];
         if debug {
-            ticks[0] = tick();
+            ticks[0] = crate::now_qpc();
         }
         let mut event = Event {
             struct_size: size_of::<Event>() as u32,
@@ -1869,7 +1862,7 @@ impl Owner {
         }
         self.receipt("application-callbacks-done", S_OK);
         if debug {
-            ticks[1] = tick();
+            ticks[1] = crate::now_qpc();
         }
         let mut result = E_FAIL;
         let mut submission_fenced = false;
@@ -2028,7 +2021,7 @@ impl Owner {
             )
         }) {
             if debug {
-                ticks[2] = tick();
+                ticks[2] = crate::now_qpc();
             }
             // Real DXGI backbuffers (the Off path) must be written on their creation queue.
             // The separate interop queue stays with SR; the final upload uses the present queue.
@@ -2077,7 +2070,7 @@ impl Owner {
             self.post_switch_frames.store(frames - 1, Ordering::Relaxed);
         }
         if debug && !failed(result) {
-            ticks[5] = tick();
+            ticks[5] = crate::now_qpc();
             self.trace_pacing(&ticks, index, sync, physical_flags);
         }
         if !failed(result) && switching {
@@ -2446,12 +2439,6 @@ impl Owner {
         SCOPED_ADMITTED.store(false, Ordering::Release);
         OUTER_ALIAS.store(null_mut(), Ordering::Release);
     }
-}
-
-fn tick() -> u64 {
-    let mut now = 0_i64;
-    unsafe { windows_sys::Win32::System::Performance::QueryPerformanceCounter(&mut now) };
-    now as u64
 }
 
 // The caller holds the provider read lease across any use of the facade.

@@ -8,6 +8,7 @@
 //! Settings keys belong to settings_store.rs, SR vendor selection to rsf_gpu_select_sr_backend.
 //! The adapter's only policy input is `set_engine_spatial`, which learns whether the engine
 //! upscales spatially itself, never the vendor.
+use crate::copy_c_string;
 use crate::com_ref;
 use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening, sr_name};
 #[cfg(not(test))]
@@ -168,14 +169,6 @@ static LIFECYCLE: Mutex<Published> = Mutex::new(Published(null_mut()));
 fn try_lifecycle() -> Option<MutexGuard<'static, Published>> {
     // Adapter callbacks may reenter either public lifecycle entry.
     crate::sync::try_lock(&LIFECYCLE)
-}
-
-unsafe fn c_copy(text: *const c_char) -> CString {
-    if text.is_null() {
-        CString::default()
-    } else {
-        unsafe { CStr::from_ptr(text) }.to_owned()
-    }
 }
 
 fn host_from<'a>(user: *mut c_void) -> &'a Host {
@@ -864,7 +857,7 @@ unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
                 request: extended.request_policy.ok_or(1u32)?,
                 drained: extended.drained_generation.ok_or(1u32)?,
                 extent: extended.spatial_extent.ok_or(1u32)?,
-                spatial_name: unsafe { c_copy(extended.spatial_name_utf8) },
+                spatial_name: unsafe { copy_c_string(extended.spatial_name_utf8, c"") },
             })
         }
         _ => return Err(1),
@@ -900,7 +893,7 @@ unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
             &log_path[..log_path.len() - 1],
         ))
         .map_err(|_| 4u32)?;
-    let streamline = unsafe { c_copy(setup.streamline_directory_utf8) };
+    let streamline = unsafe { copy_c_string(setup.streamline_directory_utf8, c"") };
     let mut interposer = streamline.as_bytes().to_vec();
     interposer.extend_from_slice(b"\\sl.interposer.dll");
     let preferences = unsafe { wide_copy(setup.preferences_path) };
@@ -944,14 +937,14 @@ unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
         preferences,
         streamline,
         interposer: CString::new(interposer).unwrap_or_default(),
-        fsr2: unsafe { c_copy(setup.fsr2_directory_utf8) },
-        fsr3: unsafe { c_copy(setup.fsr3_directory_utf8) },
-        fsr4: unsafe { c_copy(setup.fsr4_directory_utf8) },
-        xess: unsafe { c_copy(setup.xess_directory_utf8) },
+        fsr2: unsafe { copy_c_string(setup.fsr2_directory_utf8, c"") },
+        fsr3: unsafe { copy_c_string(setup.fsr3_directory_utf8, c"") },
+        fsr4: unsafe { copy_c_string(setup.fsr4_directory_utf8, c"") },
+        xess: unsafe { copy_c_string(setup.xess_directory_utf8, c"") },
         sr_choices: setup.sr_backend_choices,
         engine_type: setup.engine_type,
-        engine_version: unsafe { c_copy(setup.engine_version_utf8) },
-        project_id: unsafe { c_copy(setup.project_id_utf8) },
+        engine_version: unsafe { copy_c_string(setup.engine_version_utf8, c"") },
+        project_id: unsafe { copy_c_string(setup.project_id_utf8, c"") },
         set_engine_spatial,
         policy_v2,
     };

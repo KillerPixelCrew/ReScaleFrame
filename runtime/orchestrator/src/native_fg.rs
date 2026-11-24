@@ -4,6 +4,7 @@
 // that fill them, HUD-less copies, provider admission at Prepare, retirement, Present observation and
 // window-end sequencing, and the requested/observed FG status. The platform module owns native
 // calls. native_fg_cpu.rs owns CPU pacing and latency markers.
+use crate::now_qpc;
 use crate::com_ref;
 use crate::fg_scene::{read_scene, set_scene, with_capture_scene};
 use crate::fg_status;
@@ -97,12 +98,6 @@ macro_rules! call {
         let result = unsafe { platform::$f($($a),*) };
         result
     }};
-}
-
-pub(crate) fn now_qpc() -> u64 {
-    let mut now = 0i64;
-    unsafe { windows_sys::Win32::System::Performance::QueryPerformanceCounter(&mut now) };
-    now as u64
 }
 
 fn empty<T>() -> T {

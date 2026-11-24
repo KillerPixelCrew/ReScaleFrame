@@ -451,6 +451,29 @@ unsafe fn owned_win32_handle(
     Some(unsafe { OwnedHandle::from_raw_handle(raw) })
 }
 
+// The performance counter, in its own ticks.
+#[cfg(windows)]
+fn now_qpc() -> u64 {
+    let mut now = 0i64;
+    unsafe { windows_sys::Win32::System::Performance::QueryPerformanceCounter(&mut now) };
+    now as u64
+}
+
+// A copy of a C string the caller may leave null, `fallback` then. `text` is null or a live
+// NUL-terminated string.
+unsafe fn copy_c_string(text: *const std::ffi::c_char, fallback: &std::ffi::CStr) -> std::ffi::CString {
+    if text.is_null() {
+        fallback.to_owned()
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(text) }.to_owned()
+    }
+}
+
+// One more reference to a COM object the caller may leave null. `object` is null or live.
+#[cfg(windows)]
+unsafe fn retain_object(object: *mut std::ffi::c_void) -> Option<windows::core::IUnknown> {
+    (!object.is_null()).then(|| unsafe { com_ref::retain(object) })
+}
 use crate::sys::{RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_NONE, RSF_SR_XESS};
 
 #[unsafe(no_mangle)]

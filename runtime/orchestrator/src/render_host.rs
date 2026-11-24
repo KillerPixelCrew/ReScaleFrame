@@ -5,6 +5,7 @@
 //! commit, SR context lifetime, recording slots, fence retirement, scene and Present matching,
 //! the frontend status and overlay routing. Settings keys and text belong to settings_store.rs,
 //! SR vendor selection to rsf_gpu_select_sr_backend and FG provider admission to fg_choice.rs.
+use crate::retain_object;
 use crate::com_ref;
 use crate::d3d12_observer::ObserverSetup;
 use crate::fg_choice;
@@ -252,10 +253,6 @@ pub(crate) struct Host {
 // The process-lifetime host behind the frontend entries. It is never freed.
 static FRONTEND: AtomicPtr<Host> = AtomicPtr::new(null_mut());
 static CREATION: Mutex<()> = Mutex::new(());
-
-fn retain(object: Handle) -> Option<IUnknown> {
-    (!object.is_null()).then(|| unsafe { com_ref::retain(object) })
-}
 
 fn has(mask: u32, bit: u32) -> bool {
     1u32.checked_shl(bit).is_some_and(|bit| mask & bit != 0)
@@ -754,7 +751,7 @@ impl Host {
         // The plugin observes only the renderer's selected DIRECT queue. Retain it before the
         // first upscale so the overlay also works on the opening menus.
         if s.queue.is_none() && !self.engine_streamline {
-            s.queue = retain(native_queue);
+            s.queue = unsafe { retain_object(native_queue) };
         }
         if s.context.is_null() {
             return;
@@ -794,7 +791,7 @@ impl Host {
             return;
         }
         if s.queue.is_none() {
-            s.queue = retain(native_queue);
+            s.queue = unsafe { retain_object(native_queue) };
         }
         s.fence_value += 1;
         let value = s.fence_value;
@@ -1348,7 +1345,7 @@ unsafe extern "C" fn observer_submit(
 unsafe extern "C" fn observer_chain(user: *mut c_void, queue: Handle, _: Handle, _: Handle) {
     let host = host_from(user);
     let mut s = host.lock();
-    s.overlay_queue = retain(queue);
+    s.overlay_queue = unsafe { retain_object(queue) };
     host.graphics_ready.store(true, Ordering::Release);
     host.log("Native graphics observer selected the adapter's window and presentation queue.");
 }
@@ -1714,7 +1711,7 @@ unsafe extern "C" fn rsf_render_host_graphics(user: *mut c_void, queue: Handle) 
     if !host.engine_streamline || queue.is_null() || unsafe { leaf::queue_direct(queue) } == 0 {
         return INVALID;
     }
-    host.lock().overlay_queue = retain(queue);
+    host.lock().overlay_queue = unsafe { retain_object(queue) };
     OK
 }
 

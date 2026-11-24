@@ -221,12 +221,6 @@ fn deliver(route: (Sink, *mut c_void), event: *const Event) {
     }
 }
 
-fn qpc_now() -> u64 {
-    let mut now = 0i64;
-    unsafe { windows_sys::Win32::System::Performance::QueryPerformanceCounter(&mut now) };
-    now as u64
-}
-
 struct Dispatcher {
     rendered: AtomicBool,
     state: Mutex<State>,
@@ -313,7 +307,7 @@ impl Dispatcher {
             let mut guard = self.lock();
             let state = &mut *guard;
             let e = &receipt.header;
-            let now = qpc_now();
+            let now = crate::now_qpc();
             if e.stage != INPUT_EVENT
                 || e.source_frame_id != 0
                 || e.session_id == 0

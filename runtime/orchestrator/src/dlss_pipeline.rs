@@ -12,6 +12,7 @@
 // frame-thread entry refuses instead of racing. Cross-thread fields sit behind a second lock that
 // is never held across a leaf call or a log line. The sink has its own lock, so vendor lines
 // forwarded from inside a leaf never wait on either.
+use crate::copy_c_string;
 use crate::com_ref;
 use crate::dlss_pipeline_abi::*;
 use crate::frame_assembly::rsf_assemble_dlss_frame;
@@ -414,14 +415,6 @@ unsafe fn write_render_size(range: &Range, width: *mut u32, height: *mut u32) {
     }
     if let Some(height) = unsafe { height.as_mut() } {
         *height = range.height;
-    }
-}
-
-unsafe fn copy_string(text: *const c_char) -> CString {
-    if text.is_null() {
-        CString::default()
-    } else {
-        unsafe { CStr::from_ptr(text) }.to_owned()
     }
 }
 
@@ -840,7 +833,7 @@ impl Pipeline {
             setup.xess_directory_utf8,
         ]
         .into_iter()
-        .map(|text| unsafe { copy_string(text) })
+        .map(|text| unsafe { copy_c_string(text, c"") })
         .collect();
         owned.units_to_meters = setup.view_space_to_meters;
         owned.standard_depth = u32::from(setup.standard_depth != 0);
@@ -855,9 +848,9 @@ impl Pipeline {
         }
 
         let optional_string =
-            |text: *const c_char| (!text.is_null()).then(|| unsafe { copy_string(text) });
+            |text: *const c_char| (!text.is_null()).then(|| unsafe { copy_c_string(text, c"") });
         owned.dlss_settings = DlssSettings {
-            directory: Some(unsafe { copy_string(setup.streamline_directory_utf8) }),
+            directory: Some(unsafe { copy_c_string(setup.streamline_directory_utf8, c"") }),
             log_directory: optional_string(setup.streamline_log_directory_utf8),
             engine_version: optional_string(setup.engine_version_utf8),
             project_id: optional_string(setup.project_id_utf8),
