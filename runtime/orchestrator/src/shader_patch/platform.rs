@@ -21,8 +21,6 @@ use rsf_minhook_sys::{
     MH_Initialize, MH_OK, MH_RemoveHook,
 };
 
-// MinHook.h v1.3.4 enum values.
-
 #[repr(C)]
 struct Includes<'a> {
     vtable: &'static ID3DInclude_Vtbl,

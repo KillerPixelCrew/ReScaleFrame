@@ -131,7 +131,9 @@ pub(crate) fn admit(rules: &Json, stock: &[u8], variant: &[u8]) -> Outcome<()> {
 
 pub(crate) fn compare(rules: &Json, a: &Shader, b: &Shader) -> Outcome<()> {
     check(a.version == b.version, REFLECTION, "shader model")?;
-    let binding = |s: &'_ Shader, n: &[u8]| s.bindings.iter().find(|x| x.name == n).cloned();
+    fn binding<'a>(s: &'a Shader, n: &[u8]) -> Option<&'a Binding> {
+        s.bindings.iter().find(|x| x.name == n)
+    }
     for x in &a.bindings {
         let same = binding(b, &x.name).is_some_and(|y| {
             (x.kind, x.point, x.count, x.return_type, x.dimension)

@@ -37,10 +37,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fs, ptr};
 use windows_sys::Win32::Foundation::HMODULE;
-use windows_sys::Win32::Security::Cryptography::{
-    BCRYPT_ALG_HANDLE, BCRYPT_SHA256_ALGORITHM, BCryptCloseAlgorithmProvider, BCryptHash,
-    BCryptOpenAlgorithmProvider,
-};
+use windows_sys::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryptHash};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
     GetModuleFileNameW, GetModuleHandleExW,
@@ -175,15 +172,10 @@ fn sha256(data: &[u8]) -> Outcome<String> {
         ARGUMENT,
         "hash input too large",
     )?;
-    let mut algorithm: BCRYPT_ALG_HANDLE = ptr::null_mut();
-    let opened = unsafe {
-        BCryptOpenAlgorithmProvider(&mut algorithm, BCRYPT_SHA256_ALGORITHM, ptr::null(), 0)
-    };
-    check(opened >= 0, INTERNAL, "SHA provider")?;
     let mut digest = [0u8; 32];
     let status = unsafe {
         BCryptHash(
-            algorithm,
+            BCRYPT_SHA256_ALG_HANDLE,
             ptr::null(),
             0,
             data.as_ptr(),
@@ -192,7 +184,6 @@ fn sha256(data: &[u8]) -> Outcome<String> {
             digest.len() as u32,
         )
     };
-    unsafe { BCryptCloseAlgorithmProvider(algorithm, 0) };
     check(status >= 0, INTERNAL, "SHA failure")?;
     Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
 }

@@ -41,7 +41,7 @@ use crate::motion_resolve_params::{dense_resolve_params, has_motion_sentinel};
 use crate::native_composition::rsf_native_composition_release;
 use crate::native_cpu::rsf_native_cpu_release;
 use crate::native_exposure::rsf_core_native_exposure_release;
-use crate::native_regions::rsf_native_regions_release;
+use crate::native_regions::{Region, rsf_native_regions_release};
 use crate::native_reinsert::rsf_native_reinsert_release;
 use crate::native_scene::rsf_native_scene_reset;
 use crate::native_sr_state::{camera_for, commit_history};
@@ -122,9 +122,8 @@ unsafe fn clear_predication(context: *mut c_void) {
     unsafe { context.SetPredication(None, false) };
 }
 
-fn extent([left, top, right, bottom]: [i32; 4]) -> Option<[u32; 2]> {
-    (left >= 0 && top >= 0 && right > left && bottom > top)
-        .then(|| [(right - left) as u32, (bottom - top) as u32])
+fn extent(rect: [i32; 4]) -> Option<[u32; 2]> {
+    Region::new(rect).map(|region| region.extent)
 }
 
 #[cfg(not(test))]
