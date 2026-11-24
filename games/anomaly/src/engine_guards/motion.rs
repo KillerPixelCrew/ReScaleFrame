@@ -1,49 +1,51 @@
 // SPDX-License-Identifier: MIT
 use super::Image;
 use crate::motion_profile::MotionProfile;
-use std::ffi::c_char;
-use std::{ptr, slice};
+use std::ffi::{CStr, c_char};
+use std::slice;
 
-/// The name of the first mismatching check of the selected build, or null. Names are borrowed from the
-/// static profile or are the static names below.
-pub(crate) fn motion_guard_failure(image: &Image, profile: &MotionProfile) -> *const c_char {
+/// The name of the first mismatching check of the selected build, or None. Names come from the static profile or
+/// are the static names below.
+pub(crate) fn motion_guard_failure(image: &Image, profile: &MotionProfile) -> Option<&'static CStr> {
+    // The profile records hold static NUL-terminated names.
+    let name = |name: *const c_char| Some(unsafe { CStr::from_ptr(name) });
     let hex = |rva, code: &std::ffi::CStr| unsafe { image.matches_hex_guard(rva, code.as_ptr()) };
     // Detour entries first: the 16 expected bytes, then any unique prefix at the same RVA.
     for site in &profile.sites {
         if !unsafe { image.matches_sites(slice::from_ref(site), &profile.unique_guards) } {
-            return site.name;
+            return name(site.name);
         }
     }
     // The two create_shader calls whose return addresses admit the caller frame.
     for site in &profile.create_shader_calls {
         if !image.matches_site(site.rva, &site.expected) {
-            return site.name;
+            return name(site.name);
         }
     }
     // The caller frame offsets are read from this prologue and D3DCompile setup.
     if !hex(profile.shader_compile_rva, profile.shader_compile_prologue) {
-        return c"CRender::shader_compile prologue".as_ptr();
+        return Some(c"CRender::shader_compile prologue");
     }
     if !hex(profile.d3dcompile_setup_rva, profile.d3dcompile_setup) {
-        return c"CRender::shader_compile D3DCompile setup".as_ptr();
+        return Some(c"CRender::shader_compile D3DCompile setup");
     }
     // Hull and domain shaders reach the same detour through this dispatch and object store.
     if !hex(profile.tess_dispatch_rva, profile.tess_dispatch) {
-        return c"create_shader hull/domain dispatch".as_ptr();
+        return Some(c"create_shader hull/domain dispatch");
     }
     for site in &profile.tess_create_sites {
         if !hex(site.rva, site.prologue) {
-            return site.name.as_ptr();
+            return Some(site.name);
         }
         if !hex(site.wrapper_rva, site.wrapper) {
-            return c"CreateHWShader (hull/domain)".as_ptr();
+            return Some(c"CreateHWShader (hull/domain)");
         }
     }
     // RSF recompiles with the engine's empty pSourceName.
     if !image.matches_hex(profile.source_name_rva, b"00") {
-        return c"D3DCompile pSourceName".as_ptr();
+        return Some(c"D3DCompile pSourceName");
     }
-    ptr::null()
+    None
 }
 #[cfg(test)]
 mod tests {
@@ -114,8 +116,7 @@ mod tests {
         };
         let failure = |bytes: &[u8; 0x100]| {
             let image = Image::new(bytes.as_ptr(), bytes.len() as u32, copy);
-            let name = motion_guard_failure(&image, &profile);
-            (!name.is_null()).then(|| unsafe { CStr::from_ptr(name) }.to_str().unwrap())
+            motion_guard_failure(&image, &profile).map(|name| name.to_str().unwrap())
         };
         assert_eq!(failure(&bytes), None);
         // Break checks from last to first: each refusal must name the earliest broken check.

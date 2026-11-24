@@ -48,10 +48,9 @@ pub(super) struct NativeSite {
 #[cfg(windows)]
 pub(super) const fn site(name: &'static CStr, rva: u32, hex: &[u8; 32]) -> NativeSite {
     const fn digit(value: u8) -> u8 {
-        match value {
-            b'0'..=b'9' => value - b'0',
-            b'a'..=b'f' => value - b'a' + 10,
-            _ => panic!("invalid native guard digit"),
+        match self::digit(value) {
+            Some(value) => value,
+            None => panic!("invalid native guard digit"),
         }
     }
     let mut expected = [0; 16];
@@ -180,7 +179,7 @@ pub(super) fn decode_hex(hex: &[u8]) -> Option<Vec<u8>> {
         .collect()
 }
 
-fn digit(value: u8) -> Option<u8> {
+const fn digit(value: u8) -> Option<u8> {
     match value {
         b'0'..=b'9' => Some(value - b'0'),
         b'a'..=b'f' => Some(value - b'a' + 10),

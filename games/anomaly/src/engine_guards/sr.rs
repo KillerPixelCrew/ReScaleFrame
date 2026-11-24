@@ -4,17 +4,18 @@ use crate::sr_profile::{
     Profile, SITE_PHASE_BLUR, SITE_PHASE_COMBINE, SITE_PHASE_SCENE_PREPARE, SITE_PHASE_SUNSHAFTS,
     SITE_POSITION_SETUP, SITE_RM_NEAR, SITE_SET_MIP_LOD_BIAS, SITE_SET_P, SITE_SUN_CASCADES,
 };
-use std::ffi::c_char;
-use std::ptr;
+use std::ffi::{CStr, c_char};
 
-/// The first failing guard of the selected build's SR stage, or null when every guard matches. The returned name is
-/// borrowed from the static profile records or the static SSAO name.
+/// The name of the first failing guard of the selected build's SR stage, or None when every guard matches. Names
+/// come from the static profile records or are the static SSAO name.
 pub(crate) fn sr_guard_failure(
     image: &Image,
     profile: &Profile,
     world_window: bool,
     temporal: bool,
-) -> *const c_char {
+) -> Option<&'static CStr> {
+    // The profile records hold static NUL-terminated names.
+    let name = |name: *const c_char| Some(unsafe { CStr::from_ptr(name) });
     let sites = &profile.function_sites;
     let set_projection = &sites[SITE_SET_P];
     let set_mip_bias = &sites[SITE_SET_MIP_LOD_BIAS];
@@ -29,7 +30,7 @@ pub(crate) fn sr_guard_failure(
             )
         }
     {
-        return c"set_viewport (r4_rendertarget_phase_ssao.cpp:3)".as_ptr();
+        return Some(c"set_viewport (r4_rendertarget_phase_ssao.cpp:3)");
     }
     let unique = profile.unique_guards;
     if temporal {
@@ -38,11 +39,11 @@ pub(crate) fn sr_guard_failure(
             if guard.rva == set_projection.rva
                 && !unsafe { image.matches_hex_guard(guard.rva, guard.expected_hex) }
             {
-                return set_projection.name;
+                return name(set_projection.name);
             }
         }
         if !image.matches_site(set_mip_bias.rva, &set_mip_bias.expected) {
-            return set_mip_bias.name;
+            return name(set_mip_bias.name);
         }
         for site in &profile.first_person_sites {
             if !guard_first_person(
@@ -52,12 +53,12 @@ pub(crate) fn sr_guard_failure(
                 set_projection.rva,
                 sites[SITE_RM_NEAR].rva,
             ) {
-                return site.name.as_ptr();
+                return Some(site.name);
             }
         }
         for site in &profile.reconstruction_guards {
             if !unsafe { image.matches_hex_guard(site.rva, site.expected_hex) } {
-                return site.name;
+                return name(site.name);
             }
         }
     }
@@ -73,20 +74,20 @@ pub(crate) fn sr_guard_failure(
     ] {
         let site = &sites[index];
         if !image.matches_site(site.rva, &site.expected) {
-            return site.name;
+            return name(site.name);
         }
     }
     for site in unique {
         if (site.rva == blur.rva || site.rva == sun_cascades.rva)
             && !unsafe { image.matches_hex_guard(site.rva, site.expected_hex) }
         {
-            return site.name;
+            return name(site.name);
         }
     }
     for site in &profile.call_sites {
         if !image.matches_site(site.rva, &site.expected) {
-            return site.name;
+            return name(site.name);
         }
     }
-    ptr::null()
+    None
 }

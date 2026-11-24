@@ -328,11 +328,10 @@ impl Stage {
         }
         if !unsafe { leaf::hooks_created() } {
             let image = Image::new(build.image as *const u8, size, leaf::copy);
-            let failure = motion_guard_failure(&image, build.motion);
-            if !failure.is_null() {
-                let site = unsafe { CStr::from_ptr(failure) }.to_string_lossy();
+            if let Some(site) = motion_guard_failure(&image, build.motion) {
                 log.say(format!(
-                    "Anomaly motion refused, shaders stay stock: guard mismatch at {site}"
+                    "Anomaly motion refused, shaders stay stock: guard mismatch at {}",
+                    site.to_string_lossy()
                 ));
                 return false;
             }

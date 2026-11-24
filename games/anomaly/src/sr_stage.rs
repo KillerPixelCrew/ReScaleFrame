@@ -1163,7 +1163,7 @@ impl Stage {
                 );
                 return false;
             }
-            let failed = leaf!(
+            if let Some(name) = leaf!(
                 p,
                 verify_guards(
                     module,
@@ -1172,10 +1172,8 @@ impl Stage {
                     world_window(stage),
                     temporal(stage)
                 )
-            );
-            if !failed.is_null() {
-                // The leaf returns an immutable site name from the profile tables.
-                let name = unsafe { CStr::from_ptr(failed) }.to_string_lossy();
+            ) {
+                let name = name.to_string_lossy();
                 self.say(
                     state,
                     &format!("Anomaly SR stage refused, game left stock: guard mismatch at {name}"),

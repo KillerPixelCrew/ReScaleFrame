@@ -442,14 +442,14 @@ unsafe extern "C" fn log(_: *mut c_void, text: *const c_char) {
     fake(|f| f.logs.push(text));
 }
 
-pub(crate) unsafe extern "C" fn verify_guards(
+pub(crate) fn verify_guards(
     _: *mut c_void,
     _: u32,
     _: *const c_void,
     _: bool,
     _: bool,
-) -> *const c_char {
-    std::ptr::null()
+) -> Option<&'static CStr> {
+    None
 }
 
 /// A bound stage's leaf token, for the owners the tests drive without a stage.

@@ -639,7 +639,7 @@ pub(crate) unsafe fn verify_guards(
     build: *const c_void,
     world_window: bool,
     temporal: bool,
-) -> *const c_char {
+) -> Option<&'static CStr> {
     // Stage::install lends the build record it was given.
     let build = unsafe { &*build.cast::<Build>() };
     let image = Image::new(module.cast_const().cast(), image_size, c::copy);
