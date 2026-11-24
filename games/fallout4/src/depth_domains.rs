@@ -244,7 +244,7 @@ fn at(key: u64, offset: usize) -> usize {
     (key as usize).wrapping_add(offset)
 }
 
-/// `memcmp` equality of two cameras.
+/// Two cameras are equal by exact bits.
 fn same_camera(a: &DepthCamera, b: &DepthCamera) -> bool {
     bits(&a.view) == bits(&b.view)
         && bits(&a.projection) == bits(&b.projection)
@@ -294,7 +294,7 @@ fn refused<T>(
     None
 }
 
-/// `matches`: the stored value is finite and agrees with `expected` element by element.
+/// The stored value is finite and agrees with `expected` element by element.
 fn matches(value: &Matrix, expected: &Flat) -> bool {
     let mut actual = [0.0; 16];
     camera::store(value, &mut actual)
@@ -373,6 +373,34 @@ fn valid_camera(value: &DepthCamera) -> bool {
         )
 }
 
+/// The renderer owner's device, immediate context, window and chain; the immediate context must be
+/// the one the thread-local render context names.
+fn read_renderer(base: usize, tls_device_context: usize, out: &mut Snapshot) -> bool {
+    load(base.wrapping_add(RENDERER_POINTER), &mut out.renderer_key)
+        && out.renderer_key == base.wrapping_add(RENDERER_OBJECT) as u64
+        && load(at(out.renderer_key, RENDERER_DEVICE), &mut out.device_key)
+        && out.device_key != 0
+        && load(
+            at(out.renderer_key, RENDERER_CONTEXT),
+            &mut out.device_context_key,
+        )
+        && out.device_context_key != 0
+        && tls_device_context as u64 == out.device_context_key
+        && load(at(out.renderer_key, RENDERER_WINDOW), &mut out.window_key)
+        && out.window_key != 0
+        && load(at(out.renderer_key, RENDERER_CHAIN), &mut out.chain_key)
+        && out.chain_key != 0
+}
+
+/// The depth target and its SRV for the depth slot.
+fn read_depth_keys(out: &mut Snapshot) -> bool {
+    let depth = 0x1d48 + out.depth_slot as usize * 0x98;
+    load(at(out.renderer_key, depth), &mut out.depth_key)
+        && out.depth_key != 0
+        && load(at(out.renderer_key, depth + 0x88), &mut out.depth_srv_key)
+        && out.depth_srv_key != 0
+}
+
 /// The full temporal sample: owner, dimensions, cache, range, camera owners, depth owner and the
 /// three unique camera cache entries.
 fn sample(cpu: &Identity, out: &mut Snapshot, stage: &mut Stage) -> bool {
@@ -388,22 +416,7 @@ fn sample(cpu: &Identity, out: &mut Snapshot, stage: &mut Stage) -> bool {
     };
     out.context_key = context as u64;
     *stage = Stage::Owner;
-    if context == 0
-        || !load(base.wrapping_add(RENDERER_POINTER), &mut out.renderer_key)
-        || out.renderer_key != base.wrapping_add(RENDERER_OBJECT) as u64
-        || !load(at(out.renderer_key, RENDERER_DEVICE), &mut out.device_key)
-        || out.device_key == 0
-        || !load(
-            at(out.renderer_key, RENDERER_CONTEXT),
-            &mut out.device_context_key,
-        )
-        || out.device_context_key == 0
-        || tls_device_context as u64 != out.device_context_key
-        || !load(at(out.renderer_key, RENDERER_WINDOW), &mut out.window_key)
-        || out.window_key == 0
-        || !load(at(out.renderer_key, RENDERER_CHAIN), &mut out.chain_key)
-        || out.chain_key == 0
-    {
+    if context == 0 || !read_renderer(base, tls_device_context, out) {
         return false;
     }
     let mut frame = 0u32;
@@ -479,12 +492,7 @@ fn sample(cpu: &Identity, out: &mut Snapshot, stage: &mut Stage) -> bool {
     if !load(targets.wrapping_add(0xf84 + 4), &mut out.depth_slot) || out.depth_slot >= 13 {
         return false;
     }
-    let depth = 0x1d48 + out.depth_slot as usize * 0x98;
-    if !load(at(out.renderer_key, depth), &mut out.depth_key)
-        || out.depth_key == 0
-        || !load(at(out.renderer_key, depth + 0x88), &mut out.depth_srv_key)
-        || out.depth_srv_key == 0
-        || !load(at(context as u64, 0x2410), &mut out.near_inverse_transposed)
+    if !read_depth_keys(out) || !load(at(context as u64, 0x2410), &mut out.near_inverse_transposed)
     {
         return false;
     }
@@ -906,20 +914,7 @@ fn raster_owner(cpu: &Identity, out: &mut Snapshot) -> bool {
         return false;
     }
     if out.context_key == 0
-        || !load(base.wrapping_add(RENDERER_POINTER), &mut out.renderer_key)
-        || out.renderer_key != base.wrapping_add(RENDERER_OBJECT) as u64
-        || !load(at(out.renderer_key, RENDERER_DEVICE), &mut out.device_key)
-        || out.device_key == 0
-        || !load(
-            at(out.renderer_key, RENDERER_CONTEXT),
-            &mut out.device_context_key,
-        )
-        || out.device_context_key == 0
-        || tls_device as u64 != out.device_context_key
-        || !load(at(out.renderer_key, RENDERER_WINDOW), &mut out.window_key)
-        || out.window_key == 0
-        || !load(at(out.renderer_key, RENDERER_CHAIN), &mut out.chain_key)
-        || out.chain_key == 0
+        || !read_renderer(base, tls_device, out)
         || !load(state.wrapping_add(0x98), &mut frame)
         || !load(state.wrapping_add(0x78), &mut out.width)
         || !load(state.wrapping_add(0x7c), &mut out.height)
@@ -939,12 +934,7 @@ fn raster_owner(cpu: &Identity, out: &mut Snapshot) -> bool {
     {
         return false;
     }
-    let depth = 0x1d48 + out.depth_slot as usize * 0x98;
-    if !load(at(out.renderer_key, depth), &mut out.depth_key)
-        || out.depth_key == 0
-        || !load(at(out.renderer_key, depth + 0x88), &mut out.depth_srv_key)
-        || out.depth_srv_key == 0
-    {
+    if !read_depth_keys(out) {
         return false;
     }
     out.native_frame = u64::from(frame);
@@ -1540,7 +1530,7 @@ mod tests {
     }
 
     #[test]
-    fn stage_numbers_and_names_follow_the_cpp_order() {
+    fn stage_numbers_and_names_are_stable() {
         assert_eq!(Stage::Unverified as u32, 0);
         assert_eq!(Stage::StateChanged as u32, 20);
         assert_eq!(Stage::ProjectionMismatch as u32, 25);
@@ -1595,7 +1585,7 @@ mod tests {
     }
 
     #[test]
-    fn comparisons_are_bytewise_like_memcmp() {
+    fn comparisons_are_bytewise() {
         let a = fixture();
         let mut b = a;
         assert!(same_raster(&a, &b));
