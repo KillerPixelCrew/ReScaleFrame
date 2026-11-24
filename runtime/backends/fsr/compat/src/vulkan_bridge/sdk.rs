@@ -9,9 +9,8 @@ use crate::ffx_abi::*;
 use core::ptr;
 use windows::Win32::Foundation::FARPROC;
 
-/// Writes the directory of the module holding this bridge, with its trailing
-/// separator, and returns its length; zero when it does not fit.
-pub(super) fn own_directory(out: &mut [u16]) -> usize {
+/// The directory of the module holding this bridge, with its trailing separator.
+pub(super) fn own_directory() -> Option<Vec<u16>> {
     use windows::{
         Win32::{
             Foundation::{HMODULE, MAX_PATH},
@@ -34,24 +33,14 @@ pub(super) fn own_directory(out: &mut [u16]) -> usize {
     }
     .is_err()
     {
-        return 0;
+        return None;
     }
     let mut path = [0_u16; MAX_PATH as usize];
-    let Some(name) = (unsafe { rsf_game_sys::win32::module_path_in(module.0, &mut path) }) else {
-        return 0;
-    };
-    let Some(separator) = name
+    let name = unsafe { rsf_game_sys::win32::module_path_in(module.0, &mut path) }?;
+    let separator = name
         .iter()
-        .rposition(|&unit| unit == u16::from(b'\\') || unit == u16::from(b'/'))
-    else {
-        return 0;
-    };
-    let directory = separator + 1;
-    if directory > out.len() {
-        return 0;
-    }
-    out[..directory].copy_from_slice(&name[..directory]);
-    directory
+        .rposition(|&unit| unit == u16::from(b'\\') || unit == u16::from(b'/'))?;
+    Some(name[..=separator].to_vec())
 }
 
 pub(super) unsafe fn load_provider(

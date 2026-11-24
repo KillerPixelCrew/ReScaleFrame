@@ -66,7 +66,6 @@ const NVIDIA: u32 = 0x10de;
 const INTEL: u32 = 0x8086;
 const FSR4_MAJOR: u32 = 4;
 const PROVIDER_DLL: &str = "amd_fidelityfx_upscaler_dx12.dll";
-const MAX_PATH: usize = 260;
 const DEFAULT_FRAME_TIME_MS: f32 = 16.667;
 // 3.141593f, one f32 step above pi, so a pi FOV is admitted.
 #[allow(clippy::approx_constant)]
@@ -187,25 +186,12 @@ fn select_provider(versions: &[Version], count: u64) -> Option<u64> {
     ffx_version::select(&versions[..count], FSR4_MAJOR, 0).map(|version| version.id)
 }
 
-/// Borrows a NUL-terminated UTF-16 string without its terminator.
-///
-/// # Safety
-/// `text` must be non-null and NUL-terminated.
-unsafe fn wide<'a>(text: *const u16) -> &'a [u16] {
-    let mut length = 0;
-    while unsafe { *text.add(length) } != 0 {
-        length += 1;
-    }
-    unsafe { std::slice::from_raw_parts(text, length) }
-}
-
+/// `directory` is null (this module's directory) or a NUL-terminated UTF-16 path.
 fn provider_path(directory: *const u16) -> Option<Vec<u16>> {
     let mut path = if directory.is_null() {
-        let mut own = [0; MAX_PATH];
-        let length = sdk::own_directory(&mut own);
-        own[..length.min(MAX_PATH)].to_vec()
+        sdk::own_directory()?
     } else {
-        unsafe { wide(directory) }.to_vec()
+        unsafe { windows::core::PCWSTR(directory).as_wide().to_vec() }
     };
     let last = *path.last()?;
     if last != u16::from(b'\\') && last != u16::from(b'/') {
