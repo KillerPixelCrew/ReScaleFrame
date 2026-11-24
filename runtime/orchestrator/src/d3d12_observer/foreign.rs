@@ -88,6 +88,7 @@ pub(super) unsafe fn debug(iid: &GUID, out: &mut Handle) -> i32 {
     guarded(|| unsafe { D3D12GetDebugInterface(iid, out) }.0).unwrap_or(FAIL)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn queue_device(raw: Handle, out: &mut Handle) -> i32 {
     let Some(queue) = (unsafe { ID3D12DeviceChild::from_raw_borrowed(&raw) }) else {
         return FAIL;
@@ -95,6 +96,7 @@ pub(super) unsafe extern "C" fn queue_device(raw: Handle, out: &mut Handle) -> i
     guarded(|| unsafe { get_device(queue)(raw, &ID3D12Device::IID, out) }.0).unwrap_or(FAIL)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn removed_reason(raw: Handle) -> i32 {
     let Some(device) = (unsafe { ID3D12Device::from_raw_borrowed(&raw) }) else {
         return 0;
@@ -102,6 +104,7 @@ pub(super) unsafe extern "C" fn removed_reason(raw: Handle) -> i32 {
     guarded(|| unsafe { get_removed_reason(device)(raw) }.0).unwrap_or(0)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn breadcrumb_head(raw: Handle) -> *const std::ffi::c_void {
     let Some(dred) = (unsafe { ID3D12DeviceRemovedExtendedData::from_raw_borrowed(&raw) }) else {
         return null();
@@ -115,6 +118,7 @@ pub(super) unsafe extern "C" fn breadcrumb_head(raw: Handle) -> *const std::ffi:
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn page_fault(raw: Handle, address: &mut u64) -> i32 {
     let Some(dred) = (unsafe { ID3D12DeviceRemovedExtendedData::from_raw_borrowed(&raw) }) else {
         return FAIL;
@@ -150,6 +154,7 @@ pub(super) unsafe fn debug_layer(raw: Handle) -> i32 {
     i32::from(guarded(|| unsafe { enable_debug_layer(debug)(raw) }).is_some())
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn queue_type(raw: Handle) -> u32 {
     let Some(queue) = (unsafe { ID3D12CommandQueue::from_raw_borrowed(&raw) }) else {
         return u32::MAX;
@@ -174,6 +179,7 @@ pub(super) unsafe fn register_debug(raw: Handle, callback: D3D12MessageFunc) {
     }
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn describe_window(raw: Handle, window: &mut Handle) -> i32 {
     let Some(chain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&raw) }) else {
         return 0;

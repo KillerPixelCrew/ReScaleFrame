@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::attachment::{Query, query, query_interface};
+use super::attachment::{query, query_interface};
 use super::{Handle, foreign};
 use crate::com_ref;
 use crate::sync::lock;
@@ -10,8 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_AUTO_BREADCRUMB_NODE, D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_ID, D3D12_MESSAGE_SEVERITY,
-    ID3D12Debug, ID3D12DeviceRemovedExtendedData, ID3D12DeviceRemovedExtendedDataSettings,
-    ID3D12InfoQueue1,
+    ID3D12Debug, ID3D12DeviceRemovedExtendedDataSettings, ID3D12InfoQueue1,
 };
 use windows::core::IUnknown;
 use windows::core::{Interface, PCSTR};
@@ -35,27 +34,25 @@ struct Breadcrumb {
     name: *const c_char,
 }
 
-pub(super) struct Removal {
-    queue_device: Query,
-    removed_reason: unsafe extern "C" fn(Handle) -> i32,
-    query_dred: Query,
-    breadcrumb_head: unsafe extern "C" fn(Handle) -> *const c_void,
-    breadcrumb: unsafe extern "C" fn(*const c_void, &mut Breadcrumb),
-    operation: unsafe extern "C" fn(*const c_void, u32) -> u32,
-    page_fault: unsafe extern "C" fn(Handle, &mut u64) -> i32,
-}
+// Production reads the removal reason and DRED nodes from the live device; unit tests call
+// same-named fakes.
+#[cfg(not(test))]
+mod leaf {
+    pub(super) use super::breadcrumb;
+    pub(super) use super::breadcrumb_operation as operation;
+    pub(super) use super::foreign::{breadcrumb_head, page_fault, queue_device, removed_reason};
+    use super::{Handle, query};
+    use windows::Win32::Graphics::Direct3D12::ID3D12DeviceRemovedExtendedData;
 
-pub(super) const NATIVE: Removal = Removal {
-    queue_device: foreign::queue_device,
-    removed_reason: foreign::removed_reason,
-    query_dred: query::<ID3D12DeviceRemovedExtendedData>,
-    breadcrumb_head: foreign::breadcrumb_head,
-    breadcrumb,
-    operation: breadcrumb_operation,
-    page_fault: foreign::page_fault,
-};
+    pub(super) unsafe extern "C" fn query_dred(device: Handle, out: &mut Handle) -> i32 {
+        unsafe { query::<ID3D12DeviceRemovedExtendedData>(device, out) }
+    }
+}
+#[cfg(test)]
+use tests as leaf;
 
 // DRED node storage is borrowed until the owning interface is released.
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn breadcrumb(node: *const c_void, out: &mut Breadcrumb) {
     let node = unsafe { &*node.cast::<D3D12_AUTO_BREADCRUMB_NODE>() };
     *out = Breadcrumb {
@@ -76,6 +73,7 @@ unsafe extern "C" fn breadcrumb(node: *const c_void, out: &mut Breadcrumb) {
     };
 }
 
+#[cfg_attr(test, allow(dead_code))]
 unsafe extern "C" fn breadcrumb_operation(node: *const c_void, index: u32) -> u32 {
     let node = unsafe { &*node.cast::<D3D12_AUTO_BREADCRUMB_NODE>() };
     if node.pCommandHistory.is_null() {
@@ -149,6 +147,7 @@ pub(super) fn enabled() -> bool {
     SINK.get().is_some()
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn register_debug(device: Handle) {
     if let Some(info) = query_interface(query::<ID3D12InfoQueue1>, device) {
         unsafe { foreign::register_debug(info.as_raw(), Some(debug_message)) }
@@ -207,14 +206,14 @@ unsafe fn message<'a>(text: *const c_char) -> std::borrow::Cow<'a, str> {
     }
 }
 
-pub(super) fn report_removal(queue: Handle, platform: &Removal) {
+pub(super) fn report_removal(queue: Handle) {
     if !enabled() || REMOVAL_REPORTED.load(Ordering::Relaxed) {
         return;
     }
-    let Some(device) = query_interface(platform.queue_device, queue) else {
+    let Some(device) = query_interface(leaf::queue_device, queue) else {
         return;
     };
-    let reason = unsafe { (platform.removed_reason)(device.as_raw()) };
+    let reason = unsafe { leaf::removed_reason(device.as_raw()) };
     if reason >= 0 {
         return;
     }
@@ -228,22 +227,22 @@ pub(super) fn report_removal(queue: Handle, platform: &Removal) {
         "D3D12 device removal reason=0x{:08x}.",
         reason as u32
     ));
-    report_dred(device.as_raw(), platform, sink);
+    report_dred(device.as_raw(), sink);
 }
 
-fn report_dred(device: Handle, platform: &Removal, sink: Sink) {
-    let Some(dred) = query_interface(platform.query_dred, device) else {
+fn report_dred(device: Handle, sink: Sink) {
+    let Some(dred) = query_interface(leaf::query_dred, device) else {
         return;
     };
-    let mut node = unsafe { (platform.breadcrumb_head)(dred.as_raw()) };
+    let mut node = unsafe { leaf::breadcrumb_head(dred.as_raw()) };
     for _ in 0..BREADCRUMB_LIMIT {
         if node.is_null() {
             break;
         }
         let mut row = Breadcrumb::default();
-        unsafe { (platform.breadcrumb)(node, &mut row) };
+        unsafe { leaf::breadcrumb(node, &mut row) };
         let next_operation = if row.completed < row.count {
-            unsafe { (platform.operation)(node, row.completed) }
+            unsafe { leaf::operation(node, row.completed) }
         } else {
             u32::MAX
         };
@@ -255,7 +254,7 @@ fn report_dred(device: Handle, platform: &Removal, sink: Sink) {
         node = row.next;
     }
     let mut address = 0;
-    if unsafe { (platform.page_fault)(dred.as_raw(), &mut address) } >= 0 {
+    if unsafe { leaf::page_fault(dred.as_raw(), &mut address) } >= 0 {
         sink.line(format!("DRED page fault address=0x{address:x}."));
     }
 }
@@ -267,26 +266,32 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::ptr::without_provenance;
 
+    // The removal report calls these fakes by the production leaf names.
+    pub(super) use self::{
+        fault as page_fault, head as breadcrumb_head, query as query_dred, query as queue_device,
+        reason as removed_reason, row as breadcrumb,
+    };
+
     thread_local! {
         static LINES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static OPERATIONS: Cell<u32> = const { Cell::new(0) };
     }
 
-    unsafe extern "C" fn query(object: Handle, out: &mut Handle) -> i32 {
+    pub(super) unsafe extern "C" fn query(object: Handle, out: &mut Handle) -> i32 {
         unsafe { add_ref(object.cast()) };
         *out = object;
         0
     }
 
-    unsafe extern "C" fn reason(_: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn reason(_: Handle) -> i32 {
         -1
     }
 
-    unsafe extern "C" fn head(_: Handle) -> *const c_void {
+    pub(super) unsafe extern "C" fn head(_: Handle) -> *const c_void {
         without_provenance(1)
     }
 
-    unsafe extern "C" fn row(node: *const c_void, out: &mut Breadcrumb) {
+    pub(super) unsafe extern "C" fn row(node: *const c_void, out: &mut Breadcrumb) {
         let first = node.addr() == 1;
         *out = Breadcrumb {
             next: without_provenance(if first { 2 } else { 1 }),
@@ -297,12 +302,12 @@ mod tests {
         };
     }
 
-    unsafe extern "C" fn operation(_: *const c_void, _: u32) -> u32 {
+    pub(super) unsafe extern "C" fn operation(_: *const c_void, _: u32) -> u32 {
         OPERATIONS.set(OPERATIONS.get() + 1);
         9
     }
 
-    unsafe extern "C" fn fault(_: Handle, out: &mut u64) -> i32 {
+    pub(super) unsafe extern "C" fn fault(_: Handle, out: &mut u64) -> i32 {
         *out = 0xabcd;
         0
     }
@@ -314,20 +319,11 @@ mod tests {
     #[test]
     fn dred_walk_is_bounded_and_skips_operations_at_the_end_of_a_list() {
         let device = fake();
-        let platform = Removal {
-            queue_device: query,
-            removed_reason: reason,
-            query_dred: query,
-            breadcrumb_head: head,
-            breadcrumb: row,
-            operation,
-            page_fault: fault,
-        };
         let sink = Sink {
             log,
             user: null_mut(),
         };
-        report_dred(raw(&device), &platform, sink);
+        report_dred(raw(&device), sink);
         assert_eq!(device.refs.get(), 1);
         assert_eq!(OPERATIONS.get(), 32);
         LINES.with_borrow(|lines| {

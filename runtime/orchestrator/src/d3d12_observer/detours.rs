@@ -71,16 +71,7 @@ unsafe extern "system-unwind" fn factory<const I: usize>(
     }
     let call: Factory = unsafe { std::mem::transmute(target) };
     let result = unsafe { call(this, queue, window, desc, fullscreen, output, chain) };
-    unsafe {
-        attachment::factory_result(
-            &attachment::NATIVE,
-            result.0,
-            scope.outer as u32,
-            queue,
-            window.0,
-            chain,
-        )
-    };
+    unsafe { attachment::factory_result(result.0, scope.outer as u32, queue, window.0, chain) };
     result
 }
 
@@ -96,7 +87,7 @@ unsafe extern "system-unwind" fn device<const I: usize>(
     }
     let call: Device = unsafe { std::mem::transmute(target) };
     let result = unsafe { call(this, desc, iid, out) };
-    unsafe { attachment::device_result(&attachment::NATIVE, result.0, out) };
+    unsafe { attachment::device_result(result.0, out) };
     result
 }
 
@@ -118,7 +109,7 @@ unsafe extern "system-unwind" fn queue<const I: usize>(
     let id = submit_begin(this, count, lists);
     unsafe { call(this, count, lists) };
     submit_end(this, id, count, lists);
-    diagnostics::report_removal(this, &diagnostics::NATIVE);
+    diagnostics::report_removal(this);
 }
 
 unsafe extern "system-unwind" fn present<const I: usize>(
@@ -135,7 +126,7 @@ unsafe extern "system-unwind" fn present<const I: usize>(
     if scope.outer == 0 {
         return unsafe { call(this, interval, flags) };
     }
-    let selected = attachment::present_begin(&attachment::NATIVE, this, interval, flags.0) != 0;
+    let selected = attachment::present_begin(this, interval, flags.0) != 0;
     let result = unsafe { call(this, interval, flags) };
     if selected {
         super::notify_present(this, interval, flags.0, 0);
@@ -158,6 +149,8 @@ macro_rules! wrappers {
     };
 }
 
+// Unit tests bind through a fake, so this leaf and the detours it installs are unused there.
+#[cfg_attr(test, allow(dead_code))]
 pub(super) unsafe extern "C" fn bind_interface(kind: u32, object: Handle, slot: usize) -> i32 {
     if object.is_null() {
         return 0;
