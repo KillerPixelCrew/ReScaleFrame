@@ -890,23 +890,35 @@ impl Started {
         if !visible && unsafe { (*stats).show_performance_hud } == 0 && active_for >= STARTUP_MS {
             return None;
         }
+        // Every refusal after this point is a graphics failure.
+        let decided = unsafe { self.record_frame(platform, chain, stats, now, active_for, visible) };
+        if decided.is_none() {
+            self.fail(platform);
+        }
+        decided
+    }
+
+    unsafe fn record_frame(
+        &mut self,
+        platform: &Platform,
+        chain: *mut c_void,
+        stats: *const rsf_overlay_stats,
+        now: u64,
+        active_for: u64,
+        visible: bool,
+    ) -> Option<rsf_overlay_intent> {
         let native = self.renderer.handle.as_ptr();
         let completed = self.fence.completed(platform);
         if completed == u64::MAX {
-            self.fail(platform);
             return None;
         }
         let (slot, wait_for) = self.ring.select(completed);
         // Only already-submitted overlay work can block slot reuse.
         if wait_for != 0 && !self.fence.wait_for_slot(platform, wait_for) {
-            self.fail(platform);
             return None;
         }
         // The slot's frame stays owned by the renderer. The fence proof above admits its reuse.
-        let Some(table) = self.renderer.frame(slot) else {
-            self.fail(platform);
-            return None;
-        };
+        let table = self.renderer.frame(slot)?;
         let lease = Lease { slot, frame: table };
         self.atlas.retained[slot].clear();
         self.graphics.slots[slot].pipeline = None;
@@ -915,18 +927,11 @@ impl Started {
             height: 0,
             format: 0,
         };
-        let target = unsafe { com_ref::owned((platform.begin)(&lease.frame, chain, &mut frame)) };
-        let Some(target) = target else {
-            self.fail(platform);
-            return None;
-        };
-        let Some(pipeline) = self
+        let target =
+            unsafe { com_ref::owned((platform.begin)(&lease.frame, chain, &mut frame)) }?;
+        let pipeline = self
             .graphics
-            .bind_pipeline(platform, native, slot, frame.format)
-        else {
-            self.fail(platform);
-            return None;
-        };
+            .bind_pipeline(platform, native, slot, frame.format)?;
         if visible && !self.was_visible {
             self.trace_left = 4;
         }
@@ -956,7 +961,6 @@ impl Started {
         };
         if unsafe { (platform.collect_input)(&mut input, frame.width, frame.height, elapsed) } == 0
         {
-            self.fail(platform);
             return None;
         }
         input.startup_hint_alpha = hint_alpha;
@@ -964,7 +968,6 @@ impl Started {
         if unsafe { (ui.api.frame)(ui.handle.as_ptr(), &input, stats, &mut data, &mut decided) }
             != 0
         {
-            self.fail(platform);
             return None;
         }
         self.previous = now;
@@ -986,31 +989,16 @@ impl Started {
             vertex_bytes: 0,
             index_bytes: 0,
         };
-        if self.graphics.slots[slot]
-            .bind_uploads(platform, native, &data, &mut binding)
-            .is_none()
-        {
-            self.fail(platform);
-            return None;
-        }
-        if unsafe {
+        self.graphics.slots[slot].bind_uploads(platform, native, &data, &mut binding)?;
+        unsafe {
             self.atlas
                 .record(platform, native, &self.ui, &lease, &binding, &data)
-        }
-        .is_none()
-        {
-            self.fail(platform);
-            return None;
-        }
-        let Some(value) = self
+        }?;
+        let value = self
             .ring
             .serial
             .checked_add(1)
-            .filter(|value| *value != u64::MAX)
-        else {
-            self.fail(platform);
-            return None;
-        };
+            .filter(|value| *value != u64::MAX)?;
         if trace {
             self.log(c"Overlay12: queue submission begin");
         }
@@ -1019,7 +1007,6 @@ impl Started {
         if unsafe { (platform.signal)(native, fence, value) } == 0 {
             // Execute already happened. The failed owner stays alive until a signal proves retirement.
             self.unsignalled = Some(value);
-            self.fail(platform);
             return None;
         }
         self.ring.submitted(slot, value);
