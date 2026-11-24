@@ -38,6 +38,10 @@ the settings hooks, the SR hooks and the scene producer refuse as before. The pr
 used through its exports and entry bytes, and the Social Club renderer's frame entry and gate are
 discovered in that module the same way. Because the code is encrypted on disk, the patterns are
 tested against the decrypted dump (`discovery::tests`); they have not yet run inside the game.
+At ASI attach the discovery runs in DllMain under the loader lock: about 0.11 s in a release
+build (12 ms to copy 73.6 MB of code, about 100 ms to scan). It only reads its own process and
+computes, so it cannot deadlock. It stays there because ForceD3D12 and the settings hooks must
+land before the engine's settings load, see the research note.
 
 ## Source ownership
 

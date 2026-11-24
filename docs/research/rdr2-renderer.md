@@ -1248,6 +1248,20 @@ pattern at its site, that the three postfx calls target the discovered output, a
 installed RDR2.exe is the dump's build. `social_club_sites_resolve_in_the_installed_renderer`
 finds `+4b70` and `+4b89` in the installed 2.4.0.240 renderer.
 
+Startup cost and the loader lock: ForceD3D12 at ASI attach is the first owner that needs a site,
+so discovery runs in `DllMain` (`rsf_rdr2_asi_process_attach` -> `attach` -> `force_d3d12` ->
+`discovery::admit`) while the loader lock is held. Measured on the dump in a release build, it takes
+12 ms to copy the 73.6 MB of executable sections and about 100 ms to scan them, about 0.11 s in
+total. It only reads its own process (ReadProcessMemory) and computes; it neither waits on another
+thread nor loads a module, so it cannot deadlock. It delays other threads' module loads for that
+time. The previous exact-build attach already created and enabled MinHook hooks under the same
+lock. It cannot move: the ASI loader loads ASIs from inside the CRT's `GetSystemTimeAsFileTime`
+call, before `WinMain`, and the API parameter write and the settings hooks must be in place
+before the engine's settings load reads them. A worker thread cannot start until the lock is
+released and would then race the main thread to settings load, and `DllMain` cannot wait on it.
+Running later on the main thread would need a call between the loader's return and `WinMain`, but
+the entry point is Arxan-obfuscated (it jumps into the encrypted second `.text`), so none can be
+named without a game run.
 Uncertainty: discovery has not yet run in the game. The live copy of the decrypted sections at ASI
 attach and prepare, and every hook at a discovered address, need a game run. Patterns derived from
 one build are untested across an update until one ships.
