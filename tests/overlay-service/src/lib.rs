@@ -9,25 +9,12 @@ use rsf_game_sys::{RSF_ERROR_INVALID_ARGUMENT, RSF_OK};
 use std::ffi::{CStr, c_void};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
+use windows_sys::Win32::System::WindowsProgramming::{
+    GetPrivateProfileIntW, WritePrivateProfileStringW,
+};
 
 // Cast macros in game_api.h cannot be emitted as Rust constants by bindgen.
 type Query = unsafe extern "C" fn(*mut rsf_overlay_api) -> i32;
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetPrivateProfileIntW(
-        section: *const u16,
-        key: *const u16,
-        fallback: i32,
-        path: *const u16,
-    ) -> u32;
-    fn WritePrivateProfileStringW(
-        section: *const u16,
-        key: *const u16,
-        value: *const u16,
-        path: *const u16,
-    ) -> i32;
-}
 
 struct Ini {
     path: PathBuf,
@@ -55,7 +42,7 @@ impl Ini {
                 key.as_ptr(),
                 0xdead,
                 self.wide.as_ptr(),
-            )
+            ) as u32
         }
     }
 

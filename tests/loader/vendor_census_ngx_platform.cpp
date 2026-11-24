@@ -51,41 +51,27 @@ extern "C" int rsf_test_ngx_check_slots(void)
     g_failures = 0;
     NgxParam* p = fake_parameters();
     // MSVC groups each overload set and reverses the declaration order.
-    p->Set("x", static_cast<void*>(nullptr));
-    expect_slot(0);
-    p->Set("x", static_cast<ID3D12Resource*>(nullptr));
-    expect_slot(1);
-    p->Set("x", static_cast<ID3D11Resource*>(nullptr));
-    expect_slot(2);
-    p->Set("x", 0);
-    expect_slot(3);
-    p->Set("x", 0u);
-    expect_slot(4);
-    p->Set("x", 0.0);
-    expect_slot(5);
-    p->Set("x", 0.0f);
-    expect_slot(6);
-    p->Set("x", 0ull);
-    expect_slot(7);
-    p->Get("x", static_cast<void**>(nullptr));
-    expect_slot(8);
-    p->Get("x", static_cast<ID3D12Resource**>(nullptr));
-    expect_slot(9);
-    p->Get("x", static_cast<ID3D11Resource**>(nullptr));
-    expect_slot(10);
-    p->Get("x", static_cast<int*>(nullptr));
-    expect_slot(11);
-    p->Get("x", static_cast<unsigned int*>(nullptr));
-    expect_slot(12);
-    p->Get("x", static_cast<double*>(nullptr));
-    expect_slot(13);
-    p->Get("x", static_cast<float*>(nullptr));
-    expect_slot(14);
-    p->Get("x", static_cast<unsigned long long*>(nullptr));
-    expect_slot(15);
-    p->Reset();
-    expect_slot(16);
-    return g_failures;
+    const auto slot = [&](size_t expected, auto&& call) {
+        call();
+        expect_slot(expected);
+    };
+    slot(0, [&] { p->Set("x", static_cast<void*>(nullptr)); });
+    slot(1, [&] { p->Set("x", static_cast<ID3D12Resource*>(nullptr)); });
+    slot(2, [&] { p->Set("x", static_cast<ID3D11Resource*>(nullptr)); });
+    slot(3, [&] { p->Set("x", 0); });
+    slot(4, [&] { p->Set("x", 0u); });
+    slot(5, [&] { p->Set("x", 0.0); });
+    slot(6, [&] { p->Set("x", 0.0f); });
+    slot(7, [&] { p->Set("x", 0ull); });
+    slot(8, [&] { p->Get("x", static_cast<void**>(nullptr)); });
+    slot(9, [&] { p->Get("x", static_cast<ID3D12Resource**>(nullptr)); });
+    slot(10, [&] { p->Get("x", static_cast<ID3D11Resource**>(nullptr)); });
+    slot(11, [&] { p->Get("x", static_cast<int*>(nullptr)); });
+    slot(12, [&] { p->Get("x", static_cast<unsigned int*>(nullptr)); });
+    slot(13, [&] { p->Get("x", static_cast<double*>(nullptr)); });
+    slot(14, [&] { p->Get("x", static_cast<float*>(nullptr)); });
+    slot(15, [&] { p->Get("x", static_cast<unsigned long long*>(nullptr)); });
+    slot(16, [&] { p->Reset(); });    return g_failures;
 }
 
 extern "C" void rsf_test_ngx_set_u32(void* parameters, const char* name, unsigned int value)
