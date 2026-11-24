@@ -11,7 +11,7 @@ target_include_directories(rsf_anomaly_fg_device_test PRIVATE "${RSF_ANOMALY_FG_
     "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
 target_link_libraries(rsf_anomaly_fg_device_test PRIVATE rsf_anomaly_fixtures_rust
     "$<TARGET_LINKER_FILE:rsf_orchestrator>" ReScaleFrame::GameSDK
-    ReScaleFrame::Contract ReScaleFrame::GraphicsLeaves ReScaleFrame::Graphics d3d11 dxgi dxguid rsf_build_options)
+    ReScaleFrame::Contract ReScaleFrame::Graphics d3d11 dxgi dxguid rsf_build_options)
 add_dependencies(rsf_anomaly_fg_device_test rsf_orchestrator)
 if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamline/sl.interposer.dll")
     file(TO_NATIVE_PATH "${RSF_ANOMALY_SR_VENDOR_ROOT}" rsf_anomaly_fg_vendor_native)

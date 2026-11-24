@@ -37,11 +37,12 @@ rsf_add_rust_static(rsf_game_sdk_unity_sr_d3d12_rust rsf_rust_game_sdk_unity_sr_
 rsf_add_rust_static(rsf_game_sdk_d3d11_host_rust rsf_rust_game_sdk_d3d11_host
     rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features d3d11-host-fixture)
 # The archives carry the Rust Runtime, so they take the C leaves and MinHook rsf_orchestrator_rust takes,
-# and rsf-anomaly, so the Common Controls 6 manifest its window leaves need.
+# and rsf-anomaly, so the adapter's C leaves its Rust names and the Common Controls 6 manifest its window
+# leaves need. The D3D11 state leaves those C leaves call come from the Runtime the archives embed.
 set(rsf_anomaly_comctl6 "${PROJECT_SOURCE_DIR}/games/anomaly/comctl6.manifest")
 foreach(archive rsf_game_sdk_fixtures_rust rsf_game_sdk_render_host_rust rsf_game_sdk_cpu_rust
         rsf_game_sdk_vk_latency_rust rsf_game_sdk_unity_sr_d3d12_rust rsf_game_sdk_d3d11_host_rust)
-    target_link_libraries(${archive} INTERFACE rsf_runtime_leaves minhook)
+    target_link_libraries(${archive} INTERFACE rsf_runtime_leaves minhook rsf_anomaly_native_leaves)
     if(MSVC)
         target_sources(${archive} INTERFACE "${rsf_anomaly_comctl6}")
     endif()
@@ -72,7 +73,10 @@ rsf_add_rust_static(rsf_anomaly_fixtures_rust rsf_rust_anomaly_fixtures
     --features fg-fixture,input-hook-fixture,overlay-device-fixture,motion-hooks-fixture,motion-binder-fixture,motion-device-fixture,native-hook-fixture,sr-fixtures)
 # rsf-minhook-sys leaves MinHook to the CMake link; native_memory.h includes the GameSDK headers. The archive names the
 # adapter's C leaves directly, so every executable that links it compiles them in (games/anomaly/CMakeLists.txt).
-target_link_libraries(rsf_anomaly_fixtures_rust INTERFACE minhook ReScaleFrame::GameSDK rsf_anomaly_native_leaves)
+# Their D3D11 state leaves come from ReScaleFrame::GraphicsLeaves, except in an executable that sets
+# RSF_RUNTIME_ARCHIVE because it links the Runtime archive, which embeds them.
+target_link_libraries(rsf_anomaly_fixtures_rust INTERFACE minhook ReScaleFrame::GameSDK rsf_anomaly_native_leaves
+    $<$<NOT:$<BOOL:$<TARGET_PROPERTY:RSF_RUNTIME_ARCHIVE>>>:ReScaleFrame::GraphicsLeaves>)
 if(MSVC)
     target_sources(rsf_anomaly_fixtures_rust INTERFACE "${rsf_anomaly_comctl6}")
 endif()

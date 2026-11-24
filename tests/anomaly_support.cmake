@@ -57,7 +57,7 @@ add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_h
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_fixtures_rust rsf_build_options)
 add_test(NAME anomaly_sr_hooks_contract COMMAND rsf_anomaly_sr_hooks_test)
 add_executable(rsf_anomaly_sr_roundtrip_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_roundtrip.c")
-target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_fixtures_rust ReScaleFrame::GraphicsLeaves
+target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_fixtures_rust
     ReScaleFrame::Graphics d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
 set_tests_properties(anomaly_sr_roundtrip_device PROPERTIES SKIP_RETURN_CODE 77)
@@ -157,6 +157,7 @@ foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_d
         # defines; that archive also defines the SR API, so this test links it instead of the DLL.
         target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_fixtures_rust rsf_orchestrator_rust
             ReScaleFrame::Graphics d3d11 dxgi)
+        set_target_properties(${rsf_sr5_client} PROPERTIES RSF_RUNTIME_ARCHIVE ON)
     endif()
     target_include_directories(${rsf_sr5_client} PRIVATE "${RSF_ANOMALY_SR_SRC}"
         "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"
