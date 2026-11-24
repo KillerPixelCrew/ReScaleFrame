@@ -499,13 +499,13 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
         event.completed = 1;
         unsafe { present_event(ptr::null_mut(), event) };
         rsf_anomaly_fg_stage_end_after();
-        let status = stage_status();
-        (status.presented, status.fed)
+        let (counts, _, _) = stage_status();
+        (counts.presented, counts.fed)
     };
     assert_eq!(run_frame(100, &mut event), (1, 0));
-    let status = stage_status();
-    assert_eq!(status.eligible_at_ui_boundary, 1);
-    assert_eq!(status.runtime_tagged, 0);
+    let (counts, tagged, _) = stage_status();
+    assert_eq!(counts.eligible_at_ui_boundary, 1);
+    assert_eq!(tagged, 0);
     assert_eq!(
         STAGE
             .get()

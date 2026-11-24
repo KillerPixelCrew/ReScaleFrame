@@ -541,7 +541,7 @@ impl Scene {
                 );
             }
         }
-        let st = stage_status();
+        let (st, _, captures) = stage_status();
         let rs = self.status();
         let active = self.active_by_backend.iter().any(|&count| count > 0);
         let overlay_draws = OVERLAY_DRAWS.get();
@@ -557,7 +557,7 @@ impl Scene {
             st.fed,
             st.presented,
             st.unpresented,
-            st.captures
+            captures
         );
         println!(
             "runtime: tagged={} vendor_presented={} effective_mode={} generated={} reason={} last_result={} vendor_status={}",
@@ -586,7 +586,7 @@ impl Scene {
             st.fed > 0 && st.eligible_at_ui_boundary >= st.fed,
             "fed count",
         );
-        checks.require(st.captures == 1, "one FG capture");
+        checks.require(captures == 1, "one FG capture");
         checks.require(overlay_draws > 0, "overlay rendered");
         if self.sr.is_some() {
             checks.require(evaluated > 0, "SR evaluated");

@@ -1041,13 +1041,11 @@ pub(crate) fn rsf_anomaly_fg_stage_end_after() {
     }
     stage.pass(ptr::null_mut(), &frame, false);
     stage.boundary(frame.source_frame_id, RSF_GAME_CPU_FRAME_END);
-    {
-        let mut engine = stage.engine.lock().unwrap();
-        if engine.policy.end().skip == RSF_ANOMALY_SKIP_NONE && engine.render.camera.is_some() {
-            engine.camera_fed = engine.render.camera;
-        }
+    let mut engine = stage.engine.lock().unwrap();
+    if engine.policy.end().skip == RSF_ANOMALY_SKIP_NONE && engine.render.camera.is_some() {
+        engine.camera_fed = engine.render.camera;
     }
-    stage.engine.lock().unwrap().phase = Phase::Idle;
+    engine.phase = Phase::Idle;
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -1133,37 +1131,16 @@ pub(crate) fn report(emit: rsf_game_log_fn, user: Raw) {
     ));
 }
 
-/// The adapter's frame counters as the tests and the device fixture judge them; each reads its own subset.
+/// The policy counters, the Runtime's tagged frames and the FG captures, as the tests and the device fixture judge
+/// them.
 #[cfg(any(test, feature = "fg-fixture"))]
-#[derive(Default)]
-#[allow(dead_code)]
-struct Status {
-    source_frames: u64,
-    level_frames: u64,
-    eligible_at_ui_boundary: u64,
-    fed: u64,
-    presented: u64,
-    unpresented: u64,
-    runtime_tagged: u64,
-    captures: u64,
-}
-
-#[cfg(any(test, feature = "fg-fixture"))]
-fn stage_status() -> Status {
+fn stage_status() -> (Counters, u64, u64) {
     let Some(stage) = installed() else {
-        return Status::default();
+        return Default::default();
     };
     let counts = stage.engine.lock().unwrap().policy.counters();
-    Status {
-        source_frames: counts.source_frames,
-        level_frames: counts.level_frames,
-        eligible_at_ui_boundary: counts.eligible_at_ui_boundary,
-        fed: counts.fed,
-        presented: counts.presented,
-        unpresented: counts.unpresented,
-        runtime_tagged: stage
-            .runtime_status()
-            .map_or(0, |runtime| runtime.tagged_frames),
-        captures: stage.options.capture.lock().unwrap().total,
-    }
+    let tagged = stage
+        .runtime_status()
+        .map_or(0, |runtime| runtime.tagged_frames);
+    (counts, tagged, stage.options.capture.lock().unwrap().total)
 }
