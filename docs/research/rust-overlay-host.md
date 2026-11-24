@@ -37,9 +37,9 @@ by `tools/generate-rust-bindings.py`.
 | --- | --- | --- |
 | `rsf_overlay_host_start` | AC7 `dlss_bridge.c` `overlay_tick` each Present; Runtime `overlay_platform.cpp` `start` for the overlay service; `tests/overlay_host.cpp` | The logger is replaced on every call. Started returns 1. A failed start stays failed until a stop. The swap chain selects the device. The order is panel, renderer, window and Insert subclass, with rollback in reverse. |
 | `rsf_overlay_host_start_device` | D3D11-on-12 `overlay_d3d12.cpp` `start`, called by the Rust wrapped owner | Started returns 1 and does not replace the logger. Null arguments and an earlier failure are refused before the logger changes. The startup hint clock starts here. |
-| `rsf_overlay_host_draw_target` | D3D11-on-12 `draw` | A busy host skips silently. The trace restarts when the panel opens. The hint and HUD window are unchanged. The intent is written even if the draw fails. A layout failure returns 0 without closing the panel. |
+| `rsf_overlay_host_draw_target` | D3D11-on-12 `draw` | A busy host skips silently. The trace restarts when the panel opens. The hint and HUD window are unchanged. The intent is written even if the draw fails. A layout failure returns 0 without closing the panel. Later replaced by the admitted-target pair the wrapped D3D12 owner calls by Rust path; the unadmitted entry is deleted. |
 | `rsf_overlay_host_visible` | AC7 refresh sampling, D3D11-on-12 `visible`, fixture | Reads an atomic started mirror and the input module, and never waits for a drawing thread. |
-| `rsf_overlay_host_toggle` | No caller in the tree | Same messages and behavior. |
+| `rsf_overlay_host_toggle` | No caller in the tree | Deleted, with its core (it never had a caller). |
 | `rsf_overlay_host_present` | AC7 `overlay_tick`, Runtime service `present`, fixture | A second thread logs the skipped-thread line. A failed host refuses before taking the lock. Device, back buffer and view admission and their logs are unchanged. Targets are restored and released on every path. |
 | `rsf_overlay_host_stop` | Runtime service `stop` (device reset), D3D11-on-12 `stop`, fixture | Clears the failure, closes and uninstalls input, destroys the renderer and panel, and releases the device. The panel DLL stays loaded. |
 
