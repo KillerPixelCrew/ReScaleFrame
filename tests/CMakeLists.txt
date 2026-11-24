@@ -103,11 +103,14 @@ if(MSVC)
     target_sources(rsf_anomaly_fixtures_rust INTERFACE "${rsf_anomaly_comctl6}")
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_host_rendered_fg_device.cmake")
-# Explicit regression investigation only: requires a scratch vendor-SDK root and NVIDIA GPU.
-add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_shared_sr_device.c)
+# Explicit regression investigation only: requires a scratch vendor-SDK root and NVIDIA GPU. The fixture archive
+# carries the Runtime, so the launcher takes the Runtime's C leaves (rsf_orchestrator_rust) and its presentation table
+# (d3d11_present_api.c) rather than its DLL.
+add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_shared_sr_device.c
+    ../runtime/orchestrator/src/d3d11_present_api.c)
 set_target_properties(rsf_d3d11_host_shared_sr_device PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_d3d11_host_shared_sr_device PRIVATE
-    rsf_presentation_d3d11_host_device_rust rsf_orchestrator rsf_build_options d3d11 dxgi dxguid)
+    rsf_presentation_d3d11_host_device_rust rsf_orchestrator_rust rsf_build_options d3d11 dxgi dxguid)
 # Executables that load a built DLL in a process of their own: the Vulkan exports, the Anomaly cold
 # start, the engine sharpening settings and the isolated Mono host.
 set(rsf_process_dir "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")

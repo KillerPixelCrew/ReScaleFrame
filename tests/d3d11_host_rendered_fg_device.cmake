@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: MIT
-# Explicit hardware experiment; never part of ALL or routine CTest.
+# Explicit hardware experiment; never part of ALL or routine CTest. The fixture archive carries the Runtime, so the
+# launcher takes the Runtime's C leaves (rsf_orchestrator_rust) and its presentation table (d3d11_present_api.c)
+# rather than its DLL.
 add_executable(rsf_d3d11_host_rendered_fg_device EXCLUDE_FROM_ALL
-    "${CMAKE_CURRENT_LIST_DIR}/d3d11_host_rendered_fg_device.c")
+    "${CMAKE_CURRENT_LIST_DIR}/d3d11_host_rendered_fg_device.c"
+    "${PROJECT_SOURCE_DIR}/runtime/orchestrator/src/d3d11_present_api.c")
 set_target_properties(rsf_d3d11_host_rendered_fg_device PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_d3d11_host_rendered_fg_device PRIVATE
-    rsf_presentation_d3d11_host_device_rust rsf_orchestrator rsf_build_options d3d11 d3d12 dxgi dxguid)
+    rsf_presentation_d3d11_host_device_rust rsf_orchestrator_rust rsf_build_options d3d11 d3d12 dxgi dxguid)
 # cmake --build build/windows-x64 --config Release --target rsf_d3d11_host_rendered_fg_device
 # build/windows-x64/bin/Release/rsf_d3d11_host_rendered_fg_device.exe <scratch-root>
 # Scratch root must contain streamline/ and fidelityfx/ with matching SDK files.
