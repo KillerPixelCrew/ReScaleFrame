@@ -130,10 +130,6 @@ unsafe fn explicit(owner: *mut Owner, chain: u64, source: *const rsf_frame_recor
     unsafe { rsf_ffxgvk_present_source(owner, ptr::from_ref(&info).cast(), source) }
 }
 
-fn routed() -> *mut c_void {
-    rsf_fixture_ffx_routed()
-}
-
 /// The launcher entry (tests/fixture_main_args.c): argv[1] selects the scenario. Capture and timing
 /// output stay disabled; the provider entries are the Runtime archive's (vulkan_ffx_fg.rs).
 #[unsafe(no_mangle)]

@@ -90,7 +90,8 @@ fn recorded() -> *mut Sdk {
     SDK.with(UnsafeCell::get)
 }
 
-fn routed() -> *mut c_void {
+/// The leaf the WSI route lends for the fixture device, or null.
+pub(super) fn routed() -> *mut c_void {
     let native = rsf_core_ffxgvk_wsi_borrow(ptr::without_provenance_mut(DEVICE), 1);
     if !native.is_null() {
         rsf_core_ffxgvk_wsi_return();
@@ -609,10 +610,6 @@ pub(super) unsafe fn rsf_fixture_ffx_start(
 
 pub(super) extern "C" fn rsf_fixture_ffx_native() -> *mut c_void {
     unsafe { (*recorded()).native }
-}
-
-pub(super) extern "C" fn rsf_fixture_ffx_routed() -> *mut c_void {
-    routed()
 }
 
 pub(super) extern "C" fn rsf_fixture_ffx_chain() -> u64 {

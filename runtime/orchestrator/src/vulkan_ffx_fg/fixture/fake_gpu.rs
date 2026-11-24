@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Fake Vulkan device, queue and WSI entries for the FFX fixture, and the state it observes.
-use super::fake_sdk::{rsf_fixture_ffx_chain, rsf_fixture_ffx_routed};
+use super::fake_sdk::{routed, rsf_fixture_ffx_chain};
 use super::rsf_fixture_ffx_refused_second_owner;
 use crate::sys::rsf_vk_function;
 use crate::vulkan_ffx_fg::{Owner, rsf_ffxgvk_destroy};
@@ -154,7 +154,7 @@ unsafe extern "system" fn wsi_present(
         (*route).presents += 1;
         if (*route).destroy_inside {
             (*route).destroyed_inside = rsf_ffxgvk_destroy((*route).owner);
-            (*route).routed_inside = rsf_fixture_ffx_routed();
+            (*route).routed_inside = routed();
             (*route).created_inside = rsf_fixture_ffx_refused_second_owner();
         }
     }
