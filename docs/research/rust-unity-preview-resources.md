@@ -158,6 +158,13 @@ refuses retirement if a submitted copy never received a signal.
 refuses the first signal and checks that no Present or ring advance follows.
 The fixture reports a completed fence value anyway and verifies the source
 remains retained and the old drain proof cannot authorize release.
+
+Correction (C++-reference pass `cppref-orch-d3d12-fg`): the presenter holds typed `windows`
+COM references again, as `preview.cpp` held `ComPtr`s, instead of raw handles with hand-written
+retain and release behind a fakeable leaf module. The fixtures above faked those handles and were
+removed with the leaf module. The behaviour they pinned (the fault flag after a refused signal,
+the drain proof before release, the stale-target refusal and old-chain retention) is unchanged in
+the code and is now covered only by an Editor run.
 `a_recycled_window_waits_for_the_old_chain_and_refuses_stale_presents`
 checks a new generation for the same HWND. Pending completion and device
 removal both keep the old chain, and a complete copy allows the replacement.
