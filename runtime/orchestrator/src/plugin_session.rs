@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::sdk_module::SdkModule;
 use crate::sync::lock;
+use rsf_game_sys::ffi_util::{checked, has_capacity};
 use rsf_game_sys::windows_path::absolute_wide_path;
 use rsf_game_sys::*;
 use rsf_game_sys::{RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options};
@@ -105,16 +106,11 @@ pub(super) unsafe extern "C" fn rsf_plugin_session_prepare(
         return INVALID_ARGUMENT;
     }
     unsafe { out.write(ptr::null_mut()) };
-    if options.is_null()
-        || (unsafe { options.cast::<u32>().read() } as usize)
-            < size_of::<rsf_plugin_session_options>()
-    {
+    let Some(options) = (unsafe { checked(options) }) else {
         return INVALID_ARGUMENT;
-    }
-    let options = unsafe { &*options };
+    };
     if !unsafe { absolute_wide_path(options.plugin_path, 32767) }
-        || options.probe.is_null()
-        || (unsafe { options.probe.cast::<u32>().read() } as usize) < size_of::<rsf_game_probe>()
+        || !unsafe { has_capacity(options.probe) }
         || (options.services.struct_size as usize) < size_of::<rsf_game_host_services>()
         || options.services.session_id == 0
     {
@@ -264,9 +260,7 @@ unsafe extern "C" fn rsf_plugin_session_status(
     let Some(session) = (unsafe { raw.as_ref() }) else {
         return INVALID_ARGUMENT;
     };
-    if out.is_null()
-        || (unsafe { out.cast::<u32>().read() } as usize) < size_of::<rsf_game_renderer_status>()
-    {
+    if !unsafe { has_capacity(out) } {
         return INVALID_ARGUMENT;
     }
     if unsafe { (*out).abi_version } != RSF_GAME_ABI_VERSION {
