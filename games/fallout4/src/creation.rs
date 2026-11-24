@@ -15,9 +15,7 @@ use crate::sys::{
     RSF_D3D11_HOST_ABI_VERSION, rsf_d3d11_creation_scope, rsf_d3d11_native_chain,
     rsf_d3d11_presentation_binding, rsf_fallout4_create_call,
 };
-use crate::{
-    EXECUTABLE, EXECUTABLE_SHA256, Plain, RSF_ERROR_NOT_READY, RSF_OK,
-};
+use crate::{EXECUTABLE, EXECUTABLE_SHA256, Plain, RSF_ERROR_NOT_READY, RSF_OK};
 use crate::{image, message, read};
 use rsf_game_sys::rsf_game_host_services;
 use rsf_game_sys::win32::typed_export;
