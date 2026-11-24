@@ -3,12 +3,11 @@ use super::{bundles, contents, entry, root, utf8};
 use crate::sys::*;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, rsf_frame_record};
-use rsf_test_support::frame_record;
+use rsf_test_support::{Library, frame_record};
 use std::ffi::{c_char, c_void};
 use std::sync::OnceLock;
 use std::{fs, mem, path::Path, ptr, slice};
 use windows_sys::Win32::System::Environment::SetEnvironmentVariableW;
-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
 static INSTANCE_PROC: OnceLock<vk::PFN_vkGetInstanceProcAddr> = OnceLock::new();
 static DEVICE_PROC: OnceLock<vk::PFN_vkGetDeviceProcAddr> = OnceLock::new();
@@ -48,20 +47,15 @@ struct Device {
 
 impl Device {
     fn open(api: &'static rsf_fixture_vk_capture_api) -> Result<Self, vk::Result> {
-        let module = unsafe { LoadLibraryW(windows::core::w!("vulkan-1.dll").as_ptr()) };
-        if module.is_null() {
-            return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
-        }
+        let loader = Library::vulkan(false).map_err(|_| vk::Result::ERROR_INITIALIZATION_FAILED)?;
+        let get = loader
+            .vulkan_instance_proc()
+            .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
         // Resolver callbacks outlive this fixture's Vulkan objects. Pin the loader
         // for the process, which runs exactly one fixture.
+        std::mem::forget(loader);
+        let _ = INSTANCE_PROC.set(get);
         let entry = unsafe {
-            let get = GetProcAddress(module, c"vkGetInstanceProcAddr".as_ptr().cast())
-                .ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
-            let get = mem::transmute::<
-                unsafe extern "system" fn() -> isize,
-                vk::PFN_vkGetInstanceProcAddr,
-            >(get);
-            let _ = INSTANCE_PROC.set(get);
             ash::Entry::from_static_fn(ash::StaticFn {
                 get_instance_proc_addr: get,
             })

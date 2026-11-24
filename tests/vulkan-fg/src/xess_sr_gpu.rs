@@ -7,18 +7,14 @@ use ash::{
     Entry, StaticFn,
     vk::{self, Handle as _},
 };
+use rsf_test_support::Library;
 use std::{
     ffi::{CStr, c_char, c_void},
     mem, ptr,
     slice::from_ref,
     sync::OnceLock,
 };
-use windows_sys::Win32::{
-    Foundation::{FreeLibrary, HMODULE},
-    System::LibraryLoader::{
-        GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-    },
-};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 180;
@@ -51,7 +47,7 @@ unsafe extern "C" fn device_proc(object: *mut c_void, name: *const c_char) -> rs
 
 #[derive(Default)]
 pub(super) struct Gpu {
-    module: HMODULE,
+    library: Option<Library>,
     instance: Option<ash::Instance>,
     device: Option<ash::Device>,
     memory: vk::PhysicalDeviceMemoryProperties,
@@ -67,23 +63,20 @@ pub(super) struct Gpu {
 
 impl Gpu {
     pub(super) fn open(setup: &mut rsf_srvk_setup) -> Result<Self, Failure> {
-        let name: Vec<_> = "vulkan-1.dll\0".encode_utf16().collect();
-        let module =
-            unsafe { LoadLibraryExW(name.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
-        require(!module.is_null(), "Vulkan loader")?;
+        let library = Library::vulkan(true).map_err(|_| "Vulkan loader")?;
         // Gpu releases its resources on drop, so it is filled in place rather than by update.
         let mut gpu = Self::default();
-        gpu.module = module;
+        gpu.library = Some(library);
         gpu.initialize(setup)?;
         Ok(gpu)
     }
 
     fn initialize(&mut self, setup: &mut rsf_srvk_setup) -> Result<(), Failure> {
-        let address =
-            unsafe { GetProcAddress(self.module, c"vkGetInstanceProcAddr".as_ptr().cast()) }
-                .ok_or("Vulkan instance dispatch")?;
-        let get_instance_proc_addr: vk::PFN_vkGetInstanceProcAddr =
-            unsafe { mem::transmute(address) };
+        let get_instance_proc_addr = self
+            .library
+            .as_ref()
+            .and_then(Library::vulkan_instance_proc)
+            .ok_or("Vulkan instance dispatch")?;
         require(
             unsafe { get_instance_proc_addr(vk::Instance::null(), c"vkCreateInstance".as_ptr()) }
                 .is_some(),
@@ -503,7 +496,6 @@ impl Drop for Gpu {
             if let Some(instance) = &self.instance {
                 instance.destroy_instance(None);
             }
-            FreeLibrary(self.module);
         }
     }
 }

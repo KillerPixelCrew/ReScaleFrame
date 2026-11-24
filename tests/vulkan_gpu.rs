@@ -3,38 +3,18 @@
 use super::TestResult;
 use crate::sys::rsf_vk_get_proc;
 use ash::vk;
-use std::{ffi::CStr, ffi::c_char, ptr};
-use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE};
-use windows_sys::Win32::System::LibraryLoader::{
-    GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-};
+pub(super) use rsf_test_support::Library;
+use std::{ffi::CStr, ffi::c_char};
 
 pub(super) const NO_LOADER: &str = "Vulkan loader unavailable";
 pub(super) const NO_DEVICE: &str = "enumerate GPUs";
 
-pub(super) struct Library(HMODULE);
-impl Drop for Library {
-    fn drop(&mut self) {
-        unsafe { FreeLibrary(self.0) };
-    }
-}
-
 /// The system Vulkan loader, or Streamline's interposer when `streamline` is given.
 pub(super) fn entry(streamline: rsf_vk_get_proc) -> TestResult<(Library, ash::Entry)> {
-    let path = crate::settings_store::wide("vulkan-1.dll");
-    let module =
-        unsafe { LoadLibraryExW(path.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
-    if module.is_null() {
-        return Err(NO_LOADER.into());
-    }
-    let library = Library(module);
-    let proc = unsafe { GetProcAddress(module, c"vkGetInstanceProcAddr".as_ptr().cast()) }
+    let library = Library::vulkan(true).map_err(|_| NO_LOADER)?;
+    let get_instance_proc_addr = library
+        .vulkan_instance_proc()
         .ok_or("missing vkGetInstanceProcAddr")?;
-    let get_instance_proc_addr = unsafe {
-        std::mem::transmute::<unsafe extern "system" fn() -> isize, vk::PFN_vkGetInstanceProcAddr>(
-            proc,
-        )
-    };
     let get_instance_proc_addr = streamline.map_or(get_instance_proc_addr, |proc| unsafe {
         std::mem::transmute::<_, vk::PFN_vkGetInstanceProcAddr>(proc)
     });

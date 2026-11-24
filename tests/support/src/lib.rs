@@ -21,7 +21,8 @@ use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_SWAP_CHAIN_DESC, IDXGIAdapter, IDXGIFactory4, IDXGISwapChain,
 };
 use windows::Win32::System::LibraryLoader::{
-    GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_FLAGS, LoadLibraryExW,
+    GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_FLAGS, LOAD_LIBRARY_SEARCH_SYSTEM32,
+    LoadLibraryExW,
 };
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -366,6 +367,22 @@ impl Library {
 
     pub fn symbol(&self, name: &CStr) -> Option<unsafe extern "system" fn() -> isize> {
         unsafe { GetProcAddress(self.0, PCSTR(name.as_ptr().cast())) }
+    }
+
+    /// The Vulkan loader, searched for in System32 only when `system32` is set.
+    pub fn vulkan(system32: bool) -> Result<Self> {
+        let flags = if system32 {
+            LOAD_LIBRARY_SEARCH_SYSTEM32
+        } else {
+            LOAD_LIBRARY_FLAGS(0)
+        };
+        Self::open(OsStr::new("vulkan-1.dll"), flags)
+    }
+
+    /// `vkGetInstanceProcAddr` of the Vulkan loader.
+    pub fn vulkan_instance_proc(&self) -> Option<vk::PFN_vkGetInstanceProcAddr> {
+        let address = self.symbol(c"vkGetInstanceProcAddr")?;
+        Some(unsafe { std::mem::transmute::<_, vk::PFN_vkGetInstanceProcAddr>(address) })
     }
 }
 

@@ -7,15 +7,12 @@ use crate::xess_bridge_abi::{
 };
 use ash::{Entry, StaticFn, vk, vk::Handle as _};
 use rsf_game_sys::ffi_util::wide;
+use rsf_test_support::Library;
 use std::{
     ffi::{c_char, c_void},
     mem,
     ptr::{self, null_mut},
     sync::OnceLock,
-};
-use windows_sys::Win32::{
-    Foundation::FreeLibrary,
-    System::LibraryLoader::{GetProcAddress, LoadLibraryW},
 };
 
 type Handle = *mut c_void;
@@ -280,21 +277,12 @@ fn exercise(
 }
 
 fn device(runtime: *const u16, present: bool) -> i32 {
-    let name = wide("vulkan-1.dll");
-    let loader = unsafe { LoadLibraryW(name.as_ptr()) };
-    if loader.is_null() {
+    let Ok(loader) = Library::vulkan(false) else {
         return 20;
-    }
+    };
     let result = (|| {
-        let Some(get_proc) =
-            (unsafe { GetProcAddress(loader, c"vkGetInstanceProcAddr".as_ptr().cast()) })
-        else {
+        let Some(get_instance_proc_addr) = loader.vulkan_instance_proc() else {
             return (21, true);
-        };
-        let get_instance_proc_addr = unsafe {
-            mem::transmute::<unsafe extern "system" fn() -> isize, vk::PFN_vkGetInstanceProcAddr>(
-                get_proc,
-            )
         };
         INSTANCE_PROC.get_or_init(|| get_instance_proc_addr);
         let entry = unsafe {
@@ -325,8 +313,9 @@ fn device(runtime: *const u16, present: bool) -> i32 {
         }
         (result, retired)
     })();
-    if result.1 {
-        unsafe { FreeLibrary(loader) };
+    // Resolver callbacks outlive an owner that was not retired, so its loader stays mapped.
+    if !result.1 {
+        mem::forget(loader);
     }
     result.0
 }
