@@ -32,7 +32,7 @@ use crate::vulkan_fg_wsi::{
     rsf_core_vkfg_wsi_destroy, rsf_core_vkfg_wsi_images, rsf_core_vkfg_wsi_present,
 };
 use crate::vulkan_timing::{
-    rsf_core_vk_timing_begin, rsf_core_vk_timing_end, timing_begin, timing_end,
+    timing_begin, timing_end,
 };
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::RSF_FRAME_FLAG_RESET;
@@ -1023,12 +1023,12 @@ pub(super) unsafe extern "C" fn copy(native: Handle, commands: Handle, plan: *co
     unsafe { rsf_core_vkfg_record_copy(bound!(leaf.copy), command_buffer(commands), &*plan) };
 }
 
-pub(super) unsafe extern "C" fn configure(
+pub(super) unsafe fn configure(
     native: Handle,
     enabled: u32,
     color: u64,
     frame: u64,
-    stage: *const c_char,
+    stage: &'static str,
 ) -> i32 {
     let leaf = unsafe { leaf(native) };
     let enabled = enabled != 0;
@@ -1065,13 +1065,9 @@ pub(super) unsafe extern "C" fn configure(
         },
         frameID: frame,
     };
-    let start = if stage.is_null() {
-        0
-    } else {
-        rsf_core_vk_timing_begin()
-    };
+    let start = timing_begin();
     let configured = unsafe { bound!(leaf.sdk.configure)(leaf.effect.get(), &mut config.header) };
-    unsafe { rsf_core_vk_timing_end(stage, frame, start) };
+    timing_end(stage, frame, start);
     result(configured, FEATURE_FAILED)
 }
 
@@ -1165,9 +1161,7 @@ pub(super) mod leaf {
         fence_timing, images, open, prepare, present, query_provider, query_swapchain, set_wsi,
     };
     use crate::vulkan_fg_resources::{Platform as Resources, device::DEVICE_PLATFORM};
-    pub(in crate::vulkan_ffx_fg) use crate::vulkan_timing::{
-        rsf_core_vk_timing_begin as timing_begin, rsf_core_vk_timing_end as timing_end,
-    };
+    pub(in crate::vulkan_ffx_fg) use crate::vulkan_timing::{timing_begin, timing_end};
 
     pub(in crate::vulkan_ffx_fg) fn resources() -> &'static Resources {
         &DEVICE_PLATFORM

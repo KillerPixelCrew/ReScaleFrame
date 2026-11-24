@@ -189,13 +189,13 @@ fn presented(result: i32) -> bool {
 /// Nested diagnostics scope. The native leaf writes nothing unless the
 /// opt-in Vulkan timing file is configured.
 struct Timing {
-    stage: &'static CStr,
+    stage: &'static str,
     frame: u64,
     start: i64,
 }
 
 impl Timing {
-    fn new(stage: &'static CStr, frame: u64) -> Self {
+    fn new(stage: &'static str, frame: u64) -> Self {
         Self {
             stage,
             frame,
@@ -206,7 +206,7 @@ impl Timing {
 
 impl Drop for Timing {
     fn drop(&mut self) {
-        unsafe { leaf::timing_end(self.stage.as_ptr(), self.frame, self.start) };
+        leaf::timing_end(self.stage, self.frame, self.start);
     }
 }
 
@@ -418,7 +418,7 @@ impl Owner {
         let Some(record) = self.valid_record(frame) else {
             return INVALID_ARGUMENT;
         };
-        let _timing = Timing::new(c"ffx_prepare_total", record.frame_id);
+        let _timing = Timing::new("ffx_prepare_total", record.frame_id);
         if !self.enabled && !self.wants(record.frame_id) {
             return OK;
         }
@@ -552,10 +552,10 @@ impl Owner {
             None => (None, 0, self.timeline.last_prepared.frame_id),
         };
         let stage = match (slot.is_some(), self.configured) {
-            (true, true) => c"ffx_configure_update",
-            (true, false) => c"ffx_configure_enable",
-            (false, true) => c"ffx_configure_disable",
-            (false, false) => c"ffx_configure_disabled",
+            (true, true) => "ffx_configure_update",
+            (true, false) => "ffx_configure_enable",
+            (false, true) => "ffx_configure_disable",
+            (false, false) => "ffx_configure_disabled",
         };
         let enabled = record.is_some();
         if unsafe {
@@ -564,7 +564,7 @@ impl Owner {
                 u32::from(enabled),
                 color,
                 frame,
-                stage.as_ptr(),
+                stage,
             )
         } != OK
         {
@@ -580,7 +580,7 @@ impl Owner {
 
     fn present(&mut self, info: *const c_void, chain: u64, source: &PresentSource) -> i32 {
         let source_frame = source.frame(self.timeline.last_prepared.frame_id);
-        let _timing = Timing::new(c"ffx_present_total", source_frame);
+        let _timing = Timing::new("ffx_present_total", source_frame);
         if chain == 0 || chain != self.chain {
             return VK_INITIALIZATION_FAILED;
         }
@@ -1220,12 +1220,12 @@ mod tests {
     }
     pub(super) unsafe extern "C" fn barrier(_: Handle, _: Handle, _: *const Barrier) {}
     pub(super) unsafe extern "C" fn copy(_: Handle, _: Handle, _: *const ImageCopy) {}
-    pub(super) unsafe extern "C" fn configure(
+    pub(super) unsafe fn configure(
         _: Handle,
         enabled: u32,
         _: u64,
         frame: u64,
-        _: *const c_char,
+        _: &'static str,
     ) -> i32 {
         calls(|c| c.configures.push(if enabled == 0 { 0 } else { frame }));
         OK
@@ -1261,10 +1261,10 @@ mod tests {
     }
     pub(super) unsafe extern "C" fn flush(_: Handle) {}
     pub(super) unsafe extern "C" fn fence_timing(_: Handle, _: u64) {}
-    pub(super) extern "C" fn timing_begin() -> i64 {
+    pub(super) fn timing_begin() -> i64 {
         0
     }
-    pub(super) unsafe extern "C" fn timing_end(_: *const c_char, _: u64, _: i64) {}
+    pub(super) fn timing_end(_: &str, _: u64, _: i64) {}
 
     unsafe extern "C" fn local_types(_: Handle) -> u32 {
         1

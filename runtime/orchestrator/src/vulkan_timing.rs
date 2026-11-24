@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
 use rsf_game_sys::windows_path;
-use std::ffi::{CStr, OsStr, c_char};
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
@@ -114,11 +114,6 @@ fn begin(timing: &Timing) -> i64 {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_core_vk_timing_begin() -> i64 {
-    timing_begin()
-}
-
 pub(crate) fn timing_begin() -> i64 {
     INITIALIZE.call_once(|| {
         let Some(timing) = crate::diagnostic_preferences::value("RSF_VULKAN_TIMING_FILE")
@@ -136,20 +131,6 @@ pub(crate) fn timing_begin() -> i64 {
         }
     });
     unsafe { TIMING.load(Ordering::Acquire).as_ref() }.map_or(0, begin)
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_core_vk_timing_end(
-    stage: *const c_char,
-    frame: u64,
-    start: i64,
-) {
-    if start > 0
-        && !stage.is_null()
-        && let Ok(stage) = unsafe { CStr::from_ptr(stage) }.to_str()
-    {
-        timing_end(stage, frame, start);
-    }
 }
 
 pub(crate) fn timing_end(stage: &str, frame: u64, start: i64) {
