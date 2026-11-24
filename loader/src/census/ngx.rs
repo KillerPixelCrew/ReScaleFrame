@@ -1,25 +1,20 @@
 // SPDX-License-Identifier: MIT
+use super::Ids;
 use super::hooks::rsf_census_hook_original;
 use super::json::{Json, emit_decimal, rsf_census_json_i64, rsf_census_json_wide};
 use super::memory::{plausible, read};
 use super::platform;
-use super::rsf_census_call_state;
-use super::session::{rsf_census_call_begin, rsf_census_call_finish};
+use super::session::{Args, Call};
 use crate::sys::RSF_CENSUS_NGX_ENTRIES;
 use std::ffi::{CStr, c_void};
 use std::mem::{MaybeUninit, transmute};
 use std::ptr::null_mut;
-use std::sync::{
-    OnceLock,
-    atomic::{
-        AtomicPtr,
-        Ordering::{Acquire, Release},
-    },
+use std::sync::atomic::{
+    AtomicPtr,
+    Ordering::{Acquire, Release},
 };
-use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
 
 type Ptr = *mut c_void;
-type Args = [u64; 8];
 type Original = unsafe extern "system" fn(u64, u64, u64, u64, u64, u64, u64, u64) -> u64;
 const ENTRIES: usize = RSF_CENSUS_NGX_ENTRIES as usize;
 const GROUP: usize = 14;
@@ -27,16 +22,7 @@ const D3D12: usize = 0;
 const D3D11: usize = 1;
 const SUCCESS: u32 = 1;
 
-struct Services {
-    entries: [u16; ENTRIES],
-}
-static SERVICES: OnceLock<Services> = OnceLock::new();
-
-fn services() -> &'static Services {
-    SERVICES
-        .get()
-        .expect("NGX entries require an initialized platform")
-}
+static IDS: Ids<ENTRIES> = Ids::new();
 
 type Created = unsafe extern "C" fn(Ptr, *const c_void, u32);
 type Evaluate = unsafe extern "C" fn(Ptr, Ptr, *const c_void, u32, u64);
@@ -403,23 +389,15 @@ extern "system" fn wrapper<const ENTRY: usize>(
     a6: u64,
     a7: u64,
 ) -> u64 {
-    let mut caller = null_mut();
-    unsafe { RtlCaptureStackBackTrace(1, 1, &mut caller, null_mut()) };
-    let entry = services().entries[ENTRY];
+    let entry = IDS.get(ENTRY);
     let original = rsf_census_hook_original(entry);
-    let mut state = MaybeUninit::<rsf_census_call_state>::uninit();
-    let call = state.as_mut_ptr();
-    unsafe { rsf_census_call_begin(call, entry, caller) };
+    let mut slot = MaybeUninit::uninit();
+    let mut call = Call::begin(&mut slot, entry, caller!());
     let api = ENTRY / GROUP;
     let operation = ENTRY % GROUP;
     let args = [a0, a1, a2, a3, a4, a5, a6, a7];
-    if unsafe { (*call).full } {
-        pre_decode(
-            &mut Json(unsafe { &mut (*call).json }),
-            api,
-            operation,
-            &args,
-        );
+    if let Some(mut json) = call.json() {
+        pre_decode(&mut json, api, operation, &args);
     }
     if api == D3D12 && operation == 12 {
         observe_evaluate(&args, 0, 0);
@@ -430,16 +408,15 @@ extern "system" fn wrapper<const ENTRY: usize>(
         let forward = unsafe { transmute::<Ptr, Original>(original) };
         unsafe { forward(a0, a1, a2, a3, a4, a5, a6, a7) }
     };
-    if unsafe { (*call).full } {
-        post_decode(&mut Json(unsafe { &mut (*call).json }), operation, &args);
+    if let Some(mut json) = call.json() {
+        post_decode(&mut json, operation, &args);
     }
     if api == D3D12 {
         observe_result(operation, &args, result);
     }
-    unsafe { rsf_census_call_finish(call, result) };
+    call.finish(result);
     result
 }
-
 macro_rules! group {
     ($base:literal) => {
         [
@@ -462,7 +439,7 @@ macro_rules! group {
 }
 
 pub(super) unsafe fn rsf_census_ngx_bind(entries: &[u16; ENTRIES], output: &mut [Ptr; ENTRIES]) {
-    let _ = SERVICES.set(Services { entries: *entries });
+    IDS.bind(entries);
     for (slots, functions) in
         output
             .chunks_exact_mut(GROUP)

@@ -66,6 +66,25 @@ fn platform() -> &'static rsf_census_platform {
         .0
 }
 
+/// The census id of each hooked entry of one family, given when its wrappers are bound.
+struct Ids<const N: usize>(OnceLock<[u16; N]>);
+
+impl<const N: usize> Ids<N> {
+    const fn new() -> Self {
+        Self(OnceLock::new())
+    }
+
+    fn bind(&self, ids: &[u16; N]) {
+        let _ = self.0.set(*ids);
+    }
+
+    fn get(&self, entry: usize) -> u16 {
+        self.0
+            .get()
+            .expect("wrappers run only after their ids are bound")[entry]
+    }
+}
+
 const RSF_CENSUS_RECORD_BODY_MAX: usize = 6144;
 const RSF_CENSUS_RECORD_STACK_FRAMES: usize = 32;
 const RSF_CENSUS_RECORD_THREAD_NAME: usize = 40;

@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: MIT
+use super::Ids;
 use super::hooks::{bind_named, rsf_census_hook_original};
 use super::json::Json;
 use super::platform;
-use super::rsf_census_call_state;
-use super::session::{rsf_census_active, rsf_census_call_begin, rsf_census_call_finish};
+use super::session::{Call, rsf_census_active};
 use super::stats::{
     rsf_census_present_enter, rsf_census_present_leave, rsf_census_stats_queue_describe,
     rsf_census_stats_queue_submit,
 };
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
-use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
-use std::sync::OnceLock;
 
 type Handle = *mut c_void;
 type Info = *const c_void;
@@ -22,52 +20,10 @@ type Entry = rsf_census_vk_entry;
 const COUNT: usize = RSF_CENSUS_VK_COUNT as usize;
 const VULKAN_QUEUE: u8 = 2;
 
-struct Services {
-    entries: [u16; COUNT],
-}
-static SERVICES: OnceLock<Services> = OnceLock::new();
-
-fn services() -> &'static Services {
-    SERVICES
-        .get()
-        .expect("Vulkan wrapper registered without services")
-}
+static IDS: Ids<COUNT> = Ids::new();
 
 fn id(entry: Entry) -> u16 {
-    services().entries[entry as usize]
-}
-
-// Capture from the actual entry wrapper, before going through another Rust or native call frame.
-struct Call<'a> {
-    storage: *mut rsf_census_call_state,
-    _borrow: PhantomData<&'a mut MaybeUninit<rsf_census_call_state>>,
-}
-
-impl<'a> Call<'a> {
-    fn begin(
-        storage: &'a mut MaybeUninit<rsf_census_call_state>,
-        entry: Entry,
-        caller: Handle,
-    ) -> Self {
-        let storage = storage.as_mut_ptr();
-        unsafe { rsf_census_call_begin(storage, id(entry), caller) };
-        Self {
-            storage,
-            _borrow: PhantomData,
-        }
-    }
-
-    fn json(&mut self) -> Option<Json<'_>> {
-        unsafe {
-            (*self.storage)
-                .full
-                .then(|| Json(&mut (*self.storage).json))
-        }
-    }
-
-    fn finish(self, result: u64) {
-        unsafe { rsf_census_call_finish(self.storage, result) };
-    }
+    IDS.get(entry as usize)
 }
 
 fn read<const N: usize>(address: Info, offset: usize) -> Option<[u8; N]> {
@@ -115,7 +71,7 @@ fn proc_addr(entry: Entry, caller: Handle, handle: Handle, name: *const c_char) 
         unsafe extern "system" fn(Handle, *const c_char) -> Handle
     );
     let mut storage = MaybeUninit::uninit();
-    let mut record = Call::begin(&mut storage, entry, caller);
+    let mut record = Call::begin(&mut storage, id(entry), caller);
     let mut copied_name = [0; 96];
     let have_name = read_name(name.cast(), &mut copied_name);
     let result = original.map_or(null_mut(), |call| unsafe { call(handle, name) });
@@ -185,7 +141,7 @@ extern "system" fn create_instance(info: Info, allocator: Info, out: *mut Handle
         unsafe extern "system" fn(Info, Info, *mut Handle) -> VkResult
     );
     let mut storage = MaybeUninit::uninit();
-    let mut record = Call::begin(&mut storage, entry, caller);
+    let mut record = Call::begin(&mut storage, id(entry), caller);
     if let Some(mut json) = record.json() {
         instance_info(&mut json, info);
     }
@@ -237,7 +193,7 @@ extern "system" fn create_device(
         unsafe extern "system" fn(Handle, Info, Info, *mut Handle) -> VkResult
     );
     let mut storage = MaybeUninit::uninit();
-    let mut record = Call::begin(&mut storage, entry, caller);
+    let mut record = Call::begin(&mut storage, id(entry), caller);
     if let Some(mut json) = record.json() {
         device_info(&mut json, physical, info);
     }
@@ -258,7 +214,7 @@ extern "system" fn get_queue(device: Handle, family: u32, index: u32, out: *mut 
         unsafe extern "system" fn(Handle, u32, u32, *mut Handle)
     );
     let mut storage = MaybeUninit::uninit();
-    let mut record = Call::begin(&mut storage, entry, caller);
+    let mut record = Call::begin(&mut storage, id(entry), caller);
     if let Some(mut json) = record.json() {
         json.hex(Some(c"device"), device as u64);
         json.number(Some(c"family"), family);
@@ -295,7 +251,7 @@ extern "system" fn get_queue2(device: Handle, info: Info, out: *mut Handle) {
     let caller = caller!();
     let original = original!(entry, unsafe extern "system" fn(Handle, Info, *mut Handle));
     let mut storage = MaybeUninit::uninit();
-    let mut record = Call::begin(&mut storage, entry, caller);
+    let mut record = Call::begin(&mut storage, id(entry), caller);
     if let Some(mut json) = record.json() {
         json.hex(Some(c"device"), device as u64);
         if let Some(info) = read::<32>(info, 0) {
@@ -343,7 +299,7 @@ fn submit(
         unsafe extern "system" fn(Handle, u32, Info, u64) -> VkResult
     );
     let mut storage = MaybeUninit::uninit();
-    let mut record = Call::begin(&mut storage, entry, caller);
+    let mut record = Call::begin(&mut storage, id(entry), caller);
     if let Some(mut json) = record.json() {
         json.hex(Some(c"queue"), queue as u64);
         json.number(Some(c"batches"), count);
@@ -438,7 +394,7 @@ extern "system" fn queue_present(queue: Handle, info: Info) -> VkResult {
     let original = original!(entry, unsafe extern "system" fn(Handle, Info) -> VkResult);
     rsf_census_present_enter(false);
     let mut storage = MaybeUninit::uninit();
-    let mut record = Call::begin(&mut storage, entry, caller);
+    let mut record = Call::begin(&mut storage, id(entry), caller);
     if let Some(mut json) = record.json() {
         present_info(&mut json, queue, info);
     }
@@ -501,7 +457,7 @@ extern "system" fn create_swapchain(
         unsafe extern "system" fn(Handle, Info, Info, *mut u64) -> VkResult
     );
     let mut storage = MaybeUninit::uninit();
-    let mut record = Call::begin(&mut storage, entry, caller);
+    let mut record = Call::begin(&mut storage, id(entry), caller);
     if let Some(mut json) = record.json() {
         swapchain_info(&mut json, device, info);
     }
@@ -516,7 +472,7 @@ extern "system" fn create_swapchain(
 }
 
 pub(super) unsafe fn rsf_census_vk_bind(ids: &[u16; COUNT], wrappers: &mut [Handle; COUNT]) {
-    let _ = SERVICES.set(Services { entries: *ids });
+    IDS.bind(ids);
     let entries: [(Entry, Handle); COUNT] = [
         (
             RSF_CENSUS_VkGetInstanceProcAddr,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // FSR 2.1.2, FidelityFX API, XeSS, XeFG and XeLL diagnostic wrappers.
 #![allow(non_upper_case_globals)]
+use super::Ids;
 use super::decode::rsf_census_dxgi_format_name;
 use super::hooks::rsf_census_hook_original;
 use super::json::{
@@ -8,16 +9,13 @@ use super::json::{
 };
 use super::memory::{plausible, read, u32_at, u64_at};
 use super::platform;
-use super::rsf_census_call_state;
-use super::session::{rsf_census_call_begin, rsf_census_call_finish};
+use super::session::{Args, Call, forward8};
 use crate::sys::*;
 use std::ffi::{CStr, c_void};
 use std::mem::MaybeUninit;
-use std::sync::OnceLock;
 use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_DESC1};
 
 type Ptr = *mut c_void;
-type Args = [u64; 8];
 type Entry = rsf_census_fsr_entry;
 const COUNT: usize = RSF_FSR_COUNT as usize;
 const FSR2_RESOURCE: usize = 184;
@@ -33,22 +31,9 @@ const RESOURCE_KEYS: [&CStr; 7] = [
     c"output",
 ];
 
-struct Services {
-    entries: [u16; COUNT],
-}
-static SERVICES: OnceLock<Services> = OnceLock::new();
+static IDS: Ids<COUNT> = Ids::new();
 fn id(entry: Entry) -> u16 {
-    SERVICES.get().unwrap().entries[entry as usize]
-}
-
-fn start(
-    slot: &mut MaybeUninit<rsf_census_call_state>,
-    entry: Entry,
-    caller: Ptr,
-) -> *mut rsf_census_call_state {
-    let call = slot.as_mut_ptr();
-    unsafe { rsf_census_call_begin(call, id(entry), caller) };
-    call
+    IDS.get(entry as usize)
 }
 
 fn float(data: &[u8], offset: usize) -> f32 {
@@ -805,39 +790,26 @@ extern "system" fn wrapper<const ENTRY: Entry>(
     a6: u64,
     a7: u64,
 ) -> u64 {
-    let pc = caller!();
-    let original = original!(
-        ENTRY,
-        unsafe extern "system" fn(u64, u64, u64, u64, u64, u64, u64, u64) -> u64
-    );
-    let mut slot = MaybeUninit::uninit();
-    let call = start(&mut slot, ENTRY, pc);
-    let args = [a0, a1, a2, a3, a4, a5, a6, a7];
-    if unsafe { (*call).full } {
-        pre(ENTRY, &mut Json(unsafe { &mut (*call).json }), &args);
-    }
-    let result = original.map_or(0, |function| unsafe {
-        function(a0, a1, a2, a3, a4, a5, a6, a7)
-    });
-    if unsafe { (*call).full } {
-        post(ENTRY, &mut Json(unsafe { &mut (*call).json }), &args);
-    }
-    unsafe { rsf_census_call_finish(call, result) };
-    result
+    forward8(
+        id(ENTRY),
+        caller!(),
+        [a0, a1, a2, a3, a4, a5, a6, a7],
+        |json, args| pre(ENTRY, json, args),
+        |json, args| post(ENTRY, json, args),
+    )
 }
 
 fn xess_scale(entry: Entry, pc: Ptr, context: Ptr, x: f32, y: f32) -> i32 {
     let original = original!(entry, unsafe extern "system" fn(Ptr, f32, f32) -> i32);
     let mut slot = MaybeUninit::uninit();
-    let call = start(&mut slot, entry, pc);
-    if unsafe { (*call).full } {
-        let mut json = Json(unsafe { &mut (*call).json });
+    let mut call = Call::begin(&mut slot, id(entry), pc);
+    if let Some(mut json) = call.json() {
         json.hex(Some(c"context"), context as u64);
         json.decimal(c"x", x);
         json.decimal(c"y", y);
     }
     let result = original.map_or(0, |function| unsafe { function(context, x, y) });
-    unsafe { rsf_census_call_finish(call, u64::from(result as u32)) };
+    call.finish(u64::from(result as u32));
     result
 }
 
@@ -857,14 +829,13 @@ extern "system" fn exposure_scale(context: Ptr, scale: f32) -> i32 {
     let entry = RSF_FSR_XessSetExposureMultiplier;
     let original = original!(entry, unsafe extern "system" fn(Ptr, f32) -> i32);
     let mut slot = MaybeUninit::uninit();
-    let call = start(&mut slot, entry, pc);
-    if unsafe { (*call).full } {
-        let mut json = Json(unsafe { &mut (*call).json });
+    let mut call = Call::begin(&mut slot, id(entry), pc);
+    if let Some(mut json) = call.json() {
         json.hex(Some(c"context"), context as u64);
         json.decimal(c"scale", scale);
     }
     let result = original.map_or(0, |function| unsafe { function(context, scale) });
-    unsafe { rsf_census_call_finish(call, u64::from(result as u32)) };
+    call.finish(u64::from(result as u32));
     result
 }
 
@@ -874,20 +845,19 @@ extern "system" fn upscale_ratio(mode: i32) -> f32 {
     let entry = RSF_FSR_Fsr2GetUpscaleRatio;
     let original = original!(entry, unsafe extern "system" fn(i32) -> f32);
     let mut slot = MaybeUninit::uninit();
-    let call = start(&mut slot, entry, pc);
-    if unsafe { (*call).full } {
-        Json(unsafe { &mut (*call).json }).signed(c"quality_mode", mode);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
+    if let Some(mut json) = call.json() {
+        json.signed(c"quality_mode", mode);
     }
     let result = original.map_or(0.0, |function| unsafe { function(mode) });
-    if unsafe { (*call).full } {
-        Json(unsafe { &mut (*call).json }).decimal(c"ratio", result);
+    if let Some(mut json) = call.json() {
+        json.decimal(c"ratio", result);
     }
-    unsafe { rsf_census_call_finish(call, 0) };
+    call.finish(0);
     result
 }
-
 pub(super) unsafe fn rsf_census_fsr_bind(entries: &[u16; COUNT], output: &mut [Ptr; COUNT]) {
-    let _ = SERVICES.set(Services { entries: *entries });
+    IDS.bind(entries);
     *output = [
         wrapper::<RSF_FSR_Fsr2ContextCreate> as Ptr,
         wrapper::<RSF_FSR_Fsr2ContextDispatch> as Ptr,

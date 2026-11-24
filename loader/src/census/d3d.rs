@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
+use super::Ids;
 use super::decode::rsf_census_dxgi_format_name;
 use super::hooks::{rsf_census_hook_bind_inline, rsf_census_hook_original, rsf_census_hooks_apply};
 use super::json::{Json, rsf_census_json_raw, rsf_census_json_string};
 use super::platform;
-use super::rsf_census_call_state;
-use super::session::{
-    rsf_census_active, rsf_census_call_begin, rsf_census_call_finish, rsf_census_flags,
-};
+use super::session::{Call, rsf_census_active, rsf_census_flags};
 use super::stats::{
     rsf_census_present_enter, rsf_census_present_leave, rsf_census_stats_queue_describe,
     rsf_census_stats_queue_submit,
@@ -15,13 +13,9 @@ use crate::sys::RSF_CENSUS_FLAG_D3D12_DEBUG_ONLY;
 use crate::sys::*;
 use std::ffi::{CStr, c_void};
 use std::io::Write;
-use std::marker::PhantomData;
 use std::mem::{MaybeUninit, transmute};
 use std::ptr::{null, null_mut};
-use std::sync::{
-    OnceLock,
-    atomic::{AtomicBool, AtomicI32, AtomicPtr, Ordering::*},
-};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, Ordering::*};
 use windows::{
     Win32::{
         Foundation::E_NOINTERFACE,
@@ -55,10 +49,7 @@ const QUEUE: u8 = 1;
 const E_FAIL: i32 = 0x8000_4005u32 as i32;
 const DEBUG_LAYER: u32 = 8;
 
-struct Services {
-    entries: [u16; COUNT],
-}
-static SERVICES: OnceLock<Services> = OnceLock::new();
+static IDS: Ids<COUNT> = Ids::new();
 static LAST_COLOR: AtomicI32 = AtomicI32::new(-1);
 static DEBUG: AtomicBool = AtomicBool::new(false);
 static CREATED_DEVICE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
@@ -109,32 +100,8 @@ fn notify_submit(observer: &AtomicPtr<c_void>, queue: Ptr, count: u32, lists: *c
     }
 }
 
-fn services() -> &'static Services {
-    SERVICES.get().expect("D3D wrappers require registration")
-}
 fn id(entry: Entry) -> u16 {
-    services().entries[entry as usize]
-}
-
-struct Call<'a> {
-    state: *mut rsf_census_call_state,
-    _lease: PhantomData<&'a mut MaybeUninit<rsf_census_call_state>>,
-}
-impl<'a> Call<'a> {
-    fn begin(slot: &'a mut MaybeUninit<rsf_census_call_state>, entry: Entry, caller: Ptr) -> Self {
-        let state = slot.as_mut_ptr();
-        unsafe { rsf_census_call_begin(state, id(entry), caller) };
-        Self {
-            state,
-            _lease: PhantomData,
-        }
-    }
-    fn json(&mut self) -> Option<Json<'_>> {
-        unsafe { (*self.state).full.then(|| Json(&mut (*self.state).json)) }
-    }
-    fn finish(self, result: u64) {
-        unsafe { rsf_census_call_finish(self.state, result) };
-    }
+    IDS.get(entry as usize)
 }
 
 trait D3dJson {
@@ -302,7 +269,7 @@ fn create_factory(
     flags: Option<u32>,
 ) -> i32 {
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         if let Some(flags) = flags {
             json.hex(Some(c"flags"), flags.into());
@@ -350,7 +317,7 @@ extern "system" fn factory2(flags: u32, iid: *const GUID, out: *mut Ptr) -> i32 
 unsafe extern "system" fn debug_message(
     category: D3D12_MESSAGE_CATEGORY,
     level: D3D12_MESSAGE_SEVERITY,
-    id: D3D12_MESSAGE_ID,
+    message: D3D12_MESSAGE_ID,
     text: PCSTR,
     device: Ptr,
 ) {
@@ -358,11 +325,11 @@ unsafe extern "system" fn debug_message(
         return;
     }
     const LEVELS: [&CStr; 5] = [c"corruption", c"error", c"warning", c"info", c"message"];
-    let pc = (0x1_0000u32.wrapping_add(id.0 as u32)) as Ptr;
+    let pc = (0x1_0000u32.wrapping_add(message.0 as u32)) as Ptr;
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, RSF_D3D_D3d12DebugMessage, pc);
+    let mut call = Call::begin(&mut slot, id(RSF_D3D_D3d12DebugMessage), pc);
     if let Some(mut json) = call.json() {
-        json.number(c"id", id.0 as u32);
+        json.number(c"id", message.0 as u32);
         json.ptr(c"device", device);
         json.number(c"category", category.0 as u32);
         json.text(
@@ -429,7 +396,7 @@ fn start_debug() {
         return;
     }
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, RSF_D3D_CensusEvent, start_debug as Ptr);
+    let mut call = Call::begin(&mut slot, id(RSF_D3D_CensusEvent), start_debug as Ptr);
     if let Some(mut json) = call.json() {
         json.text(Some(c"event"), c"d3d12_debug_layer");
     }
@@ -448,7 +415,7 @@ fn attach_info(device: Ptr) {
     let mut cookie = 0;
     let status = register_info_queue(device, &mut cookie);
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, RSF_D3D_CensusEvent, attach_info as Ptr);
+    let mut call = Call::begin(&mut slot, id(RSF_D3D_CensusEvent), attach_info as Ptr);
     if let Some(mut json) = call.json() {
         json.text(Some(c"event"), c"d3d12_info_queue");
         json.ptr(c"device", device);
@@ -500,7 +467,7 @@ extern "system" fn create_device(adapter: Ptr, level: i32, iid: *const GUID, out
     );
     start_debug();
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         json.ptr(c"adapter", adapter);
         json.hex(Some(c"minimum_feature_level"), result(level));
@@ -560,7 +527,7 @@ extern "system" fn create_queue(
         ) -> i32
     );
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         const TYPES: [&CStr; 7] = [
             c"DIRECT",
@@ -614,7 +581,7 @@ extern "system" fn execute(queue: Ptr, count: u32, lists: *const Ptr) {
     let entry = RSF_D3D_D3d12QueueExecuteCommandLists;
     let original = original!(entry, unsafe extern "system" fn(Ptr, u32, *const Ptr));
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         json.ptr(c"queue", queue);
         json.number(c"num_lists", count);
@@ -716,7 +683,7 @@ extern "system" fn create_swapchain(
         unsafe extern "system" fn(Ptr, Ptr, *const DXGI_SWAP_CHAIN_DESC, *mut Ptr) -> i32
     );
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         json.ptr(c"factory", factory);
         json.ptr(c"device_or_queue", device);
@@ -755,7 +722,7 @@ extern "system" fn create_hwnd(
         ) -> i32
     );
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         json.ptr(c"factory", factory);
         json.ptr(c"device_or_queue", device);
@@ -795,7 +762,7 @@ extern "system" fn create_core_window(
         ) -> i32
     );
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         json.ptr(c"factory", factory);
         json.ptr(c"device_or_queue", device);
@@ -868,7 +835,7 @@ extern "system" fn present(chain: Ptr, sync: u32, flags: u32) -> i32 {
         notify_object(&BEFORE_PRESENT, chain);
     }
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         put_present(&mut json, chain, sync, flags, null());
     }
@@ -893,7 +860,7 @@ extern "system" fn present1(
     rsf_census_present_enter(flags & 1 != 0);
     let _lease = PresentLease;
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         put_present(&mut json, chain, sync, flags, params);
     }
@@ -937,7 +904,7 @@ extern "system" fn resize(
         unsafe extern "system" fn(Ptr, u32, u32, u32, i32, u32) -> i32
     );
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         resize_fields(&mut json, chain, count, width, height, format, flags);
     }
@@ -966,7 +933,7 @@ extern "system" fn resize1(
         unsafe extern "system" fn(Ptr, u32, u32, u32, i32, u32, *const u32, *const Ptr) -> i32
     );
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         resize_fields(&mut json, chain, count, width, height, format, flags);
     }
@@ -983,7 +950,7 @@ extern "system" fn set_color(chain: Ptr, color: i32) -> i32 {
     let entry = RSF_D3D_DxgiSwapChainSetColorSpace1;
     let original = original!(entry, unsafe extern "system" fn(Ptr, i32) -> i32);
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         json.ptr(c"swapchain", chain);
         json.number(c"color_space", color as u32);
@@ -1006,7 +973,7 @@ extern "system" fn fullscreen(chain: Ptr, enabled: i32, output: Ptr) -> i32 {
     let entry = RSF_D3D_DxgiSwapChainSetFullscreenState;
     let original = original!(entry, unsafe extern "system" fn(Ptr, i32, Ptr) -> i32);
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         json.ptr(c"swapchain", chain);
         json.flag(c"fullscreen", enabled != 0);
@@ -1023,7 +990,7 @@ extern "system" fn waitable(chain: Ptr) -> Ptr {
     let entry = RSF_D3D_DxgiSwapChainGetFrameLatencyWaitableObject;
     let original = original!(entry, unsafe extern "system" fn(Ptr) -> Ptr);
     let mut slot = MaybeUninit::uninit();
-    let mut call = Call::begin(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
         json.ptr(c"swapchain", chain);
     }
@@ -1033,7 +1000,7 @@ extern "system" fn waitable(chain: Ptr) -> Ptr {
 }
 
 pub(super) unsafe fn rsf_census_d3d_bind(entries: &[u16; COUNT], output: &mut [Ptr; COUNT]) {
-    let _ = SERVICES.set(Services { entries: *entries });
+    IDS.bind(entries);
     for (entry, wrapper) in [
         (RSF_D3D_CreateDXGIFactory, factory as Ptr),
         (RSF_D3D_CreateDXGIFactory1, factory1 as Ptr),

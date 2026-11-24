@@ -1,40 +1,25 @@
 // SPDX-License-Identifier: MIT
 #![allow(non_upper_case_globals)]
+use super::Ids;
 use super::hooks::{bind_named, rsf_census_hook_bind_thunk, rsf_census_hook_original};
 use super::json::{Json, emit_decimal, rsf_census_json_bytes, rsf_census_json_wide};
 use super::memory::{plausible, read, u16_at, u32_at, u64_at};
 use super::platform;
-use super::rsf_census_call_state;
-use super::session::{rsf_census_call_begin, rsf_census_call_finish};
+use super::session::{Args, Call, forward8};
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::io::Write;
 use std::mem::MaybeUninit;
 use std::ptr::{null, null_mut};
-use std::sync::OnceLock;
 
 type Ptr = *mut c_void;
-type Args = [u64; 8];
 type Entry = rsf_census_misc_entry;
 const COUNT: usize = RSF_MISC_COUNT as usize;
 const SL_HEADER: usize = 32;
-struct Services {
-    entries: [u16; COUNT],
-}
-static SERVICES: OnceLock<Services> = OnceLock::new();
+static IDS: Ids<COUNT> = Ids::new();
 
 fn id(entry: Entry) -> u16 {
-    SERVICES.get().unwrap().entries[entry as usize]
-}
-
-fn start(
-    slot: &mut MaybeUninit<rsf_census_call_state>,
-    entry: Entry,
-    caller: Ptr,
-) -> *mut rsf_census_call_state {
-    let state = slot.as_mut_ptr();
-    unsafe { rsf_census_call_begin(state, id(entry), caller) };
-    state
+    IDS.get(entry as usize)
 }
 
 fn read_name(address: u64, text: &mut [u8]) -> bool {
@@ -90,7 +75,7 @@ extern "system" fn nv_query(interface: u32) -> Ptr {
         unsafe extern "system" fn(u32) -> Ptr
     );
     let mut slot = MaybeUninit::uninit();
-    let state = start(&mut slot, RSF_MISC_NvapiQueryInterface, pc);
+    let mut call = Call::begin(&mut slot, id(RSF_MISC_NvapiQueryInterface), pc);
     let result = original.map_or(null_mut(), |resolve| unsafe { resolve(interface) });
     let reflex = match interface {
         0xac1c_a9e0 => Some((RSF_MISC_NvapiSetSleepMode, c"NvapiSetSleepMode")),
@@ -103,15 +88,14 @@ extern "system" fn nv_query(interface: u32) -> Ptr {
         )),
         _ => None,
     };
-    if unsafe { (*state).full } {
-        let mut json = Json(unsafe { &mut (*state).json });
+    if let Some(mut json) = call.json() {
         json.hex(Some(c"id"), interface.into());
         json.hex(Some(c"result"), result as u64);
         if let Some((_, name)) = reflex {
             json.text(c"reflex_entry", name);
         }
     }
-    unsafe { rsf_census_call_finish(state, result as u64) };
+    call.finish(result as u64);
     if let Some((entry, _)) = reflex
         && !result.is_null()
     {
@@ -599,11 +583,10 @@ extern "system" fn sl_get_feature(feature_id: u32, name: *const c_char, output: 
         unsafe extern "system" fn(u32, *const c_char, *mut Ptr) -> i32
     );
     let mut slot = MaybeUninit::uninit();
-    let call = start(&mut slot, entry, pc);
+    let mut call = Call::begin(&mut slot, id(entry), pc);
     let mut text = [0u8; 64];
     let have_name = read_name(name as u64, &mut text);
-    if unsafe { (*call).full } {
-        let mut json = Json(unsafe { &mut (*call).json });
+    if let Some(mut json) = call.json() {
         feature(&mut json, feature_id);
         json.text(
             c"function_name",
@@ -621,7 +604,7 @@ extern "system" fn sl_get_feature(feature_id: u32, name: *const c_char, output: 
     {
         unsafe { platform().write_ptr.unwrap()(output, wrapper) };
     }
-    unsafe { rsf_census_call_finish(call, u64::from(result as u32)) };
+    call.finish(u64::from(result as u32));
     result
 }
 
@@ -636,27 +619,16 @@ extern "system" fn wrapper<const ENTRY: Entry>(
     a6: u64,
     a7: u64,
 ) -> u64 {
-    let pc = caller!();
-    type Original = unsafe extern "system" fn(u64, u64, u64, u64, u64, u64, u64, u64) -> u64;
-    let original = original!(ENTRY, Original);
-    let mut slot = MaybeUninit::uninit();
-    let call = start(&mut slot, ENTRY, pc);
-    let args = [a0, a1, a2, a3, a4, a5, a6, a7];
-    if unsafe { (*call).full } {
-        pre(ENTRY, &mut Json(unsafe { &mut (*call).json }), &args);
-    }
-    let result = original.map_or(0, |function| unsafe {
-        function(a0, a1, a2, a3, a4, a5, a6, a7)
-    });
-    if unsafe { (*call).full } {
-        post(ENTRY, &mut Json(unsafe { &mut (*call).json }), &args);
-    }
-    unsafe { rsf_census_call_finish(call, result) };
-    result
+    forward8(
+        id(ENTRY),
+        caller!(),
+        [a0, a1, a2, a3, a4, a5, a6, a7],
+        |json, args| pre(ENTRY, json, args),
+        |json, args| post(ENTRY, json, args),
+    )
 }
-
 pub(super) unsafe fn rsf_census_misc_bind(entries: &[u16; COUNT], output: &mut [Ptr; COUNT]) {
-    let _ = SERVICES.set(Services { entries: *entries });
+    IDS.bind(entries);
     *output = [
         nv_query as Ptr,
         wrapper::<RSF_MISC_NvapiSetSleepMode> as Ptr,

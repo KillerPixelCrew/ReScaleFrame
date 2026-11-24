@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::hooks::{
-    rsf_census_hook_counts, rsf_census_hooks_install, rsf_census_hooks_remove,
-    rsf_census_hooks_summary,
+    rsf_census_hook_counts, rsf_census_hook_original, rsf_census_hooks_install,
+    rsf_census_hooks_remove, rsf_census_hooks_summary,
 };
 use super::identity::*;
 use super::json::Json;
@@ -14,6 +14,7 @@ use super::{RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES};
 use super::{rsf_census_call_state, rsf_census_json};
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr::{self, null, null_mut};
 use std::sync::{
@@ -343,7 +344,71 @@ pub(super) fn rsf_census_flags() -> u32 {
     CORE.get().map_or(0, |core| core.flags)
 }
 
-pub(super) unsafe fn rsf_census_call_begin(
+/// A wrapper's call in flight. The record lives in the wrapper's own frame, in `slot`, and must
+/// not move once begun: its JSON writer points into it.
+pub(super) struct Call<'a> {
+    state: *mut rsf_census_call_state,
+    _lease: PhantomData<&'a mut MaybeUninit<rsf_census_call_state>>,
+}
+
+impl<'a> Call<'a> {
+    pub(super) fn begin(
+        slot: &'a mut MaybeUninit<rsf_census_call_state>,
+        entry: u16,
+        caller: *mut c_void,
+    ) -> Self {
+        let state = slot.as_mut_ptr();
+        unsafe { rsf_census_call_begin(state, entry, caller) };
+        Self {
+            state,
+            _lease: PhantomData,
+        }
+    }
+
+    /// The argument JSON, present only for a call sampled into a full record.
+    pub(super) fn json(&mut self) -> Option<Json<'_>> {
+        unsafe { (*self.state).full.then(|| Json(&mut (*self.state).json)) }
+    }
+
+    pub(super) fn finish(self, result: u64) {
+        unsafe { rsf_census_call_finish(self.state, result) };
+    }
+}
+
+pub(super) type Args = [u64; 8];
+
+/// Forward the eight argument words of a wrapped export, describing them before the call and the
+/// results after it.
+pub(super) fn forward8(
+    entry: u16,
+    caller: *mut c_void,
+    args: Args,
+    pre: impl FnOnce(&mut Json<'_>, &Args),
+    post: impl FnOnce(&mut Json<'_>, &Args),
+) -> u64 {
+    type Original = unsafe extern "system" fn(u64, u64, u64, u64, u64, u64, u64, u64) -> u64;
+    let original = rsf_census_hook_original(entry);
+    let mut slot = MaybeUninit::uninit();
+    let mut call = Call::begin(&mut slot, entry, caller);
+    if let Some(mut json) = call.json() {
+        pre(&mut json, &args);
+    }
+    let [a0, a1, a2, a3, a4, a5, a6, a7] = args;
+    let result = if original.is_null() {
+        0
+    } else {
+        unsafe {
+            std::mem::transmute::<*mut c_void, Original>(original)(a0, a1, a2, a3, a4, a5, a6, a7)
+        }
+    };
+    if let Some(mut json) = call.json() {
+        post(&mut json, &args);
+    }
+    call.finish(result);
+    result
+}
+
+unsafe fn rsf_census_call_begin(
     state: *mut rsf_census_call_state,
     entry: u16,
     caller: *mut c_void,
@@ -406,7 +471,7 @@ pub(super) unsafe fn rsf_census_call_begin(
     }
 }
 
-pub(super) unsafe fn rsf_census_call_finish(state: *mut rsf_census_call_state, result: u64) {
+unsafe fn rsf_census_call_finish(state: *mut rsf_census_call_state, result: u64) {
     if !unsafe { (*state).full } || !rsf_census_active() {
         return;
     }
