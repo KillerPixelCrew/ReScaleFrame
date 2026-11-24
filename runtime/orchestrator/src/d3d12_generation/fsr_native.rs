@@ -192,7 +192,7 @@ pub(super) unsafe extern "C" fn create_chain(
     {
         Ok(factory) => factory,
         Err(error) => {
-            Log::new(setup).write(format_args!(
+            setup_log(setup).say(&format!(
                 "FSR FG create DXGI factory failed HRESULT=0x{:08x}",
                 error.code().0 as u32
             ));

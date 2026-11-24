@@ -2,8 +2,7 @@
 use crate::sdk_module::SdkModule;
 use crate::sr_session::has_capacity;
 use crate::sys::{
-    RSF_FG_ABI_VERSION, RSF_FG_DYNAMIC, RSF_FG_OFF, RSF_REFLEX_BOOST, rsf_backend_log_fn,
-    rsf_fg_frame as Frame, rsf_fg_options as Options, rsf_fg_retirement as Retirement,
+    RSF_FG_ABI_VERSION, RSF_FG_DYNAMIC, RSF_FG_OFF, RSF_REFLEX_BOOST, rsf_fg_frame as Frame, rsf_fg_options as Options, rsf_fg_retirement as Retirement,
     rsf_fg_status as Status, rsf_generation_provider as Provider, rsf_generation_setup as Setup,
 };
 use rsf_game_sys::backend_result::{
@@ -11,8 +10,8 @@ use rsf_game_sys::backend_result::{
     NOT_READY, NOT_SUPPORTED, OK, STALE_RESOURCES,
 };
 use rsf_game_sys::rsf_frame_record as Record;
-use std::ffi::{CString, c_char, c_void};
-use std::fmt::Arguments;
+use rsf_graphics::dump_options::Log;
+use std::ffi::{c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::Mutex;
 
@@ -171,27 +170,9 @@ impl Drop for Bindings {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Log {
-    callback: rsf_backend_log_fn,
-    user: Raw,
-}
-
-impl Log {
-    fn new(setup: &Setup) -> Self {
-        Self {
-            callback: setup.chain.log,
-            user: setup.chain.log_user,
-        }
-    }
-
-    fn write(self, message: Arguments<'_>) {
-        if let Some(log) = self.callback
-            && let Ok(message) = CString::new(message.to_string())
-        {
-            unsafe { log(self.user, message.as_ptr()) };
-        }
-    }
+// The caller's log sink for this provider.
+fn setup_log(setup: &Setup) -> Log {
+    Log::new(setup.chain.log, setup.chain.log_user)
 }
 
 fn version_name(status: &mut Status, name: &str) {

@@ -13,6 +13,7 @@ use crate::retain_object;
 use crate::sharpening_policy;
 use crate::sr_session::checked;
 use crate::sync::lock;
+use rsf_graphics::dump_options::Log;
 use crate::sys::rsf_sr12_setup as Setup;
 use crate::sys::*;
 use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE};
@@ -291,8 +292,7 @@ pub(crate) struct Sr12 {
     native: Native,
     gpu: Gpu,
     device: IUnknown,
-    log: rsf_backend_log_fn,
-    user: Handle,
+    log: Log,
     backend: u32,
     input_sdr: bool,
     external_exposure: bool,
@@ -548,8 +548,7 @@ unsafe fn create(setup: *const Setup) -> Result<Sr12, i32> {
         native,
         gpu,
         device,
-        log: s.log,
-        user: s.user,
+        log: Log::new(s.log, s.user),
         backend: s.backend,
         input_sdr: s.input_sdr != 0,
         external_exposure,
@@ -582,12 +581,6 @@ unsafe fn create(setup: *const Setup) -> Result<Sr12, i32> {
 impl Sr12 {
     fn capture(&self) -> Handle {
         self.native.capture
-    }
-
-    fn say(&self, message: &CStr) {
-        if let Some(log) = self.log {
-            unsafe { log(self.user, message.as_ptr()) };
-        }
     }
 
     unsafe fn owned(&self, child: Handle) -> bool {
@@ -674,7 +667,7 @@ impl Sr12 {
     }
 
     unsafe fn motion_diagnostic(&self, state: &mut State, list: Handle, slot: usize) {
-        if self.log.is_none() {
+        if self.log.callback.is_none() {
             return;
         }
         if state.motion_pending[slot] {
@@ -685,12 +678,9 @@ impl Sr12 {
                         unsafe { std::slice::from_raw_parts(mapped, READBACK_BYTES as usize) };
                     let (mean, maximum, invalid) = motion_statistics(bytes);
                     unsafe { native::unmap(buffer.as_raw()) };
-                    let text = format!(
+                    self.log.say(&format!(
                         "Normalized motion samples: mean={mean:.6} max={maximum:.6} render pixels invalid={invalid}"
-                    );
-                    if let Ok(text) = std::ffi::CString::new(text) {
-                        self.say(&text);
-                    }
+                    ));
                 }
             }
             state.motion_pending[slot] = false;
@@ -1087,7 +1077,7 @@ impl Sr12 {
         };
         if accepted == 0 && !state.sharpen_reported {
             state.sharpen_reported = true;
-            self.say(c"D3D12 sharpening unavailable; retaining unsharpened SR output");
+            self.log.say("D3D12 sharpening unavailable; retaining unsharpened SR output");
         }
     }
 

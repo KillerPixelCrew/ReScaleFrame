@@ -317,7 +317,7 @@ impl Fsr {
                     c_text(setup.runtime_directory_utf8),
                 )
             };
-            self.log.write(format_args!(
+            self.log.say(&format!(
                 "FSR FG create generation: FFX result={result} requested_major={} selected={selected} id={} API={major}.{minor}.{patch} root={root}",
                 setup.feature_major, status.version_id
             ));
@@ -661,7 +661,7 @@ impl Session for Fsr {
         counters.reports = counters.reports.saturating_add(1);
         self.counters.set(counters);
         if report {
-            self.log.write(format_args!(
+            self.log.say(&format!(
                 "FSR FG counters source={} generated={dispatched} DXGI_present_count={count} query={:08x}",
                 before.order.last_prepare, result as u32
             ));
@@ -763,7 +763,7 @@ unsafe fn rsf_core_fsr12_create(setup: *const Setup, out: *mut Raw, chain: *mut 
     }
     let session = crate::allocate_handle(Fsr {
         sdk,
-        log: Log::new(setup),
+        log: setup_log(setup),
         device: unsafe { com_ref::retain(setup.chain.d3d12_device) },
         queue: unsafe { com_ref::retain(setup.chain.d3d12_queue) },
         ui_mode: setup.chain.ui_mode,
@@ -815,7 +815,7 @@ unsafe fn rsf_core_fsr12_create(setup: *const Setup, out: *mut Raw, chain: *mut 
         if result == OK {
             let [major, minor, patch] = native::SDK.swapchain;
             let desc = &setup.chain;
-            owner.log.write(format_args!(
+            owner.log.say(&format!(
                 "FSR FG create swapchain: FFX result={ffx} chain={} API={major}.{minor}.{patch} size={}x{} buffers={} format={}",
                 u32::from(!created.is_null()),
                 desc.width,
@@ -863,7 +863,7 @@ unsafe fn rsf_core_fsr12_generate(user: Raw, desc: Raw) -> u32 {
     }
     let report = owner.dispatch_logs.fetch_add(1, Relaxed);
     if report < 3 || (result != 0 && report < 12) {
-        owner.log.write(format_args!(
+        owner.log.say(&format!(
             "FSR FG dispatch frame={} requested_outputs={} result={} reset={}",
             generated.sequence, generated.count, result as i32, generated.reset
         ));

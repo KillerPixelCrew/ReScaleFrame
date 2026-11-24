@@ -441,7 +441,7 @@ impl Session for Xess {
         let status = self.state.observe(before.order.revision, observation);
         let previous_active = self.last_present_active.replace(status.active);
         if previous_active != status.active || before.status.vendor_status != status.vendor_status {
-            self.log.write(format_args!(
+            self.log.say(&format!(
                 "XeSS FG present source={} query={result} interpolation={} enabled={} presented={} active={} reset={} source_gap={}",
                 before.order.last_prepare, present.interpolation, present.enabled, present.frames, status.active,
                 u32::from(self.prepared_reset.get()), self.prepared_gap.get()
@@ -495,7 +495,7 @@ unsafe fn rsf_core_xeg12_create(setup: *const Setup, out: *mut Raw, chain: *mut 
     };
     let session = crate::allocate_handle(Xess {
         sdk,
-        log: Log::new(setup),
+        log: setup_log(setup),
         device: unsafe { com_ref::retain(setup.chain.d3d12_device) },
         queue: unsafe { com_ref::retain(setup.chain.d3d12_queue) },
         ui_mode: setup.chain.ui_mode,
