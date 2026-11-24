@@ -15,8 +15,8 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
 
-use rsf_ac7_plugin as _;
 #[cfg(feature = "ac7-render-scope")]
+use rsf_ac7_plugin as _;
 use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT};
 
 mod d3d11_bridge_sr;
