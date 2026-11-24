@@ -66,17 +66,7 @@ pub(crate) struct ResourceFacts {
 
 const _: () = assert!(size_of::<ResourceFacts>() == 24);
 
-pub(crate) fn read_bytes(address: usize, out: &mut [u8]) -> bool {
-    address != 0 && unsafe { read_process_memory(address, out.as_mut_ptr().cast(), out.len()) }
-}
-
-/// Copies a plain-data value. `T` must be valid for every bit pattern.
-pub(crate) fn read_value<T: Copy + Default>(address: usize) -> Option<T> {
-    let mut value = T::default();
-    let read = address != 0
-        && unsafe { read_process_memory(address, (&raw mut value).cast(), size_of::<T>()) };
-    read.then_some(value)
-}
+pub(crate) use rsf_game_sys::win32::{read as read_value, read_bytes};
 
 pub(crate) fn read_pointer(address: usize) -> Option<usize> {
     read_value::<usize>(address)

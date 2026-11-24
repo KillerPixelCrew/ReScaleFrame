@@ -8,7 +8,7 @@ use super::shots::{self, input_shot};
 use super::{Capture, has_inputs};
 use crate::{
     layout,
-    platform::{lock, worker_tls_slots},
+    platform::{lock, read_bytes, worker_tls_slots},
 };
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null;
@@ -60,14 +60,7 @@ fn camera(state: &Native, input: &InputId) {
                 .read(block.checked_add(layout::camera_probe::JOB)?)
                 .unwrap_or_default();
             let mut bytes = [0u8; CAMERA_BYTES];
-            unsafe {
-                crate::platform::read_process_memory(
-                    facts.view as usize,
-                    bytes.as_mut_ptr().cast(),
-                    bytes.len(),
-                )
-            }
-            .then_some(bytes)
+            read_bytes(facts.view as usize, &mut bytes).then_some(bytes)
         });
     unsafe {
         input_camera(

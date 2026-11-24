@@ -623,8 +623,8 @@ pub(super) unsafe extern "C" fn before_present(chain: Raw) {
             state.selected_chain.load(Ordering::Acquire)
         } else {
             state
-                .read(state.base + layout::SWAPCHAIN)
-                .unwrap_or(null_mut())
+                .read::<usize>(state.base + layout::SWAPCHAIN)
+                .map_or(null_mut(), |chain| chain as Raw)
         };
         if chain != game_chain {
             return;

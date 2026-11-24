@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Observer hook installation, activation, and retryable disable. The session (`session.rs`)
 //! owns the control record under its lock; native code keeps the typed MinHook trampolines.
-use rsf_game_sys::rsf_game_host_services;
-#[cfg(not(test))]
-use std::ffi::c_char;
-use std::ffi::{CString, c_void};
+use rsf_game_sys::{host_log, rsf_game_host_services};
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 
@@ -25,12 +23,7 @@ pub(crate) struct Control {
 
 // The hook operations: the native MinHook leaves below, or the test fake.
 #[cfg(test)]
-use fake::{create, disable, enable, initialize, log, pin, remove};
-
-#[cfg(not(test))]
-fn log(host: &rsf_game_host_services, message: *const c_char) {
-    unsafe { crate::render_native::log_host(host, message) };
-}
+use fake::{create, disable, enable, initialize, pin, remove};
 
 impl Control {
     pub(crate) const fn new() -> Self {
@@ -84,11 +77,10 @@ impl Control {
         }
         if let Err((index, status)) = self.hooks.enable(|index| enable(index as u32)) {
             let stage = HOOKS[index];
-            if let Ok(message) = CString::new(format!(
-                "Skyrim start refused at {stage}: MinHook status={status}"
-            )) {
-                log(host, message.as_ptr());
-            }
+            host_log(
+                host,
+                &format!("Skyrim start refused at {stage}: MinHook status={status}"),
+            );
             self.disable(true);
             return false;
         }
@@ -212,9 +204,7 @@ fn pin() -> bool {
 /// fails and `DISABLE_REFUSES` makes hook 0 refuse disable. `DISABLED` counts disable calls.
 #[cfg(test)]
 pub(crate) mod fake {
-    use rsf_game_sys::rsf_game_host_services;
     use std::cell::Cell;
-    use std::ffi::c_char;
 
     thread_local! {
         pub(crate) static ENABLE_REFUSES: Cell<Option<u32>> = const { Cell::new(None) };
@@ -241,7 +231,6 @@ pub(crate) mod fake {
     pub(super) fn pin() -> bool {
         true
     }
-    pub(super) fn log(_: &rsf_game_host_services, _: *const c_char) {}
 }
 
 #[cfg(test)]
@@ -253,7 +242,7 @@ mod tests {
         fake::ENABLE_REFUSES.set(Some(1));
         fake::DISABLE_REFUSES.set(true);
         let mut control = Control::default();
-        // The fake log does not read the host. Zero is an empty GameSDK services table.
+        // A zeroed services table has no log callback.
         let host = unsafe { std::mem::zeroed() };
         assert!(control.prepare());
         assert!(!control.start(&host));

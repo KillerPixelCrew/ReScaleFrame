@@ -6,10 +6,11 @@ use crate::cpu_native::*;
 use crate::cpu_policy::*;
 use crate::cpu_sources::*;
 use crate::platform;
-use crate::render_native::{log_host, rsf_skyrim_call_render_pass, thread};
+use crate::render_native::{rsf_skyrim_call_render_pass, thread};
 use crate::sys::*;
+use rsf_game_sys::host_log;
 use std::cell::Cell;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
@@ -106,14 +107,6 @@ fn qpc() -> u64 {
     let mut time = 0;
     unsafe { QueryPerformanceCounter(&mut time) };
     time as u64
-}
-
-fn log(host: &rsf_game_host_services, message: String) {
-    if host.log.is_some()
-        && let Ok(message) = CString::new(message)
-    {
-        unsafe { log_host(host, message.as_ptr()) };
-    }
 }
 
 fn frame_event(frame: NonNull<Frame>, stage: u32) {
@@ -266,7 +259,7 @@ fn finish_frame(frame: NonNull<Frame>, returned: bool) {
                     worker.mismatched,
                 )
             };
-            log(&services.host, message);
+            host_log(&services.host, &message);
         }
     }
     if returned {
@@ -431,9 +424,9 @@ fn prepare_poll(mut poll: NonNull<Poll>) {
     let mut reserved = 0;
     if let Some(services) = services {
         if POLL_REPORTS.fetch_add(1, Relaxed) < 16 && services.host.log.is_some() {
-            log(
+            host_log(
                 &services.host,
-                format!(
+                &format!(
                     "Skyrim native poll thread={} scoped_source={} native_job_generation={} submitting_source={} poll_generation={}; submitting source is not input consumption",
                     thread(),
                     render_source(),
@@ -671,7 +664,7 @@ pub(crate) fn render_diagnostic(stage: &CStr, pass: &rsf_game_render_pass) {
             u8::from(frame.input.ambiguous),
         )
     };
-    log(&host, message);
+    host_log(&host, &message);
 }
 
 fn render_fact(pass: &mut rsf_game_render_pass, role: u32) {
@@ -887,9 +880,9 @@ pub(crate) fn start() -> bool {
         Err(refusal) => {
             if let Some(services) = cpu_hooks::services() {
                 let stage = unsafe { CStr::from_ptr(refusal.stage) };
-                log(
+                host_log(
                     &services.host,
-                    format!(
+                    &format!(
                         "Skyrim CPU start refused: {} RVA={:X} status={}",
                         stage.to_string_lossy(),
                         refusal.rva,

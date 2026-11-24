@@ -212,14 +212,8 @@ impl Platform {
         unsafe { crate::render_native::log_host(host, message.as_ptr()) };
     }
 
-    /// Logs formatted text; it never contains an interior NUL.
     pub(crate) fn log_text(&self, host: &rsf_game_host_services, message: &str) {
-        let mut text = Vec::with_capacity(message.len() + 1);
-        text.extend_from_slice(message.as_bytes());
-        text.push(0);
-        if let Ok(message) = CStr::from_bytes_with_nul(&text) {
-            self.log(host, message);
-        }
+        rsf_game_sys::host_log(host, message);
     }
 
     pub(crate) fn creation_begin(

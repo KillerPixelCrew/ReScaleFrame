@@ -3,9 +3,10 @@
 use super::{Capture, Progress, detours, ngx, poll};
 use crate::{
     diagnostics::capture_directory,
-    platform::{lock, read_process_memory},
+    platform::{lock, read_value},
 };
 use rsf_game_sys::ffi_util::try_box;
+use rsf_game_sys::win32::Plain;
 use std::ffi::{OsString, c_char, c_void};
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
@@ -47,13 +48,12 @@ pub(super) struct Native {
 }
 
 impl Native {
-    pub(super) fn read<T: Copy + Default>(&self, address: usize) -> Option<T> {
-        let mut value = T::default();
-        (!self.fixture
-            && unsafe {
-                read_process_memory(address, (&mut value as *mut T).cast(), size_of::<T>())
-            })
-        .then_some(value)
+    pub(super) fn read<T: Plain>(&self, address: usize) -> Option<T> {
+        if self.fixture {
+            None
+        } else {
+            read_value(address)
+        }
     }
 
     pub(super) fn progress(&self) -> Progress {

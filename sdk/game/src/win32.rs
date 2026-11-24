@@ -105,6 +105,8 @@ unsafe impl Plain for u64 {}
 unsafe impl Plain for usize {}
 unsafe impl Plain for f32 {}
 unsafe impl<const N: usize> Plain for [u8; N] {}
+unsafe impl<const N: usize> Plain for [u16; N] {}
+unsafe impl<const N: usize> Plain for [u32; N] {}
 unsafe impl<const N: usize> Plain for [f32; N] {}
 unsafe impl Plain for windows_sys::Win32::UI::WindowsAndMessaging::MSG {}
 
