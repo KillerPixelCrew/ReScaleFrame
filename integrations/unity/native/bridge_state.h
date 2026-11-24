@@ -12,17 +12,6 @@
 #define RSF_UNITY_FRAMES_SLOTS 3u
 #define RSF_UNITY_FRAMES_SOURCES 8u
 
-/* A reconstruction frame admitted into command ring slot `slot`. A nonzero generation
-   identifies a pending change to acknowledge after delivery. */
-typedef struct rsf_unity_frame_admission {
-    uint32_t slot, pending_generation;
-} rsf_unity_frame_admission;
-
-/* A recorded source frame whose engine submission is not yet confirmed to the host. */
-typedef struct rsf_unity_source_submission {
-    uint64_t session_id, source_frame_id, view_key;
-} rsf_unity_source_submission;
-
 #ifdef __cplusplus
 extern "C" {
 #endif

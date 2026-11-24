@@ -19,8 +19,7 @@
 use crate::sys::{
     RSF_UNITY_BRIDGE_ABI_VERSION, RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS,
     RSF_UNITY_FRAMES_SOURCES, RSF_UNITY_PACKET_HUDLESS, RSF_UNITY_PACKET_INPUTS_ONLY,
-    RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_WINDOW, rsf_unity_config, rsf_unity_frame_admission,
-    rsf_unity_packet, rsf_unity_source_submission,
+    RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_WINDOW, rsf_unity_config, rsf_unity_packet,
 };
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
@@ -41,11 +40,26 @@ const MAX_EXTENT: u32 = 16384;
 
 // SAFETY: all-zero is a valid packet: integers, floats and null pointers.
 const EMPTY_PACKET: rsf_unity_packet = unsafe { std::mem::zeroed() };
-const NO_SOURCE: rsf_unity_source_submission = rsf_unity_source_submission {
+const NO_SOURCE: Source = Source {
     session_id: 0,
     source_frame_id: 0,
     view_key: 0,
 };
+
+/// A reconstruction frame admitted into command ring slot `slot`. A nonzero generation
+/// identifies a pending change to acknowledge after delivery.
+pub(crate) struct Admission {
+    pub(crate) slot: u32,
+    pub(crate) pending_generation: u32,
+}
+
+/// A recorded source frame whose engine submission is not yet confirmed to the host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Source {
+    pub(crate) session_id: u64,
+    pub(crate) source_frame_id: u64,
+    pub(crate) view_key: u64,
+}
 
 /// The references a stored packet holds on its colour, depth, motion and output resources, in
 /// that order. A null resource holds nothing.
@@ -97,7 +111,7 @@ struct State {
     /// Unity completion value of each command ring slot's last submission; 0 for none.
     complete: [u64; SLOTS],
     next: usize,
-    sources: [rsf_unity_source_submission; SOURCES],
+    sources: [Source; SOURCES],
     /// Latest completion of a copy recorded on Unity's own list.
     inline_complete: u64,
     input: (u32, u32),
@@ -126,18 +140,12 @@ fn lock() -> MutexGuard<'static, State> {
     lock_or_recover(&STATE)
 }
 
-fn source_of(packet: &rsf_unity_packet) -> rsf_unity_source_submission {
-    rsf_unity_source_submission {
+fn source_of(packet: &rsf_unity_packet) -> Source {
+    Source {
         session_id: packet.session_id,
         source_frame_id: packet.frame_id,
         view_key: packet.view_key,
     }
-}
-
-fn same_source(a: &rsf_unity_source_submission, b: &rsf_unity_source_submission) -> bool {
-    a.session_id == b.session_id
-        && a.source_frame_id == b.source_frame_id
-        && a.view_key == b.view_key
 }
 
 fn in_flight(complete: u64, completed: u64) -> bool {
@@ -320,11 +328,7 @@ impl State {
     /// Render extents, a policy change and output extents change only with the ring idle; a
     /// packet from an older generation is refused unless it carries the pending change. The
     /// state accepted by an earlier step is kept when a later one refuses.
-    fn admit_frame(
-        &mut self,
-        packet: &rsf_unity_packet,
-        completed: u64,
-    ) -> Option<rsf_unity_frame_admission> {
+    fn admit_frame(&mut self, packet: &rsf_unity_packet, completed: u64) -> Option<Admission> {
         if self.submission_unknown
             || completed == u64::MAX
             || !self.can_record_source(&source_of(packet))
@@ -360,18 +364,13 @@ impl State {
         if in_flight(self.complete[self.next], completed) {
             return None;
         }
-        Some(rsf_unity_frame_admission {
+        Some(Admission {
             slot: self.next as u32,
             pending_generation: pending_generation.unwrap_or(0),
         })
     }
 
-    fn submitted(
-        &mut self,
-        admission: &rsf_unity_frame_admission,
-        complete: u64,
-        source: &rsf_unity_source_submission,
-    ) -> bool {
+    fn submitted(&mut self, admission: &Admission, complete: u64, source: &Source) -> bool {
         let slot = admission.slot as usize;
         if slot >= SLOTS {
             return false;
@@ -386,19 +385,19 @@ impl State {
         self.record_source(source, 0)
     }
 
-    fn can_record_source(&self, source: &rsf_unity_source_submission) -> bool {
+    fn can_record_source(&self, source: &Source) -> bool {
         source.source_frame_id != 0
             && self
                 .sources
                 .iter()
-                .any(|entry| entry.source_frame_id == 0 || same_source(entry, source))
+                .any(|entry| entry.source_frame_id == 0 || entry == source)
     }
 
-    fn record_source(&mut self, source: &rsf_unity_source_submission, inline_fence: u64) -> bool {
+    fn record_source(&mut self, source: &Source, inline_fence: u64) -> bool {
         if !self.can_record_source(source) {
             return false;
         }
-        if !self.sources.iter().any(|entry| same_source(entry, source)) {
+        if !self.sources.iter().any(|entry| entry == source) {
             let free = self
                 .sources
                 .iter_mut()
@@ -414,7 +413,7 @@ impl State {
         &mut self,
         session_id: u64,
         source_frame_id: u64,
-    ) -> ([rsf_unity_source_submission; SOURCES], usize) {
+    ) -> ([Source; SOURCES], usize) {
         let mut flushed = [NO_SOURCE; SOURCES];
         let mut remaining = [NO_SOURCE; SOURCES];
         let (mut count, mut retained) = (0, 0);
@@ -738,15 +737,15 @@ pub(crate) fn rsf_unity_frames_settle_change(generation: u32) -> bool {
 pub(crate) fn rsf_unity_frames_admit_frame(
     packet: &rsf_unity_packet,
     completed: u64,
-) -> Option<rsf_unity_frame_admission> {
+) -> Option<Admission> {
     lock().admit_frame(packet, completed)
 }
 
 /// Records a submission. One that gives no completion stops the bridge.
 pub(crate) fn rsf_unity_frames_submitted(
-    admission: &rsf_unity_frame_admission,
+    admission: &Admission,
     complete: u64,
-    source: &rsf_unity_source_submission,
+    source: &Source,
 ) -> bool {
     if lock().submitted(admission, complete, source) {
         return true;
@@ -755,14 +754,11 @@ pub(crate) fn rsf_unity_frames_submitted(
     false
 }
 
-pub(crate) fn rsf_unity_frames_can_record_source(source: &rsf_unity_source_submission) -> bool {
+pub(crate) fn rsf_unity_frames_can_record_source(source: &Source) -> bool {
     lock().can_record_source(source)
 }
 
-pub(crate) fn rsf_unity_frames_record_source(
-    source: &rsf_unity_source_submission,
-    inline_fence: u64,
-) {
+pub(crate) fn rsf_unity_frames_record_source(source: &Source, inline_fence: u64) {
     let recorded = lock().record_source(source, inline_fence);
     debug_assert!(
         recorded,
@@ -960,8 +956,8 @@ mod tests {
         }
     }
 
-    fn source(frame_id: u64) -> rsf_unity_source_submission {
-        rsf_unity_source_submission {
+    fn source(frame_id: u64) -> Source {
+        Source {
             session_id: SESSION,
             source_frame_id: frame_id,
             view_key: 3,
@@ -1244,7 +1240,7 @@ mod tests {
     #[test]
     fn sources_flush_by_session_frame_and_view_in_recording_order() {
         let mut state = State::new();
-        let alternate_view = rsf_unity_source_submission {
+        let alternate_view = Source {
             view_key: 99,
             ..source(9)
         };
@@ -1255,7 +1251,7 @@ mod tests {
         state.record_source(&source(3), 0);
         state.record_source(&source(12), 0);
         state.record_source(
-            &rsf_unity_source_submission {
+            &Source {
                 session_id: SESSION + 1,
                 ..source(5)
             },

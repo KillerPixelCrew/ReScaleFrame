@@ -2,7 +2,7 @@
 //! Direct Unity D3D12 recording. Unity supplies its event, queue and frame-fence facts.
 
 use crate::bridge_state::{
-    log, rsf_unity_frames_activate, rsf_unity_frames_active, rsf_unity_frames_admit_frame,
+    Source, log, rsf_unity_frames_activate, rsf_unity_frames_active, rsf_unity_frames_admit_frame,
     rsf_unity_frames_begin_d3d12_event, rsf_unity_frames_can_record_source,
     rsf_unity_frames_dispatch_d3d12, rsf_unity_frames_end_d3d12_event,
     rsf_unity_frames_flush_sources, rsf_unity_frames_record_source, rsf_unity_frames_submitted,
@@ -11,7 +11,6 @@ use crate::d3d11_pass::build_d3d12_pass;
 use crate::sys::rsf_unity_d3d12_engine;
 use crate::sys::{
     RSF_UNITY_FRAMES_SLOTS, RSF_UNITY_PACKET_HUDLESS, RSF_UNITY_PACKET_WINDOW, rsf_unity_packet,
-    rsf_unity_source_submission,
 };
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
@@ -55,8 +54,8 @@ impl Drop for Event {
     }
 }
 
-fn source(pass: &rsf_game_render_pass) -> rsf_unity_source_submission {
-    rsf_unity_source_submission {
+fn source(pass: &rsf_game_render_pass) -> Source {
+    Source {
         session_id: pass.session_id,
         source_frame_id: pass.source_frame_id,
         view_key: pass.view_key,
