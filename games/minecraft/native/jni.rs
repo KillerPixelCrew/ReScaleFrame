@@ -87,6 +87,23 @@ unsafe fn interface<'jni>(env: *mut JNIEnv) -> &'jni JNINativeInterface_ {
     unsafe { &**env }
 }
 
+/// The UTF-16 code units of a Java string, or None for null.
+unsafe fn string_units(env: *mut JNIEnv, string: jstring) -> Option<Vec<u16>> {
+    if string.is_null() {
+        return None;
+    }
+    let api = unsafe { interface(env) };
+    let length = unsafe { (api.GetStringLength.unwrap())(env, string) };
+    let chars = unsafe { (api.GetStringChars.unwrap())(env, string, null_mut()) };
+    if chars.is_null() {
+        return None;
+    }
+    // The JVM lends length UTF-16 code units until ReleaseStringChars.
+    let units = unsafe { std::slice::from_raw_parts(chars, length as usize) }.to_vec();
+    unsafe { (api.ReleaseStringChars.unwrap())(env, string, chars) };
+    Some(units)
+}
+
 fn pipeline(handle: jlong) -> *mut rsf_gl_pipeline {
     handle as usize as *mut rsf_gl_pipeline
 }
@@ -116,20 +133,9 @@ unsafe extern "system" fn open(
     surface: jlong,
     root: jstring,
 ) -> jlong {
-    if root.is_null() {
-        return 0;
-    }
-    let api = unsafe { interface(env) };
-    let length = unsafe { (api.GetStringLength.unwrap())(env, root) };
-    let chars = unsafe { (api.GetStringChars.unwrap())(env, root, null_mut()) };
-    if chars.is_null() {
-        return 0;
-    }
-    // The JVM lends length UTF-16 code units until ReleaseStringChars.
-    let directory =
-        runtime_directory(unsafe { std::slice::from_raw_parts(chars, length as usize) });
-    unsafe { (api.ReleaseStringChars.unwrap())(env, root, chars) };
-    let Some((directory, utf8)) = directory else {
+    let Some((directory, utf8)) =
+        unsafe { string_units(env, root) }.and_then(|units| runtime_directory(&units))
+    else {
         return 0;
     };
     open_log(Path::new(&directory));
@@ -296,20 +302,11 @@ unsafe extern "system" fn open_settings(
     }) else {
         return -1;
     };
-    if path.is_null() {
+    let Some(mut settings) =
+        (unsafe { string_units(env, path) }).filter(|units| !units.contains(&0))
+    else {
         return -1;
-    }
-    let api = unsafe { interface(env) };
-    let length = unsafe { (api.GetStringLength.unwrap())(env, path) };
-    let chars = unsafe { (api.GetStringChars.unwrap())(env, path, null_mut()) };
-    if chars.is_null() {
-        return -1;
-    }
-    let mut settings = unsafe { std::slice::from_raw_parts(chars, length as usize) }.to_vec();
-    unsafe { (api.ReleaseStringChars.unwrap())(env, path, chars) };
-    if settings.contains(&0) {
-        return -1;
-    }
+    };
     settings.push(0);
     let section = wide("Render");
     let options = frame::options(&configuration);
@@ -432,16 +429,6 @@ unsafe extern "system" fn present(
     vsync: jboolean,
 ) -> jint {
     unsafe { rsf_gl_pipeline_present(pipeline(handle), frame as u64, u32::from(vsync)) }
-}
-
-#[unsafe(export_name = "Java_org_kpc_rescaleframecraft_render_NativeBridge_status")]
-unsafe extern "system" fn status(
-    env: *mut JNIEnv,
-    class: jclass,
-    handle: jlong,
-    destination: jlongArray,
-) {
-    unsafe { status_count(env, class, handle, destination) };
 }
 
 #[unsafe(export_name = "Java_org_kpc_rescaleframecraft_render_NativeBridge_statusCount")]

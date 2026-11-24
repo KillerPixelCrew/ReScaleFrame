@@ -4,7 +4,7 @@
 
 `ReScaleFrame.Minecraft.dll` links the `rsf-minecraft` Rust archive and the same
 OrchestratorCore. `native/jni.rs` uses typed JNI definitions from `jni-sys`, and
-`native/jni.def` exports the original Java signatures plus `statusCount`. The bridge calls
+`native/jni.def` exports the `NativeBridge` signatures. The bridge calls
 the linked Runtime directly through `native/platform_abi.rs`, generated from the Runtime
 headers. The GL interop fixture still links the Rust message observer. The native target
 can be built without setting a JDK header path.

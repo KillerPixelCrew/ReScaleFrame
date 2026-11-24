@@ -15,8 +15,6 @@ class NativeBridgeTest {
         var status=new long[16];Arrays.fill(status,-1);
         assertEquals(0,NativeBridge.statusCount(0,status));
         for(long field:status)assertEquals(-1,field);
-        var legacy=new long[14];Arrays.fill(legacy,-1);NativeBridge.status(0,legacy);
-        for(long field:legacy)assertEquals(-1,field);
         assertNull(NativeBridge.configure(0,1920,1080,1,1,13,0,1,1,0,false,new org.kpc.rescaleframecraft.client.TaaSettings().sharpening()),
             "Preset-bearing JNI signature rejects an absent native session");
     }

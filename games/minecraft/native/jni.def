@@ -12,6 +12,5 @@ EXPORTS
     Java_org_kpc_rescaleframecraft_render_NativeBridge_evaluate
     Java_org_kpc_rescaleframecraft_render_NativeBridge_hudless
     Java_org_kpc_rescaleframecraft_render_NativeBridge_present
-    Java_org_kpc_rescaleframecraft_render_NativeBridge_status
     Java_org_kpc_rescaleframecraft_render_NativeBridge_statusCount
     Java_org_kpc_rescaleframecraft_render_NativeBridge_close
