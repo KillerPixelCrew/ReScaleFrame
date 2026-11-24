@@ -340,7 +340,9 @@ fn read_usize(address: usize) -> Option<usize> {
 fn image_reader(base: usize) -> impl FnMut(usize, *mut u8, usize) -> bool {
     move |offset, out, size| {
         base.checked_add(offset).is_some_and(|address| {
-            read_bytes(address, unsafe { std::slice::from_raw_parts_mut(out, size) })
+            read_bytes(address, unsafe {
+                std::slice::from_raw_parts_mut(out, size)
+            })
         })
     }
 }

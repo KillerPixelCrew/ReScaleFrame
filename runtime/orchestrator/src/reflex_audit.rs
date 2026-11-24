@@ -2,8 +2,8 @@
 use crate::diagnostic_output::Output;
 use crate::sync::lock;
 use crate::sys::rsf_backend_log_fn as Log;
-use rsf_graphics::dump_options::Log as Listener;
 use crate::win32_diagnostics::module_location;
+use rsf_graphics::dump_options::Log as Listener;
 use std::arch::naked_asm;
 use std::ffi::c_void;
 use std::ptr::null_mut;

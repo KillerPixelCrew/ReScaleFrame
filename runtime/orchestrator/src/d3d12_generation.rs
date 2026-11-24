@@ -2,8 +2,9 @@
 use crate::sdk_module::SdkModule;
 use crate::sr_session::has_capacity;
 use crate::sys::{
-    RSF_FG_ABI_VERSION, RSF_FG_DYNAMIC, RSF_FG_OFF, RSF_REFLEX_BOOST, rsf_fg_frame as Frame, rsf_fg_options as Options, rsf_fg_retirement as Retirement,
-    rsf_fg_status as Status, rsf_generation_provider as Provider, rsf_generation_setup as Setup,
+    RSF_FG_ABI_VERSION, RSF_FG_DYNAMIC, RSF_FG_OFF, RSF_REFLEX_BOOST, rsf_fg_frame as Frame,
+    rsf_fg_options as Options, rsf_fg_retirement as Retirement, rsf_fg_status as Status,
+    rsf_generation_provider as Provider, rsf_generation_setup as Setup,
 };
 use rsf_game_sys::backend_result::{
     ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, LOAD_FAILED, NEEDS_RESTART,

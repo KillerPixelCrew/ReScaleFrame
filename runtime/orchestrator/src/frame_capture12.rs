@@ -39,7 +39,6 @@ const MAX_FRAMES: u32 = 16;
 // `submitted` signals a fresh fence to this value on the recording queue.
 const SUBMITTED: u64 = 1;
 
-
 /// Where a copied texture's rows sit in its readback buffer.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Layout {

@@ -2292,9 +2292,11 @@ mod tests {
         assert_eq!(calls(), ["owner", "present 0x0 0"]);
         // Route the D3D11 producer's real Editor plan after its native resource handoff.
         use crate::{d3d11_pass, sys::rsf_unity_packet};
-        let mut packet = rsf_unity_packet::default();
-        packet.camera = pass.camera;
-        packet.color = without_provenance_mut(0x50);
+        let packet = rsf_unity_packet {
+            camera: pass.camera,
+            color: without_provenance_mut(0x50),
+            ..Default::default()
+        };
         let mut pass = d3d11_pass::plan(d3d11_pass::EVENT_WINDOW, &packet, true).pass;
         pass.color_input = packet.color;
         let logged = "log Editor presentation pending: texture=640x360 format=10 expected=8x6";

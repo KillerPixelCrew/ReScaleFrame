@@ -166,7 +166,9 @@ const STATE_MAP: [(i32, u32); 8] = [
 fn d3d12_state(ffx: u32) -> Option<u32> {
     let known = STATE_MAP
         .iter()
-        .fold(STATE_COMMON | STATE_PRESENT, |known, &(bit, _)| known | bit as u32);
+        .fold(STATE_COMMON | STATE_PRESENT, |known, &(bit, _)| {
+            known | bit as u32
+        });
     (ffx & !known == 0).then(|| {
         STATE_MAP
             .iter()
@@ -763,7 +765,10 @@ unsafe fn rsf_core_fsr12_create(setup: *const Setup, out: *mut Raw, chain: *mut 
     };
     initial.version_id = version.id;
     if !version.name.is_null() {
-        version_name(&mut initial, unsafe { CStr::from_ptr(version.name) }.to_bytes());
+        version_name(
+            &mut initial,
+            unsafe { CStr::from_ptr(version.name) }.to_bytes(),
+        );
     }
     let session = crate::allocate_handle(Fsr {
         sdk,

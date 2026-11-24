@@ -13,7 +13,6 @@ use crate::retain_object;
 use crate::sharpening_policy;
 use crate::sr_session::checked;
 use crate::sync::lock;
-use rsf_graphics::dump_options::Log;
 use crate::sys::rsf_sr12_setup as Setup;
 use crate::sys::*;
 use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE};
@@ -25,6 +24,7 @@ use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_NO_FG,
     RSF_GAME_RENDER_RESET, rsf_camera_frame, rsf_frame_record, rsf_game_render_pass as Pass,
 };
+use rsf_graphics::dump_options::Log;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::{MaybeUninit, offset_of};
 use std::ptr::{self, NonNull};
@@ -1077,7 +1077,8 @@ impl Sr12 {
         };
         if accepted == 0 && !state.sharpen_reported {
             state.sharpen_reported = true;
-            self.log.say("D3D12 sharpening unavailable; retaining unsharpened SR output");
+            self.log
+                .say("D3D12 sharpening unavailable; retaining unsharpened SR output");
         }
     }
 

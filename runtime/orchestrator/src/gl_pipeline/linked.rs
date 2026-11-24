@@ -167,4 +167,3 @@ pub(super) unsafe extern "C" fn sr_set_sharpening(
 pub(super) unsafe extern "C" fn sr_destroy(owner: Handle) {
     unsafe { sr12::rsf_core_sr12_destroy(owner.cast()) }
 }
-

@@ -15,7 +15,6 @@ use crate::native_fg_cpu::{self as cpu_owner, Failure, Frame as CpuOwner};
 use crate::now_qpc;
 use crate::sync::lock;
 use crate::sys::*;
-pub(crate) use rsf_graphics::dump_options::Log as Sink;
 use crate::sys::{
     RSF_FG_ABI_VERSION, RSF_FG_DYNAMIC, RSF_FG_FIXED, RSF_FG_OFF, RSF_PACING_NONE,
     RSF_PACING_REFLEX, RSF_REFLEX_BOOST, RSF_REFLEX_OFF, rsf_backend_log_fn as Log,
@@ -40,6 +39,7 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RESET, rsf_frame_record,
     rsf_game_render_pass as Pass,
 };
+pub(crate) use rsf_graphics::dump_options::Log as Sink;
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{self, NonNull};
@@ -160,7 +160,14 @@ pub(crate) fn requested() -> Options {
 }
 
 fn stage(name: &str, source: u64, native: u64, result: i32) {
-    cpu_owner::stage(call!(present_generation), name, source, native, result, None);
+    cpu_owner::stage(
+        call!(present_generation),
+        name,
+        source,
+        native,
+        result,
+        None,
+    );
 }
 
 // The game's screen class decides, through the one rule every generation consumer applies.
@@ -1734,7 +1741,8 @@ pub(super) unsafe extern "C" fn rsf_native_fg_retire(_user: Handle, session: Han
         own.read_state = restoring;
     }
     let source = slot.as_ref().map_or(0, |s| s.source);
-    cpu_owner::trace("retirement failed; slot held until a later retirement",
+    cpu_owner::trace(
+        "retirement failed; slot held until a later retirement",
         source,
         result,
     );

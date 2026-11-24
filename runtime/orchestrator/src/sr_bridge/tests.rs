@@ -339,7 +339,12 @@ pub(super) unsafe extern "C" fn surface_d3d11(surface: Handle) -> Handle {
 pub(super) unsafe extern "C" fn surface_d3d12(surface: Handle) -> Handle {
     child(surface, true)
 }
-pub(super) unsafe extern "C" fn fence_create(_: Handle, _: Handle, _: rsf_backend_log_fn, _: Handle) -> Handle {
+pub(super) unsafe extern "C" fn fence_create(
+    _: Handle,
+    _: Handle,
+    _: rsf_backend_log_fn,
+    _: Handle,
+) -> Handle {
     let fence = created("fence");
     let children = (object("fence11"), object("fence12"));
     world(|world| world.children.insert(fence as usize, children));

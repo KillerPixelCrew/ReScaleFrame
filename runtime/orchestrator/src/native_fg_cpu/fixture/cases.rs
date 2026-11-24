@@ -125,10 +125,7 @@ pub(super) fn run() -> i32 {
     latency_end_session(SESSION);
     assert!(rsf_native_latency_has_claim(1) == 0);
     let mut retired = request_frame(3);
-    assert_eq!(
-        unsafe { latency_frame_get(&mut retired) },
-        0
-    );
+    assert_eq!(unsafe { latency_frame_get(&mut retired) }, 0);
 
     let paced_before_rendered = pace_calls();
     rsf_native_fg_rendered_source_set(1);
