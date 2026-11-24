@@ -2,6 +2,8 @@
 //! Window, WARP device and check helpers the Windows fixture crates share.
 #![cfg(windows)]
 
+pub mod device;
+
 use std::ffi::{CStr, OsStr};
 use std::os::windows::ffi::OsStrExt;
 use windows::Win32::Foundation::{

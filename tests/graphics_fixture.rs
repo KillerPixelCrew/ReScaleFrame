@@ -4,9 +4,7 @@ use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-#[path = "graphics_fixture_device.rs"]
-mod device;
-use device::{Device, TestResult, half_to_f32};
+use rsf_test_support::device::{Device, TestResult, half_to_f32};
 #[path = "colour_transport.rs"]
 mod colour_transport;
 #[path = "d3d11_state.rs"]

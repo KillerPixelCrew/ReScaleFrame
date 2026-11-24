@@ -12,11 +12,7 @@ use windows_sys::Win32::System::LibraryLoader::{
     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
 
-#[allow(clippy::duplicate_mod)] // Shared with another crate or module through #[path].
-#[allow(dead_code)]
-#[path = "../../../../../tests/graphics_fixture_device.rs"]
-mod graphics;
-use graphics::{Device, TestResult};
+use rsf_test_support::device::{Device, TestResult};
 
 const SIZE: u32 = 512;
 

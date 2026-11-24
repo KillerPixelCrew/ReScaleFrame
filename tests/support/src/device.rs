@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+//! A WARP D3D11 device with texture creation and readback, and the half-float decode its
+//! fixtures compare against.
+use crate::d3d11_device;
 use std::{ptr, slice};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
@@ -7,34 +10,33 @@ use windows::Win32::Graphics::Direct3D::{
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-pub(super) type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
-pub(super) struct Device {
-    pub(super) device: ID3D11Device,
-    pub(super) context: ID3D11DeviceContext,
+pub struct Device {
+    pub device: ID3D11Device,
+    pub context: ID3D11DeviceContext,
 }
 
 impl Device {
-    pub(super) fn warp() -> Option<Self> {
+    pub fn warp() -> Option<Self> {
         Self::create(D3D_DRIVER_TYPE_WARP, None)
     }
 
-    pub(super) fn feature_11() -> Option<Self> {
+    pub fn feature_11() -> Option<Self> {
         let levels = &[D3D_FEATURE_LEVEL_11_0];
         Self::create(D3D_DRIVER_TYPE_HARDWARE, Some(levels))
             .or_else(|| Self::create(D3D_DRIVER_TYPE_WARP, Some(levels)))
     }
 
-    pub(super) fn create(
+    pub fn create(
         driver: D3D_DRIVER_TYPE,
         levels: Option<&[D3D_FEATURE_LEVEL]>,
     ) -> Option<Self> {
-        let (device, context) =
-            rsf_test_support::d3d11_device(driver, D3D11_CREATE_DEVICE_FLAG(0), levels).ok()?;
+        let (device, context) = d3d11_device(driver, D3D11_CREATE_DEVICE_FLAG(0), levels).ok()?;
         Some(Self { device, context })
     }
 
-    pub(super) fn desc(
+    pub fn desc(
         size: [u32; 2],
         format: DXGI_FORMAT,
         bind: D3D11_BIND_FLAG,
@@ -54,7 +56,7 @@ impl Device {
         }
     }
 
-    pub(super) fn texture(
+    pub fn texture(
         &self,
         desc: &D3D11_TEXTURE2D_DESC,
         data: Option<&D3D11_SUBRESOURCE_DATA>,
@@ -67,7 +69,7 @@ impl Device {
         texture.ok_or_else(|| "CreateTexture2D returned a null texture".into())
     }
 
-    pub(super) fn initialized<T>(
+    pub fn initialized<T>(
         &self,
         desc: &D3D11_TEXTURE2D_DESC,
         pixels: &[T],
@@ -89,8 +91,11 @@ impl Device {
         )
     }
 
-    // T must accept all bit patterns and match the texel component layout.
-    pub(super) unsafe fn read<T: Copy>(
+    /// Reads `components` samples of `T` per texel back through a staging copy.
+    ///
+    /// # Safety
+    /// `T` must accept all bit patterns and match the texel component layout.
+    pub unsafe fn read<T: Copy>(
         &self,
         texture: &ID3D11Texture2D,
         desc: &D3D11_TEXTURE2D_DESC,
@@ -126,7 +131,7 @@ impl Device {
     }
 }
 
-pub(super) fn half_to_f32(bits: u16) -> f32 {
+pub fn half_to_f32(bits: u16) -> f32 {
     let sign = u32::from(bits & 0x8000) << 16;
     let exponent = u32::from((bits >> 10) & 0x1f);
     let fraction = u32::from(bits & 0x3ff);

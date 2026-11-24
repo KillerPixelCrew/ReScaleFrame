@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: MIT
 #![cfg(all(windows, not(test)))]
 
-#[allow(dead_code)]
-#[path = "../../graphics_fixture_device.rs"]
-mod device;
-
-use device::{Device, TestResult, half_to_f32};
+use rsf_test_support::device::{Device, TestResult, half_to_f32};
 use rsf_game_sys::rsf_native_translucency_masks as Masks;
 use rsf_game_sys::{
     RSF_GAME_RENDER_CLOUD_DEPTH, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,
