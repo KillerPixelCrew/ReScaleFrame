@@ -156,11 +156,7 @@ impl Latency {
             status: LatencyStatus {
                 struct_size: size_of::<LatencyStatus>() as u32,
                 abi_version: RSF_FGVK_LATENCY_ABI_VERSION,
-                mode: 0,
-                available: 0,
-                sleep_calls: 0,
-                marker_calls: 0,
-                result: 0,
+                ..Default::default()
             },
             minimum_interval_us: 0,
             last_attempted: 0,

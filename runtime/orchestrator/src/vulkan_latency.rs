@@ -669,11 +669,7 @@ pub unsafe fn rsf_core_latencyvk_get_status(
         let mut status = rsf_fgvk_latency_status {
             struct_size: size_of::<rsf_fgvk_latency_status>() as u32,
             abi_version: RSF_FGVK_LATENCY_ABI_VERSION,
-            mode: 0,
-            available: 0,
-            sleep_calls: 0,
-            marker_calls: 0,
-            result: 0,
+            ..Default::default()
         };
         let query = if lease.context.is_null() {
             NOT_READY
