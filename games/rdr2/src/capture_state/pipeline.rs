@@ -21,23 +21,26 @@ fn blend_facts(blend: D3D12_RENDER_TARGET_BLEND_DESC) -> Pipeline {
 unsafe fn shader_facts(
     ps: D3D12_SHADER_BYTECODE,
     vs: D3D12_SHADER_BYTECODE,
-    facts: &mut Pipeline,
-) -> bool {
-    unsafe {
-        hash_shader(ps.pShaderBytecode.cast(), ps.BytecodeLength, &mut facts.ps)
-            && hash_shader(vs.pShaderBytecode.cast(), vs.BytecodeLength, &mut facts.vs)
-    }
+    facts: Pipeline,
+) -> Option<Pipeline> {
+    Some(Pipeline {
+        ps: unsafe { hash_shader(ps.pShaderBytecode.cast(), ps.BytecodeLength) }?,
+        vs: unsafe { hash_shader(vs.pShaderBytecode.cast(), vs.BytecodeLength) }?,
+        ..facts
+    })
 }
 
 pub(super) unsafe fn graphics_facts(
     desc: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC,
-    out: &mut Pipeline,
-) -> bool {
-    let Some(desc) = (unsafe { desc.as_ref() }) else {
-        return false;
-    };
-    *out = blend_facts(desc.BlendState.RenderTarget[0]);
-    unsafe { shader_facts(desc.PS, desc.VS, out) }
+) -> Option<Pipeline> {
+    let desc = unsafe { desc.as_ref() }?;
+    unsafe {
+        shader_facts(
+            desc.PS,
+            desc.VS,
+            blend_facts(desc.BlendState.RenderTarget[0]),
+        )
+    }
 }
 
 // Each tagged payload has natural alignment and the stream advances in pointer-aligned steps.
@@ -135,16 +138,11 @@ unsafe fn stream(desc: &D3D12_PIPELINE_STATE_STREAM_DESC) -> Option<Pipeline> {
         }
         offset += size;
     }
-    unsafe { shader_facts(ps, vs, &mut facts) }.then_some(facts)
+    unsafe { shader_facts(ps, vs, facts) }
 }
 
 pub(super) unsafe fn stream_facts(
     desc: *const D3D12_PIPELINE_STATE_STREAM_DESC,
-    out: &mut Pipeline,
-) -> bool {
-    let Some(facts) = (unsafe { desc.as_ref() }).and_then(|desc| unsafe { stream(desc) }) else {
-        return false;
-    };
-    *out = facts;
-    true
+) -> Option<Pipeline> {
+    unsafe { desc.as_ref() }.and_then(|desc| unsafe { stream(desc) })
 }

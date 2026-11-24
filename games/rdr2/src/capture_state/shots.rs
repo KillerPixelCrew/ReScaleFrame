@@ -9,8 +9,7 @@ use super::gpu_leases::{
 use super::metadata::{InputId, RESOURCE_COUNT, RESOURCE_ROLES};
 use super::recordings::{
     Draw, Pipeline, Readback, Submission, apply_submission, awaits_fence, claim_readback,
-    discard_submission, fence_readback, reuse_readback, snapshot_submission, stamp_copy,
-    submit_readback,
+    fence_readback, reuse_readback, snapshot_submission, stamp_copy, submit_readback,
 };
 use super::{Capture, INPUT_FRAMES, KEEP_TAIL, MAX_DRAW_COPIES, SAVE_DRAW, active, commit_draw};
 use std::cell::RefCell;
@@ -28,13 +27,7 @@ pub(super) const UNPAIRED_SUBMISSION: u32 = 5;
 
 struct QueueCall {
     queue: *mut c_void,
-    snapshot: *mut Submission,
-}
-
-impl Drop for QueueCall {
-    fn drop(&mut self) {
-        unsafe { discard_submission(self.snapshot) };
-    }
+    snapshot: Option<Submission>,
 }
 
 struct QueueCalls {
@@ -166,12 +159,11 @@ pub(super) unsafe fn discard_reset(owner: &Capture, list: *mut c_void, generatio
 
 /// When the original queue call must run without a receipt, its copies cannot be proven
 /// unsubmitted by a subsequent Reset. A confirmed device loss can still retire them.
-unsafe fn untracked_submit(owner: &Capture, count: u32, lists: *const *mut c_void) {
-    if count == 0 {
+/// None is an unreadable list array: every unsubmitted copy may have run.
+unsafe fn untracked_submit(owner: &Capture, lists: Option<&[*mut c_void]>) {
+    if lists.is_some_and(<[_]>::is_empty) {
         return;
     }
-    let lists =
-        (!lists.is_null()).then(|| unsafe { std::slice::from_raw_parts(lists, count as usize) });
     for shot in &mut unsafe { &mut *owner.shots.get() }.pending {
         if !shot.receipt.discarded
             && shot.receipt.submission == 0
@@ -279,33 +271,28 @@ pub(super) unsafe fn draw_shot(
 pub(super) unsafe fn before_submit(
     owner: &Capture,
     queue: *mut c_void,
-    count: u32,
-    lists: *const *mut c_void,
+    lists: Option<&[*mut c_void]>,
 ) {
     QUEUE_CALLS.with_borrow_mut(|calls| {
         if calls.refused != 0 || calls.stack.try_reserve(1).is_err() {
             calls.refused += 1;
-            unsafe { untracked_submit(owner, count, lists) };
+            unsafe { untracked_submit(owner, lists) };
         } else {
-            let snapshot = unsafe { claim_submission(owner, count, lists) };
+            let snapshot = unsafe { claim_submission(owner, lists) };
             calls.stack.push(QueueCall { queue, snapshot });
         }
     });
 }
 
-unsafe fn claim_submission(
-    owner: &Capture,
-    count: u32,
-    lists: *const *mut c_void,
-) -> *mut Submission {
-    let submission = unsafe { snapshot_submission(owner, count, lists) };
-    if let Some(submission) = unsafe { submission.as_ref() } {
+unsafe fn claim_submission(owner: &Capture, lists: Option<&[*mut c_void]>) -> Option<Submission> {
+    let submission = lists.and_then(|lists| unsafe { snapshot_submission(owner, lists) });
+    if let Some(submission) = &submission {
         let pending = &mut unsafe { &mut *owner.shots.get() }.pending;
         for shot in pending {
             claim_readback(submission, &mut shot.receipt);
         }
     } else {
-        unsafe { untracked_submit(owner, count, lists) };
+        unsafe { untracked_submit(owner, lists) };
     }
     submission
 }
@@ -328,18 +315,19 @@ pub(super) unsafe fn after_submit(owner: &Capture, queue: *mut c_void) -> u32 {
         Ok(call) => call,
         Err(result) => return result,
     };
-    let snapshot = call.as_ref().map_or(ptr::null_mut(), |call| call.snapshot);
-    unsafe { finish_submission(owner, queue, snapshot) }
+    let mut snapshot = call.and_then(|call| call.snapshot);
+    unsafe { finish_submission(owner, queue, snapshot.as_mut()) }
 }
 
 unsafe fn finish_submission(
     owner: &Capture,
     queue: *mut c_void,
-    submission: *mut Submission,
+    submission: Option<&mut Submission>,
 ) -> u32 {
+    let tracked = submission.is_some();
     let serial = unsafe { apply_submission(owner, submission) };
     let pending = &mut unsafe { &mut *owner.shots.get() }.pending;
-    if !submission.is_null() {
+    if tracked {
         for shot in &mut *pending {
             if submit_readback(&mut shot.receipt, queue, serial) {
                 bind_queue(&mut shot.leases, queue);
@@ -487,16 +475,14 @@ mod tests {
                 stamp_copy(&owner, list, &mut shot.receipt);
                 pending.push(shot);
             }
-            let submission = snapshot_submission(&owner, 1, [list].as_ptr());
-            assert!(!submission.is_null());
-            assert!(claim_readback(&*submission, &mut pending[0].receipt));
-            untracked_submit(&owner, 1, [other].as_ptr());
+            let submission = snapshot_submission(&owner, &[list]).unwrap();
+            assert!(claim_readback(&submission, &mut pending[0].receipt));
+            untracked_submit(&owner, Some(&[other]));
             reset_list(&owner, list, ptr::null_mut());
             assert!(collect_ready(&owner, completed, device_live).is_none());
             assert_eq!(pending_count(&owner), 2);
             assert_eq!(ready_count(&owner), 0);
             assert_eq!((*owner.ledger.get()).readbacks_unavailable, 1);
-            drop(Box::from_raw(submission));
             drop_ready(&owner);
         }
     }

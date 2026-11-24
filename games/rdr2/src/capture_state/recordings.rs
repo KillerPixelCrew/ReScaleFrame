@@ -3,7 +3,6 @@
 use super::{Capture, MAX_DRAW_METADATA, try_entry};
 #[cfg(windows)]
 use rsf_game_sys::checksum::crc32_ieee;
-use rsf_game_sys::ffi_util::try_box;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -11,7 +10,6 @@ use std::ptr::null_mut;
 const UNKNOWN: u32 = u32::MAX;
 type States = HashMap<usize, u32>;
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct Pipeline {
     pub(super) ps: u32,
@@ -26,8 +24,6 @@ pub(super) struct Pipeline {
     pub(super) write_mask: u32,
 }
 
-#[repr(C)]
-#[derive(Default)]
 pub(super) struct DrawBinding {
     pub(super) target: *mut c_void,
     pub(super) pso: u64,
@@ -35,7 +31,6 @@ pub(super) struct DrawBinding {
     pub(super) pipeline_known: bool,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct Draw {
     pub(super) ordinal: u32,
@@ -51,14 +46,6 @@ pub(super) struct Draw {
     pub(super) stack_size: u32,
     pub(super) pipeline_known: bool,
 }
-
-const _: () = {
-    assert!(size_of::<Pipeline>() == 40);
-    assert!(
-        size_of::<DrawBinding>() == 64 && std::mem::offset_of!(DrawBinding, pipeline_known) == 56
-    );
-    assert!(size_of::<Draw>() == 192 && std::mem::offset_of!(Draw, stack) == 88);
-};
 
 #[derive(Default)]
 struct Recording {
@@ -184,28 +171,27 @@ impl Recordings {
     }
 }
 
-// The native descriptor parser lends the exact shader bytes for this call. Hashing does
-// not access the owner and runs before the native graphics mutex is taken.
+// The descriptor lends the exact shader bytes for this call. Hashing runs before the capture
+// mutex is taken.
 #[cfg(windows)]
-pub(super) unsafe fn hash_shader(bytes: *const u8, length: usize, out: &mut u32) -> bool {
+pub(super) unsafe fn hash_shader(bytes: *const u8, length: usize) -> Option<u32> {
     if length == 0 {
-        *out = 0;
-        return true;
+        return Some(0);
     }
     if bytes.is_null() || length > isize::MAX as usize {
-        return false;
+        return None;
     }
-    let bytes = unsafe { std::slice::from_raw_parts(bytes, length) };
-    *out = crc32_ieee(bytes);
-    true
+    Some(crc32_ieee(unsafe {
+        std::slice::from_raw_parts(bytes, length)
+    }))
 }
 
 // All of these calls run under g->mutex. Resource and command-list addresses are identities.
 // The observation maps do not own COM references.
-pub(super) unsafe fn record_pipeline(owner: &Capture, pso: *mut c_void, facts: *const Pipeline) {
+pub(super) unsafe fn record_pipeline(owner: &Capture, pso: *mut c_void, facts: Option<&Pipeline>) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     let key = pso as usize;
-    let Some(facts) = (unsafe { facts.as_ref() }) else {
+    let Some(facts) = facts else {
         // A successful callback with an unrecognized descriptor supersedes an old address.
         recordings.pipelines.remove(&key);
         return;
@@ -224,11 +210,11 @@ pub(super) unsafe fn record_rtv(owner: &Capture, handle: usize, resource: *mut c
     }
 }
 
-pub(super) unsafe fn bind_rtv(owner: &Capture, list: *mut c_void, handle: *const usize) {
+pub(super) unsafe fn bind_rtv(owner: &Capture, list: *mut c_void, handle: Option<usize>) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     // Resolve the first view at bind time. A later descriptor write does not retarget the list.
-    let target = unsafe { handle.as_ref() }
-        .and_then(|handle| recordings.rtvs.get(handle))
+    let target = handle
+        .and_then(|handle| recordings.rtvs.get(&handle))
         .copied()
         .unwrap_or(null_mut());
     if let Some(recording) = try_entry(&mut recordings.lists, list as usize) {
@@ -243,26 +229,19 @@ pub(super) unsafe fn bind_pipeline(owner: &Capture, list: *mut c_void, pso: *mut
     }
 }
 
-pub(super) unsafe fn get_draw_binding(
-    owner: &Capture,
-    list: *mut c_void,
-    out: &mut DrawBinding,
-) -> bool {
+pub(super) unsafe fn draw_binding(owner: &Capture, list: *mut c_void) -> Option<DrawBinding> {
     let recordings = unsafe { &*owner.recordings.get() };
-    let Some(recording) = recordings.lists.get(&(list as usize)) else {
-        return false;
-    };
+    let recording = recordings.lists.get(&(list as usize))?;
     if recording.target.is_null() {
-        return false;
+        return None;
     }
     let pipeline = recordings.pipelines.get(&recording.pso).copied();
-    *out = DrawBinding {
+    Some(DrawBinding {
         target: recording.target,
         pso: recording.pso as u64,
         pipeline: pipeline.unwrap_or_default(),
         pipeline_known: pipeline.is_some(),
-    };
-    true
+    })
 }
 
 pub(super) unsafe fn record_draw(owner: &Capture, draw: &Draw) -> bool {
@@ -361,20 +340,9 @@ pub(super) unsafe fn reuse_readback(
 
 pub(super) unsafe fn snapshot_submission(
     owner: &Capture,
-    count: u32,
-    lists: *const *mut c_void,
-) -> *mut Submission {
-    let lists = if count == 0 {
-        &[]
-    } else if lists.is_null() {
-        return null_mut();
-    } else {
-        unsafe { std::slice::from_raw_parts(lists, count as usize) }
-    };
-    unsafe { &mut *owner.recordings.get() }
-        .snapshot(lists)
-        .and_then(try_box)
-        .map_or_else(null_mut, Box::into_raw)
+    lists: &[*mut c_void],
+) -> Option<Submission> {
+    unsafe { &mut *owner.recordings.get() }.snapshot(lists)
 }
 
 pub(super) fn claim_readback(submission: &Submission, readback: &mut Readback) -> bool {
@@ -416,20 +384,14 @@ pub(super) fn fence_readback(readback: &mut Readback, queue: *mut c_void, value:
     true
 }
 
-pub(super) unsafe fn apply_submission(owner: &Capture, submission: *mut Submission) -> u64 {
+pub(super) unsafe fn apply_submission(owner: &Capture, submission: Option<&mut Submission>) -> u64 {
     let recordings = unsafe { &mut *owner.recordings.get() };
-    if let Some(submission) = unsafe { submission.as_mut() } {
+    if let Some(submission) = submission {
         recordings.submit(submission)
     } else {
         // The queue ran after a refused snapshot; the old submitted states may be stale.
         recordings.submitted.clear();
         0
-    }
-}
-
-pub(super) unsafe fn discard_submission(submission: *mut Submission) {
-    if !submission.is_null() {
-        drop(unsafe { Box::from_raw(submission) });
     }
 }
 
@@ -474,10 +436,9 @@ mod tests {
             assert_eq!(resource_state(&owner, aliased, a), UNKNOWN);
             transition(&owner, aliased, c, 0, 16, false);
             transition(&owner, later, b, 0, 32, false);
-            let submission = snapshot_submission(&owner, 3, [earlier, aliased, later].as_ptr());
-            assert!(!submission.is_null());
-            apply_submission(&owner, submission);
-            discard_submission(submission);
+            let mut submission = snapshot_submission(&owner, &[earlier, aliased, later]);
+            assert!(submission.is_some());
+            apply_submission(&owner, submission.as_mut());
             assert_eq!(resource_state(&owner, unrelated_list, a), UNKNOWN);
             assert_eq!(resource_state(&owner, unrelated_list, b), 32);
             assert_eq!(resource_state(&owner, unrelated_list, c), 16);
@@ -490,21 +451,14 @@ mod tests {
         let list = without_provenance_mut(1);
         let resource = without_provenance_mut(2);
         let pso = without_provenance_mut(3);
-        let mut binding = DrawBinding {
-            target: null_mut(),
-            pso: 0,
-            pipeline: Pipeline::default(),
-            pipeline_known: false,
-        };
         unsafe {
             record_rtv(&owner, 4, resource);
-            bind_rtv(&owner, list, &4);
+            bind_rtv(&owner, list, Some(4));
             bind_pipeline(&owner, list, pso);
-            record_pipeline(&owner, pso, &Pipeline::default());
-            assert!(get_draw_binding(&owner, list, &mut binding));
-            assert!(binding.pipeline_known);
-            record_pipeline(&owner, pso, std::ptr::null());
-            assert!(get_draw_binding(&owner, list, &mut binding));
+            record_pipeline(&owner, pso, Some(&Pipeline::default()));
+            assert!(draw_binding(&owner, list).unwrap().pipeline_known);
+            record_pipeline(&owner, pso, None);
+            let binding = draw_binding(&owner, list).unwrap();
             assert!(!binding.pipeline_known);
             assert_eq!(binding.pso, 3);
             assert_eq!(binding.target, resource);
@@ -522,19 +476,16 @@ mod tests {
             transition(&owner, list, resource, 0, 8, false);
             let mut readback = Readback::default();
             stamp_copy(&owner, list, &mut readback);
-            let batch = [list];
-            let receipt = snapshot_submission(&owner, 1, batch.as_ptr());
-            assert!(!receipt.is_null());
+            let mut receipt = snapshot_submission(&owner, &[list]).unwrap();
             reset_list(&owner, list, null_mut());
             transition(&owner, list, resource, 0, 16, false);
             let mut later = Readback::default();
             stamp_copy(&owner, list, &mut later);
-            assert!(claim_readback(&*receipt, &mut readback));
-            assert!(!claim_readback(&*receipt, &mut later));
-            assert_eq!(apply_submission(&owner, receipt), 1);
+            assert!(claim_readback(&receipt, &mut readback));
+            assert!(!claim_readback(&receipt, &mut later));
+            assert_eq!(apply_submission(&owner, Some(&mut receipt)), 1);
             assert_eq!(resource_state(&owner, other_list, resource), 8);
             assert_eq!(resource_state(&owner, list, resource), 16);
-            discard_submission(receipt);
         }
     }
 
@@ -548,14 +499,12 @@ mod tests {
         unsafe {
             stamp_copy(&owner, list, &mut readback);
             assert!(reuse_readback(&owner, &readback, list, 0));
-            let receipt = snapshot_submission(&owner, 1, [list].as_ptr());
-            assert!(!receipt.is_null());
-            assert!(claim_readback(&*receipt, &mut readback));
+            let mut receipt = snapshot_submission(&owner, &[list]).unwrap();
+            assert!(claim_readback(&receipt, &mut readback));
             assert!(!reuse_readback(&owner, &readback, list, 0));
-            let serial = apply_submission(&owner, receipt);
+            let serial = apply_submission(&owner, Some(&mut receipt));
             assert!(!submit_readback(&mut readback, other_queue, serial + 1));
             assert!(submit_readback(&mut readback, queue, serial));
-            discard_submission(receipt);
         }
         assert!(awaits_fence(&readback, queue));
         assert!(!fence_readback(&mut readback, other_queue, 1));

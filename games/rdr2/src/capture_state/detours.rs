@@ -10,13 +10,7 @@ use super::pipeline::{graphics_facts, stream_facts};
 use super::recordings::*;
 use super::shots::{self, Image, draw_shot, pending_count};
 use crate::{camera_probe::rsf_rdr2_camera_request, layout, platform::lock};
-use std::{
-    arch::naked_asm,
-    cell::Cell,
-    ffi::c_void,
-    ptr::{null, null_mut},
-    sync::atomic::Ordering,
-};
+use std::{arch::naked_asm, cell::Cell, ffi::c_void, ptr::null_mut, sync::atomic::Ordering};
 use windows::Win32::Graphics::{
     Direct3D12::*,
     Dxgi::{DXGI_HDR_METADATA_TYPE, IDXGISwapChain, IDXGISwapChain4, IDXGISwapChain4_Vtbl},
@@ -173,13 +167,7 @@ pub(super) unsafe fn copy_resource(
 fn pipeline(pso: Raw, facts: Option<&Pipeline>) {
     let state = owner();
     let _guard = lock(&state.observations);
-    unsafe {
-        record_pipeline(
-            &state.capture,
-            pso,
-            facts.map_or(null(), std::ptr::from_ref),
-        )
-    };
+    unsafe { record_pipeline(&state.capture, pso, facts) };
 }
 
 // The vtable methods use SDK descriptor and HRESULT types with raw COM pointers.
@@ -189,9 +177,7 @@ macro_rules! pso_detour {
             type Original = unsafe extern "system" fn(Raw, $($name_ty,)? *const $desc, Iid, Out) -> HRESULT;
             let hr = unsafe { original::<Original>(Role::$role)(this, $($name_arg,)? desc, iid, out) };
             if let Some(pso) = unsafe { output(hr, out) } {
-                let mut facts = Pipeline::default();
-                let known = unsafe { $facts(desc, &mut facts) };
-                pipeline(pso, known.then_some(&facts));
+                pipeline(pso, unsafe { $facts(desc) }.as_ref());
             }
             hr
         }
@@ -387,7 +373,7 @@ unsafe extern "system" fn set_rtv(
     let first = (count != 0)
         .then(|| unsafe { handles.as_ref() })
         .flatten()
-        .map_or(null(), |h| std::ptr::from_ref(&h.ptr));
+        .map(|handle| handle.ptr);
     let state = owner();
     let _guard = lock(&state.observations);
     unsafe { bind_rtv(&state.capture, list, first) };
@@ -448,13 +434,11 @@ fn snapshot(list: Raw, vertices: u32, instances: u32, caller: u64) {
         return;
     }
     let guard = lock(&state.observations);
-    let mut binding = DrawBinding::default();
-    if !active(&state.capture)
-        || !unsafe { get_draw_binding(&state.capture, list, &mut binding) }
-        || !unsafe { gpu_accepts_target(&state.capture, binding.target) }
-    {
+    let Some(binding) = (unsafe { draw_binding(&state.capture, list) }).filter(|binding| {
+        active(&state.capture) && unsafe { gpu_accepts_target(&state.capture, binding.target) }
+    }) else {
         return;
-    }
+    };
     let mut draw = Draw {
         vertices,
         instances,
@@ -594,9 +578,14 @@ pub(super) unsafe extern "C" fn swapchain_created(chain: Raw) {
 }
 
 pub(super) unsafe extern "C" fn before_submit(queue: Raw, count: u32, lists: *const Raw) {
+    let lists = match (count, lists.is_null()) {
+        (0, _) => Some(&[][..]),
+        (_, true) => None,
+        _ => Some(unsafe { std::slice::from_raw_parts(lists, count as usize) }),
+    };
     let state = owner();
     let _guard = lock(&state.observations);
-    unsafe { shots::before_submit(&state.capture, queue, count, lists) };
+    unsafe { shots::before_submit(&state.capture, queue, lists) };
 }
 
 pub(super) unsafe extern "C" fn after_submit(queue: Raw, _: u32, _: *const Raw) {
