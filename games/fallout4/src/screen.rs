@@ -331,28 +331,23 @@ impl Drop for LastError {
     }
 }
 
-/// Query only on the engine callback. The native leaf contains the exception
-/// guard around the engine calls.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_fallout4_screen_classify(
+/// Query only on the engine callback. The native leaf contains the exception guard around the
+/// engine calls. Facts only: this neither clears NO_FG nor admits an input owner.
+pub(crate) fn classify(
     source: &rsf_fallout4_cpu_identity,
     pass: &rsf_game_render_pass,
     ordinary_world: bool,
-    result: &mut NativeScreen,
-) {
+) -> NativeScreen {
     let _error = LastError(unsafe { GetLastError() });
     let base = VERIFIED_IMAGE.load(Ordering::Acquire);
     if base == 0 {
-        *result = NativeScreen::refused(QUERY_UNAVAILABLE);
-        return;
+        return NativeScreen::refused(QUERY_UNAVAILABLE);
     }
     if !render_source_is_current(source) {
-        *result = NativeScreen::refused(SOURCE_CHANGED);
-        return;
+        return NativeScreen::refused(SOURCE_CHANGED);
     }
     let Some(before) = Observation::read(base) else {
-        *result = NativeScreen::refused(QUERY_UNAVAILABLE);
-        return;
+        return NativeScreen::refused(QUERY_UNAVAILABLE);
     };
     let camera = if before.camera_state != 0 && before.camera_vtable == base + 0x25a_a6d8 {
         before.player_camera
@@ -360,14 +355,13 @@ pub(crate) extern "C" fn rsf_fallout4_screen_classify(
         0
     };
     let Some((facts, cameras)) = observe(base, before.ui, camera) else {
-        *result = NativeScreen::refused(QUERY_UNAVAILABLE);
-        return;
+        return NativeScreen::refused(QUERY_UNAVAILABLE);
     };
-    *result = NativeScreen::refused(0);
+    let mut result = NativeScreen::refused(0);
     result.facts = facts;
     let Some(cameras) = cameras else {
         result.refusals = QUERY_UNAVAILABLE;
-        return;
+        return result;
     };
     if cameras & (1 << 2) != 0 {
         result.facts |= VATS_CAMERA;
@@ -385,7 +379,7 @@ pub(crate) extern "C" fn rsf_fallout4_screen_classify(
         || (result.facts & FROZEN_PAUSE != 0) != (before.freeze_pause != 0)
     {
         result.refusals = OBSERVATION_CHANGED;
-        return;
+        return result;
     }
     if !ordinary_world {
         result.refusals |= NOT_ORDINARY_WORLD;
@@ -409,16 +403,12 @@ pub(crate) extern "C" fn rsf_fallout4_screen_classify(
     } else if result.refusals == 0 {
         result.screen = RSF_SCREEN_GAMEPLAY;
     }
+    result
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_fallout4_ordinary_screen_refusals(
-    source: &rsf_fallout4_cpu_identity,
-) -> u32 {
-    // SAFETY: the empty pass has no resources. Classification supplies screen
-    // facts and the expected invalid-world-lease refusal.
-    let candidate = unsafe { std::mem::zeroed() };
-    let mut screen = NativeScreen::EMPTY;
-    rsf_fallout4_screen_classify(source, &candidate, true, &mut screen);
-    screen.refusals
+/// Refusal facts for the ordinary World before a render-input lease is available: the screen
+/// facts and the expected invalid-world-lease refusal.
+pub(crate) fn ordinary_refusals(source: &rsf_fallout4_cpu_identity) -> u32 {
+    // SAFETY: the empty pass has no resources.
+    classify(source, &unsafe { std::mem::zeroed() }, true).refusals
 }

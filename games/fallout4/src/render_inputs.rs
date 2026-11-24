@@ -3,8 +3,8 @@
 //! temporal state, the TAA camera cache scan, the logical-to-platform target maps, resource and
 //! raster admission, the steady camera history, and the GameSDK pass each reader leases.
 //!
-//! Rust samples the D3D11 resources and lends their owned references to the
-//! native World caller. The native leaves format and report existing receipts.
+//! An admitted read returns the owned references with its pass; render_inputs.c formats the
+//! receipts.
 
 mod native;
 
@@ -107,7 +107,6 @@ pub(crate) struct FramebufferLease {
 }
 
 unsafe extern "C" {
-    fn rsf_fallout4_input_object(inputs: *const c_void, slot: u32) -> *mut c_void;
     fn rsf_fallout4_inputs_report_reader(
         report: ReportFn,
         stage: *const c_char,
@@ -193,11 +192,10 @@ enum Stage {
     CameraChanged,
     HistoryChanged,
     Accepted,
-    Exception,
     ProducerChanged,
 }
 
-const NAMES: [&CStr; 33] = [
+const NAMES: [&CStr; 32] = [
     c"unverified",
     c"owner",
     c"dimensions",
@@ -229,7 +227,6 @@ const NAMES: [&CStr; 33] = [
     c"camera-changed",
     c"history-changed",
     c"accepted",
-    c"exception",
     c"producer-changed",
 ];
 const _: () = assert!(Stage::ProducerChanged as usize + 1 == NAMES.len() && NAMES.len() <= 64);
@@ -1147,7 +1144,7 @@ fn read_inputs(
 
 /// Raster/resource lease only. No temporal camera, history or depth admission. All downstream
 /// allocations are conservatively required before native reduction.
-fn read_raster(
+fn raster_pass(
     lease: &mut native::NativeLease,
     frame: &rsf_game_render_pass,
     producer: Option<&Snapshot>,
@@ -1371,113 +1368,71 @@ fn framebuffer_receipt(
     };
 }
 
-/// The reader's exception receipt is due: its stage bit was not yet spent.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_inputs_claim_exception() -> bool {
-    let bit = 1u64 << Stage::Exception as u32;
-    REPORTED.fetch_or(bit, Ordering::Relaxed) & bit == 0
+/// An admitted reader lease: one reference to each resource the pass names, held until the
+/// World drops it.
+pub(crate) struct Inputs {
+    pub(crate) context: ID3D11DeviceContext,
+    pub(crate) chain: IDXGISwapChain,
+    // Indexed by the native_input_* slots; the optional allocations may be missing.
+    pub(crate) textures: [Option<ID3D11Texture2D>; native::TEXTURE_SLOTS],
+    pub(crate) pass: rsf_game_render_pass,
 }
 
-/// The full reader. `output` is cleared first and written only on admission; the caller keeps
-/// the lease only then.
-///
-/// # Safety
-/// `transferred` points to the caller's empty lease, `producer` null or readable and `output` writable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_inputs_read(
-    transferred: *mut native::TransferredLease,
-    report: Report,
-    producer: *const Snapshot,
-    output: *mut rsf_game_render_pass,
-) -> bool {
-    let Some(output) = (unsafe { output.as_mut() }) else {
-        return false;
-    };
-    // SAFETY: the SDK record holds only integers, floats and raw pointers.
-    *output = unsafe { std::mem::zeroed() };
-    if transferred.is_null() {
-        return false;
+impl Inputs {
+    pub(crate) fn texture(&self, slot: u32) -> *mut c_void {
+        self.textures[slot as usize]
+            .as_ref()
+            .map_or(std::ptr::null_mut(), windows::core::Interface::as_raw)
     }
-    let producer = unsafe { producer.as_ref() }.copied();
+
+    /// Both leases name the same colour, depth, motion, Pip-Boy, VATS and refraction resources,
+    /// and with `owners` the same Context and chain.
+    pub(crate) fn same_resources(&self, held: &Self, owners: bool) -> bool {
+        use crate::d3d11::same_object;
+        (!owners
+            || (same_object(&self.context, &held.context) && same_object(&self.chain, &held.chain)))
+            && [
+                SLOT_COLOUR,
+                SLOT_DEPTH,
+                SLOT_MOTION,
+                SLOT_PIPBOY,
+                SLOT_VATS,
+                SLOT_REFRACTION_NORMALS,
+            ]
+            .into_iter()
+            .all(|slot| {
+                match (&self.textures[slot as usize], &held.textures[slot as usize]) {
+                    (Some(current), Some(held)) => same_object(current, held),
+                    _ => false,
+                }
+            })
+    }
+}
+
+/// The full reader. Supplies native resource, camera, rect and frame facts only.
+pub(crate) fn read_temporal(report: Report, producer: Option<&Snapshot>) -> Option<Inputs> {
     let mut reading = Reading::new();
     let mut lease = native::NativeLease::default();
-    match read_inputs(&mut lease, report, producer.as_ref(), &mut reading) {
+    match read_inputs(&mut lease, report, producer, &mut reading) {
         Ok(()) => {
             receipt(report, Stage::Accepted, &mut reading);
-            *output = reading.pass;
-            unsafe { transferred.write(lease.transfer()) };
-            true
+            lease.into_inputs(reading.pass)
         }
         Err(stage) => {
             receipt(report, stage, &mut reading);
-            false
+            None
         }
     }
 }
 
-/// The raster reader. `output` is cleared first and written only on admission.
-///
-/// # Safety
-/// `transferred` points to the caller's empty lease, `frame` readable, `producer` null or readable and
-/// `output` writable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_inputs_read_raster(
-    transferred: *mut native::TransferredLease,
-    frame: *const rsf_game_render_pass,
-    producer: *const Snapshot,
-    output: *mut rsf_game_render_pass,
-) -> bool {
-    if output.is_null() {
-        return false;
-    }
-    // SAFETY: the SDK record holds only integers, floats and raw pointers.
-    unsafe { output.write(std::mem::zeroed()) };
-    if transferred.is_null() || frame.is_null() {
-        return false;
-    }
-    let frame = unsafe { frame.read() };
-    let producer = unsafe { producer.as_ref() }.copied();
+/// The raster reader of the FRAME pass.
+pub(crate) fn read_raster(
+    frame: &rsf_game_render_pass,
+    producer: Option<&Snapshot>,
+) -> Option<Inputs> {
     let mut lease = native::NativeLease::default();
-    match read_raster(&mut lease, &frame, producer.as_ref()) {
-        Some(pass) => {
-            unsafe {
-                output.write(pass);
-                transferred.write(lease.transfer())
-            };
-            true
-        }
-        None => false,
-    }
-}
-
-/// Compare the World-owned interfaces in the producer's established order.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_inputs_same_resources(
-    current: *const c_void,
-    held: *const c_void,
-    owners: bool,
-) -> bool {
-    use crate::sys::{native_input_chain, native_input_context};
-
-    // SAFETY: Both pointers name the calling thread's native World leases.
-    // Read each pair just before its COM comparison, preserving short-circuit
-    // behavior and the fresh slot observations on reentrant calls.
-    let same = |slot| unsafe {
-        let current = rsf_fallout4_input_object(current, slot);
-        let held = rsf_fallout4_input_object(held, slot);
-        crate::d3d11::rsf_fallout4_render_same_object(current, held)
-    };
-    (!owners || (same(native_input_context) && same(native_input_chain)))
-        && [
-            SLOT_COLOUR,
-            SLOT_DEPTH,
-            SLOT_MOTION,
-            SLOT_PIPBOY,
-            SLOT_VATS,
-            SLOT_REFRACTION_NORMALS,
-        ]
-        .into_iter()
-        .all(same)
+    let pass = raster_pass(&mut lease, frame, producer)?;
+    lease.into_inputs(pass)
 }
 
 /// Own the accepted framebuffer directly for the duration of the render seam.
@@ -1513,8 +1468,7 @@ mod tests {
         assert_eq!(Stage::Unverified as u32, 0);
         assert_eq!(Stage::CacheRead as u32, 13);
         assert_eq!(Stage::Accepted as u32, 30);
-        assert_eq!(Stage::Exception as u32, 31);
-        assert_eq!(Stage::ProducerChanged as u32, 32);
+        assert_eq!(Stage::ProducerChanged as u32, 31);
         assert_eq!(NAMES[Stage::CameraOwner as usize], c"camera-owner");
         assert_eq!(NAMES[Stage::ExtentFormat as usize], c"extent-format");
         assert_eq!(Framebuffer::TargetChanged as u32, 17);

@@ -8,14 +8,6 @@ RSF_FALLOUT4_RENDER_ABI_BEGIN
 
 typedef void (*NativeInputReport)(const char*);
 
-// The readers transfer an owned reference for each nonnull slot.
-// The native caller attaches them to the World or releases unused references.
-
-bool rsf_fallout4_inputs_claim_exception() RSF_FALLOUT4_RENDER_NOEXCEPT;
-bool rsf_fallout4_inputs_read(NativeInputReferences* lease,
-    NativeInputReport, const NativeDepthSnapshot* producer, rsf_game_render_pass*) RSF_FALLOUT4_RENDER_NOEXCEPT;
-bool rsf_fallout4_inputs_read_raster(NativeInputReferences* lease,
-    const rsf_game_render_pass* frame, const NativeDepthSnapshot* producer, rsf_game_render_pass*) RSF_FALLOUT4_RENDER_NOEXCEPT;
 RSF_FALLOUT4_RENDER_ASSERT(sizeof(NativeCamera) == 288);
 RSF_FALLOUT4_RENDER_ASSERT(offsetof(NativeCamera, projection) == 64);
 RSF_FALLOUT4_RENDER_ASSERT(offsetof(NativeCamera, view_projection_unjittered) == 128);
@@ -42,9 +34,6 @@ RSF_FALLOUT4_RENDER_ASSERT(sizeof(NativeFramebufferReceipt) == 344 && offsetof(N
     offsetof(NativeFramebufferReceipt, target_texture) == 280 && offsetof(NativeFramebufferReceipt, platform) == 304 &&
     offsetof(NativeFramebufferReceipt, rtv_mip) == 340);
 
-bool rsf_fallout4_inputs_same_resources(const void* current, const void* held,
-    bool owners) RSF_FALLOUT4_RENDER_NOEXCEPT;
-void* rsf_fallout4_input_object(const void* inputs, uint32_t slot) RSF_FALLOUT4_RENDER_NOEXCEPT;
 void rsf_fallout4_inputs_report_reader(NativeInputReport, const char* stage,
     const NativeInputReceipt*, const rsf_game_render_pass*) RSF_FALLOUT4_RENDER_NOEXCEPT;
 void rsf_fallout4_inputs_report_mismatch(NativeInputReport, const NativeInputState* first,

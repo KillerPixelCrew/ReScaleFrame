@@ -6,7 +6,7 @@ use crate::build_layout::{
 };
 use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::depth_domains::{self, Snapshot};
-use crate::screen::{WORLD_LEASE_INVALID, rsf_fallout4_ordinary_screen_refusals};
+use crate::screen::{WORLD_LEASE_INVALID, ordinary_refusals};
 pub(crate) use crate::sys::NativeOutputOwner as OutputOwner;
 use crate::sys::NativeResolutionReceipt as Receipt;
 use crate::{Plain, guard, image, read};
@@ -46,19 +46,11 @@ pub(crate) const MANAGER: usize = 0x3e5e4b0;
 const SHADOW_VIEWPORT_DIRTY: u32 = 2;
 const VIEWPORT_UNIT: usize = 0x2929458;
 
-type Reserve = unsafe extern "C" fn(*const rsf_game_render_pass) -> bool;
 type ReportFn = unsafe extern "C" fn(*const c_char);
 type Report = Option<ReportFn>;
-type Upscale = unsafe extern "C" fn(*mut c_void, *mut c_void, *const rsf_game_render_pass) -> i32;
 type RenderConfig = unsafe extern "C" fn(*mut c_void, *mut rsf_game_render_config) -> i32;
 
 unsafe extern "C" {
-    fn rsf_fallout4_resolution_reconfigure(
-        upscale: Upscale,
-        user: *mut c_void,
-        context: *mut c_void,
-        planning: &rsf_game_render_pass,
-    ) -> bool;
     fn rsf_fallout4_resolution_config(
         query: RenderConfig,
         user: *mut c_void,
@@ -70,14 +62,6 @@ unsafe extern "C" {
         context: *mut c_void,
         receipt: &Receipt,
     );
-}
-
-impl OutputOwner {
-    pub(crate) const EMPTY: Self = Self {
-        context: 0,
-        manager: 0,
-        triangles: [0; 3],
-    };
 }
 
 const _: () = {
@@ -439,8 +423,18 @@ fn output_size(pass: &rsf_game_render_pass) -> [u32; 2] {
     [pass.camera.output_width, pass.camera.output_height]
 }
 
+/// The host's render configuration: 1 when read, 0 when unbound or refused, -1 when it threw.
+pub(crate) fn query_config(
+    host: &rsf_game_host_services,
+    config: &mut rsf_game_render_config,
+) -> i32 {
+    host.render_config.map_or(0, |query| unsafe {
+        rsf_fallout4_resolution_config(query, host.user, config)
+    })
+}
+
 fn configured_targets(
-    host: *const rsf_game_host_services,
+    host: &rsf_game_host_services,
     frame: &rsf_game_render_pass,
     context: *mut c_void,
     size: [u32; 2],
@@ -450,24 +444,19 @@ fn configured_targets(
     planning.flags = RSF_GAME_RENDER_RECONFIGURE | RSF_GAME_RENDER_NO_FG;
     [planning.camera.output_width, planning.camera.output_height] = size;
     // Reconfigure prepares the plan. Admission comes from the sized config that follows.
-    let upscale = unsafe { (*host).process_upscale }?;
-    if !unsafe { rsf_fallout4_resolution_reconfigure(upscale, (*host).user, context, &planning) } {
+    if !crate::render_hooks::guarded_upscale(host, context, &planning, &mut 0) {
         return None;
     }
     let mut config = rsf_game_render_config::request();
-    // Reconfigure may reenter. Sample the config callback and user after it.
-    let query = unsafe { (*host).render_config }?;
-    if unsafe { rsf_fallout4_resolution_config(query, (*host).user, &mut config) } != 1 {
+    if query_config(host, &mut config) != 1 {
         return None;
     }
     config.checked_render_extent(size)
 }
 
-fn preflight(
-    base: usize,
-    pass: &rsf_game_render_pass,
-    context: *mut c_void,
-) -> Option<OutputOwner> {
+/// The full-output owner of `pass` on `context`.
+pub(crate) fn preflight(pass: &rsf_game_render_pass, context: *mut c_void) -> Option<OutputOwner> {
+    let base = image();
     if context.is_null() {
         return None;
     }
@@ -499,24 +488,25 @@ fn preflight(
     })
 }
 
-// The SDK and recovery calls can reenter the native hooks. Do not keep a Rust reference to
-// their World pass or a borrow of the thread-local scope across either call.
-unsafe fn configure(
-    host: *const rsf_game_host_services,
-    frame: *const rsf_game_render_pass,
+/// Takes input ownership of the native resolution for the FRAME pass on its Context. A reduced
+/// plan first reserves its recovery through `reserve`.
+pub(crate) fn configure(
+    host: &rsf_game_host_services,
+    pass: &rsf_game_render_pass,
     context: *mut c_void,
-    reserve: Option<Reserve>,
+    reserve: impl FnOnce(&rsf_game_render_pass) -> bool,
 ) -> Option<()> {
     let current = SCOPE.get();
     if current.input
         || current.output
         || context.is_null()
-        || unsafe { (*host).render_config.is_none() || (*host).process_upscale.is_none() }
+        || host.render_config.is_none()
+        || host.process_upscale.is_none()
     {
         return None;
     }
     let cpu = current_identity();
-    let pass = unsafe { frame.read() };
+    let pass = *pass;
     if (cpu.session, cpu.source, cpu.submission)
         != (pass.session_id, pass.source_frame_id, pass.submission_id)
         || !render_source_is_current(&cpu)
@@ -533,13 +523,12 @@ unsafe fn configure(
     }
     let render = configured_targets(host, &pass, context, size)?;
     if !render_source_is_current(&cpu)
-        || rsf_fallout4_ordinary_screen_refusals(&cpu) != WORLD_LEASE_INVALID
+        || ordinary_refusals(&cpu) != WORLD_LEASE_INVALID
         || !input_enabled(base)
     {
         return None;
     }
 
-    let pass = unsafe { frame.read() };
     let mut scope = Scope {
         frame: FrameOwner::from_pass(&pass, size, context as usize, pass.swapchain as usize),
         ..Scope::default()
@@ -569,9 +558,7 @@ unsafe fn configure(
         [planning.camera.render_width, planning.camera.render_height] = render;
         planning.render_rect = [0, 0, render[0] as i32, render[1] as i32];
         planning.output_rect = [0, 0, size[0] as i32, size[1] as i32];
-        if !reserve.is_some_and(|reserve| {
-            preflight(base, &planning, context).is_some() && unsafe { reserve(&planning) }
-        }) {
+        if preflight(&planning, context).is_none() || !reserve(&planning) {
             SCOPE.set(Scope::default());
             return None;
         }
@@ -642,7 +629,7 @@ fn replay_output_viewport(base: usize, scope: &Scope) -> Option<()> {
         .then_some(())
 }
 
-fn begin_output(snapshot: &Snapshot, pass: &rsf_game_render_pass) -> Option<()> {
+pub(crate) fn begin_output(snapshot: &Snapshot, pass: &rsf_game_render_pass) -> Option<()> {
     if SCOPE.get().output {
         return None;
     }
@@ -720,7 +707,7 @@ fn begin_output(snapshot: &Snapshot, pass: &rsf_game_render_pass) -> Option<()> 
     None
 }
 
-fn native_dr(base: usize, scope: &mut Scope) -> Option<()> {
+fn transfer_native_dr(base: usize, scope: &mut Scope) -> Option<()> {
     if !scope.input && !scope.output {
         return Some(());
     }
@@ -985,46 +972,10 @@ pub(crate) fn inputs_match(pass: &rsf_game_render_pass) -> bool {
         && [output_right as u32, output_bottom as u32] == output_size(pass)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_resolution_configure(
-    host: *const rsf_game_host_services,
-    frame: *const rsf_game_render_pass,
-    context: *mut c_void,
-    reserve: Option<Reserve>,
-) -> bool {
-    unsafe { configure(host, frame, context, reserve) }.is_some()
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_resolution_preflight(
-    pass: &rsf_game_render_pass,
-    context: *mut c_void,
-    output: *mut OutputOwner,
-) -> bool {
-    if let Some(output) = unsafe { output.as_mut() } {
-        *output = OutputOwner::default();
-    }
-    let Some(owner) = preflight(image(), pass, context) else {
-        return false;
-    };
-    if let Some(output) = unsafe { output.as_mut() } {
-        *output = owner;
-    }
-    true
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_begin_output(
-    snapshot: &Snapshot,
-    pass: &rsf_game_render_pass,
-) -> bool {
-    begin_output(snapshot, pass).is_some()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_native_dr() -> bool {
+/// A completed native DR writer supersedes the owned input ratios.
+pub(crate) fn native_dr() -> bool {
     let mut scope = SCOPE.get();
-    let okay = native_dr(image(), &mut scope).is_some();
+    let okay = transfer_native_dr(image(), &mut scope).is_some();
     SCOPE.set(scope);
     okay
 }
@@ -1043,13 +994,11 @@ pub(crate) fn native_viewport(enabled: bool) -> bool {
     !enabled || write(image() + VIEWPORT, &0u8)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_end_output() -> bool {
+pub(crate) fn end_current_output() -> bool {
     end_output(image())
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_finish_source() -> bool {
+pub(crate) fn finish_current_source() -> bool {
     finish_source(image())
 }
 
@@ -1065,25 +1014,23 @@ pub(crate) fn refused() -> bool {
     SCOPE.get().changed
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_resolution_report(
+/// The reduced-stage receipt. The caller's last error survives all receipt work.
+pub(crate) fn report(
     stage: u32,
-    pass: *const rsf_game_render_pass,
+    pass: &rsf_game_render_pass,
     context: *mut c_void,
     published: bool,
     result: i32,
     report: Report,
 ) {
     let error = unsafe { GetLastError() };
-    // The guarded C receipt leaf contains foreign exceptions. Restore the
-    // caller's error after all receipt work, including early-refusal paths.
-    unsafe { report_state(stage, pass, context, published, result, report) };
+    report_state(stage, pass, context, published, result, report);
     unsafe { SetLastError(error) };
 }
 
-unsafe fn report_state(
+fn report_state(
     stage: u32,
-    pass: *const rsf_game_render_pass,
+    pass: &rsf_game_render_pass,
     context: *mut c_void,
     published: bool,
     result: i32,
@@ -1103,12 +1050,11 @@ unsafe fn report_state(
     let Some(report) = report else {
         return;
     };
-    let pass = unsafe { pass.read() };
     if pass.source_frame_id == 0 {
         return;
     }
     let scope = SCOPE.get();
-    if !in_receipt_budget(stage, &pass, &scope) {
+    if !in_receipt_budget(stage, pass, &scope) {
         return;
     }
     let base = image();
@@ -1150,7 +1096,7 @@ unsafe fn report_state(
             receipt.actual_raster = raster;
         }
     }
-    unsafe { rsf_fallout4_resolution_report_receipt(report, &pass, context, &receipt) };
+    unsafe { rsf_fallout4_resolution_report_receipt(report, pass, context, &receipt) };
 }
 
 #[cfg(test)]

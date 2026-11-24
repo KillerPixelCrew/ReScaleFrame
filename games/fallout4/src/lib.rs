@@ -7,15 +7,12 @@
 //! admission, the reduced-render recovery transaction and SR and HUDless publication, and
 //! render-input admission with its camera history and leased passes.
 //!
-//! Native leaves stay in C11 (host_boundary.c, cpu_events.c, render_hooks.c, render_inputs.c, resolution.c,
-//! screen.c and depth_domains.c) and reach this crate through linked host and CPU functions
-//! (fallout4_platform.h and cpu_events_platform.h), the render hook
-//! leaves (render_hooks_platform.h), and the linked depth-domain and render-input diagnostics:
-//! the typed detour shells with
-//! their return addresses and trampoline calls, exception guards, the shared file hash, the Steam
-//! chain facade, and the render producer callbacks and recovery leaves. Rust samples the
-//! typed D3D11 and COM facts, and transfers admitted references to the native World.
-//! The Runtime decides vendors, presentation and pacing; this crate reports native facts only.
+//! Native leaves stay in C11 (host_boundary.c, cpu_events.c, render_hooks.c, render_inputs.c,
+//! resolution.c, screen.c and depth_domains.c): the typed detour shells with their return
+//! addresses and trampoline calls, the foreign-exception guards around engine and Runtime calls,
+//! and the receipt formatters. Rust owns every decision and the render World with its COM
+//! references. The Runtime decides vendors, presentation and pacing; this crate reports native
+//! facts only.
 
 #![cfg(windows)]
 

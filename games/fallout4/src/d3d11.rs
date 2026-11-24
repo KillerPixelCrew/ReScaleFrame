@@ -29,6 +29,30 @@ pub(crate) fn same_native(object: u64, native: u64) -> bool {
     unsafe { IUnknown::from_raw_borrowed(&raw) }.is_some_and(|native| identity(native) == object)
 }
 
+/// Both interfaces name the same COM object.
+pub(crate) fn same_object(a: &impl Interface, b: &impl Interface) -> bool {
+    let Ok(a) = a.cast::<IUnknown>() else {
+        return false;
+    };
+    b.cast::<IUnknown>().is_ok_and(|b| a.as_raw() == b.as_raw())
+}
+
+/// Both nonnull pointers name the same COM object.
+///
+/// # Safety
+/// Each pointer is null or a live interface.
+pub(crate) unsafe fn same_raw(a: *mut c_void, b: *mut c_void) -> bool {
+    match unsafe {
+        (
+            IUnknown::from_raw_borrowed(&a),
+            IUnknown::from_raw_borrowed(&b),
+        )
+    } {
+        (Some(a), Some(b)) => same_object(a, b),
+        _ => false,
+    }
+}
+
 pub(crate) fn viewport(context: &ID3D11DeviceContext) -> (u32, u32, [f32; 6]) {
     let mut count = 0;
     // SAFETY: the typed context is live. Request the count before reading a single viewport.
@@ -53,58 +77,26 @@ pub(crate) fn viewport(context: &ID3D11DeviceContext) -> (u32, u32, [f32; 6]) {
     )
 }
 
-// These leaves borrow live interfaces for the duration of a native render callback.
-// The World and candidate leases remain owned by the C shell.
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fallout4_render_same_object(
-    a: *mut c_void,
-    b: *mut c_void,
-) -> bool {
-    if a.is_null() || b.is_null() {
-        return false;
-    }
-    let (Some(a), Some(b)) = (unsafe { IUnknown::from_raw_borrowed(&a) }, unsafe {
-        IUnknown::from_raw_borrowed(&b)
-    }) else {
-        return false;
-    };
-    same_identity(a, b)
-}
-
-fn same_identity(a: &impl Interface, b: &impl Interface) -> bool {
-    let Ok(a) = a.cast::<IUnknown>() else {
-        return false;
-    };
-    b.cast::<IUnknown>().is_ok_and(|b| a.as_raw() == b.as_raw())
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_render_check_owner(
-    context: *mut c_void,
-    chain: *mut c_void,
+/// An immediate Context on the owner device, the chain on that device and the chain's output
+/// window.
+pub(crate) fn owner_matches(
+    context: &ID3D11DeviceContext,
+    chain: &IDXGISwapChain,
     expected_device: usize,
     expected_window: usize,
 ) -> bool {
-    let (Some(context), Some(chain)) = (
-        unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) },
-        unsafe { IDXGISwapChain::from_raw_borrowed(&chain) },
-    ) else {
-        return false;
-    };
     let device = unsafe { context.GetDevice() };
     if unsafe { context.GetType() } != D3D11_DEVICE_CONTEXT_IMMEDIATE {
         return false;
     }
     let Ok(device) = device else { return false };
-    if !unsafe { rsf_fallout4_render_same_object(device.as_raw(), expected_device as *mut c_void) }
-    {
+    if !same_native(identity(&device), expected_device as u64) {
         return false;
     }
     let Ok(chain_device) = (unsafe { chain.GetDevice::<ID3D11Device>() }) else {
         return false;
     };
-    same_identity(&device, &chain_device)
+    same_object(&device, &chain_device)
         && unsafe { chain.GetDesc() }
             .is_ok_and(|description| description.OutputWindow.0 as usize == expected_window)
 }
@@ -120,32 +112,25 @@ pub(crate) fn framebuffer_extent(texture: &ID3D11Texture2D) -> [u32; 3] {
     [desc.Width, desc.Height, desc.SampleDesc.Count]
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_render_auxiliary_depth(texture: *mut c_void) -> bool {
-    unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }
-        .is_some_and(|texture| texture_desc(texture).Format == DXGI_FORMAT_R24G8_TYPELESS)
+pub(crate) fn auxiliary_depth(texture: &ID3D11Texture2D) -> bool {
+    texture_desc(texture).Format == DXGI_FORMAT_R24G8_TYPELESS
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_render_auxiliary_colour(
-    texture: *mut c_void,
-    context: *mut c_void,
+/// A single-sample, single-mip default-usage colour target of the output extent on the Context's
+/// device, in a format the host can load and render.
+pub(crate) fn auxiliary_colour(
+    texture: &ID3D11Texture2D,
+    context: &ID3D11DeviceContext,
     width: u32,
     height: u32,
 ) -> bool {
-    let (Some(texture), Some(context)) = (
-        unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) },
-        unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) },
-    ) else {
-        return false;
-    };
     let device = unsafe { context.GetDevice() };
     let owner = unsafe { texture.GetDevice() };
     let desc = texture_desc(texture);
     let (Ok(device), Ok(owner)) = (device, owner) else {
         return false;
     };
-    if !same_identity(&device, &owner)
+    if !same_object(&device, &owner)
         || desc.Width != width
         || desc.Height != height
         || desc.MipLevels != 1

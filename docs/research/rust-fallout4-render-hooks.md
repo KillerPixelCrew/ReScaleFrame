@@ -1,5 +1,13 @@
 # Fallout 4 World and Present admission in Rust
 
+> **Superseded layout (C++-reference pass, 2026-11-24).** The sections below record the port in
+> steps, when the World lived in `render_hooks.c` and Rust reached it through five leaf tables
+> (`render_hooks/scope.rs`, `producer.rs`, `publication.rs`, `imagespace.rs`, `recovery.rs`). The
+> World now lives in Rust (`render_hooks.rs`, one thread-local record with its COM references) and
+> `render_hooks.c` keeps only the typed detours and the guarded Runtime calls. The admission order,
+> the receipts and the fixed defects described below are unchanged; the leaf tables, their fake-leaf
+> tests and the `NativeInputs` C lease no longer exist.
+
 This source port starts at `1a87cbca` and uses the existing Fallout 4 AE 1.11.240.0 evidence for
 executable SHA-256 `fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8`.
 The [native callback analysis](fallout4-render-integration-20261116.md) identifies the ordinary

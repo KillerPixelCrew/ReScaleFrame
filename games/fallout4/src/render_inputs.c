@@ -1,66 +1,9 @@
 /* SPDX-License-Identifier: MIT */
-/* Receipt formatting and transfer of the Rust input lease into the native World. */
-#define COBJMACROS
-#include "render_inputs.h"
+/* Receipt formatting of the Rust render-input readers (render_inputs.rs). */
 #include "render_inputs_platform.h"
 #include "native_guard.h"
 #include <stdio.h>
 #include <string.h>
-
-/* Each nonnull field of a reader lease holds one owned reference from Rust. An accepted read
-   transfers them to the result; a refusal releases them here. */
-static void release_com(void* object)
-{
-    if (object) IUnknown_Release((IUnknown*)object);
-}
-
-static void release_references(NativeInputReferences* refs)
-{
-    for (uint32_t slot = 0; slot < native_input_slot_count; ++slot) release_com(refs->textures[slot]);
-    release_com(refs->chain);
-    release_com(refs->context);
-    memset(refs, 0, sizeof(*refs));
-}
-
-RSF_FALLOUT4_RENDER_ASSERT(sizeof(NativeInputReferences) == 8 * sizeof(void*) &&
-    offsetof(NativeInputReferences, textures) == 16);
-
-void rsf_fallout4_native_inputs_release(NativeInputs* inputs)
-{
-    release_com(inputs->context);
-    release_com(inputs->chain);
-    release_com(inputs->colour);
-    release_com(inputs->depth);
-    release_com(inputs->motion);
-    release_com(inputs->refraction_normals);
-    release_com(inputs->pipboy);
-    release_com(inputs->vats);
-    memset(inputs, 0, sizeof(*inputs));
-}
-
-void rsf_fallout4_native_inputs_move(NativeInputs* target, NativeInputs* source)
-{
-    if (target == source) return;
-    rsf_fallout4_native_inputs_release(target);
-    *target = *source;
-    memset(source, 0, sizeof(*source));
-}
-
-void* rsf_fallout4_input_object(const void* opaque, uint32_t slot)
-{
-    const NativeInputs* inputs = (const NativeInputs*)opaque;
-    switch (slot) {
-    case native_input_context: return inputs->context;
-    case native_input_chain: return inputs->chain;
-    case native_input_colour: return inputs->colour;
-    case native_input_motion: return inputs->motion;
-    case native_input_depth: return inputs->depth;
-    case native_input_refraction_normals: return inputs->refraction_normals;
-    case native_input_pipboy: return inputs->pipboy;
-    case native_input_vats: return inputs->vats;
-    default: return NULL;
-    }
-}
 
 /* The reader receipt text; Rust decides the stage and its once-per-stage mask. */
 void rsf_fallout4_inputs_report_reader(NativeInputReport report, const char* stage, const NativeInputReceipt* receipt,
@@ -170,61 +113,4 @@ void rsf_fallout4_inputs_report_framebuffer(NativeInputReport report, const char
         (void*)(uintptr_t)r->swap.window, after->frame, (void*)after->context,
         (void*)after->chain, (void*)after->window);
     rsf_fallout4_report_guarded(report, text);
-}
-
-/* Move the Rust lease into the result: each field's one owned reference becomes the result's. */
-static void take(NativeInputs* result, NativeInputReferences* refs)
-{
-    result->context = (ID3D11DeviceContext*)refs->context;
-    result->chain = (IDXGISwapChain*)refs->chain;
-    result->colour = (ID3D11Texture2D*)refs->textures[native_input_colour];
-    result->motion = (ID3D11Texture2D*)refs->textures[native_input_motion];
-    result->depth = (ID3D11Texture2D*)refs->textures[native_input_depth];
-    result->refraction_normals = (ID3D11Texture2D*)refs->textures[native_input_refraction_normals];
-    result->pipboy = (ID3D11Texture2D*)refs->textures[native_input_pipboy];
-    result->vats = (ID3D11Texture2D*)refs->textures[native_input_vats];
-    memset(refs, 0, sizeof(*refs));
-}
-
-bool rsf_fallout4_read_native_inputs(NativeInputs* output, void (*report)(const char*),
-    const NativeDepthSnapshot* producer)
-{
-    rsf_fallout4_native_inputs_release(output);
-    NativeInputReferences refs;
-    memset(&refs, 0, sizeof(refs));
-    NativeInputs result;
-    memset(&result, 0, sizeof(result));
-    bool accepted = false;
-    bool threw = false;
-    RSF_FOREIGN_TRY { accepted = rsf_fallout4_inputs_read(&refs, report, producer, &result.pass); }
-    RSF_FOREIGN_CATCH { threw = true; }
-    if (!accepted) {
-        release_references(&refs);
-        if (threw && report && rsf_fallout4_inputs_claim_exception())
-            rsf_fallout4_report_guarded(report, "Fallout4 reader stage=exception");
-        return false;
-    }
-    take(&result, &refs);
-    *output = result;
-    return true;
-}
-
-bool rsf_fallout4_read_native_raster_inputs(NativeInputs* output, const rsf_game_render_pass* frame,
-    const NativeDepthSnapshot* producer)
-{
-    rsf_fallout4_native_inputs_release(output);
-    NativeInputReferences refs;
-    memset(&refs, 0, sizeof(refs));
-    NativeInputs result;
-    memset(&result, 0, sizeof(result));
-    bool accepted = false;
-    RSF_FOREIGN_TRY { accepted = rsf_fallout4_inputs_read_raster(&refs, frame, producer, &result.pass); }
-    RSF_FOREIGN_CATCH { accepted = false; }
-    if (!accepted) {
-        release_references(&refs);
-        return false;
-    }
-    take(&result, &refs);
-    *output = result;
-    return true;
 }

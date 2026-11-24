@@ -1086,7 +1086,8 @@ pub(crate) fn verify() -> bool {
     okay
 }
 
-fn capture_raster(cpu: &Identity, report: Report) -> Option<Snapshot> {
+/// Owner and producer raster only, sampled twice. Never temporal admission.
+pub(crate) fn capture_raster(cpu: &Identity, report: Report) -> Option<Snapshot> {
     let (mut before, mut after) = (EMPTY, EMPTY);
     let mut stage = Stage::Source;
     let admitted = VERIFIED.load(Ordering::Acquire)
@@ -1201,7 +1202,8 @@ pub(crate) fn snapshot_current(snapshot: &Snapshot, report: Report) -> bool {
     okay
 }
 
-fn capture(cpu: &Identity, report: Report) -> Option<Snapshot> {
+/// The temporal snapshot after the original prepass returned at its exact caller.
+pub(crate) fn capture(cpu: &Identity, report: Report) -> Option<Snapshot> {
     let (mut before, mut after) = (EMPTY, EMPTY);
     before.identity = *cpu;
     let mut stage = Stage::Unverified;
@@ -1265,7 +1267,8 @@ fn pass_matches(snapshot: &Snapshot, cpu: &Identity, pass: &rsf_game_render_pass
         && pass.output_rect == output_rect
 }
 
-fn make(
+/// The two composed domains for the primary SR pass.
+pub(crate) fn make(
     snapshot: &Snapshot,
     cpu: &Identity,
     pass: &rsf_game_render_pass,
@@ -1393,99 +1396,6 @@ fn make(
         return refused(Stage::Source, &confirmed, report, None);
     }
     Some(result)
-}
-
-/// Owner and producer raster only, sampled twice. Never temporal admission.
-///
-/// # Safety
-/// `cpu` is readable and `output` writable, and
-/// neither overlaps the other.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_depth_capture_raster(
-    cpu: *const Identity,
-    output: *mut Snapshot,
-    report: Report,
-) -> bool {
-    let Some(output) = (unsafe { output.as_mut() }) else {
-        return false;
-    };
-    *output = EMPTY;
-    let Some(cpu) = (unsafe { cpu.as_ref() }) else {
-        return false;
-    };
-    let cpu = *cpu;
-    capture_raster(&cpu, report).is_some_and(|snapshot| {
-        *output = snapshot;
-        true
-    })
-}
-
-/// # Safety
-/// `snapshot` is readable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_depth_raster_current(snapshot: *const Snapshot) -> bool {
-    unsafe { snapshot.as_ref() }.is_some_and(raster_current)
-}
-
-/// The temporal snapshot after the original prepass returned at its exact caller.
-///
-/// # Safety
-/// `cpu` is readable and `output` writable, and
-/// neither overlaps the other.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_depth_capture(
-    cpu: *const Identity,
-    output: *mut Snapshot,
-    report: Report,
-) -> bool {
-    let Some(output) = (unsafe { output.as_mut() }) else {
-        return false;
-    };
-    *output = EMPTY;
-    let Some(cpu) = (unsafe { cpu.as_ref() }) else {
-        return false;
-    };
-    let cpu = *cpu;
-    capture(&cpu, report).is_some_and(|snapshot| {
-        *output = snapshot;
-        true
-    })
-}
-
-/// The two composed domains for the primary SR pass. `output` may lie inside `*pass` (the caller
-/// passes `pass.depth_domains`), so it is cleared first through the pointer, the pass is read as a
-/// copy afterwards, and the result is written only on admission.
-///
-/// # Safety
-/// `snapshot`, `cpu` and `pass` are readable and
-/// `output` is writable. Only `output` and `pass` may overlap.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_depth_make(
-    snapshot: *const Snapshot,
-    cpu: *const Identity,
-    pass: *const rsf_game_render_pass,
-    output: *mut rsf_game_depth_domains,
-    report: Report,
-) -> bool {
-    if output.is_null() {
-        return false;
-    }
-    unsafe { output.write(NO_DOMAINS) };
-    let (Some(snapshot), Some(cpu)) = (unsafe { snapshot.as_ref() }, unsafe { cpu.as_ref() })
-    else {
-        return false;
-    };
-    if pass.is_null() {
-        return false;
-    }
-    let (snapshot, cpu, pass) = (*snapshot, *cpu, unsafe { pass.read() });
-    match make(&snapshot, &cpu, &pass, report) {
-        Some(result) => {
-            unsafe { output.write(result) };
-            true
-        }
-        None => false,
-    }
 }
 
 #[cfg(test)]

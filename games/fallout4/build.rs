@@ -47,7 +47,6 @@ fn main() {
 fn derives(name: &str) -> &'static [&'static str] {
     match name {
         "NativeResolutionReceipt"
-        | "NativeAuxiliaryInputs"
         | "NativeDepthMathFailure"
         | "NativeDepthCamera"
         | "NativeDepthMaps"
@@ -58,17 +57,9 @@ fn derives(name: &str) -> &'static [&'static str] {
         | "NativeInputHistoryReceipt"
         | "NativeFramebufferReceipt" => &["PartialEq"],
         "NativeScreen"
-        | "NativeInputReferences"
-        | "NativeRenderExports"
-        | "NativeRecoveryLease"
-        | "NativePublicationInputs"
         | "NativeOutputOwner"
         | "NativeInputSwapFacts"
-        | "NativeInputResourceFacts"
-        | "NativeWorldAdmission"
-        | "NativeRenderScopeKey"
-        | "NativeRenderOwner"
-        | "NativeEffectsCall" => &["PartialEq", "Eq"],
+        | "NativeInputResourceFacts" => &["PartialEq", "Eq"],
         "rsf_fallout4_cpu_identity" => &["Debug", "PartialEq", "Eq"],
         _ => &[],
     }

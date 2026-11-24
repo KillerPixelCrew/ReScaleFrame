@@ -1,18 +1,9 @@
 /* SPDX-License-Identifier: MIT */
-/* Guarded Runtime calls and the reduced-stage receipt text of the Rust resolution owner
+/* The guarded render-config query and the reduced-stage receipt text of the Rust resolution owner
    (resolution.rs). */
 #include "resolution_platform.h"
 #include "native_guard.h"
 #include <stdio.h>
-
-bool rsf_fallout4_resolution_reconfigure(rsf_game_process_upscale_fn upscale, void* user, void* context,
-    const rsf_game_render_pass* planning)
-{
-    bool returned = true;
-    RSF_FOREIGN_TRY { (void)upscale(user, context, planning); }
-    RSF_FOREIGN_CATCH { returned = false; }
-    return returned;
-}
 
 int32_t rsf_fallout4_resolution_config(rsf_game_render_config_fn query, void* user, rsf_game_render_config* config)
 {

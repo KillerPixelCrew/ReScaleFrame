@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-//! Typed D3D11 input observations and references transferred to the caller's lease.
+//! Typed D3D11 input observations and the references a reader holds.
 
-use super::{DeviceFacts, ResourceFacts, SwapFacts, ViewportFacts};
+use super::{DeviceFacts, Inputs, ResourceFacts, SwapFacts, ViewportFacts};
 use crate::d3d11::{identity, viewport as read_viewport};
-pub(super) use crate::sys::NativeInputReferences as TransferredLease;
+use rsf_game_sys::rsf_game_render_pass;
 use std::ffi::c_void;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_DEVICE_CONTEXT_IMMEDIATE, D3D11_RENDER_TARGET_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC,
@@ -13,20 +13,15 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use windows::core::Interface;
 
-const TEXTURE_SLOTS: usize = crate::sys::native_input_slot_count as usize;
+pub(super) const TEXTURE_SLOTS: usize = crate::sys::native_input_slot_count as usize;
 
-/// Candidate references stay in Rust until a reader admits its pass.
+/// The references a reader takes while it validates; an admitted read keeps them.
 #[derive(Default)]
 pub(super) struct NativeLease {
     textures: [Option<ID3D11Texture2D>; TEXTURE_SLOTS],
     chain: Option<IDXGISwapChain>,
     context: Option<ID3D11DeviceContext>,
 }
-
-const _: () = {
-    assert!(size_of::<TransferredLease>() == usize::BITS as usize);
-    assert!(std::mem::offset_of!(TransferredLease, textures) == 16);
-};
 
 impl NativeLease {
     pub(super) fn into_framebuffer(
@@ -36,15 +31,13 @@ impl NativeLease {
         Some((self.context.take()?, self.chain.take()?, texture))
     }
 
-    pub(super) fn transfer(self) -> TransferredLease {
-        fn raw<T: Interface>(owned: Option<T>) -> *mut c_void {
-            owned.map_or(std::ptr::null_mut(), Interface::into_raw)
-        }
-        TransferredLease {
-            context: raw(self.context),
-            chain: raw(self.chain),
-            textures: self.textures.map(raw),
-        }
+    pub(super) fn into_inputs(self, pass: rsf_game_render_pass) -> Option<Inputs> {
+        Some(Inputs {
+            context: self.context?,
+            chain: self.chain?,
+            textures: self.textures,
+            pass,
+        })
     }
 }
 

@@ -24,7 +24,7 @@ use crate::sys::{
     RSF_FALLOUT4_CPU_HOOK_JOB_END, RSF_FALLOUT4_CPU_HOOK_KEYBOARD, RSF_FALLOUT4_CPU_HOOK_MOUSE,
     RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS, RSF_FALLOUT4_CPU_HOOK_POLL, RSF_FALLOUT4_CPU_HOOK_SWAP,
     RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, RSF_FALLOUT4_CPU_HOOK_WRAPPER, RSF_FALLOUT4_CPU_SCOPE_WORDS,
-    rsf_fallout4_cpu_identity, rsf_fallout4_cpu_scope,
+    rsf_fallout4_cpu_scope,
 };
 use crate::{MH_OK, MH_RemoveHook, image, load, pin, read};
 use handoff::{
@@ -81,7 +81,6 @@ static ORIGINALS: [AtomicPtr<c_void>; RSF_FALLOUT4_CPU_HOOK_COUNT as usize] =
 unsafe extern "C" {
     fn rsf_fallout4_cpu_detour(hook: u32) -> *mut c_void;
     fn rsf_fallout4_cpu_peek_thunk() -> *mut c_void;
-    fn rsf_fallout4_cpu_finish_render_scope();
     fn rsf_fallout4_cpu_deliver(
         callback: CpuEvent,
         user: *mut c_void,
@@ -113,10 +112,6 @@ fn remove_hook(hook: u32, target: *mut c_void) -> bool {
 
 fn peek_thunk() -> usize {
     unsafe { rsf_fallout4_cpu_peek_thunk() as usize }
-}
-
-fn finish_render_scope() {
-    unsafe { rsf_fallout4_cpu_finish_render_scope() };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -987,7 +982,7 @@ fn close_frame() {
     if identity.source == 0 {
         return;
     }
-    finish_render_scope();
+    crate::render_hooks::finish_scope();
     let _ = drain_current_abort();
     emit(RSF_GAME_CPU_FRAME_END);
     {
@@ -2981,7 +2976,7 @@ pub(crate) fn begin_render() -> bool {
 
 /// Called only by the guarded native Present detour after verified owner/screen checks and
 /// SUBMISSION completion. These are native phase facts.
-fn begin_present_phase(source: &CpuIdentity, native_frame: u64, window: u64) -> bool {
+pub(crate) fn begin_present_phase(source: &CpuIdentity, native_frame: u64, window: u64) -> bool {
     let source_current = cpu_source_is_current(source);
     let c = render_copy();
     let mut proof = c.key;
@@ -3013,57 +3008,10 @@ fn begin_present_phase(source: &CpuIdentity, native_frame: u64, window: u64) -> 
     true
 }
 
-fn end_present_phase(source: &CpuIdentity) {
+pub(crate) fn end_present_phase(source: &CpuIdentity) {
     let mut w = worker();
     if w.current.cpu.session == source.session && w.current.cpu.source == source.source {
         w.current.present = false;
-    }
-}
-
-fn identity_from(value: *const rsf_fallout4_cpu_identity) -> Option<CpuIdentity> {
-    unsafe { value.as_ref() }.copied()
-}
-
-/// # Safety
-/// `out` is null or writable.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fallout4_cpu_current_identity(
-    out: *mut rsf_fallout4_cpu_identity,
-) {
-    if let Some(out) = unsafe { out.as_mut() } {
-        *out = current_identity();
-    }
-}
-
-/// # Safety
-/// `identity` is null or readable.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_fallout4_cpu_render_source_is_current(
-    identity: *const rsf_fallout4_cpu_identity,
-) -> bool {
-    identity_from(identity).is_some_and(|identity| render_source_is_current(&identity))
-}
-
-/// # Safety
-/// `identity` is null or readable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_cpu_begin_present_phase(
-    identity: *const rsf_fallout4_cpu_identity,
-    native_frame: u64,
-    window: u64,
-) -> bool {
-    identity_from(identity)
-        .is_some_and(|identity| begin_present_phase(&identity, native_frame, window))
-}
-
-/// # Safety
-/// `identity` is null or readable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_cpu_end_present_phase(
-    identity: *const rsf_fallout4_cpu_identity,
-) {
-    if let Some(identity) = identity_from(identity) {
-        end_present_phase(&identity);
     }
 }
 

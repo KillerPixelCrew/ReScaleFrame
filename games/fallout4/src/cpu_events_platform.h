@@ -38,10 +38,9 @@ typedef struct rsf_fallout4_cpu_scope {
 } rsf_fallout4_cpu_scope;
 
 // Linked native leaves. Delivery takes the Rust owner's validated nonnull callback. The detours and
-// the message thunk are in cpu_events.c; the post-Swap scope end is in render_hooks.c.
+// the message thunk are in cpu_events.c.
 void* rsf_fallout4_cpu_detour(uint32_t hook);
 void* rsf_fallout4_cpu_peek_thunk(void);
-void rsf_fallout4_cpu_finish_render_scope(void);
 bool rsf_fallout4_cpu_deliver(rsf_game_cpu_event_fn callback, void* user, const rsf_game_cpu_event* event);
 
 // Rust owner entry points.
@@ -83,9 +82,3 @@ void rsf_fallout4_cpu_peek_exit(uintptr_t caller, int32_t result, void* message,
 void rsf_fallout4_cpu_cancel(uint32_t hook, rsf_fallout4_cpu_scope* scope);
 void rsf_fallout4_cpu_peek_cancel(void);
 
-// Render producer queries, all on the Swap thread.
-void rsf_fallout4_cpu_current_identity(rsf_fallout4_cpu_identity* identity);
-bool rsf_fallout4_cpu_render_source_is_current(const rsf_fallout4_cpu_identity* identity);
-bool rsf_fallout4_cpu_begin_present_phase(const rsf_fallout4_cpu_identity* identity,
-    uint64_t native_frame, uint64_t window);
-void rsf_fallout4_cpu_end_present_phase(const rsf_fallout4_cpu_identity* identity);
