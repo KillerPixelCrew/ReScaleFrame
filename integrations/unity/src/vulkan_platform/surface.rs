@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{DeviceHandles, borrow, release};
+use super::{DeviceHandles, borrowed, release};
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows::Win32::{
@@ -35,7 +35,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_chain_create(
         ..Default::default()
     };
     let chain = unsafe {
-        let queue = borrow::<ID3D12CommandQueue>(&(*shared).queue);
+        let queue = borrowed::<ID3D12CommandQueue>(&(*shared).queue);
         CreateDXGIFactory1::<IDXGIFactory2>()
             .and_then(|factory| {
                 factory.CreateSwapChainForHwnd(
@@ -56,7 +56,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_chain_extent(
     width: *mut u32,
     height: *mut u32,
 ) {
-    let desc = unsafe { borrow::<IDXGISwapChain3>(&chain).GetDesc1() }.unwrap_or_default();
+    let desc = unsafe { borrowed::<IDXGISwapChain3>(&chain).GetDesc1() }.unwrap_or_default();
     unsafe {
         width.write(desc.Width);
         height.write(desc.Height);
@@ -65,7 +65,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_chain_extent(
 
 pub(crate) unsafe fn rsf_uvk_gpu_chain_resize(chain: *mut c_void, width: u32, height: u32) -> bool {
     unsafe {
-        borrow::<IDXGISwapChain3>(&chain)
+        borrowed::<IDXGISwapChain3>(&chain)
             .ResizeBuffers(BUFFER_COUNT, width, height, FORMAT, DXGI_SWAP_CHAIN_FLAG(0))
             .is_ok()
     }
@@ -76,14 +76,14 @@ pub(crate) unsafe fn rsf_uvk_gpu_chain_destroy(chain: *mut c_void) {
 }
 
 pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_buffer(chain: *mut c_void) -> *mut c_void {
-    let chain = unsafe { borrow::<IDXGISwapChain3>(&chain) };
+    let chain = unsafe { borrowed::<IDXGISwapChain3>(&chain) };
     unsafe { chain.GetBuffer::<ID3D12Resource>(chain.GetCurrentBackBufferIndex()) }
         .map_or(null_mut(), Interface::into_raw)
 }
 
 pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_present(chain: *mut c_void) -> bool {
     unsafe {
-        borrow::<IDXGISwapChain3>(&chain)
+        borrowed::<IDXGISwapChain3>(&chain)
             .Present(0, DXGI_PRESENT(0))
             .is_ok()
     }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! GPU operations for the Unity Vulkan bridge's leased shared-device and command records.
 
-use crate::bridge_interop::VULKAN;
+use crate::bridge_interop::{VULKAN, borrowed};
 use crate::vulkan_state::{CommandSlot, DeviceHandles, ImageHandles};
 use ash::vk::{self, Handle as _};
 use rsf_runtime_submission::FenceStatus;
@@ -107,10 +107,6 @@ impl DeviceHandles {
     }
 }
 
-unsafe fn borrow<T: Interface>(raw: &*mut c_void) -> &T {
-    unsafe { T::from_raw_borrowed(raw) }.expect("live Unity Vulkan bridge COM view")
-}
-
 unsafe fn release<T: Interface>(raw: *mut c_void) {
     if !raw.is_null() {
         drop(unsafe { T::from_raw(raw) });
@@ -160,8 +156,8 @@ pub(crate) unsafe extern "C" fn rsf_uvk_gpu_create_device(
     if !created {
         return 0;
     }
-    let device = unsafe { borrow::<ID3D12Device>(&shared.device) };
-    let fence = unsafe { borrow::<ID3D12Fence>(&shared.fence) };
+    let device = unsafe { borrowed::<ID3D12Device>(&shared.device) };
+    let fence = unsafe { borrowed::<ID3D12Fence>(&shared.fence) };
     let Ok(handle) =
         (unsafe { device.CreateSharedHandle(fence, None, GENERIC_ALL.0, PCWSTR::null()) })
     else {
@@ -201,7 +197,7 @@ unsafe fn create_dx_device(luid: LUID, shared: &mut DeviceHandles) -> bool {
             return Ok(false);
         };
         shared.device = device.into_raw();
-        let device = unsafe { borrow::<ID3D12Device>(&shared.device) };
+        let device = unsafe { borrowed::<ID3D12Device>(&shared.device) };
         let queue: ID3D12CommandQueue =
             unsafe { device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC::default())? };
         shared.queue = queue.into_raw();
@@ -243,7 +239,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_create_image(
 ) -> bool {
     let shared = unsafe { &*shared };
     let output = unsafe { &mut *output };
-    let device = unsafe { borrow::<ID3D12Device>(&shared.device) };
+    let device = unsafe { borrowed::<ID3D12Device>(&shared.device) };
     let heap = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -322,7 +318,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_create_image(
     }) else {
         return false;
     };
-    let resource = unsafe { borrow::<ID3D12Resource>(&output.resource) };
+    let resource = unsafe { borrowed::<ID3D12Resource>(&output.resource) };
     let Ok(handle) =
         (unsafe { device.CreateSharedHandle(resource, None, GENERIC_ALL.0, PCWSTR::null()) })
     else {
@@ -418,14 +414,14 @@ pub(crate) unsafe fn rsf_uvk_gpu_create_slot(
         return false;
     }
     slot.complete = fence.as_raw();
-    let device = unsafe { borrow::<ID3D12Device>(&shared.device) };
+    let device = unsafe { borrowed::<ID3D12Device>(&shared.device) };
     let Ok(allocator) = (unsafe {
         device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
     }) else {
         return false;
     };
     slot.allocator = allocator.into_raw();
-    let allocator = unsafe { borrow::<ID3D12CommandAllocator>(&slot.allocator) };
+    let allocator = unsafe { borrowed::<ID3D12CommandAllocator>(&slot.allocator) };
     let result = unsafe {
         device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
             0,
@@ -437,7 +433,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_create_slot(
     let Ok(commands) = result else { return false };
     slot.commands = commands.into_raw();
     unsafe {
-        borrow::<ID3D12GraphicsCommandList>(&slot.commands)
+        borrowed::<ID3D12GraphicsCommandList>(&slot.commands)
             .Close()
             .is_ok()
     }
@@ -471,7 +467,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_fence_ready(shared: *const DeviceHandles, fence
 }
 
 pub(crate) unsafe fn rsf_uvk_gpu_shared_completed(shared: *const DeviceHandles) -> u64 {
-    unsafe { borrow::<ID3D12Fence>(&(*shared).fence).GetCompletedValue() }
+    unsafe { borrowed::<ID3D12Fence>(&(*shared).fence).GetCompletedValue() }
 }
 
 pub(crate) unsafe fn rsf_uvk_gpu_drain(shared: *const DeviceHandles) -> bool {
@@ -479,7 +475,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_drain(shared: *const DeviceHandles) -> bool {
     if unsafe { (shared.dispatch().queue_idle)(shared.vk_queue()) } != SUCCESS {
         return false;
     }
-    let fence = unsafe { borrow::<ID3D12Fence>(&shared.fence) };
+    let fence = unsafe { borrowed::<ID3D12Fence>(&shared.fence) };
     let completed = unsafe { fence.GetCompletedValue() };
     let (status, pending) = {
         let ring = VULKAN.lock();

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{DeviceHandles, Dispatch, SUCCESS, VULKAN, borrow};
+use super::{DeviceHandles, Dispatch, SUCCESS, VULKAN, borrowed};
 use crate::package_state::rsf_unity_package_sr_recording;
 use crate::vulkan_state::{self, CommandSlot};
 use ash::vk::{self, Handle as _};
@@ -31,8 +31,8 @@ pub(crate) unsafe fn rsf_uvk_gpu_begin(
             return false;
         }
     }
-    let allocator = unsafe { borrow::<ID3D12CommandAllocator>(&slot.allocator) };
-    let commands = unsafe { borrow::<ID3D12GraphicsCommandList>(&slot.commands) };
+    let allocator = unsafe { borrowed::<ID3D12CommandAllocator>(&slot.allocator) };
+    let commands = unsafe { borrowed::<ID3D12GraphicsCommandList>(&slot.commands) };
     if unsafe {
         allocator
             .Reset()
@@ -99,8 +99,8 @@ pub(crate) unsafe fn rsf_uvk_gpu_upload(
     if VULKAN.lock().completion() != Some(value) {
         return false;
     }
-    let queue = unsafe { borrow::<ID3D12CommandQueue>(&shared.queue) };
-    let fence = unsafe { borrow::<ID3D12Fence>(&shared.fence) };
+    let queue = unsafe { borrowed::<ID3D12CommandQueue>(&shared.queue) };
+    let fence = unsafe { borrowed::<ID3D12Fence>(&shared.fence) };
     unsafe { queue.Wait(fence, value).is_ok() }
 }
 
@@ -112,15 +112,15 @@ pub(crate) unsafe fn rsf_uvk_gpu_submit(
 ) -> bool {
     let dispatch = unsafe { shared.dispatch() };
     let command = vk::CommandBuffer::from_raw(slot.vk[1]);
-    let list = unsafe { borrow::<ID3D12GraphicsCommandList>(&slot.commands) };
+    let list = unsafe { borrowed::<ID3D12GraphicsCommandList>(&slot.commands) };
     if unsafe { list.Close() }.is_err() || unsafe { (dispatch.end_buffer)(command) } != SUCCESS {
         return false;
     }
     let Some(value) = VULKAN.lock().submit(ring as usize) else {
         return false;
     };
-    let queue = unsafe { borrow::<ID3D12CommandQueue>(&shared.queue) };
-    let fence = unsafe { borrow::<ID3D12Fence>(&shared.fence) };
+    let queue = unsafe { borrowed::<ID3D12CommandQueue>(&shared.queue) };
+    let fence = unsafe { borrowed::<ID3D12Fence>(&shared.fence) };
     let list = ManuallyDrop::new(Some(unsafe { ID3D12CommandList::from_raw(slot.commands) }));
     unsafe { queue.ExecuteCommandLists(std::slice::from_ref(&*list)) };
     if unsafe { queue.Signal(fence, value) }.is_err() {
@@ -168,7 +168,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_dx_barrier(
         },
         ..Default::default()
     };
-    unsafe { borrow::<ID3D12GraphicsCommandList>(&list).ResourceBarrier(&[barrier]) };
+    unsafe { borrowed::<ID3D12GraphicsCommandList>(&list).ResourceBarrier(&[barrier]) };
 }
 
 pub(crate) unsafe fn rsf_uvk_gpu_dx_copy(
@@ -177,9 +177,9 @@ pub(crate) unsafe fn rsf_uvk_gpu_dx_copy(
     source: *mut c_void,
 ) {
     unsafe {
-        borrow::<ID3D12GraphicsCommandList>(&list).CopyResource(
-            borrow::<ID3D12Resource>(&target),
-            borrow::<ID3D12Resource>(&source),
+        borrowed::<ID3D12GraphicsCommandList>(&list).CopyResource(
+            borrowed::<ID3D12Resource>(&target),
+            borrowed::<ID3D12Resource>(&source),
         )
     };
 }

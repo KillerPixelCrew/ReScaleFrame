@@ -2,6 +2,7 @@
 //! The Unity package's D3D11-to-D3D12 recording and hand-back.
 
 use super::*;
+use crate::bridge_interop::borrowed;
 use crate::bridge_state::{log, rsf_unity_frames_activate, rsf_unity_frames_active};
 use crate::d3d11_pass::{
     self, HANDBACK_FAILED, PassPlan, RETIRED, ROUTE_NONE, ROUTE_PREVIEW, ROUTE_WINDOW,
@@ -40,11 +41,6 @@ const RSF_SHARED_OK: rsf_shared_result = 0;
 unsafe extern "C" {
     fn rsf_unity_d3d11_engine_device() -> *mut c_void;
     fn rsf_unity_d3d11_engine_swapchain() -> *mut c_void;
-}
-
-unsafe fn borrowed<T: Interface>(raw: &*mut c_void) -> &T {
-    // The published graphics record or a surface lease keeps this reference live.
-    unsafe { T::from_raw_borrowed(raw) }.expect("live Unity bridge interface")
 }
 
 unsafe fn release(raw: *mut c_void) {
