@@ -91,28 +91,22 @@ fn readback_buffer(device: &ID3D12Device, bytes: u64) -> Option<ID3D12Resource> 
     buffer
 }
 
+// A readback buffer, with one reference, and where the copy's rows land in it.
 #[cfg_attr(test, allow(dead_code))]
-unsafe fn allocate_raw(source: Handle, out: *mut Layout, single_slice: bool) -> Handle {
-    let Some((buffer, layout)) = (unsafe { ID3D12Resource::from_raw_borrowed(&source) })
-        .and_then(|source| allocate(source, single_slice))
-    else {
-        return ptr::null_mut();
-    };
-    unsafe { out.write(layout) };
-    buffer.into_raw()
+unsafe fn allocate_raw(source: Handle, single_slice: bool) -> Option<(Handle, Layout)> {
+    let source = unsafe { ID3D12Resource::from_raw_borrowed(&source) }?;
+    let (buffer, layout) = allocate(source, single_slice)?;
+    Some((buffer.into_raw(), layout))
 }
 
 #[cfg(not(test))]
-pub(super) unsafe extern "C" fn allocate_capture(source: Handle, out: *mut Layout) -> Handle {
-    unsafe { allocate_raw(source, out, true) }
+pub(super) unsafe fn allocate_capture(source: Handle) -> Option<(Handle, Layout)> {
+    unsafe { allocate_raw(source, true) }
 }
 
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe extern "C" fn rsf_fg12_platform_readback(
-    source: Handle,
-    out: *mut Layout,
-) -> Handle {
-    unsafe { allocate_raw(source, out, false) }
+pub(crate) unsafe fn rsf_fg12_platform_readback(source: Handle) -> Option<(Handle, Layout)> {
+    unsafe { allocate_raw(source, false) }
 }
 
 fn resource_field(resource: &ID3D12Resource) -> ManuallyDrop<Option<ID3D12Resource>> {

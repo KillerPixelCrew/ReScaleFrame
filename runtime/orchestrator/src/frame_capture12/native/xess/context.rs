@@ -285,8 +285,7 @@ unsafe extern "C" fn rsf_core_xess_dx12_share_fence(
 unsafe extern "C" fn rsf_core_xess_dx12_vulkan_luid(physical: Handle, out: &mut u64) -> i32 {
     use ash::vk::{self, Handle as _};
     use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
-    let loader_name: Vec<_> = "vulkan-1.dll\0".encode_utf16().collect();
-    let loader = unsafe { GetModuleHandleW(loader_name.as_ptr()) };
+    let loader = unsafe { GetModuleHandleW(windows::core::w!("vulkan-1.dll").as_ptr()) };
     if loader.is_null() {
         return -10;
     }

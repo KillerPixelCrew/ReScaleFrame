@@ -66,17 +66,17 @@ fn refs(pointer: usize) -> u32 {
     })
 }
 
-pub(super) unsafe extern "C" fn allocate(_: Handle, out: *mut Layout) -> Handle {
+pub(super) unsafe fn allocate(_: Handle) -> Option<(Handle, Layout)> {
     if world(|w| w.refuse_source) {
-        return std::ptr::null_mut();
+        return None;
     }
     let buffer = object();
-    world(|w| {
-        unsafe { out.write(w.layout) };
+    let layout = world(|w| {
         w.memory
             .insert(buffer, vec![NEVER_COPIED; w.layout.bytes as usize]);
+        w.layout
     });
-    buffer as Handle
+    Some((buffer as Handle, layout))
 }
 
 pub(super) unsafe extern "C" fn copy(

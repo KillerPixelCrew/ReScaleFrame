@@ -23,11 +23,10 @@ unsafe impl Send for Readback {}
 
 impl Readback {
     unsafe fn allocate(source: *mut c_void) -> Option<Self> {
-        let mut layout = std::mem::MaybeUninit::uninit();
-        let raw = unsafe { native!(readback(source, layout.as_mut_ptr())) };
+        let (raw, layout) = unsafe { native!(readback(source)) }?;
         Some(Self {
             buffer: unsafe { com_ref::owned(raw) }?,
-            layout: unsafe { layout.assume_init() },
+            layout,
         })
     }
 

@@ -11,6 +11,9 @@ use crate::d3d12_fence::FenceState;
 use crate::frame_capture_vk::Legacy;
 use crate::sr_session::has_capacity;
 use crate::sync::lock;
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT as INVALID, NOT_READY, OK,
+};
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fs;
@@ -36,13 +39,6 @@ const MAX_FRAMES: u32 = 16;
 // `submitted` signals a fresh fence to this value on the recording queue.
 const SUBMITTED: u64 = 1;
 
-// rsf_backend_result from rescaleframe/backend.h.
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const INIT_FAILED: i32 = -6;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 
 /// Where a copied texture's rows sit in its readback buffer.
 #[derive(Clone, Copy, Default)]
@@ -189,8 +185,10 @@ impl Owner {
         if (!legacy && !core) || list.is_null() || source.is_null() {
             return false;
         }
-        let mut layout = Layout::default();
-        let Some(buffer) = (unsafe { com_ref::owned(ops::allocate(source, &mut layout)) }) else {
+        let Some((buffer, layout)) = (unsafe { ops::allocate(source) }) else {
+            return false;
+        };
+        let Some(buffer) = (unsafe { com_ref::owned(buffer) }) else {
             return false;
         };
         let mut readback = Readback {
@@ -496,10 +494,6 @@ fn legacy_json(value: &Readback) -> String {
     crate::capture_metadata::legacy_json(&value.identity, &value.role, &fields, &reset)
 }
 
-unsafe fn owner<'a>(owner: *const Owner) -> Option<&'a Owner> {
-    unsafe { owner.as_ref() }
-}
-
 unsafe fn text<'a>(value: *const c_char) -> Option<&'a CStr> {
     (!value.is_null()).then(|| unsafe { CStr::from_ptr(value) })
 }
@@ -522,7 +516,7 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_destroy(owner: *mut Owner) {
 }
 
 pub(super) unsafe extern "C" fn rsf_core_capture12_enabled(owner: *const Owner) -> i32 {
-    i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.enabled()))
+    i32::from(unsafe { owner.as_ref() }.is_some_and(|owner| owner.enabled()))
 }
 
 pub(super) unsafe extern "C" fn rsf_core_capture12_configure(
@@ -531,7 +525,7 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_configure(
     first: u64,
     frames: u32,
 ) -> i32 {
-    match (unsafe { self::owner(owner) }, unsafe { text(path) }) {
+    match (unsafe { owner.as_ref() }, unsafe { text(path) }) {
         (Some(owner), Some(path)) => i32::from(owner.configure(path, first, frames)),
         _ => 0,
     }
@@ -539,14 +533,14 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_configure(
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_core_capture12_wants(owner: *const Owner, frame: u64) -> i32 {
-    i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.wants(frame)))
+    i32::from(unsafe { owner.as_ref() }.is_some_and(|owner| owner.wants(frame)))
 }
 
 pub(super) unsafe extern "C" fn rsf_core_capture12_force_reset(
     owner: *const Owner,
     frame: u64,
 ) -> i32 {
-    i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| {
+    i32::from(unsafe { owner.as_ref() }.is_some_and(|owner| {
         let state = owner.lock();
         state.reset_sr && state.legacy.wants(frame)
     }))
@@ -562,7 +556,7 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_event(
     result: i32,
 ) -> i32 {
     match (
-        unsafe { self::owner(owner) },
+        unsafe { owner.as_ref() },
         unsafe { identity.as_ref() },
         unsafe { text(name) },
     ) {
@@ -589,7 +583,7 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_record(
     preview_scale: f32,
 ) -> i32 {
     match (
-        unsafe { self::owner(owner) },
+        unsafe { owner.as_ref() },
         unsafe { identity.as_ref() },
         unsafe { text(role) },
     ) {
@@ -615,7 +609,7 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_flush(
     slot: u32,
     ready_only: u32,
 ) -> i32 {
-    unsafe { self::owner(owner) }.map_or(0, |owner| {
+    unsafe { owner.as_ref() }.map_or(0, |owner| {
         let mut state = owner.lock();
         i32::from(owner.flush(&mut state, slot, ready_only != 0))
     })
@@ -627,13 +621,13 @@ pub(super) unsafe extern "C" fn rsf_core_capture12_submitted(
     slot: u32,
     identity: *const Record,
 ) -> i32 {
-    unsafe { self::owner(owner) }.map_or(0, |owner| {
+    unsafe { owner.as_ref() }.map_or(0, |owner| {
         i32::from(owner.submitted(queue, slot, unsafe { identity.as_ref() }))
     })
 }
 
 unsafe extern "C" fn rsf_core_capture12_abandon(owner: *const Owner, slot: u32) {
-    if let Some(owner) = unsafe { self::owner(owner) } {
+    if let Some(owner) = unsafe { owner.as_ref() } {
         owner.abandon(slot);
     }
 }
@@ -663,7 +657,7 @@ unsafe extern "C" fn rsf_input_dump12_record(
     view: u32,
     scale: f32,
 ) -> i32 {
-    let Some(owner) = (unsafe { self::owner(owner) }) else {
+    let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID;
     };
     if list.is_null() || source.is_null() || role.is_null() || !unsafe { has_capacity(identity) } {
@@ -702,7 +696,7 @@ unsafe extern "C" fn rsf_input_dump12_submitted(
     queue: Handle,
     slot: u32,
 ) -> i32 {
-    let Some(owner) = (unsafe { self::owner(owner) }) else {
+    let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID;
     };
     if queue.is_null() {
@@ -716,7 +710,7 @@ unsafe extern "C" fn rsf_input_dump12_submitted(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_input_dump12_poll(owner: *const Owner) -> i32 {
-    let Some(owner) = (unsafe { self::owner(owner) }) else {
+    let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID;
     };
     if owner.flush(&mut owner.lock(), ALL_SLOTS, true) {
@@ -733,7 +727,7 @@ unsafe extern "C" fn rsf_input_dump12_abandon(owner: *const Owner, slot: u32) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_input_dump12_destroy(owner: *mut Owner) -> i32 {
-    let Some(capture) = (unsafe { self::owner(owner) }) else {
+    let Some(capture) = (unsafe { owner.as_ref() }) else {
         return OK;
     };
     {
