@@ -125,7 +125,7 @@ static IMAGES: ImageOps = ImageOps {
     submit_fence: None,
 };
 
-unsafe extern "C" fn open(setup: *const Setup, out: *mut *mut c_void) -> i32 {
+pub(super) unsafe extern "C" fn open(setup: *const Setup, out: *mut *mut c_void) -> i32 {
     assert_eq!(unsafe { (*setup).device } as usize, DEVICE);
     with(|fake| {
         fake.events.push("open".into());
@@ -136,20 +136,20 @@ unsafe extern "C" fn open(setup: *const Setup, out: *mut *mut c_void) -> i32 {
         0
     })
 }
-unsafe extern "C" fn close(_: *mut c_void) {
+pub(super) unsafe extern "C" fn close(_: *mut c_void) {
     with(|fake| fake.events.push("close".into()));
 }
-unsafe extern "C" fn image_user(device: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn image_user(device: *mut c_void) -> *mut c_void {
     device
 }
-unsafe extern "C" fn create_layouts(_: *mut c_void, out: *mut Layouts) -> i32 {
+pub(super) unsafe extern "C" fn create_layouts(_: *mut c_void, out: *mut Layouts) -> i32 {
     let out = unsafe { &mut *out };
     match create("set-layout", &mut out.descriptor_set) {
         0 => create("pipeline-layout", &mut out.pipeline),
         error => error,
     }
 }
-unsafe extern "C" fn release_layouts(_: *mut c_void, layouts: *mut Layouts) {
+pub(super) unsafe extern "C" fn release_layouts(_: *mut c_void, layouts: *mut Layouts) {
     let layouts = unsafe { &mut *layouts };
     for handle in [layouts.pipeline, layouts.descriptor_set] {
         if handle != 0 {
@@ -158,16 +158,25 @@ unsafe extern "C" fn release_layouts(_: *mut c_void, layouts: *mut Layouts) {
     }
     *layouts = Layouts::default();
 }
-unsafe extern "C" fn create_pipeline(_: *mut c_void, layout: u64, mode: u32, out: *mut u64) -> i32 {
+pub(super) unsafe extern "C" fn create_pipeline(
+    _: *mut c_void,
+    layout: u64,
+    mode: u32,
+    out: *mut u64,
+) -> i32 {
     assert!(with(|fake| fake.live.contains(&layout)));
     let result = create(if mode == 2 { "pipeline2" } else { "pipeline" }, out);
     with(|fake| fake.events.push(format!("mode{mode}")));
     result
 }
-unsafe extern "C" fn destroy_pipeline(_: *mut c_void, pipeline: u64) {
+pub(super) unsafe extern "C" fn destroy_pipeline(_: *mut c_void, pipeline: u64) {
     destroy("pipeline", pipeline);
 }
-unsafe extern "C" fn create_uniform(_: *mut c_void, layout: u64, out: *mut Uniform) -> i32 {
+pub(super) unsafe extern "C" fn create_uniform(
+    _: *mut c_void,
+    layout: u64,
+    out: *mut Uniform,
+) -> i32 {
     assert!(with(|fake| fake.live.contains(&layout)));
     let out = unsafe { &mut *out };
     for (kind, handle) in [
@@ -184,7 +193,7 @@ unsafe extern "C" fn create_uniform(_: *mut c_void, layout: u64, out: *mut Unifo
     out.mapped = leaf();
     0
 }
-unsafe extern "C" fn release_uniform(_: *mut c_void, uniform: *mut Uniform) {
+pub(super) unsafe extern "C" fn release_uniform(_: *mut c_void, uniform: *mut Uniform) {
     let uniform = unsafe { &mut *uniform };
     // The descriptor set is freed with its pool.
     if uniform.set != 0 {
@@ -197,17 +206,26 @@ unsafe extern "C" fn release_uniform(_: *mut c_void, uniform: *mut Uniform) {
     }
     *uniform = Uniform::default();
 }
-unsafe extern "C" fn input_view(_: *mut c_void, image: u64, _: u32, out: *mut u64) -> i32 {
+pub(super) unsafe extern "C" fn input_view(
+    _: *mut c_void,
+    image: u64,
+    _: u32,
+    out: *mut u64,
+) -> i32 {
     create(if image == DEPTH { "depth-view" } else { "view" }, out)
 }
-unsafe extern "C" fn options(request: *const Options, out: *mut Options) -> u32 {
+pub(super) unsafe extern "C" fn options(request: *const Options, out: *mut Options) -> u32 {
     let Some(request) = (unsafe { request.as_ref() }) else {
         return 0;
     };
     unsafe { out.write(*request) };
     u32::from(with(|fake| !fake.inactive))
 }
-unsafe extern "C" fn write_constants(mapped: *mut c_void, _: *const Options, facts: *const Facts) {
+pub(super) unsafe extern "C" fn write_constants(
+    mapped: *mut c_void,
+    _: *const Options,
+    facts: *const Facts,
+) {
     assert!(!mapped.is_null());
     let facts = unsafe { &*facts };
     with(|fake| {
@@ -218,7 +236,7 @@ unsafe extern "C" fn write_constants(mapped: *mut c_void, _: *const Options, fac
         ))
     });
 }
-unsafe extern "C" fn record(_: *mut c_void, commands: *mut c_void, pass: *const Pass) {
+pub(super) unsafe extern "C" fn record(_: *mut c_void, commands: *mut c_void, pass: *const Pass) {
     let pass = unsafe { &*pass };
     with(|fake| {
         for handle in [
@@ -242,22 +260,19 @@ unsafe extern "C" fn record(_: *mut c_void, commands: *mut c_void, pass: *const 
         ));
     });
 }
-const PLATFORM: &Platform = &Platform {
-    images: &IMAGES,
-    open: Some(open),
-    close: Some(close),
-    image_user: Some(image_user),
-    create_layouts: Some(create_layouts),
-    release_layouts: Some(release_layouts),
-    create_pipeline: Some(create_pipeline),
-    destroy_pipeline: Some(destroy_pipeline),
-    create_uniform: Some(create_uniform),
-    release_uniform: Some(release_uniform),
-    create_view: Some(input_view),
-    options: Some(options),
-    write_constants: Some(write_constants),
-    record: Some(record),
-};
+/// The fakes the owner calls in place of native.rs, by the production names.
+pub(super) mod leaf {
+    pub(in crate::vulkan_sharpening) use super::{
+        close, create_layouts, create_pipeline, create_uniform, destroy_pipeline, image_user,
+        input_view as create_view, open, options, record, release_layouts, release_uniform,
+        write_constants,
+    };
+    use crate::vulkan_fg_resources::Platform as ImageOps;
+
+    pub(in crate::vulkan_sharpening) fn images() -> &'static ImageOps {
+        &super::IMAGES
+    }
+}
 
 struct Harness {
     owner: *mut Owner,
@@ -274,7 +289,7 @@ impl Harness {
         record.output_width = 33;
         record.output_height = 17;
         Self {
-            owner: unsafe { rsf_core_sharpenvk_create(PLATFORM) },
+            owner: rsf_core_sharpenvk_create(),
             setup,
             record,
         }

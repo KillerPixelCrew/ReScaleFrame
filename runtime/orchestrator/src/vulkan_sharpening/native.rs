@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Facts, Layouts, Options, Pass, Platform, Setup, Uniform};
+use super::{Facts, Layouts, Options, Pass, Setup, Uniform};
 use crate::d3d11_sharpening::{Frame, rsf_sharpen11_active, rsf_sharpen11_pack};
 use crate::vulkan_fg_resources::Platform as ImageOps;
 use ash::vk::{self, Handle};
@@ -66,7 +66,7 @@ unsafe fn device<'a>(user: *mut c_void) -> &'a Device {
     unsafe { &*user.cast() }
 }
 
-unsafe extern "C" fn open(setup: *const Setup, out: *mut *mut c_void) -> i32 {
+pub(super) unsafe extern "C" fn open(setup: *const Setup, out: *mut *mut c_void) -> i32 {
     unsafe { out.write(ptr::null_mut()) };
     let setup = unsafe { &*setup };
     let (Some(device_proc), Some(instance_proc)) = (setup.device_proc, setup.instance_proc) else {
@@ -118,11 +118,11 @@ unsafe extern "C" fn open(setup: *const Setup, out: *mut *mut c_void) -> i32 {
     vk::Result::SUCCESS.as_raw()
 }
 
-unsafe extern "C" fn close(user: *mut c_void) {
+pub(super) unsafe extern "C" fn close(user: *mut c_void) {
     drop(unsafe { Box::from_raw(user.cast::<Device>()) });
 }
 
-unsafe extern "C" fn image_user(user: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn image_user(user: *mut c_void) -> *mut c_void {
     user
 }
 
@@ -206,7 +206,12 @@ fn range(aspect_mask: vk::ImageAspectFlags) -> vk::ImageSubresourceRange {
     }
 }
 
-unsafe extern "C" fn create_view(user: *mut c_void, image: u64, format: u32, out: *mut u64) -> i32 {
+pub(super) unsafe extern "C" fn create_view(
+    user: *mut c_void,
+    image: u64,
+    format: u32,
+    out: *mut u64,
+) -> i32 {
     let d = unsafe { device(user) };
     let format = vk::Format::from_raw(format as i32);
     let aspect = if format == vk::Format::D32_SFLOAT {
@@ -255,7 +260,7 @@ const DESCRIPTORS: [vk::DescriptorType; 6] = [
     vk::DescriptorType::STORAGE_IMAGE,
 ];
 
-unsafe extern "C" fn create_layouts(user: *mut c_void, out: *mut Layouts) -> i32 {
+pub(super) unsafe extern "C" fn create_layouts(user: *mut c_void, out: *mut Layouts) -> i32 {
     let d = unsafe { device(user) };
     let out = unsafe { &mut *out };
     let bindings: [_; DESCRIPTORS.len()] = std::array::from_fn(|i| {
@@ -283,7 +288,7 @@ unsafe extern "C" fn create_layouts(user: *mut c_void, out: *mut Layouts) -> i32
     })
 }
 
-unsafe extern "C" fn release_layouts(user: *mut c_void, layouts: *mut Layouts) {
+pub(super) unsafe extern "C" fn release_layouts(user: *mut c_void, layouts: *mut Layouts) {
     let d = unsafe { device(user) };
     let layouts = unsafe { &mut *layouts };
     if layouts.pipeline != 0 {
@@ -302,7 +307,7 @@ unsafe extern "C" fn release_layouts(user: *mut c_void, layouts: *mut Layouts) {
     *layouts = Layouts::default();
 }
 
-unsafe extern "C" fn create_pipeline(
+pub(super) unsafe extern "C" fn create_pipeline(
     user: *mut c_void,
     layout: u64,
     mode: u32,
@@ -346,7 +351,7 @@ unsafe extern "C" fn create_pipeline(
     result.as_raw()
 }
 
-unsafe extern "C" fn destroy_pipeline(user: *mut c_void, pipeline: u64) {
+pub(super) unsafe extern "C" fn destroy_pipeline(user: *mut c_void, pipeline: u64) {
     unsafe {
         device(user)
             .vk
@@ -411,7 +416,11 @@ fn uniform(
     Ok(())
 }
 
-unsafe extern "C" fn create_uniform(user: *mut c_void, layout: u64, slot: *mut Uniform) -> i32 {
+pub(super) unsafe extern "C" fn create_uniform(
+    user: *mut c_void,
+    layout: u64,
+    slot: *mut Uniform,
+) -> i32 {
     uniform(
         unsafe { device(user) },
         vk::DescriptorSetLayout::from_raw(layout),
@@ -420,7 +429,7 @@ unsafe extern "C" fn create_uniform(user: *mut c_void, layout: u64, slot: *mut U
     .map_or_else(vk::Result::as_raw, |()| 0)
 }
 
-unsafe extern "C" fn release_uniform(user: *mut c_void, slot: *mut Uniform) {
+pub(super) unsafe extern "C" fn release_uniform(user: *mut c_void, slot: *mut Uniform) {
     let d = unsafe { device(user) };
     let slot = unsafe { &mut *slot };
     let memory = vk::DeviceMemory::from_raw(slot.memory);
@@ -441,7 +450,7 @@ unsafe extern "C" fn release_uniform(user: *mut c_void, slot: *mut Uniform) {
     *slot = Uniform::default();
 }
 
-unsafe extern "C" fn options(request: *const Options, out: *mut Options) -> u32 {
+pub(super) unsafe extern "C" fn options(request: *const Options, out: *mut Options) -> u32 {
     let value = unsafe { request.as_ref() }
         .copied()
         .unwrap_or_else(crate::sharpening_policy::defaults);
@@ -450,7 +459,11 @@ unsafe extern "C" fn options(request: *const Options, out: *mut Options) -> u32 
     unsafe { rsf_sharpen11_active(&value) }
 }
 
-unsafe extern "C" fn constants(mapped: *mut c_void, request: *const Options, facts: *const Facts) {
+pub(super) unsafe extern "C" fn constants(
+    mapped: *mut c_void,
+    request: *const Options,
+    facts: *const Facts,
+) {
     let f = unsafe { &*facts };
     let frame = Frame {
         depth_linear: 0,
@@ -517,7 +530,11 @@ fn barrier(
     };
 }
 
-unsafe extern "C" fn record(user: *mut c_void, commands: *mut c_void, pass: *const Pass) {
+pub(super) unsafe extern "C" fn record(
+    user: *mut c_void,
+    commands: *mut c_void,
+    pass: *const Pass,
+) {
     use vk::AccessFlags as A;
     use vk::ImageLayout as L;
     let d = &unsafe { device(user) }.vk;
@@ -678,19 +695,17 @@ static IMAGES: ImageOps = ImageOps {
     submit_fence: None,
 };
 
-pub(super) const PLATFORM: &Platform = &Platform {
-    images: &IMAGES,
-    open: Some(open),
-    close: Some(close),
-    image_user: Some(image_user),
-    create_layouts: Some(create_layouts),
-    release_layouts: Some(release_layouts),
-    create_pipeline: Some(create_pipeline),
-    destroy_pipeline: Some(destroy_pipeline),
-    create_uniform: Some(create_uniform),
-    release_uniform: Some(release_uniform),
-    create_view: Some(create_view),
-    options: Some(options),
-    write_constants: Some(constants),
-    record: Some(record),
-};
+/// The owner's Vulkan leaves.
+#[cfg_attr(test, allow(unused_imports, dead_code))]
+pub(super) mod leaf {
+    pub(in crate::vulkan_sharpening) use super::{
+        close, constants as write_constants, create_layouts, create_pipeline, create_uniform,
+        create_view, destroy_pipeline, image_user, open, options, record, release_layouts,
+        release_uniform,
+    };
+    use crate::vulkan_fg_resources::Platform as ImageOps;
+
+    pub(in crate::vulkan_sharpening) fn images() -> &'static ImageOps {
+        &super::IMAGES
+    }
+}

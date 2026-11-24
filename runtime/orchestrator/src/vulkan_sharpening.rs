@@ -11,7 +11,6 @@ use crate::sys::rsf_sharpening_options as Options;
 
 use crate::sys::{rsf_srvk_frame as Frame, rsf_srvk_image as Image, rsf_srvk_setup as Setup};
 use crate::vulkan_fg_resources::Image as OwnedImage;
-use crate::vulkan_fg_resources::Platform as ImageOps;
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_sr::{R32_FLOAT, RGBA16_FLOAT, SHADER_READ, STORAGE_USAGE, TRANSFER_SRC_USAGE};
 use std::ffi::{c_char, c_void};
@@ -91,32 +90,12 @@ pub(crate) struct Pass {
     pub(crate) reserved: u32,
 }
 
-type Leaf = *mut c_void;
-
-/// The native Vulkan leaves of the owner: `native::PLATFORM` in production, a CPU fake in tests.
-/// Scratch images use the shared Vulkan image leaves.
-#[repr(C)]
-pub(crate) struct Platform {
-    pub(crate) images: *const ImageOps,
-    pub(crate) open: Option<unsafe extern "C" fn(*const Setup, *mut Leaf) -> i32>,
-    pub(crate) close: Option<unsafe extern "C" fn(Leaf)>,
-    pub(crate) image_user: Option<unsafe extern "C" fn(Leaf) -> *mut c_void>,
-    pub(crate) create_layouts: Option<unsafe extern "C" fn(Leaf, *mut Layouts) -> i32>,
-    pub(crate) release_layouts: Option<unsafe extern "C" fn(Leaf, *mut Layouts)>,
-    /// Mode 1 to 3 selects the RCAS, depth RCAS or depth DAS SPIR-V.
-    pub(crate) create_pipeline: Option<unsafe extern "C" fn(Leaf, u64, u32, *mut u64) -> i32>,
-    pub(crate) destroy_pipeline: Option<unsafe extern "C" fn(Leaf, u64)>,
-    pub(crate) create_uniform: Option<unsafe extern "C" fn(Leaf, u64, *mut Uniform) -> i32>,
-    pub(crate) release_uniform: Option<unsafe extern "C" fn(Leaf, *mut Uniform)>,
-    pub(crate) create_view: Option<unsafe extern "C" fn(Leaf, u64, u32, *mut u64) -> i32>,
-    /// Sanitizes the request, or the defaults when it is null. Returns nonzero when the options
-    /// require a filter dispatch.
-    pub(crate) options: Option<unsafe extern "C" fn(*const Options, *mut Options) -> u32>,
-    pub(crate) write_constants:
-        Option<unsafe extern "C" fn(*mut c_void, *const Options, *const Facts)>,
-    pub(crate) record: Option<unsafe extern "C" fn(Leaf, *mut c_void, *const Pass)>,
-}
-
+// The native Vulkan leaves of the owner (native.rs) in production, CPU fakes with the same names in
+// unit tests. Scratch images use the shared Vulkan image leaves that `leaf::images()` returns.
+#[cfg(not(test))]
+use native::leaf;
+#[cfg(test)]
+use tests::leaf;
 #[derive(Default)]
 struct Slot {
     // The command buffer whose recording uses this slot, or 0 when free.
@@ -136,7 +115,6 @@ struct Device {
 }
 
 pub(crate) struct Owner {
-    platform: &'static Platform,
     device: Option<Device>,
     slots: Vec<Slot>,
     dispatches: u64,
@@ -170,25 +148,19 @@ fn exposure_scale(pre_exposure: f32) -> f32 {
     }
 }
 
-fn image_ops(platform: &Platform) -> &ImageOps {
-    // Owner construction requires the native table and its non-null image table
-    // to stay alive for the lifetime of the owner.
-    unsafe { &*platform.images }
-}
-
-fn release_views(platform: &Platform, leaf: *mut c_void, views: &mut [u64; 4]) {
-    let user = unsafe { platform.image_user.unwrap()(leaf) };
+fn release_views(leaf: *mut c_void, views: &mut [u64; 4]) {
+    let user = unsafe { leaf::image_user(leaf) };
     for view in views.iter_mut().filter(|view| **view != 0) {
-        unsafe { (image_ops(platform).destroy_view.unwrap())(user, *view) };
+        unsafe { (leaf::images().destroy_view.unwrap())(user, *view) };
         *view = 0;
     }
 }
 
-fn release_slot(platform: &Platform, leaf: *mut c_void, slot: &mut Slot) {
-    release_views(platform, leaf, &mut slot.views);
-    let user = unsafe { platform.image_user.unwrap()(leaf) };
-    rsf_core_vkfg_release_image(image_ops(platform), user, &mut slot.scratch);
-    unsafe { platform.release_uniform.unwrap()(leaf, &mut slot.uniform) };
+fn release_slot(leaf: *mut c_void, slot: &mut Slot) {
+    release_views(leaf, &mut slot.views);
+    let user = unsafe { leaf::image_user(leaf) };
+    rsf_core_vkfg_release_image(leaf::images(), user, &mut slot.scratch);
+    unsafe { leaf::release_uniform(leaf, &mut slot.uniform) };
     *slot = Slot::default();
 }
 
@@ -198,9 +170,8 @@ impl Owner {
             // A failed bind or another device stays refused until clear().
             return device.key == setup.device as usize && device.ready;
         }
-        let platform = self.platform;
         let mut leaf = ptr::null_mut();
-        let opened = unsafe { platform.open.unwrap()(setup, &mut leaf) } == 0 && !leaf.is_null();
+        let opened = unsafe { leaf::open(setup, &mut leaf) } == 0 && !leaf.is_null();
         let device = self.device.insert(Device {
             key: setup.device as usize,
             leaf,
@@ -208,13 +179,11 @@ impl Owner {
             pipelines: [0; 3],
             ready: false,
         });
-        if !opened || unsafe { platform.create_layouts.unwrap()(leaf, &mut device.layouts) } != 0 {
+        if !opened || unsafe { leaf::create_layouts(leaf, &mut device.layouts) } != 0 {
             return false;
         }
         for (pipeline, mode) in device.pipelines.iter_mut().zip(FILTERS) {
-            if unsafe {
-                platform.create_pipeline.unwrap()(leaf, device.layouts.pipeline, mode, pipeline)
-            } != 0
+            if unsafe { leaf::create_pipeline(leaf, device.layouts.pipeline, mode, pipeline) } != 0
             {
                 return false;
             }
@@ -235,10 +204,10 @@ impl Owner {
     }
 
     // The slot is free, so every recording that used its resources has retired.
-    fn prepare(platform: &Platform, device: &Device, slot: &mut Slot, extent: [u32; 2]) -> bool {
+    fn prepare(device: &Device, slot: &mut Slot, extent: [u32; 2]) -> bool {
         if slot.uniform.pool == 0
             && unsafe {
-                platform.create_uniform.unwrap()(
+                leaf::create_uniform(
                     device.leaf,
                     device.layouts.descriptor_set,
                     &mut slot.uniform,
@@ -247,9 +216,9 @@ impl Owner {
         {
             return false;
         }
-        let user = unsafe { platform.image_user.unwrap()(device.leaf) };
+        let user = unsafe { leaf::image_user(device.leaf) };
         ensure_image(
-            image_ops(platform),
+            leaf::images(),
             user,
             &mut slot.scratch,
             extent,
@@ -263,13 +232,7 @@ impl Owner {
             && slot.scratch.view != 0
     }
 
-    fn create_views(
-        platform: &Platform,
-        device: &Device,
-        slot: &mut Slot,
-        frame: &Frame,
-        output: u64,
-    ) -> bool {
+    fn create_views(device: &Device, slot: &mut Slot, frame: &Frame, output: u64) -> bool {
         let requests = [
             (output, RGBA16_FLOAT),
             (frame.motion.image, frame.motion.format),
@@ -277,10 +240,8 @@ impl Owner {
             (frame.exposure.image, frame.exposure.format),
         ];
         for (view, (image, format)) in slot.views.iter_mut().zip(requests) {
-            if image != 0
-                && unsafe { platform.create_view.unwrap()(device.leaf, image, format, view) } != 0
-            {
-                release_views(platform, device.leaf, &mut slot.views);
+            if image != 0 && unsafe { leaf::create_view(device.leaf, image, format, view) } != 0 {
+                release_views(device.leaf, &mut slot.views);
                 return false;
             }
         }
@@ -288,7 +249,6 @@ impl Owner {
     }
 
     fn record(&mut self, setup: &Setup, commands: *mut c_void, frame: &Frame, output: u64) -> bool {
-        let platform = self.platform;
         let mut options: Options = unsafe { std::mem::zeroed() };
         let request = if frame.sharpening.struct_size != 0 {
             &raw const frame.sharpening
@@ -296,7 +256,7 @@ impl Owner {
             ptr::null()
         };
         // Off, Vendor and zero strength leave the output untouched.
-        if unsafe { platform.options.unwrap()(request, &mut options) } == 0 {
+        if unsafe { leaf::options(request, &mut options) } == 0 {
             return true;
         }
         let Some(record) = (unsafe { frame.record.as_ref() }) else {
@@ -318,11 +278,11 @@ impl Owner {
         };
         let device = self.device.as_ref().expect("initialized device");
         let slot = &mut self.slots[index];
-        if !Self::prepare(platform, device, slot, extent) {
-            release_slot(platform, device.leaf, slot);
+        if !Self::prepare(device, slot, extent) {
+            release_slot(device.leaf, slot);
             return false;
         }
-        if !Self::create_views(platform, device, slot, frame, output) {
+        if !Self::create_views(device, slot, frame, output) {
             return false;
         }
         let facts = Facts {
@@ -341,7 +301,7 @@ impl Owner {
             motion_x: frame.motion_scale_x,
             motion_y: frame.motion_scale_y,
         };
-        unsafe { platform.write_constants.unwrap()(slot.uniform.mapped, &options, &facts) };
+        unsafe { leaf::write_constants(slot.uniform.mapped, &options, &facts) };
         let color = slot.views[0];
         let pass = Pass {
             set: slot.uniform.set,
@@ -360,7 +320,7 @@ impl Owner {
             scratch_initialized: slot.scratch.initialized,
             reserved: 0,
         };
-        unsafe { platform.record.unwrap()(device.leaf, commands, &pass) };
+        unsafe { leaf::record(device.leaf, commands, &pass) };
         slot.commands = commands as usize;
         slot.scratch.initialized = 1;
         self.dispatches += 1;
@@ -379,7 +339,7 @@ impl Owner {
             .iter_mut()
             .filter(|slot| slot.commands == commands as usize)
         {
-            release_views(self.platform, device.leaf, &mut slot.views);
+            release_views(device.leaf, &mut slot.views);
             slot.commands = 0;
         }
     }
@@ -388,10 +348,9 @@ impl Owner {
         let Some(mut device) = self.device.take() else {
             return;
         };
-        let platform = self.platform;
         // Slots exist only after the device and its pipelines are ready.
         for slot in &mut self.slots {
-            release_slot(platform, device.leaf, slot);
+            release_slot(device.leaf, slot);
         }
         self.slots = Vec::new();
         if device.leaf.is_null() {
@@ -403,10 +362,10 @@ impl Owner {
                 .into_iter()
                 .filter(|pipeline| *pipeline != 0)
             {
-                platform.destroy_pipeline.unwrap()(device.leaf, pipeline);
+                leaf::destroy_pipeline(device.leaf, pipeline);
             }
-            platform.release_layouts.unwrap()(device.leaf, &mut device.layouts);
-            platform.close.unwrap()(device.leaf);
+            leaf::release_layouts(device.leaf, &mut device.layouts);
+            leaf::close(device.leaf);
         }
     }
 }
@@ -417,17 +376,8 @@ impl Drop for Owner {
     }
 }
 
-unsafe fn rsf_core_sharpenvk_create(platform: *const Platform) -> *mut Owner {
-    if platform.is_null() {
-        return ptr::null_mut();
-    }
-    // The native facade passes its static leaf table.
-    let platform: &'static Platform = unsafe { &*platform };
-    if platform.images.is_null() {
-        return ptr::null_mut();
-    }
+fn rsf_core_sharpenvk_create() -> *mut Owner {
     crate::allocate_handle(Owner {
-        platform,
         device: None,
         slots: Vec::new(),
         dispatches: 0,
@@ -521,7 +471,7 @@ pub(crate) unsafe fn rsf_sharpenvk_host_run(
     output: u64,
 ) -> u32 {
     if host.owner.is_null() {
-        host.owner = unsafe { rsf_core_sharpenvk_create(native::PLATFORM) }.cast();
+        host.owner = rsf_core_sharpenvk_create().cast();
     }
     let result =
         unsafe { rsf_core_sharpenvk_record(host.owner.cast(), setup, commands, frame, output) };
