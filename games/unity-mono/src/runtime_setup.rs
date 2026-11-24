@@ -4,8 +4,7 @@
 use crate::bridge_state::rsf_unity_mono_drained_generation;
 use crate::generation::{self, RSF_DLSS_ENGINE_UNITY, Sources};
 use crate::runtime_config::{
-    Ini, PATH_CAPACITY, file_name, path_setting, preferences_path, profile_int, setting,
-    terminated, utf8,
+    Ini, file_name, path_setting, preferences_path, profile_int, setting, terminated, utf8,
 };
 use crate::startup_policy::{self, MONO_DEADLINE, wait_for_sr};
 // The carrier already loaded the Runtime. The plugin target links its import library.
@@ -16,6 +15,7 @@ use crate::sys::{
     rsf_fg_choice_start, rsf_fg12_capture_outputs, rsf_fg12_install, rsf_fg12_setup,
     rsf_native_fg_options, rsf_overlay_saved_options_unregister,
 };
+use rsf_game_sys::win32::module_path;
 use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION_V2, rsf_callback_host_setup, rsf_callback_host_setup_v2,
     rsf_game_probe,
@@ -32,7 +32,7 @@ use std::sync::{Mutex, PoisonError};
 use std::thread::sleep;
 use std::time::Instant;
 use windows::Win32::Graphics::Direct3D12::{D3D12GetDebugInterface, ID3D12Debug};
-use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowThreadProcessId};
 use windows_sys::core::{PCWSTR, w};
@@ -271,24 +271,14 @@ struct Fingerprint {
 }
 
 fn fingerprint() -> Result<Fingerprint, u32> {
-    let mut executable = vec![0u16; PATH_CAPACITY];
-    let length =
-        unsafe { GetModuleFileNameW(null_mut(), executable.as_mut_ptr(), PATH_CAPACITY as u32) }
-            as usize;
-    if length == 0 || length >= PATH_CAPACITY {
-        return Err(code::NO_EXECUTABLE);
-    }
-    executable.truncate(length);
-    let name = terminated(utf8(file_name(&executable)));
-    let executable = OsString::from_wide(&executable);
-    let digest = rsf_windows::sha256_file(Path::new(&executable)).ok_or(code::NO_HASH)?;
-    let hex = b"0123456789abcdef";
-    let mut hash = [0; 65];
-    for (byte, pair) in digest.into_iter().zip(hash.chunks_exact_mut(2)) {
-        pair[0] = hex[usize::from(byte >> 4)] as c_char;
-        pair[1] = hex[usize::from(byte & 15)] as c_char;
-    }
-    Ok(Fingerprint { name, hash })
+    let executable = unsafe { module_path(null_mut()) }.ok_or(code::NO_EXECUTABLE)?;
+    let name = terminated(utf8(file_name(executable.units())));
+    let path = OsString::from_wide(executable.units());
+    let hash = rsf_windows::sha256_file_hex(Path::new(&path)).ok_or(code::NO_HASH)?;
+    Ok(Fingerprint {
+        name,
+        hash: hash.map(|digit| digit as c_char),
+    })
 }
 
 fn sr_start(ini: *const u16, identity: &mut Option<Fingerprint>) -> u32 {
@@ -442,7 +432,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sr_choices_match_the_cpp_mask() {
+    fn sr_choices_cover_every_unity_provider() {
         assert_eq!(SR_CHOICES, 0b111_1110);
     }
 

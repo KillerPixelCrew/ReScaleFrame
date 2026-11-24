@@ -7,6 +7,7 @@ use crate::sys::rsf_unity_native_api;
 #[cfg(test)]
 use rsf_game_sys::RSF_GAME_ABI_VERSION;
 use rsf_game_sys::call_header::validate;
+use rsf_game_sys::win32::module_path;
 use rsf_game_sys::{
     rsf_game_control_args, rsf_game_prepare_args, rsf_game_renderer_status, rsf_game_start_args,
     rsf_result,
@@ -18,7 +19,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-    GetModuleFileNameW, GetModuleHandleExW,
+    GetModuleHandleExW,
 };
 
 use rsf_game_sys::{
@@ -30,7 +31,6 @@ use rsf_game_sys::{
 const MANAGED_INSTALLED: u32 = 2;
 const MANAGED_REFUSED: u32 = 3;
 
-const PATH_CAPACITY: usize = 32768;
 const HELPER: &str = "ReScaleFrame.Unity.Managed.dll";
 
 const UNPREPARED: &CStr = c"Unity Mono adapter has not been prepared.";
@@ -88,14 +88,8 @@ fn helper_path() -> Option<String> {
     if unsafe { GetModuleHandleExW(flags, anchor, &mut module) } == 0 {
         return None;
     }
-    let mut path = vec![0u16; PATH_CAPACITY];
-    let length =
-        unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), PATH_CAPACITY as u32) } as usize;
-    if length == 0 || length >= PATH_CAPACITY {
-        return None;
-    }
-    let plugin = String::from_utf16(&path[..length]).ok()?;
-    sibling(&plugin, HELPER)
+    let path = unsafe { module_path(module) }?;
+    sibling(&String::from_utf16(path.units()).ok()?, HELPER)
 }
 
 /// `leaf` in the directory of `path`. None when `path` has no directory.
