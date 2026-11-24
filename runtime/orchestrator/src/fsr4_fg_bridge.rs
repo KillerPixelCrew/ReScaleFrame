@@ -23,8 +23,6 @@ mod commands;
 #[cfg(not(feature = "fixture-leaves"))]
 pub(super) use commands::RsfFsr4FgReleaseImage;
 mod native;
-#[cfg(not(feature = "fixture-leaves"))]
-pub(crate) use native::{RsfFsr4FgCreate, RsfFsr4FgProbe};
 mod sdk;
 #[cfg(feature = "fixture-leaves")]
 pub(crate) mod state_fixture;
@@ -40,6 +38,7 @@ pub(super) use crate::sys::{
 const OUT_OF_MEMORY: i32 = 0x8007_000e_u32 as i32;
 const UNEXPECTED: i32 = 0x8000_ffff_u32 as i32;
 
+// The capsule objects `leaf::objects` reports.
 const DEVICE: u32 = 1 << 0;
 const GENERATION: u32 = 1 << 1;
 const CHAIN: u32 = 1 << 2;
@@ -676,7 +675,14 @@ fn select_version(versions: &[Version], count: u64) -> u64 {
     ffx_version::select(&versions[..count as usize], 4, 0).map_or(0, |version| version.id)
 }
 
-unsafe fn rsf_core_fsr4fg_probe(luid: u64, directory: *const u16, out: *mut BridgeInfo) -> i32 {
+/// Creates a matching DX12 device and queries its exact major-4 providers
+/// without a window or WSI calls.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn RsfFsr4FgProbe(
+    luid: u64,
+    directory: *const u16,
+    out: *mut BridgeInfo,
+) -> i32 {
     if let Err(code) = unsafe { check(out) } {
         return code;
     }
@@ -696,7 +702,11 @@ unsafe fn rsf_core_fsr4fg_probe(luid: u64, directory: *const u16, out: *mut Brid
     result.err().unwrap_or(0)
 }
 
-unsafe fn rsf_core_fsr4fg_create(setup: *const BridgeCreate, output: *mut *mut Bridge) -> i32 {
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn RsfFsr4FgCreate(
+    setup: *const BridgeCreate,
+    output: *mut *mut Bridge,
+) -> i32 {
     if output.is_null() {
         return INVALID;
     }

@@ -67,10 +67,6 @@ pub(super) struct Owner {
 }
 
 impl Owner {
-    pub(super) fn device_luid(&self, setup: &rsf_srvk_setup) -> Result<u64, i32> {
-        Self::adapter_luid(setup)
-    }
-
     pub(super) fn adapter_luid(setup: &rsf_srvk_setup) -> Result<u64, i32> {
         let mut luid = 0;
         succeeded(unsafe { leaf::adapter_luid(setup, &mut luid) })?;
@@ -353,15 +349,7 @@ pub(crate) unsafe extern "C" fn rsf_dx12vk_interop_image(
     if out.is_null() {
         return INVALID;
     }
-    unsafe {
-        out.write(Output {
-            image: 0,
-            dx12_resource: ptr::null_mut(),
-            format: 0,
-            width: 0,
-            height: 0,
-        })
-    };
+    unsafe { out.write(Output::default()) };
     let Some(owner) = (unsafe { owner.cast::<Owner>().as_mut() }) else {
         return INVALID;
     };

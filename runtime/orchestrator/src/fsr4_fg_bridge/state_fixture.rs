@@ -372,7 +372,7 @@ fn create() -> (i32, *mut Bridge) {
     };
     let mut bridge = ptr::null_mut();
     (
-        unsafe { rsf_core_fsr4fg_create(&setup, &mut bridge) },
+        unsafe { RsfFsr4FgCreate(&setup, &mut bridge) },
         bridge,
     )
 }

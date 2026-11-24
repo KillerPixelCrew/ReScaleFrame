@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::{Lookup, NOT_SUPPORTED, fallback_admit, rsf_srvk_fallback, rsf_vk_get_proc};
+use crate::dx12_vulkan_platform::typed;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::backend_result::FEATURE_FAILED;
 use std::ffi::{CStr, c_void};
-use std::{mem, ptr};
+use std::ptr;
 
 const LINEAR_BLIT: vk::FormatFeatureFlags = vk::FormatFeatureFlags::from_raw(
     vk::FormatFeatureFlags::BLIT_SRC.as_raw()
@@ -29,7 +30,7 @@ pub(super) unsafe fn rsf_core_srvk_spatial_fallback(
         (ok != 0).then_some(address).ok_or(FEATURE_FAILED)
     };
     let load = || {
-        Ok::<_, i32>((
+        Ok::<_, i32>([
             resolve(
                 call.instance_proc,
                 call.instance,
@@ -37,22 +38,22 @@ pub(super) unsafe fn rsf_core_srvk_spatial_fallback(
             )?,
             resolve(call.device_proc, call.device, c"vkCmdPipelineBarrier")?,
             resolve(call.device_proc, call.device, c"vkCmdBlitImage")?,
-        ))
+        ])
     };
-    let (get_properties, barrier, blit) = match load() {
-        Ok((Some(get), Some(barrier), Some(blit))) => (get, barrier, blit),
-        Ok(_) => return NOT_SUPPORTED,
+    let [get_properties, barrier, blit] = match load() {
+        Ok(entries) => entries,
         Err(error) => return error,
     };
-    // Match the loader symbol to its Vulkan system-ABI function type.
-    let get_properties = unsafe {
-        mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetPhysicalDeviceFormatProperties>(
-            get_properties,
+    // Each loader symbol was resolved by its exact Vulkan command name.
+    let (Some(get_properties), Some(barrier), Some(blit)) = (unsafe {
+        (
+            typed::<vk::PFN_vkGetPhysicalDeviceFormatProperties>(get_properties),
+            typed::<vk::PFN_vkCmdPipelineBarrier>(barrier),
+            typed::<vk::PFN_vkCmdBlitImage>(blit),
         )
+    }) else {
+        return NOT_SUPPORTED;
     };
-    let barrier =
-        unsafe { mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdPipelineBarrier>(barrier) };
-    let blit = unsafe { mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdBlitImage>(blit) };
     let mut properties = vk::FormatProperties::default();
     unsafe {
         get_properties(
@@ -255,7 +256,7 @@ mod tests {
             b"vkCmdBlitImage" => blit as vk::PFN_vkCmdBlitImage as *const (),
             _ => return None,
         };
-        Some(unsafe { mem::transmute::<*const (), unsafe extern "C" fn()>(entry) })
+        Some(unsafe { std::mem::transmute::<*const (), unsafe extern "C" fn()>(entry) })
     }
 
     unsafe extern "C" fn lookup(

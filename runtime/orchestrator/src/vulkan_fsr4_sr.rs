@@ -240,6 +240,19 @@ impl Owner {
         unsafe { leaf::bridge_info(self.bridge, info) }
     }
 
+    fn query_info(&self) -> Result<Info, i32> {
+        let mut info = Info {
+            struct_size: size_of::<Info>() as u32,
+            abi_version: RSF_FSR4_BRIDGE_ABI_VERSION,
+            adapter_luid: 0,
+            provider_version: 0,
+            vendor_id: 0,
+            int8_compatibility: 0,
+        };
+        succeeded(self.info(&mut info))?;
+        Ok(info)
+    }
+
     fn initialize(&mut self, luid: u64, directory: &[u16]) -> Result<(), i32> {
         let output = self.output();
         let request = BridgeCreate {
@@ -259,15 +272,7 @@ impl Owner {
         succeeded(unsafe { leaf::bridge_create(&request, &mut self.bridge) })?;
         let [width, height] = &mut self.render;
         succeeded(unsafe { leaf::bridge_plan(self.bridge, self.setup.quality, width, height) })?;
-        let mut info = Info {
-            struct_size: size_of::<Info>() as u32,
-            abi_version: RSF_FSR4_BRIDGE_ABI_VERSION,
-            adapter_luid: 0,
-            provider_version: 0,
-            vendor_id: 0,
-            int8_compatibility: 0,
-        };
-        succeeded(self.info(&mut info))?;
+        let info = self.query_info()?;
         succeeded(unsafe {
             leaf::capture_initialize(self.graphics.handle, &self.setup, info.provider_version)
         })?;
@@ -648,7 +653,7 @@ unsafe fn create_admitted(mut setup: Setup, handoff: Handoff, output: *mut *mut 
         Ok(interop) => interop,
         Err(error) => return error,
     };
-    let luid = match interop.device_luid(&setup) {
+    let luid = match Interop::adapter_luid(&setup) {
         Ok(luid) => luid,
         Err(error) => return error,
     };
@@ -698,22 +703,19 @@ unsafe extern "C" fn rsf_fsr4vk_info(owner: *const Owner, info: *mut Info) -> i3
 }
 
 unsafe fn public_info(owner: *const Owner, public: &mut rsf_srvk_fsr4_provider_info) -> i32 {
-    let mut native = Info {
-        struct_size: size_of::<Info>() as u32,
-        abi_version: RSF_FSR4_BRIDGE_ABI_VERSION,
-        adapter_luid: 0,
-        provider_version: 0,
-        vendor_id: 0,
-        int8_compatibility: 0,
+    let Some(owner) = (unsafe { owner.as_ref() }) else {
+        return INVALID;
     };
-    let result = unsafe { rsf_fsr4vk_info(owner, &mut native) };
-    if result == 0 {
-        public.adapter_luid = native.adapter_luid;
-        public.provider_version = native.provider_version;
-        public.vendor_id = native.vendor_id;
-        public.int8_compatibility = native.int8_compatibility;
+    match owner.query_info() {
+        Ok(native) => {
+            public.adapter_luid = native.adapter_luid;
+            public.provider_version = native.provider_version;
+            public.vendor_id = native.vendor_id;
+            public.int8_compatibility = native.int8_compatibility;
+            0
+        }
+        Err(error) => error,
     }
-    result
 }
 
 unsafe fn rsf_fsr4vk_evaluate(

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The fixture-leaves archive calls the state fixture's doubles, so these leaves are unused there.
 #![cfg_attr(feature = "fixture-leaves", allow(dead_code))]
-//! Native capsule and exported entry points of the FSR 4 frame-generation bridge.
+//! Native capsule of the FSR 4 frame-generation bridge.
 //!
 //! The capsule keeps the provider module, both SDK contexts, the create
 //! descriptors the SDK retains until those contexts are destroyed, the DXGI
@@ -12,8 +12,8 @@
 use super::commands::{self, Graphics};
 use super::sdk;
 use super::{
-    Bridge, BridgeCreate, BridgeFrame, BridgeInfo, GeneratedFn, Handle, INVALID, SwapchainDesc,
-    Version, rsf_core_fsr4fg_create, rsf_core_fsr4fg_probe,
+    BridgeCreate, BridgeFrame, CHAIN, DEVICE, GENERATION, GeneratedFn, Handle, INVALID,
+    LOCAL_FENCE, SHARED_FENCE, SWAPCHAIN, SwapchainDesc, Version,
 };
 use crate::d3d12_generation::fsr_abi::*;
 use crate::d3d12_sr::ffx_abi::{self, *};
@@ -30,13 +30,6 @@ const FRAMEGENERATION_VERSION: u32 = 0x0100_0002; // FFX_FRAMEGENERATION_VERSION
 const SWAPCHAIN_DX12_VERSION: u32 = 0x0100_0000; // FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION
 // ffxApiGetSurfaceFormatDX12(DXGI_FORMAT_B8G8R8A8_UNORM).
 const SURFACE_BGRA8_UNORM: u32 = ffx_abi::FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM as u32;
-
-const DEVICE: u32 = 1 << 0;
-const GENERATION: u32 = 1 << 1;
-const CHAIN: u32 = 1 << 2;
-const SWAPCHAIN: u32 = 1 << 3;
-const LOCAL_FENCE: u32 = 1 << 4;
-const SHARED_FENCE: u32 = 1 << 5;
 
 /// ffxCreateBackendDX12Desc.
 #[repr(C)]
@@ -340,22 +333,4 @@ pub(super) mod leaf {
         allocate, configure, create_generation, create_swapchain, destroy_generation,
         destroy_swapchain, get_provider, load, objects, prepare, release, versions, wait_presents,
     };
-}
-/// Creates a matching DX12 device and queries its exact major-4 providers
-/// without a window or WSI calls.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn RsfFsr4FgProbe(
-    luid: u64,
-    directory: *const u16,
-    info: *mut BridgeInfo,
-) -> i32 {
-    unsafe { rsf_core_fsr4fg_probe(luid, directory, info) }
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn RsfFsr4FgCreate(
-    setup: *const BridgeCreate,
-    output: *mut *mut Bridge,
-) -> i32 {
-    unsafe { rsf_core_fsr4fg_create(setup, output) }
 }
