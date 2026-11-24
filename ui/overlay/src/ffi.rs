@@ -15,6 +15,7 @@
 //! * Nothing is allocated for the caller. The pointers handed back point into buffers the handle
 //!   owns and refills on the next frame call.
 
+use rsf_game_sys::ffi_util::has_capacity;
 use std::ffi::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
@@ -195,14 +196,14 @@ unsafe fn frame_inner(
     // Size first, reference second. A caller with a shorter struct has fewer bytes than this build
     // expects, and a reference to the whole thing would already be invalid by the time anything
     // got to look at the size that says so.
-    if unsafe { !fits(input) || !fits(stats) } {
+    if unsafe { !has_capacity(input) || !has_capacity(stats) } {
         return RSF_OVERLAY_ERROR_INVALID_ARGUMENT;
     }
     // The two outputs are optional, but a short one is refused rather than partly filled.
-    if !draw_data.is_null() && unsafe { !fits(draw_data.cast_const()) } {
+    if !draw_data.is_null() && unsafe { !has_capacity(draw_data.cast_const()) } {
         return RSF_OVERLAY_ERROR_INVALID_ARGUMENT;
     }
-    if !intent.is_null() && unsafe { !fits(intent.cast_const()) } {
+    if !intent.is_null() && unsafe { !has_capacity(intent.cast_const()) } {
         return RSF_OVERLAY_ERROR_INVALID_ARGUMENT;
     }
     let input = unsafe { &*input };
@@ -240,19 +241,6 @@ unsafe fn frame_inner(
         };
     }
     RSF_OVERLAY_OK
-}
-
-/// Whether a caller's struct says it is at least as long as this build's version of it.
-///
-/// Longer is fine and means the caller compiled against a later header: fields are only ever
-/// appended, so everything this build knows about is still where it expects it.
-///
-/// # Safety
-/// `pointer` must be non-null and point at a struct that begins with its own `uint32_t
-/// struct_size`, which every struct in `overlay.h` does. Only those four bytes are read.
-unsafe fn fits<T>(pointer: *const T) -> bool {
-    let declared = unsafe { pointer.cast::<u32>().read_unaligned() };
-    declared as usize >= size_of::<T>()
 }
 
 /// The intent a frame starts from before the panel changes anything.

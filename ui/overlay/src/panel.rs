@@ -18,8 +18,7 @@ use egui::{
 };
 
 use crate::model::{
-    GenerationStats, HostOption, Intent, MAX_HOST_OPTIONS, PanelSize, Quality, Stats,
-    UiPreferences,
+    GenerationStats, HostOption, Intent, MAX_HOST_OPTIONS, PanelSize, Quality, Stats, UiPreferences,
 };
 use crate::performance::Rates;
 
