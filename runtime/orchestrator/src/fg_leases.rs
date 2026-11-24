@@ -13,15 +13,10 @@ use windows::core::IUnknown;
 const MAX_LEASES: usize = 16;
 const MAX_RESOURCES: usize = 5;
 
-use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12DeviceChild, ID3D12Fence};
+use crate::d3d12_host::device_of;
+use rsf_game_sys::ffi_util::checked;
+use windows::Win32::Graphics::Direct3D12::{ID3D12DeviceChild, ID3D12Fence};
 use windows::core::Interface;
-
-unsafe fn device(child: *mut c_void) -> Option<ID3D12Device> {
-    let child = unsafe { ID3D12DeviceChild::from_raw_borrowed(&child) }?;
-    let mut device = None;
-    unsafe { child.GetDevice(&mut device) }.ok()?;
-    device
-}
 
 pub(super) unsafe extern "C" fn rsf_d3d12_fence_completed(fence: *mut c_void) -> u64 {
     let Some(fence) = (unsafe { ID3D12Fence::from_raw_borrowed(&fence) }) else {
@@ -31,10 +26,13 @@ pub(super) unsafe extern "C" fn rsf_d3d12_fence_completed(fence: *mut c_void) ->
 }
 
 unsafe fn same_device(first: *mut c_void, second: *mut c_void) -> bool {
-    let Some(first) = (unsafe { device(first) }) else {
+    let device = |child: *mut c_void| {
+        unsafe { ID3D12DeviceChild::from_raw_borrowed(&child) }.and_then(device_of)
+    };
+    let Some(first) = device(first) else {
         return false;
     };
-    unsafe { device(second) }.is_some_and(|second| first.as_raw() == second.as_raw())
+    device(second).is_some_and(|second| first.as_raw() == second.as_raw())
 }
 
 #[derive(Clone)]
@@ -61,12 +59,7 @@ pub(super) enum Retirement {
 impl Retirement {
     // The caller may supply only the size prefix.
     pub(super) unsafe fn read(raw: *const rsf_fg_retirement) -> Option<Self> {
-        if raw.is_null()
-            || (unsafe { raw.cast::<u32>().read() } as usize) < size_of::<rsf_fg_retirement>()
-        {
-            return None;
-        }
-        let rsf_fg_retirement { fence, value, .. } = unsafe { raw.read() };
+        let rsf_fg_retirement { fence, value, .. } = *unsafe { checked(raw) }?;
         match NonNull::new(fence) {
             None if value == 0 => Some(Self::Immediate),
             Some(fence) if value != u64::MAX => Some(Self::Fenced { fence, value }),
