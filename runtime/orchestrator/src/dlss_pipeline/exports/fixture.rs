@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
-use crate::sdk_module::SdkModule;
 use crate::sys::rsf_d3d11_state;
-use std::os::windows::ffi::OsStrExt;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::{Common::*, CreateDXGIFactory, IDXGIFactory};
-use windows::core::Interface;
-use windows_sys::Win32::System::LibraryLoader::{
-    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-};
-
+use rsf_test_support::Library;
 use rsf_test_support::device::{Device, TestResult};
+use windows::Win32::System::LibraryLoader::{
+    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
+};
+use windows::core::Interface;
 
 const SIZE: u32 = 512;
 
 struct Runtime {
-    _dll: SdkModule,
+    _dll: Library,
     start: unsafe extern "C" fn(Raw, *const Setup) -> i32,
     stop: unsafe extern "C" fn() -> i32,
     output: unsafe extern "C" fn() -> Raw,
@@ -30,15 +28,11 @@ struct Runtime {
 impl Runtime {
     fn open() -> TestResult<Self> {
         let path = std::env::current_exe()?.with_file_name("ReScaleFrame.Runtime.dll");
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
-        let dll = SdkModule::adopt_system(unsafe {
-            LoadLibraryExW(
-                wide.as_ptr(),
-                null_mut(),
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-            )
-        })
-        .ok_or("could not load the Runtime DLL beside the fixture")?;
+        let dll = Library::open(
+            path.as_os_str(),
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+        )
+        .map_err(|error| format!("could not load the Runtime DLL beside the fixture: {error}"))?;
         macro_rules! import {
             ($name:expr) => {{
                 let address = dll
