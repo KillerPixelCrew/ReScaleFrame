@@ -138,8 +138,10 @@ refusal and keep a spatial fallback. DLSS requires supported NVIDIA hardware.
 FSR4 uses the experimental INT8 compatibility path on non-native hardware;
 support and image quality depend on the hardware and runtime.
 
-This is a Unity Mono/URP DX12 build for Steam build 25286774,
-Unity 6000.3.14f1. It refuses an unrecognized executable or native player.
+This is a Unity Mono/URP DX12 build, made on Unity 6000.3.14f1. It does not
+need one exact game build: at start-up it finds the Unity player, its Mono
+runtime and the URP methods it hooks. If one is missing or changed after a game
+update, it stays off and ReScaleFrame/unity-sr.log names what is missing.
 Temporal SR runs before DoF/blur, bloom and tone mapping. UI is drawn afterward.
 This build includes independent DLSS-G, FSR3/4 and XeSS FG selection in Insert,
 with live provider changes and SDK-limited multiplier controls. FG defaults to
@@ -186,8 +188,9 @@ decompiles, logs or machine-specific deployment baseline are included.
 '@
 [IO.File]::WriteAllText("$taskStage/README.txt", $taskReadme, [Text.UTF8Encoding]::new($false))
 $taskManifest = [ordered]@{
-    format = 1; version = $taskVersion; game = 'drag-n-wash'; steam_build = '25286774'
-    executable_sha256 = '5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc'
+    format = 1; version = $taskVersion; game = 'drag-n-wash'
+    # Evidence of the deployment the payload came from, when there was one; it gates nothing.
+    deployed_executable_sha256 = if ($taskDeployment -and $taskDeployment.PSObject.Properties.Name -contains 'executable_sha256') { $taskDeployment.executable_sha256 } else { $null }
     artifact_source = 'Release artifacts and hash-verified vendor payload'; backend = $Backend; quality = $Quality
     source_baseline = (& git -C $taskRoot rev-parse HEAD).Trim()
     source_has_uncommitted_changes = [bool](& git -C $taskRoot status --porcelain)
