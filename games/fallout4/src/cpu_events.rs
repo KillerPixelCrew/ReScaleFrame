@@ -26,7 +26,7 @@ use crate::sys::{
     RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, RSF_FALLOUT4_CPU_HOOK_WRAPPER, RSF_FALLOUT4_CPU_SCOPE_WORDS,
     rsf_fallout4_cpu_identity, rsf_fallout4_cpu_scope,
 };
-use crate::{MH_CreateHook, MH_OK, MH_RemoveHook, image, load, message, pin, read};
+use crate::{MH_OK, MH_RemoveHook, image, load, message, pin, read};
 use handoff::{
     CpuIdentity, Phase, WorkerCycle, WorkerTicket, active_join_matches, invalidates_render_source,
 };
@@ -98,14 +98,8 @@ fn hook_created(hook: u32) -> bool {
 }
 
 fn create_hook(hook: u32, target: *mut c_void) -> bool {
-    let mut original = std::ptr::null_mut();
     let detour = unsafe { rsf_fallout4_cpu_detour(hook) };
-    // MinHook creates this disabled. Publish the trampoline before the later start.
-    if unsafe { MH_CreateHook(target, detour, &mut original) } != MH_OK {
-        return false;
-    }
-    ORIGINALS[hook as usize].store(original, Release);
-    true
+    crate::create_hook(target, detour, &ORIGINALS[hook as usize])
 }
 
 fn remove_hook(hook: u32, target: *mut c_void) -> bool {

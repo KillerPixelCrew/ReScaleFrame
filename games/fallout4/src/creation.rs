@@ -16,7 +16,7 @@ use crate::sys::{
     rsf_d3d11_presentation_binding, rsf_fallout4_create_call,
 };
 use crate::{
-    EXECUTABLE, EXECUTABLE_SHA256, MH_CreateHook, MH_OK, Plain, RSF_ERROR_NOT_READY, RSF_OK,
+    EXECUTABLE, EXECUTABLE_SHA256, Plain, RSF_ERROR_NOT_READY, RSF_OK,
 };
 use crate::{image, message, read};
 use rsf_game_sys::rsf_game_host_services;
@@ -103,13 +103,7 @@ fn hook_created() -> bool {
 fn create_hook() -> bool {
     let target = hook_address() as *mut c_void;
     let detour = creation_detour as *const () as *mut c_void;
-    let mut original = std::ptr::null_mut();
-    // MinHook creates this disabled, so the trampoline can be published before start.
-    if unsafe { MH_CreateHook(target, detour, &mut original) } != MH_OK {
-        return false;
-    }
-    ORIGINAL.store(original, Ordering::Release);
-    true
+    crate::create_hook(target, detour, &ORIGINAL)
 }
 
 fn hook_address() -> usize {

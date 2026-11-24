@@ -85,12 +85,11 @@ const PENDING: &CStr = c"Guarded native/reduced SR callbacks; game quality, FG a
 /// A native leaf threw; the lifecycle entry reports RSF_ERROR_NOT_READY.
 pub(crate) struct Threw;
 
-// MinHook.h, MH_STATUS. The native CMake target links the same MinHook instance for all seams.
-const MH_OK: i32 = 0;
-const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
-const MH_ERROR_DISABLED: i32 = 6;
-
-use rsf_minhook_sys::{MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_RemoveHook};
+// The native CMake target links the same MinHook instance for all seams.
+use rsf_minhook_sys::{
+    MH_CreateHook, MH_DisableHook, MH_ERROR_ALREADY_INITIALIZED, MH_ERROR_DISABLED, MH_EnableHook,
+    MH_Initialize, MH_OK, MH_RemoveHook,
+};
 
 unsafe extern "C" {
     fn rsf_fallout4_native_host_create(
@@ -144,6 +143,20 @@ pub(crate) fn initialize_hooks() -> bool {
         unsafe { MH_Initialize() },
         MH_OK | MH_ERROR_ALREADY_INITIALIZED
     )
+}
+
+/// Creates a MinHook detour (disabled) and publishes its trampoline into `original`.
+pub(crate) fn create_hook(
+    target: *mut c_void,
+    detour: *mut c_void,
+    original: &std::sync::atomic::AtomicPtr<c_void>,
+) -> bool {
+    let mut trampoline = std::ptr::null_mut();
+    if unsafe { MH_CreateHook(target, detour, &mut trampoline) } != MH_OK {
+        return false;
+    }
+    original.store(trampoline, std::sync::atomic::Ordering::Release);
+    true
 }
 
 pub(crate) fn enable_hook(target: usize) -> bool {
