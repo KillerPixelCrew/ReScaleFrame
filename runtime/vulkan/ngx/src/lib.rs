@@ -54,13 +54,14 @@ vendor_entries! {
 }
 
 /// The resolved runtime, or its NUL-terminated load error.
-static RUNTIME: OnceLock<Result<Entries, [u8; LOAD_ERROR_CAPACITY]>> = OnceLock::new();
+type Runtime = Result<Entries, Box<[u8; LOAD_ERROR_CAPACITY]>>;
+static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
-fn load() -> &'static Result<Entries, [u8; LOAD_ERROR_CAPACITY]> {
+fn load() -> &'static Runtime {
     RUNTIME.get_or_init(|| {
         // The acquired module reference is intentionally retained for the process.
         loader::open().map(Entries::resolve).map_err(|message| {
-            let mut error = [0; LOAD_ERROR_CAPACITY];
+            let mut error = Box::new([0; LOAD_ERROR_CAPACITY]);
             let count = message.len().min(error.len() - 1);
             error[..count].copy_from_slice(&message[..count]);
             error
