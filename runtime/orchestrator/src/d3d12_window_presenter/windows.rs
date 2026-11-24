@@ -23,7 +23,7 @@ unsafe fn borrow<T: Interface>(raw: &*mut c_void) -> &T {
     unsafe { T::from_raw_borrowed(raw) }.expect("live graphics reference")
 }
 
-unsafe extern "C" fn bind(device: *mut c_void, queue: *mut c_void, out: *mut Gpu) -> bool {
+pub(super) unsafe fn bind_gpu(device: *mut c_void, queue: *mut c_void, out: *mut Gpu) -> bool {
     let device: &ID3D12Device = unsafe { borrow(&device) };
     let queue: &ID3D12CommandQueue = unsafe { borrow(&queue) };
     if unsafe { queue.GetDesc() }.Type != D3D12_COMMAND_LIST_TYPE_DIRECT {
@@ -49,7 +49,7 @@ unsafe extern "C" fn bind(device: *mut c_void, queue: *mut c_void, out: *mut Gpu
     true
 }
 
-unsafe extern "C" fn create_chain(
+pub(super) unsafe fn create_chain(
     gpu: *const Gpu,
     hwnd: *mut c_void,
     width: u32,
@@ -85,7 +85,7 @@ unsafe extern "C" fn create_chain(
     true
 }
 
-unsafe extern "C" fn extent(chain: *mut c_void, width: *mut u32, height: *mut u32) -> bool {
+pub(super) unsafe fn chain_extent(chain: *mut c_void, width: *mut u32, height: *mut u32) -> bool {
     let chain: &IDXGISwapChain3 = unsafe { borrow(&chain) };
     let Ok(desc) = (unsafe { chain.GetDesc1() }) else {
         return false;
@@ -97,13 +97,13 @@ unsafe extern "C" fn extent(chain: *mut c_void, width: *mut u32, height: *mut u3
     true
 }
 
-unsafe extern "C" fn resize(chain: *mut c_void, width: u32, height: u32) -> bool {
+pub(super) unsafe fn resize_chain(chain: *mut c_void, width: u32, height: u32) -> bool {
     let chain: &IDXGISwapChain3 = unsafe { borrow(&chain) };
     unsafe { chain.ResizeBuffers(BUFFER_COUNT, width, height, FORMAT, DXGI_SWAP_CHAIN_FLAG(0)) }
         .is_ok()
 }
 
-unsafe extern "C" fn describe(source: *mut c_void, output: *mut Texture) {
+pub(super) unsafe fn describe(source: *mut c_void, output: *mut Texture) {
     let source: &ID3D12Resource = unsafe { borrow(&source) };
     let desc = unsafe { source.GetDesc() };
     let compatible = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
@@ -126,12 +126,12 @@ unsafe extern "C" fn describe(source: *mut c_void, output: *mut Texture) {
     };
 }
 
-unsafe extern "C" fn completed(fence: *mut c_void) -> u64 {
+pub(super) unsafe fn completed(fence: *mut c_void) -> u64 {
     let fence: &ID3D12Fence = unsafe { borrow(&fence) };
     unsafe { fence.GetCompletedValue() }
 }
 
-unsafe extern "C" fn wait(fence: *mut c_void, value: u64) -> bool {
+pub(super) unsafe fn wait(fence: *mut c_void, value: u64) -> bool {
     let fence: &ID3D12Fence = unsafe { borrow(&fence) };
     match fence_status(unsafe { fence.GetCompletedValue() }, value) {
         FenceStatus::Complete => return true,
@@ -156,7 +156,7 @@ unsafe extern "C" fn wait(fence: *mut c_void, value: u64) -> bool {
     result == S_OK
 }
 
-unsafe extern "C" fn acquire(chain: *mut c_void, output: *mut *mut c_void) -> bool {
+pub(super) unsafe fn acquire(chain: *mut c_void, output: *mut *mut c_void) -> bool {
     let chain: &IDXGISwapChain3 = unsafe { borrow(&chain) };
     let Ok(buffer) =
         (unsafe { chain.GetBuffer::<ID3D12Resource>(chain.GetCurrentBackBufferIndex()) })
@@ -167,7 +167,7 @@ unsafe extern "C" fn acquire(chain: *mut c_void, output: *mut *mut c_void) -> bo
     true
 }
 
-unsafe extern "C" fn create_slot(device: *mut c_void, output: *mut Slot) -> bool {
+pub(super) unsafe fn create_slot(device: *mut c_void, output: *mut Slot) -> bool {
     let device: &ID3D12Device = unsafe { borrow(&device) };
     let Ok(allocator) = (unsafe {
         device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
@@ -219,7 +219,7 @@ fn barrier(
     }
 }
 
-unsafe extern "C" fn record(
+pub(super) unsafe fn record(
     slot: *const Slot,
     buffer: *mut c_void,
     texture: *mut c_void,
@@ -274,19 +274,19 @@ unsafe extern "C" fn record(
     }
 }
 
-unsafe extern "C" fn execute(queue: *mut c_void, list: *mut c_void) {
+pub(super) unsafe fn execute(queue: *mut c_void, list: *mut c_void) {
     let queue: &ID3D12CommandQueue = unsafe { borrow(&queue) };
     let list = ManuallyDrop::new(Some(unsafe { ID3D12CommandList::from_raw(list) }));
     unsafe { queue.ExecuteCommandLists(std::slice::from_ref(&*list)) };
 }
 
-unsafe extern "C" fn signal(queue: *mut c_void, fence: *mut c_void, value: u64) -> bool {
+pub(super) unsafe fn signal(queue: *mut c_void, fence: *mut c_void, value: u64) -> bool {
     let queue: &ID3D12CommandQueue = unsafe { borrow(&queue) };
     let fence: &ID3D12Fence = unsafe { borrow(&fence) };
     unsafe { queue.Signal(fence, value) }.is_ok()
 }
 
-unsafe extern "C" fn present(
+pub(super) unsafe fn present(
     chain: *mut c_void,
     source: *const rsf_game_render_pass,
     observer: Observer,
@@ -303,29 +303,11 @@ unsafe extern "C" fn present(
     unsafe { chain.Present(0, DXGI_PRESENT(0)) }.0 == S_OK
 }
 
-unsafe extern "C" fn retain(object: *mut c_void) {
+pub(super) unsafe fn retain(object: *mut c_void) {
     let reference: &IUnknown = unsafe { borrow(&object) };
     let _ = reference.clone().into_raw();
 }
 
-unsafe extern "C" fn release(object: *mut c_void) {
+pub(super) unsafe fn release(object: *mut c_void) {
     drop(unsafe { IUnknown::from_raw(object) });
 }
-
-pub(super) const LEAVES: Leaves = Leaves {
-    bind_gpu: bind,
-    create_chain,
-    chain_extent: extent,
-    resize_chain: resize,
-    describe,
-    completed,
-    wait,
-    acquire,
-    create_slot,
-    record,
-    execute,
-    signal,
-    present,
-    retain,
-    release,
-};

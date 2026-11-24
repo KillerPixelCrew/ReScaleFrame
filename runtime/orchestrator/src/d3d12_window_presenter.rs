@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! A per-output D3D12 presenter. The caller owns window selection and leases the source.
 #[cfg(windows)]
+// Production calls the D3D12 and DXGI leaves in `windows`; unit tests call same-named fakes.
+#[cfg(not(test))]
 mod windows;
 use crate::sync::lock;
 use rsf_game_sys::rsf_game_render_pass;
@@ -8,6 +10,10 @@ use rsf_runtime_submission::SubmissionRing;
 #[cfg(windows)]
 use std::sync::{Mutex, TryLockError};
 use std::{ffi::c_void, ptr};
+#[cfg(test)]
+use tests as leaf;
+#[cfg(not(test))]
+use windows as leaf;
 
 type Observer = Option<unsafe extern "C" fn(*const rsf_game_render_pass) -> i32>;
 
@@ -84,42 +90,23 @@ impl Slot {
     };
 
     /// Drops the slot: allocator, list, source.
-    fn clear(self, leaves: &Leaves) {
-        unref(leaves, self.allocator);
-        unref(leaves, self.list);
-        unref(leaves, self.source);
+    fn clear(self) {
+        unref(self.allocator);
+        unref(self.list);
+        unref(self.source);
     }
 
     /// Drops a refused fresh slot: list, then allocator.
-    fn discard(self, leaves: &Leaves) {
-        unref(leaves, self.list);
-        unref(leaves, self.allocator);
+    fn discard(self) {
+        unref(self.list);
+        unref(self.allocator);
     }
 }
 
-#[repr(C)]
-struct Leaves {
-    bind_gpu: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut Gpu) -> bool,
-    create_chain: unsafe extern "C" fn(*const Gpu, *mut c_void, u32, u32, *mut *mut c_void) -> bool,
-    chain_extent: unsafe extern "C" fn(*mut c_void, *mut u32, *mut u32) -> bool,
-    resize_chain: unsafe extern "C" fn(*mut c_void, u32, u32) -> bool,
-    describe: unsafe extern "C" fn(*mut c_void, *mut Texture),
-    completed: unsafe extern "C" fn(*mut c_void) -> u64,
-    wait: unsafe extern "C" fn(*mut c_void, u64) -> bool,
-    acquire: unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> bool,
-    create_slot: unsafe extern "C" fn(*mut c_void, *mut Slot) -> bool,
-    record: unsafe extern "C" fn(*const Slot, *mut c_void, *mut c_void, bool) -> u32,
-    execute: unsafe extern "C" fn(*mut c_void, *mut c_void),
-    signal: unsafe extern "C" fn(*mut c_void, *mut c_void, u64) -> bool,
-    present: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass, Observer) -> bool,
-    retain: unsafe extern "C" fn(*mut c_void),
-    release: unsafe extern "C" fn(*mut c_void),
-}
-
 /// Drops one transferred reference. Null holds none.
-fn unref(leaves: &Leaves, object: *mut c_void) {
+fn unref(object: *mut c_void) {
     if !object.is_null() {
-        unsafe { (leaves.release)(object) };
+        unsafe { leaf::release(object) };
     }
 }
 
@@ -154,13 +141,13 @@ impl Graphics {
 
     /// Takes one reference each to the lent device and queue and creates the fence. A refused or
     /// incomplete transfer is dropped at once.
-    fn bind(&mut self, device: *mut c_void, queue: *mut c_void, leaves: &Leaves) -> bool {
+    fn bind(&mut self, device: *mut c_void, queue: *mut c_void) -> bool {
         let mut bound = Gpu::EMPTY;
-        let accepted = unsafe { (leaves.bind_gpu)(device, queue, &mut bound) };
+        let accepted = unsafe { leaf::bind_gpu(device, queue, &mut bound) };
         if !accepted || bound.device.is_null() || bound.queue.is_null() || bound.fence.is_null() {
-            unref(leaves, bound.fence);
-            unref(leaves, bound.queue);
-            unref(leaves, bound.device);
+            unref(bound.fence);
+            unref(bound.queue);
+            unref(bound.device);
             return false;
         }
         // The leaf never writes the swapchain, which create_chain adds next.
@@ -168,12 +155,12 @@ impl Graphics {
         true
     }
 
-    fn create_chain(&mut self, window: Target, width: u32, height: u32, leaves: &Leaves) -> bool {
+    fn create_chain(&mut self, window: Target, width: u32, height: u32) -> bool {
         let mut chain = ptr::null_mut();
         let created =
-            unsafe { (leaves.create_chain)(&self.gpu, window.handle, width, height, &mut chain) };
+            unsafe { leaf::create_chain(&self.gpu, window.handle, width, height, &mut chain) };
         if !created || chain.is_null() {
-            unref(leaves, chain);
+            unref(chain);
             return false;
         }
         self.gpu.chain = chain;
@@ -187,7 +174,6 @@ impl Graphics {
         queue: *mut c_void,
         width: u32,
         height: u32,
-        leaves: &Leaves,
     ) -> bool {
         if self.faulted
             || window.handle.is_null()
@@ -200,7 +186,7 @@ impl Graphics {
         {
             return false;
         }
-        if self.gpu.device.is_null() && !self.bind(device, queue, leaves) {
+        if self.gpu.device.is_null() && !self.bind(device, queue) {
             return false;
         }
         if self.gpu.device != device || self.gpu.queue != queue {
@@ -213,52 +199,43 @@ impl Graphics {
             self.replace_chain = true;
         }
         if self.replace_chain {
-            if !self.check_drained(leaves) {
+            if !self.check_drained() {
                 return false;
             }
-            unref(
-                leaves,
-                std::mem::replace(&mut self.gpu.chain, ptr::null_mut()),
-            );
+            unref(std::mem::replace(&mut self.gpu.chain, ptr::null_mut()));
             self.replace_chain = false;
         }
         if self.gpu.chain.is_null() {
-            return self.create_chain(window, width, height, leaves);
+            return self.create_chain(window, width, height);
         }
         let (mut old_width, mut old_height) = (0, 0);
-        if !unsafe { (leaves.chain_extent)(self.gpu.chain, &mut old_width, &mut old_height) } {
+        if !unsafe { leaf::chain_extent(self.gpu.chain, &mut old_width, &mut old_height) } {
             return false;
         }
         (old_width, old_height) == (width, height)
             || unsafe {
-                (leaves.wait)(self.gpu.fence, self.ring.submitted())
-                    && (leaves.resize_chain)(self.gpu.chain, width, height)
+                leaf::wait(self.gpu.fence, self.ring.submitted())
+                    && leaf::resize_chain(self.gpu.chain, width, height)
             }
     }
 
     /// The per-slot proof: the next ring slot, once its last submission completed. Only then may
     /// the slot drop its source reference and reset its allocator.
-    fn retired_slot(&self, leaves: &Leaves) -> Option<usize> {
+    fn retired_slot(&self) -> Option<usize> {
         let (slot, retired) = self.ring.slot();
-        unsafe { (leaves.wait)(self.gpu.fence, retired) }.then_some(slot)
+        unsafe { leaf::wait(self.gpu.fence, retired) }.then_some(slot)
     }
 
     /// Copies `texture` to the current back buffer through slot `index` and executes it.
-    fn record(
-        &mut self,
-        index: usize,
-        texture: *mut c_void,
-        common: bool,
-        leaves: &Leaves,
-    ) -> bool {
+    fn record(&mut self, index: usize, texture: *mut c_void, common: bool) -> bool {
         // Resolve the destination before touching the slot, so a refusal leaves no open list.
         let mut backbuffer = ptr::null_mut();
-        if !unsafe { (leaves.acquire)(self.gpu.chain, &mut backbuffer) } || backbuffer.is_null() {
-            unref(leaves, backbuffer);
+        if !unsafe { leaf::acquire(self.gpu.chain, &mut backbuffer) } || backbuffer.is_null() {
+            unref(backbuffer);
             return false;
         }
-        let recorded = self.record_slot(index, backbuffer, texture, common, leaves);
-        unref(leaves, backbuffer);
+        let recorded = self.record_slot(index, backbuffer, texture, common);
+        unref(backbuffer);
         recorded
     }
 
@@ -268,25 +245,24 @@ impl Graphics {
         backbuffer: *mut c_void,
         texture: *mut c_void,
         common: bool,
-        leaves: &Leaves,
     ) -> bool {
         let Some(slot) = self.slots.get_mut(index) else {
             return false;
         };
-        unref(leaves, std::mem::replace(&mut slot.source, ptr::null_mut()));
+        unref(std::mem::replace(&mut slot.source, ptr::null_mut()));
         if slot.list.is_null() {
             let mut fresh = Slot::EMPTY;
-            let created = unsafe { (leaves.create_slot)(self.gpu.device, &mut fresh) };
+            let created = unsafe { leaf::create_slot(self.gpu.device, &mut fresh) };
             if !created || fresh.allocator.is_null() || fresh.list.is_null() {
-                fresh.discard(leaves);
+                fresh.discard();
                 return false;
             }
             *slot = fresh;
         }
-        match unsafe { (leaves.record)(&*slot, backbuffer, texture, common) } {
+        match unsafe { leaf::record(&*slot, backbuffer, texture, common) } {
             RECORD_CLOSED => {}
             RECORD_BROKEN => {
-                std::mem::replace(slot, Slot::EMPTY).clear(leaves);
+                std::mem::replace(slot, Slot::EMPTY).clear();
                 return false;
             }
             RECORD_REFUSED => return false,
@@ -294,27 +270,27 @@ impl Graphics {
             _ => return false,
         }
         // The slot holds its source until the slot's next submission proves this one complete.
-        unsafe { (leaves.retain)(texture) };
+        unsafe { leaf::retain(texture) };
         slot.source = texture;
         self.proved = false;
-        unsafe { (leaves.execute)(self.gpu.queue, slot.list) };
+        unsafe { leaf::execute(self.gpu.queue, slot.list) };
         true
     }
 
-    fn submit(&mut self, texture: *mut c_void, common: bool, leaves: &Leaves) -> bool {
+    fn submit(&mut self, texture: *mut c_void, common: bool) -> bool {
         if self.faulted || self.ring.next_completion().is_none() {
             return false;
         }
-        let Some(slot) = self.retired_slot(leaves) else {
+        let Some(slot) = self.retired_slot() else {
             return false;
         };
-        if !self.record(slot, texture, common, leaves) {
+        if !self.record(slot, texture, common) {
             return false;
         }
         // The GPU already owns the list and source. A missing or refused signal
         // leaves this slot current and bars all further use or retirement.
         if !self.ring.submit(slot).is_some_and(|complete| unsafe {
-            (leaves.signal)(self.gpu.queue, self.gpu.fence, complete)
+            leaf::signal(self.gpu.queue, self.gpu.fence, complete)
         }) {
             self.faulted = true;
             return false;
@@ -330,36 +306,29 @@ impl Graphics {
         pass: &rsf_game_render_pass,
         common: bool,
         observer: Observer,
-        leaves: &Leaves,
     ) -> bool {
         if self.faulted || self.replace_chain || self.gpu.chain.is_null() || self.target != target {
             return false;
         }
         let mut facts = Texture::default();
-        unsafe { (leaves.describe)(texture, &mut facts) };
+        unsafe { leaf::describe(texture, &mut facts) };
         let width = pass.camera.output_width;
         let height = pass.camera.output_height;
         if facts.width != u64::from(width) || facts.height != height || !facts.compatible {
             return false;
         }
-        self.prepare(
-            target,
-            self.gpu.device,
-            self.gpu.queue,
-            width,
-            height,
-            leaves,
-        ) && self.submit(texture, common, leaves)
-            && unsafe { (leaves.present)(self.gpu.chain, pass, observer) }
+        self.prepare(target, self.gpu.device, self.gpu.queue, width, height)
+            && self.submit(texture, common)
+            && unsafe { leaf::present(self.gpu.chain, pass, observer) }
     }
 
     /// Reads the fence without waiting. A device-removal read of `u64::MAX` refuses, as does a
     /// fault. Without a fence the read is 0.
-    fn check_drained(&mut self, leaves: &Leaves) -> bool {
+    fn check_drained(&mut self) -> bool {
         let completed = if self.gpu.fence.is_null() {
             0
         } else {
-            unsafe { (leaves.completed)(self.gpu.fence) }
+            unsafe { leaf::completed(self.gpu.fence) }
         };
         self.proved = !self.faulted && self.ring.drained(completed);
         self.proved
@@ -367,24 +336,24 @@ impl Graphics {
 
     /// Drops every reference: each slot's allocator, list and source,
     /// then the swapchain, fence, queue and device.
-    fn destroy(self, leaves: &Leaves) {
+    fn destroy(self) {
         for slot in self.slots {
-            slot.clear(leaves);
+            slot.clear();
         }
-        unref(leaves, self.gpu.chain);
-        unref(leaves, self.gpu.fence);
-        unref(leaves, self.gpu.queue);
-        unref(leaves, self.gpu.device);
+        unref(self.gpu.chain);
+        unref(self.gpu.fence);
+        unref(self.gpu.queue);
+        unref(self.gpu.device);
     }
 }
 
 /// Destroys the record only with a drained proof taken since its last submission, then leaves a
 /// fresh one. A refusal destroys nothing.
-fn release_checked(graphics: &mut Graphics, leaves: &Leaves) -> bool {
+fn release_checked(graphics: &mut Graphics) -> bool {
     if !graphics.proved {
         return false;
     }
-    std::mem::replace(graphics, Graphics::new()).destroy(leaves);
+    std::mem::replace(graphics, Graphics::new()).destroy();
     true
 }
 
@@ -436,7 +405,7 @@ unsafe extern "C" fn rsf_d3d12_window_prepare(
         return 0;
     };
     with_output(output, |graphics| {
-        graphics.prepare(target, device, queue, width, height, &windows::LEAVES)
+        graphics.prepare(target, device, queue, width, height)
     })
 }
 
@@ -463,14 +432,7 @@ unsafe extern "C" fn rsf_d3d12_window_present(
     }
     let pass = unsafe { &*pass };
     with_output(output, |graphics| {
-        graphics.present(
-            target,
-            texture,
-            pass,
-            common != 0,
-            output.1,
-            &windows::LEAVES,
-        )
+        graphics.present(target, texture, pass, common != 0, output.1)
     })
 }
 
@@ -478,7 +440,7 @@ unsafe extern "C" fn rsf_d3d12_window_present(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d12_window_drained(output: *mut c_void) -> i32 {
     unsafe { output.cast::<Output>().as_ref() }.map_or(1, |output| {
-        with_output(output, |graphics| graphics.check_drained(&windows::LEAVES))
+        with_output(output, |graphics| graphics.check_drained())
     })
 }
 
@@ -489,7 +451,7 @@ unsafe extern "C" fn rsf_d3d12_window_destroy(output: *mut c_void) -> i32 {
     let Some(output_ref) = (unsafe { output.as_ref() }) else {
         return 1;
     };
-    if !release_checked(&mut lock(&output_ref.0), &windows::LEAVES) {
+    if !release_checked(&mut lock(&output_ref.0)) {
         return 0;
     }
     drop(unsafe { Box::from_raw(output) });
@@ -542,7 +504,11 @@ mod tests {
         Graphics::new()
     }
 
-    unsafe extern "C" fn bind_gpu(device: *mut c_void, queue: *mut c_void, out: *mut Gpu) -> bool {
+    pub(super) unsafe extern "C" fn bind_gpu(
+        device: *mut c_void,
+        queue: *mut c_void,
+        out: *mut Gpu,
+    ) -> bool {
         if !called("bind_gpu") {
             return false;
         }
@@ -553,7 +519,7 @@ mod tests {
         true
     }
 
-    unsafe extern "C" fn create_chain(
+    pub(super) unsafe extern "C" fn create_chain(
         _: *const Gpu,
         _: *mut c_void,
         width: u32,
@@ -567,7 +533,11 @@ mod tests {
         true
     }
 
-    unsafe extern "C" fn chain_extent(_: *mut c_void, width: *mut u32, height: *mut u32) -> bool {
+    pub(super) unsafe extern "C" fn chain_extent(
+        _: *mut c_void,
+        width: *mut u32,
+        height: *mut u32,
+    ) -> bool {
         unsafe {
             width.write(8);
             height.write(8);
@@ -575,11 +545,11 @@ mod tests {
         called("chain_extent")
     }
 
-    unsafe extern "C" fn resize_chain(_: *mut c_void, width: u32, height: u32) -> bool {
+    pub(super) unsafe extern "C" fn resize_chain(_: *mut c_void, width: u32, height: u32) -> bool {
         called(&format!("resize {width}x{height}"))
     }
 
-    unsafe extern "C" fn describe(_: *mut c_void, facts: *mut Texture) {
+    pub(super) unsafe extern "C" fn describe(_: *mut c_void, facts: *mut Texture) {
         unsafe {
             facts.write(Texture {
                 width: 8,
@@ -589,15 +559,15 @@ mod tests {
         };
     }
 
-    unsafe extern "C" fn completed(_: *mut c_void) -> u64 {
+    pub(super) unsafe extern "C" fn completed(_: *mut c_void) -> u64 {
         COMPLETED.get()
     }
 
-    unsafe extern "C" fn wait(_: *mut c_void, value: u64) -> bool {
+    pub(super) unsafe extern "C" fn wait(_: *mut c_void, value: u64) -> bool {
         called(&format!("wait {value}"))
     }
 
-    unsafe extern "C" fn acquire(_: *mut c_void, out: *mut *mut c_void) -> bool {
+    pub(super) unsafe extern "C" fn acquire(_: *mut c_void, out: *mut *mut c_void) -> bool {
         if !called("acquire") {
             return false;
         }
@@ -606,7 +576,7 @@ mod tests {
     }
 
     /// A refusal transfers the allocator only, as the native leaf does on a refused list.
-    unsafe extern "C" fn create_slot(_: *mut c_void, out: *mut Slot) -> bool {
+    pub(super) unsafe extern "C" fn create_slot(_: *mut c_void, out: *mut Slot) -> bool {
         let index = CREATED.get();
         let out = unsafe { &mut *out };
         out.allocator = handle(ALLOCATOR + index);
@@ -618,7 +588,12 @@ mod tests {
         true
     }
 
-    unsafe extern "C" fn record(_: *const Slot, _: *mut c_void, _: *mut c_void, _: bool) -> u32 {
+    pub(super) unsafe extern "C" fn record(
+        _: *const Slot,
+        _: *mut c_void,
+        _: *mut c_void,
+        _: bool,
+    ) -> u32 {
         if !called("record") {
             RECORD_REFUSED
         } else if REFUSE.get() == "close" {
@@ -628,15 +603,15 @@ mod tests {
         }
     }
 
-    unsafe extern "C" fn execute(_: *mut c_void, list: *mut c_void) {
+    pub(super) unsafe extern "C" fn execute(_: *mut c_void, list: *mut c_void) {
         called(&format!("execute {}", list.addr()));
     }
 
-    unsafe extern "C" fn signal(_: *mut c_void, _: *mut c_void, value: u64) -> bool {
+    pub(super) unsafe extern "C" fn signal(_: *mut c_void, _: *mut c_void, value: u64) -> bool {
         called(&format!("signal {value}"))
     }
 
-    unsafe extern "C" fn present(
+    pub(super) unsafe extern "C" fn present(
         _: *mut c_void,
         _: *const rsf_game_render_pass,
         _: Observer,
@@ -644,31 +619,13 @@ mod tests {
         called("present")
     }
 
-    unsafe extern "C" fn retain(object: *mut c_void) {
+    pub(super) unsafe extern "C" fn retain(object: *mut c_void) {
         called(&format!("retain {}", object.addr()));
     }
 
-    unsafe extern "C" fn release(object: *mut c_void) {
+    pub(super) unsafe extern "C" fn release(object: *mut c_void) {
         called(&format!("release {}", object.addr()));
     }
-
-    const LEAVES: Leaves = Leaves {
-        bind_gpu,
-        create_chain,
-        chain_extent,
-        resize_chain,
-        describe,
-        completed,
-        wait,
-        acquire,
-        create_slot,
-        record,
-        execute,
-        signal,
-        present,
-        retain,
-        release,
-    };
 
     fn visible() -> Target {
         Target {
@@ -680,7 +637,7 @@ mod tests {
     }
 
     fn prepare(graphics: &mut Graphics, width: u32) -> bool {
-        graphics.prepare(visible(), handle(DEVICE), handle(QUEUE), width, 8, &LEAVES)
+        graphics.prepare(visible(), handle(DEVICE), handle(QUEUE), width, 8)
     }
 
     /// A record with its device, queue, fence and swapchain and no calls recorded.
@@ -700,7 +657,7 @@ mod tests {
     }
 
     fn submit(graphics: &mut Graphics, texture: usize) {
-        assert!(graphics.submit(handle(texture), false, &LEAVES));
+        assert!(graphics.submit(handle(texture), false));
         calls();
     }
 
@@ -728,7 +685,7 @@ mod tests {
             }
         );
         // Another device or queue is refused without a leaf.
-        assert!(!graphics.prepare(visible(), handle(9), handle(QUEUE), 8, 8, &LEAVES));
+        assert!(!graphics.prepare(visible(), handle(9), handle(QUEUE), 8, 8));
         assert!(calls().is_empty());
         // A new extent waits for every submission before resizing.
         assert!(prepare(&mut graphics, 16));
@@ -738,8 +695,8 @@ mod tests {
     #[test]
     fn a_slot_is_created_on_first_use_and_holds_its_source_until_reuse() {
         let mut graphics = bound();
-        assert_eq!(graphics.retired_slot(&LEAVES), Some(0));
-        assert!(graphics.record(0, handle(TEXTURE), false, &LEAVES));
+        assert_eq!(graphics.retired_slot(), Some(0));
+        assert!(graphics.record(0, handle(TEXTURE), false));
         assert_eq!(
             calls(),
             [
@@ -761,7 +718,7 @@ mod tests {
             }
         );
         // Reuse drops the old source before recording and creates nothing.
-        assert!(graphics.record(0, handle(TEXTURE + 1), true, &LEAVES));
+        assert!(graphics.record(0, handle(TEXTURE + 1), true));
         assert_eq!(
             calls(),
             [
@@ -773,7 +730,7 @@ mod tests {
                 "release 30"
             ]
         );
-        assert!(!graphics.record(SLOTS, handle(TEXTURE), false, &LEAVES));
+        assert!(!graphics.record(SLOTS, handle(TEXTURE), false));
         assert_eq!(calls(), ["acquire", "release 30"]);
     }
 
@@ -784,7 +741,7 @@ mod tests {
             submit(&mut graphics, TEXTURE + texture);
         }
         REFUSE.set("wait 1");
-        assert_eq!(graphics.retired_slot(&LEAVES), None);
+        assert_eq!(graphics.retired_slot(), None);
         assert_eq!(calls(), ["wait 1"]);
         // The refused proof left slot 0 and its source untouched.
         assert_eq!(graphics.slots[0].source, handle(TEXTURE));
@@ -795,7 +752,7 @@ mod tests {
         let mut graphics = bound();
         submit(&mut graphics, TEXTURE);
         REFUSE.set("acquire");
-        assert!(!graphics.record(0, handle(TEXTURE + 1), false, &LEAVES));
+        assert!(!graphics.record(0, handle(TEXTURE + 1), false));
         assert_eq!(calls(), ["acquire"]);
         assert_eq!(graphics.slots[0].source, handle(TEXTURE));
     }
@@ -804,7 +761,7 @@ mod tests {
     fn a_partial_slot_is_dropped_at_once() {
         let mut graphics = bound();
         REFUSE.set("create_slot");
-        assert!(!graphics.record(0, handle(TEXTURE), false, &LEAVES));
+        assert!(!graphics.record(0, handle(TEXTURE), false));
         assert_eq!(
             calls(),
             ["acquire", "create_slot", "release 10", "release 30"]
@@ -816,7 +773,7 @@ mod tests {
     fn a_failed_close_drops_the_slot_and_a_failed_reset_keeps_it() {
         let mut graphics = bound();
         REFUSE.set("close");
-        assert!(!graphics.record(0, handle(TEXTURE), false, &LEAVES));
+        assert!(!graphics.record(0, handle(TEXTURE), false));
         assert_eq!(
             calls(),
             [
@@ -830,7 +787,7 @@ mod tests {
         );
         assert_eq!(graphics.slots[0], Slot::EMPTY);
         REFUSE.set("record");
-        assert!(!graphics.record(0, handle(TEXTURE), false, &LEAVES));
+        assert!(!graphics.record(0, handle(TEXTURE), false));
         assert_eq!(calls(), ["acquire", "create_slot", "record", "release 30"]);
         assert_eq!(
             graphics.slots[0],
@@ -847,20 +804,20 @@ mod tests {
         let mut graphics = bound();
         submit(&mut graphics, TEXTURE);
         submit(&mut graphics, TEXTURE + 1);
-        assert!(!release_checked(&mut graphics, &LEAVES));
+        assert!(!release_checked(&mut graphics));
         COMPLETED.set(1);
-        assert!(!graphics.check_drained(&LEAVES));
+        assert!(!graphics.check_drained());
         COMPLETED.set(u64::MAX);
-        assert!(!graphics.check_drained(&LEAVES));
+        assert!(!graphics.check_drained());
         COMPLETED.set(2);
-        assert!(graphics.check_drained(&LEAVES));
+        assert!(graphics.check_drained());
         // A later submission voids the proof.
         submit(&mut graphics, TEXTURE + 2);
-        assert!(!release_checked(&mut graphics, &LEAVES));
+        assert!(!release_checked(&mut graphics));
         assert!(calls().is_empty());
         COMPLETED.set(3);
-        assert!(graphics.check_drained(&LEAVES));
-        assert!(release_checked(&mut graphics, &LEAVES));
+        assert!(graphics.check_drained());
+        assert!(release_checked(&mut graphics));
         assert_eq!(
             calls(),
             [
@@ -889,7 +846,7 @@ mod tests {
     fn a_fault_keeps_every_reference() {
         let mut graphics = bound();
         REFUSE.set("signal 1");
-        assert!(!graphics.present(visible(), handle(TEXTURE), &pass(), false, None, &LEAVES));
+        assert!(!graphics.present(visible(), handle(TEXTURE), &pass(), false, None));
         assert_eq!(graphics.ring.slot(), (0, 1));
         assert_eq!(graphics.ring.submitted(), 1);
         assert!(!graphics.proved);
@@ -908,10 +865,10 @@ mod tests {
             ]
         );
         COMPLETED.set(1);
-        assert!(!graphics.check_drained(&LEAVES));
-        assert!(!release_checked(&mut graphics, &LEAVES));
+        assert!(!graphics.check_drained());
+        assert!(!release_checked(&mut graphics));
         assert!(!prepare(&mut graphics, 8));
-        assert!(!graphics.present(visible(), handle(TEXTURE), &pass(), false, None, &LEAVES));
+        assert!(!graphics.present(visible(), handle(TEXTURE), &pass(), false, None));
         assert!(calls().is_empty());
         assert_eq!(graphics.slots[0].source, handle(TEXTURE));
     }
@@ -920,35 +877,34 @@ mod tests {
     fn a_recycled_window_waits_for_the_old_chain_and_refuses_stale_presents() {
         let mut graphics = bound();
         let pass = pass();
-        assert!(graphics.present(visible(), handle(TEXTURE), &pass, false, None, &LEAVES));
+        assert!(graphics.present(visible(), handle(TEXTURE), &pass, false, None));
         calls();
         let new = Target {
             generation: 2,
             ..visible()
         };
-        let prepare_new = |graphics: &mut Graphics| {
-            graphics.prepare(new, handle(DEVICE), handle(QUEUE), 8, 8, &LEAVES)
-        };
+        let prepare_new =
+            |graphics: &mut Graphics| graphics.prepare(new, handle(DEVICE), handle(QUEUE), 8, 8);
         assert!(!prepare_new(&mut graphics));
-        assert!(!graphics.present(visible(), handle(TEXTURE), &pass, false, None, &LEAVES));
-        assert!(!graphics.present(new, handle(TEXTURE), &pass, false, None, &LEAVES));
+        assert!(!graphics.present(visible(), handle(TEXTURE), &pass, false, None));
+        assert!(!graphics.present(new, handle(TEXTURE), &pass, false, None));
         COMPLETED.set(u64::MAX);
         assert!(!prepare_new(&mut graphics));
-        assert!(!release_checked(&mut graphics, &LEAVES));
+        assert!(!release_checked(&mut graphics));
         assert_eq!(graphics.gpu.chain, handle(CHAIN));
         assert!(calls().is_empty());
         COMPLETED.set(1);
         assert!(prepare_new(&mut graphics));
         assert_eq!(calls(), ["release 4", "create_chain 8x8"]);
         assert!(!prepare(&mut graphics, 8));
-        assert!(graphics.present(new, handle(TEXTURE), &pass, false, None, &LEAVES));
+        assert!(graphics.present(new, handle(TEXTURE), &pass, false, None));
     }
 
     #[test]
     fn an_unbound_preview_proves_and_releases_nothing() {
         let mut graphics = fresh();
-        assert!(graphics.check_drained(&LEAVES));
-        assert!(release_checked(&mut graphics, &LEAVES));
+        assert!(graphics.check_drained());
+        assert!(release_checked(&mut graphics));
         assert!(calls().is_empty());
     }
 }
