@@ -286,15 +286,15 @@ unsafe fn renderer_ref<'a>(handle: *mut rsf_ac7_native_renderer) -> &'a Renderer
     unsafe { Renderer::from_handle(handle) }
 }
 
-pub(crate) unsafe extern "C" fn installed() -> *mut rsf_ac7_native_renderer {
+pub(crate) unsafe fn installed() -> *mut rsf_ac7_native_renderer {
     super::INSTALLED.load(Ordering::SeqCst).cast()
 }
 
-pub(crate) unsafe extern "C" fn install(renderer: *mut rsf_ac7_native_renderer) {
+pub(crate) unsafe fn install(renderer: *mut rsf_ac7_native_renderer) {
     super::INSTALLED.store(renderer.cast(), Ordering::SeqCst);
 }
 
-pub(crate) unsafe extern "C" fn create(
+pub(crate) unsafe fn create(
     options: *const rsf_ac7_native_renderer_options,
 ) -> *mut rsf_ac7_native_renderer {
     match unsafe { options.as_ref() }.and_then(Renderer::create) {
@@ -303,45 +303,45 @@ pub(crate) unsafe extern "C" fn create(
     }
 }
 
-pub(crate) unsafe extern "C" fn release(renderer: *mut rsf_ac7_native_renderer) {
+pub(crate) unsafe fn release(renderer: *mut rsf_ac7_native_renderer) {
     if !renderer.is_null() {
         drop(unsafe { Box::from_raw(renderer.cast::<Renderer>()) });
     }
 }
 
-pub(crate) unsafe extern "C" fn options(
+pub(crate) unsafe fn options(
     renderer: *mut rsf_ac7_native_renderer,
 ) -> *const rsf_ac7_native_renderer_options {
     &unsafe { renderer_ref(renderer) }.options
 }
 
-pub(crate) unsafe extern "C" fn patches(
+pub(crate) unsafe fn patches(
     renderer: *mut rsf_ac7_native_renderer,
 ) -> *mut rsf_ac7_code_patches {
     unsafe { renderer_ref(renderer) }.patches.get()
 }
 
-pub(crate) unsafe extern "C" fn active(renderer: *mut rsf_ac7_native_renderer) -> bool {
+pub(crate) unsafe fn active(renderer: *mut rsf_ac7_native_renderer) -> bool {
     unsafe { renderer_ref(renderer) }.active()
 }
 
-pub(crate) unsafe extern "C" fn set_active(renderer: *mut rsf_ac7_native_renderer, active: bool) {
+pub(crate) unsafe fn set_active(renderer: *mut rsf_ac7_native_renderer, active: bool) {
     unsafe { renderer_ref(renderer) }
         .active
         .store(active, Ordering::SeqCst);
 }
 
-pub(crate) unsafe extern "C" fn quiescing(renderer: *mut rsf_ac7_native_renderer) -> bool {
+pub(crate) unsafe fn quiescing(renderer: *mut rsf_ac7_native_renderer) -> bool {
     unsafe { renderer_ref(renderer) }.quiescing()
 }
 
-pub(crate) unsafe extern "C" fn set_quiescing(renderer: *mut rsf_ac7_native_renderer) {
+pub(crate) unsafe fn set_quiescing(renderer: *mut rsf_ac7_native_renderer) {
     unsafe { renderer_ref(renderer) }
         .quiescing
         .store(true, Ordering::SeqCst);
 }
 
-pub(crate) unsafe extern "C" fn scopes_create(
+pub(crate) unsafe fn scopes_create(
     renderer: *mut rsf_ac7_native_renderer,
     capacity: u32,
 ) -> bool {
@@ -365,15 +365,15 @@ pub(crate) unsafe extern "C" fn scopes_create(
     created
 }
 
-pub(crate) unsafe extern "C" fn scopes_quiesce(renderer: *mut rsf_ac7_native_renderer) {
+pub(crate) unsafe fn scopes_quiesce(renderer: *mut rsf_ac7_native_renderer) {
     unsafe { rsf_ac7_render_scopes_quiesce(renderer_ref(renderer).scopes()) };
 }
 
-pub(crate) unsafe extern "C" fn scopes_idle(renderer: *mut rsf_ac7_native_renderer) -> bool {
+pub(crate) unsafe fn scopes_idle(renderer: *mut rsf_ac7_native_renderer) -> bool {
     unsafe { crate::render_scope::scopes_idle(renderer_ref(renderer).scopes()) }
 }
 
-pub(crate) unsafe extern "C" fn scopes_destroy(renderer: *mut rsf_ac7_native_renderer) -> bool {
+pub(crate) unsafe fn scopes_destroy(renderer: *mut rsf_ac7_native_renderer) -> bool {
     let owner = unsafe { renderer_ref(renderer) };
     if unsafe { rsf_ac7_render_scopes_destroy(owner.scopes()) } == 0 {
         return false;
@@ -382,7 +382,7 @@ pub(crate) unsafe extern "C" fn scopes_destroy(renderer: *mut rsf_ac7_native_ren
     true
 }
 
-pub(crate) unsafe extern "C" fn hooks_initialize() -> bool {
+pub(crate) unsafe fn hooks_initialize() -> bool {
     let init = unsafe { MH_Initialize() };
     if init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED {
         return false;
@@ -391,13 +391,13 @@ pub(crate) unsafe extern "C" fn hooks_initialize() -> bool {
     true
 }
 
-pub(crate) unsafe extern "C" fn hook_bind(hook: u32, target: *mut u8) {
+pub(crate) unsafe fn hook_bind(hook: u32, target: *mut u8) {
     if let Some(site) = site(hook) {
         site.target.store(target.cast(), Ordering::Relaxed);
     }
 }
 
-pub(crate) unsafe extern "C" fn hook_create(hook: u32) -> bool {
+pub(crate) unsafe fn hook_create(hook: u32) -> bool {
     let Some(target) = bound_target(hook) else {
         return false;
     };
@@ -412,12 +412,12 @@ pub(crate) unsafe extern "C" fn hook_create(hook: u32) -> bool {
     created == MH_OK
 }
 
-pub(crate) unsafe extern "C" fn hook_enable(hook: u32) -> bool {
+pub(crate) unsafe fn hook_enable(hook: u32) -> bool {
     bound_target(hook).is_some_and(|target| unsafe { MH_EnableHook(target) } == MH_OK)
 }
 
 /// MH_CreateHook writes the trampoline only on success; a removal clears it again.
-pub(crate) unsafe extern "C" fn hook_created(hook: u32) -> bool {
+pub(crate) unsafe fn hook_created(hook: u32) -> bool {
     bound_target(hook).is_some()
         && !SITES[hook as usize]
             .original
@@ -426,7 +426,7 @@ pub(crate) unsafe extern "C" fn hook_created(hook: u32) -> bool {
 }
 
 /// A null target is a hook that was never installed; MH_DisableHook(NULL) would disable them all.
-pub(crate) unsafe extern "C" fn hook_disable(hook: u32) -> bool {
+pub(crate) unsafe fn hook_disable(hook: u32) -> bool {
     let Some(target) = bound_target(hook) else {
         return false;
     };
@@ -434,7 +434,7 @@ pub(crate) unsafe extern "C" fn hook_disable(hook: u32) -> bool {
     disabled == MH_OK || disabled == MH_ERROR_DISABLED || disabled == MH_ERROR_NOT_CREATED
 }
 
-pub(crate) unsafe extern "C" fn hook_remove(hook: u32) -> bool {
+pub(crate) unsafe fn hook_remove(hook: u32) -> bool {
     let Some(target) = bound_target(hook) else {
         return false;
     };
@@ -448,7 +448,7 @@ pub(crate) unsafe extern "C" fn hook_remove(hook: u32) -> bool {
     true
 }
 
-pub(crate) unsafe extern "C" fn pin() {
+pub(crate) unsafe fn pin() {
     let mut pinned = HMODULE::default();
     let address = pin as *const u16;
     let _ = unsafe {
@@ -460,11 +460,11 @@ pub(crate) unsafe extern "C" fn pin() {
     };
 }
 
-pub(crate) unsafe extern "C" fn drain(renderer: *mut rsf_ac7_native_renderer) {
+pub(crate) unsafe fn drain(renderer: *mut rsf_ac7_native_renderer) {
     drain_retired(unsafe { renderer_ref(renderer) });
 }
 
-pub(crate) unsafe extern "C" fn outstanding(renderer: *mut rsf_ac7_native_renderer) -> bool {
+pub(crate) unsafe fn outstanding(renderer: *mut rsf_ac7_native_renderer) -> bool {
     let owner = unsafe { renderer_ref(renderer) };
     owner.live_renderers.load(Ordering::SeqCst) != 0
         || owner.live_window_tasks.load(Ordering::SeqCst) != 0
@@ -474,14 +474,14 @@ pub(crate) unsafe extern "C" fn outstanding(renderer: *mut rsf_ac7_native_render
         || !owner.retired.load(Ordering::SeqCst).is_null()
 }
 
-pub(crate) unsafe extern "C" fn retired(renderer: *mut rsf_ac7_native_renderer) -> bool {
+pub(crate) unsafe fn retired(renderer: *mut rsf_ac7_native_renderer) -> bool {
     !unsafe { renderer_ref(renderer) }
         .retired
         .load(Ordering::SeqCst)
         .is_null()
 }
 
-pub(crate) unsafe extern "C" fn input_unhook(renderer: *mut rsf_ac7_native_renderer) -> bool {
+pub(crate) unsafe fn input_unhook(renderer: *mut rsf_ac7_native_renderer) -> bool {
     let owner = unsafe { renderer_ref(renderer) };
     let hook = owner.input_hook.load(Ordering::SeqCst);
     if hook.is_null() {
@@ -494,19 +494,19 @@ pub(crate) unsafe extern "C" fn input_unhook(renderer: *mut rsf_ac7_native_rende
     true
 }
 
-pub(crate) unsafe extern "C" fn controller_disable() {
+pub(crate) unsafe fn controller_disable() {
     if let Some(disable) = native().and_then(|calls| calls.controller_disable) {
         unsafe { disable() };
     }
 }
 
-pub(crate) unsafe extern "C" fn controller_remove() -> bool {
+pub(crate) unsafe fn controller_remove() -> bool {
     native()
         .and_then(|calls| calls.controller_remove)
         .is_some_and(|remove| unsafe { remove() })
 }
 
-pub(crate) unsafe extern "C" fn truesky_restore(renderer: *mut rsf_ac7_native_renderer) -> bool {
+pub(crate) unsafe fn truesky_restore(renderer: *mut rsf_ac7_native_renderer) -> bool {
     restore_truesky(unsafe { renderer_ref(renderer) })
 }
 

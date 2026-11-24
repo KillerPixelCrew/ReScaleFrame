@@ -337,7 +337,7 @@ pub(crate) unsafe extern "C" fn native_cloud_composite_draw(
     }
 }
 
-pub(crate) unsafe extern "C" fn module(name: *const u16) -> *mut u8 {
+pub(crate) unsafe fn module(name: *const u16) -> *mut u8 {
     #[cfg(feature = "warp-fixture")]
     {
         let module = super::TEST_TRUESKY_MODULE.load(Ordering::Relaxed);
@@ -348,7 +348,7 @@ pub(crate) unsafe extern "C" fn module(name: *const u16) -> *mut u8 {
     unsafe { GetModuleHandleW(PCWSTR(name)) }.map_or(null_mut(), |module| module.0.cast())
 }
 
-pub(crate) unsafe extern "C" fn relay_allocate(call: *mut u8, handler: *mut c_void) -> *mut c_void {
+pub(crate) unsafe fn relay_allocate(call: *mut u8, handler: *mut c_void) -> *mut c_void {
     let slot = allocate_depth_relay(call);
     if !slot.is_null() {
         unsafe { slot.cast::<*mut c_void>().write(handler) };
@@ -356,24 +356,24 @@ pub(crate) unsafe extern "C" fn relay_allocate(call: *mut u8, handler: *mut c_vo
     slot
 }
 
-pub(crate) unsafe extern "C" fn relay_release(slot: *mut c_void) {
+pub(crate) unsafe fn relay_release(slot: *mut c_void) {
     if !slot.is_null() {
         let _ = unsafe { VirtualFree(slot, 0, MEM_RELEASE) };
     }
 }
 
-pub(crate) unsafe extern "C" fn depth_ready(renderer: *mut rsf_ac7_native_renderer) -> bool {
+pub(crate) unsafe fn depth_ready(renderer: *mut rsf_ac7_native_renderer) -> bool {
     unsafe { Renderer::from_handle(renderer) }
         .cloud_depth_ready
         .load(Ordering::Acquire)
 }
 
-pub(crate) unsafe extern "C" fn motion_release(renderer: *mut rsf_ac7_native_renderer) {
+pub(crate) unsafe fn motion_release(renderer: *mut rsf_ac7_native_renderer) {
     unsafe { *Renderer::from_handle(renderer).cloud_motion.get() = CloudDepth::default() };
 }
 
 /// Called by truesky.rs with `cloud_lock` held.
-pub(crate) unsafe extern "C" fn depth_release(renderer: *mut rsf_ac7_native_renderer) {
+pub(crate) unsafe fn depth_release(renderer: *mut rsf_ac7_native_renderer) {
     let owner = unsafe { Renderer::from_handle(renderer) };
     let cloud = owner.cloud.get();
     unsafe {
