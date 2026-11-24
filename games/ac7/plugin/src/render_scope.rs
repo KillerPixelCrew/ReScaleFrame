@@ -290,8 +290,10 @@ unsafe extern "C" fn rsf_ac7_scope_owner_create(
     1
 }
 
+/// `open_leased` without a lease. `out` receives the ticket, or null on refusal.
+///
 /// # Safety
-/// As `rsf_ac7_render_scope_open_leased` without a lease.
+/// As `open_leased`; `out` is null or writable.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_ac7_render_scope_open(
     scopes: *mut Scopes,
@@ -299,27 +301,28 @@ pub(crate) unsafe extern "C" fn rsf_ac7_render_scope_open(
     scope: *const rsf_ac7_render_scope,
     out: *mut *mut Ticket,
 ) -> c_int {
-    unsafe { rsf_ac7_render_scope_open_leased(scopes, native_command_list, scope, null(), out) }
+    if out.is_null() {
+        return 0;
+    }
+    let ticket = unsafe { open_leased(scopes, native_command_list, scope, null()) };
+    unsafe { out.write(ticket.unwrap_or(null_mut())) };
+    c_int::from(ticket.is_some())
 }
 
-/// Copies `scope` with the next serial, takes the lease and appends the begin marker. Takes lease
-/// ownership on success only.
+/// Copies `scope` with the next serial, takes the lease and appends the begin marker, returning
+/// the open ticket. Takes lease ownership on success only.
 ///
 /// # Safety
 /// `scopes` is null or a live owner; `native_command_list` is null or a recording native list
 /// owned by the calling thread; `scope` is null or a caller scope of at least its struct_size;
-/// `lease` and `out` are null or valid.
-pub(crate) unsafe fn rsf_ac7_render_scope_open_leased(
+/// `lease` is null or valid.
+pub(crate) unsafe fn open_leased(
     scopes: *mut Scopes,
     native_command_list: *mut c_void,
     scope: *const rsf_ac7_render_scope,
     lease: *const rsf_ac7_scope_lease,
-    out: *mut *mut Ticket,
-) -> c_int {
-    if out.is_null() {
-        return 0;
-    }
-    c_int::from(unsafe { queue_scope(scopes, native_command_list, scope, lease, out) })
+) -> Option<*mut Ticket> {
+    unsafe { queue_scope(scopes, native_command_list, scope, lease, false) }
 }
 
 /// Takes the lease only when both adjacent markers can be queued together.
@@ -333,38 +336,35 @@ pub(crate) unsafe extern "C" fn rsf_ac7_render_scope_enqueue_leased(
     scope: *const rsf_ac7_render_scope,
     lease: *const rsf_ac7_scope_lease,
 ) -> c_int {
-    c_int::from(unsafe { queue_scope(scopes, native_command_list, scope, lease, null_mut()) })
+    c_int::from(unsafe { queue_scope(scopes, native_command_list, scope, lease, true) }.is_some())
 }
 
-/// A null `out` queues both markers. Otherwise the caller receives an open ticket.
+/// `paired` queues both markers, and the returned ticket only reports success. Otherwise it is
+/// the caller's open ticket.
 unsafe fn queue_scope(
     scopes: *mut Scopes,
     native_command_list: *mut c_void,
     scope: *const rsf_ac7_render_scope,
     lease: *const rsf_ac7_scope_lease,
-    out: *mut *mut Ticket,
-) -> bool {
+    paired: bool,
+) -> Option<*mut Ticket> {
     if scopes.is_null()
         || native_command_list.is_null()
         || scope.is_null()
         || unsafe { (*scope).struct_size } < size_of::<rsf_ac7_render_scope>() as u32
     {
-        return false;
+        return None;
     }
     let owner = unsafe { &*scopes };
     let scope = unsafe { &*scope };
     if scope.session_id != owner.session || !valid_identity(scope) {
-        return false;
-    }
-    let paired = out.is_null();
-    if !paired {
-        unsafe { out.write(null_mut()) };
+        return None;
     }
     let mut state = owner.lock();
     if !state.accepting || state.outstanding >= owner.capacity {
-        return false;
+        return None;
     }
-    let Some(ticket) = try_box(Ticket {
+    let ticket = try_box(Ticket {
         owner: scopes,
         recording_list: native_command_list,
         scope: *scope,
@@ -372,9 +372,7 @@ unsafe fn queue_scope(
         begin: Command::new(true),
         end: Command::new(false),
         closed: paired,
-    }) else {
-        return false;
-    };
+    })?;
     let ticket = Box::into_raw(ticket);
     let first = unsafe { addr_of_mut!((*ticket).begin) };
     let end = unsafe { addr_of_mut!((*ticket).end) };
@@ -390,13 +388,10 @@ unsafe fn queue_scope(
     }
     if !unsafe { append(native_command_list, first, last) } {
         unsafe { drop(Box::from_raw(ticket)) };
-        return false;
+        return None;
     }
     state.outstanding += 1;
-    if !paired {
-        unsafe { out.write(ticket) };
-    }
-    true
+    Some(ticket)
 }
 
 /// Appends the end marker. A refused append leaves the ticket open for another attempt.
@@ -467,11 +462,8 @@ fn idle(state: &State) -> bool {
 ///
 /// # Safety
 /// `scopes` is null or a live owner.
-pub(crate) unsafe fn rsf_ac7_render_scopes_idle(scopes: *mut Scopes) -> c_int {
-    match unsafe { scopes.as_ref() } {
-        Some(owner) => c_int::from(idle(&owner.lock())),
-        None => 1,
-    }
+pub(crate) unsafe fn scopes_idle(scopes: *mut Scopes) -> bool {
+    unsafe { scopes.as_ref() }.is_none_or(|owner| idle(&owner.lock()))
 }
 
 /// Frees an idle owner. Refuses while producers are accepted or markers or scopes remain.

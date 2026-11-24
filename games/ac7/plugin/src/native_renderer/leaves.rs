@@ -6,7 +6,7 @@
 use super::sky::restore_truesky;
 use super::{
     HOOKS, Renderer, SITES, bytes_match, drain_retired, game_module, hook, native,
-    rsf_ac7_render_scopes_destroy, rsf_ac7_render_scopes_idle, rsf_ac7_render_scopes_quiesce,
+    rsf_ac7_render_scopes_destroy, rsf_ac7_render_scopes_quiesce,
 };
 use super::{evidence, frame, graph, particles, shaders, sky, slate, translucency, views, widgets};
 use crate::sys::{rsf_ac7_code_leaves, rsf_ac7_code_patches};
@@ -370,7 +370,7 @@ pub(crate) unsafe extern "C" fn scopes_quiesce(renderer: *mut rsf_ac7_native_ren
 }
 
 pub(crate) unsafe extern "C" fn scopes_idle(renderer: *mut rsf_ac7_native_renderer) -> bool {
-    unsafe { rsf_ac7_render_scopes_idle(renderer_ref(renderer).scopes()) != 0 }
+    unsafe { crate::render_scope::scopes_idle(renderer_ref(renderer).scopes()) }
 }
 
 pub(crate) unsafe extern "C" fn scopes_destroy(renderer: *mut rsf_ac7_native_renderer) -> bool {

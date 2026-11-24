@@ -139,7 +139,7 @@ unsafe extern "C" fn lease_release(object: *mut c_void) {
     check.released.set(check.released.get() + 1);
     check
         .idle_at_release
-        .set(unsafe { rsf_ac7_render_scopes_idle(check.scopes.get()) } != 0);
+        .set(unsafe { scopes_idle(check.scopes.get()) });
 }
 
 // The exception leaves without exceptions: Rust callbacks cannot throw.
@@ -235,7 +235,7 @@ fn close(ticket: *mut Ticket, list: &mut List) -> bool {
 }
 
 fn idle(scopes: *mut Scopes) -> bool {
-    unsafe { rsf_ac7_render_scopes_idle(scopes) != 0 }
+    unsafe { scopes_idle(scopes) }
 }
 
 fn destroy(scopes: *mut Scopes) -> bool {
@@ -448,11 +448,8 @@ fn leases_resolve_at_both_markers_and_release_before_the_owner_goes_idle() {
         resolve: Some(lease_resolve),
         release: Some(lease_release),
     };
-    let mut ticket = null_mut();
-    let opened = unsafe {
-        rsf_ac7_render_scope_open_leased(scopes, list.raw(), &scene(1, 0x10), &lease, &mut ticket)
-    };
-    assert_eq!(opened, 1);
+    let ticket =
+        unsafe { open_leased(scopes, list.raw(), &scene(1, 0x10), &lease) }.expect("opened");
     list.run();
     assert_eq!((check.resolved.get(), check.released.get()), (1, 0));
     quiesce(scopes);
@@ -484,11 +481,8 @@ fn a_throwing_resolve_skips_the_stack_and_callbacks_but_retires_the_ticket() {
         resolve: Some(lease_resolve),
         release: Some(lease_release),
     };
-    let mut ticket = null_mut();
-    let opened = unsafe {
-        rsf_ac7_render_scope_open_leased(scopes, list.raw(), &scene(1, 0x10), &lease, &mut ticket)
-    };
-    assert_eq!(opened, 1);
+    let ticket =
+        unsafe { open_leased(scopes, list.raw(), &scene(1, 0x10), &lease) }.expect("opened");
     assert!(close(ticket, &mut list));
     list.run();
     assert!(check.observed.borrow().is_empty());
@@ -529,19 +523,8 @@ fn a_refused_end_resolve_restores_state_without_delivering_a_pass() {
         resolve: Some(lease_resolve),
         release: Some(lease_release),
     };
-    let mut ticket = null_mut();
-    assert_eq!(
-        unsafe {
-            rsf_ac7_render_scope_open_leased(
-                scopes,
-                list.raw(),
-                &scene(1, 0x10),
-                &lease,
-                &mut ticket,
-            )
-        },
-        1
-    );
+    let ticket =
+        unsafe { open_leased(scopes, list.raw(), &scene(1, 0x10), &lease) }.expect("opened");
     assert!(close(ticket, &mut list));
     list.run();
     assert_eq!(check.frames(), [101, 101, 0]);
@@ -556,17 +539,8 @@ fn a_lease_without_functions_and_an_unleased_open_are_equivalent() {
     let check = Check::new();
     let scopes = create(&check, 1, Some(state), None, &CALLS);
     let mut list = List::new();
-    let mut ticket = null_mut();
-    let opened = unsafe {
-        rsf_ac7_render_scope_open_leased(
-            scopes,
-            list.raw(),
-            &scene(3, 0x10),
-            &NO_LEASE,
-            &mut ticket,
-        )
-    };
-    assert_eq!(opened, 1);
+    let ticket =
+        unsafe { open_leased(scopes, list.raw(), &scene(3, 0x10), &NO_LEASE) }.expect("opened");
     assert!(close(ticket, &mut list));
     list.run();
     assert_eq!(check.frames(), [3, 0]);

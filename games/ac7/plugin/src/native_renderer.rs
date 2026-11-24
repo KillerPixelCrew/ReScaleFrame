@@ -10,23 +10,20 @@
 //! former code contained, from the engine's pixel shader factory, is contained by the C leaf
 //! native_renderer_platform.c. Every other engine call ran uncontained before and still does.
 //! Research and the per-hook comparison are in docs/research/rust-ac7-native-renderer.md.
-use crate::render_scope::rsf_ac7_render_scope_close;
-use crate::render_scope::rsf_ac7_render_scope_enqueue_leased;
-use crate::render_scope::rsf_ac7_render_scope_open;
-use crate::render_scope::rsf_ac7_render_scope_open_leased;
-use crate::render_scope::rsf_ac7_render_scopes_destroy;
-use crate::render_scope::rsf_ac7_render_scopes_idle;
-use crate::render_scope::rsf_ac7_render_scopes_quiesce;
+use crate::render_scope::{
+    rsf_ac7_render_scope_close, rsf_ac7_render_scope_enqueue_leased, rsf_ac7_render_scopes_destroy,
+    rsf_ac7_render_scopes_quiesce,
+};
 use crate::sites::{rsf_ac7_hook_role as hook_role, rsf_ac7_hook_rva as hook_rva};
 use crate::sys::rsf_ac7_scope_lease;
 use crate::sys::{
     RSF_AC7_HOOK_SITE_COUNT, rsf_ac7_code_patches, rsf_ac7_native_calls, rsf_ac7_truesky_patches,
 };
-use crate::sys::{rsf_ac7_copy_memory, rsf_ac7_read_memory};
 use crate::sys::{
     RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_native_renderer, rsf_ac7_native_renderer_options,
     rsf_ac7_render_scope, rsf_ac7_render_scope_fn, rsf_ac7_view,
 };
+use crate::sys::{rsf_ac7_copy_memory, rsf_ac7_read_memory};
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::rsf_game_render_config;
 use std::alloc::{Layout, alloc_zeroed};
@@ -772,9 +769,8 @@ fn drain_retired(owner: &Renderer) {
 }
 
 fn open(owner: &Renderer, list: *mut c_void, scope: &rsf_ac7_render_scope) -> Option<*mut c_void> {
-    let mut ticket = null_mut();
-    (unsafe { rsf_ac7_render_scope_open(owner.scopes(), list, scope, &mut ticket) } != 0)
-        .then_some(ticket.cast())
+    unsafe { crate::render_scope::open_leased(owner.scopes(), list, scope, std::ptr::null()) }
+        .map(|ticket| ticket.cast())
 }
 
 fn open_leased(
@@ -783,10 +779,8 @@ fn open_leased(
     scope: &rsf_ac7_render_scope,
     lease: &rsf_ac7_scope_lease,
 ) -> Option<*mut c_void> {
-    let mut ticket = null_mut();
-    (unsafe { rsf_ac7_render_scope_open_leased(owner.scopes(), list, scope, lease, &mut ticket) }
-        != 0)
-        .then_some(ticket.cast())
+    unsafe { crate::render_scope::open_leased(owner.scopes(), list, scope, lease) }
+        .map(|ticket| ticket.cast())
 }
 
 fn enqueue_leased(
