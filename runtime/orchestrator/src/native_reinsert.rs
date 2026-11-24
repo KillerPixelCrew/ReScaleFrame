@@ -7,40 +7,11 @@ use crate::d3d11_output_platform::{
     rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_output_unbind_targets,
 };
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
-use crate::native_regions::SourceView;
+use crate::native_regions::{Region as Rect, SourceView};
 use crate::sys::*;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use windows::core::{IUnknown, Interface};
-
-struct Rect {
-    left: u32,
-    top: u32,
-    right: u32,
-    bottom: u32,
-}
-
-impl Rect {
-    fn new([left, top, right, bottom]: [i32; 4]) -> Option<Self> {
-        if left < 0 || top < 0 || right <= left || bottom <= top {
-            return None;
-        }
-        Some(Self {
-            left: left as u32,
-            top: top as u32,
-            right: right as u32,
-            bottom: bottom as u32,
-        })
-    }
-
-    fn width(&self) -> u32 {
-        self.right - self.left
-    }
-
-    fn height(&self) -> u32 {
-        self.bottom - self.top
-    }
-}
 
 fn float_colour(format: u32) -> bool {
     matches!(
@@ -70,8 +41,8 @@ impl Output {
         if owner.as_raw() != device.as_raw()
             || dest.layers != 1
             || dest.samples != 1
-            || dest.width < rect.right
-            || dest.height < rect.bottom
+            || dest.width < rect.bounds[2]
+            || dest.height < rect.bounds[3]
             || dest.usage == RSF_D3D11_USAGE_IMMUTABLE
         {
             return None;
@@ -115,8 +86,7 @@ unsafe impl Send for Conversions {}
 
 impl Conversions {
     unsafe fn prepare(&mut self, formats: [Option<u32>; 2], rect: &Rect) -> Option<()> {
-        let width = rect.width();
-        let height = rect.height();
+        let [width, height] = rect.extent;
         for (slot, format) in self.slots.iter_mut().zip(formats) {
             let Some(format) = format else { continue };
             if slot.as_ref().is_some_and(|entry| {
@@ -179,8 +149,8 @@ impl Conversions {
                     context,
                     output.target.as_raw(),
                     view,
-                    rect.width(),
-                    rect.height(),
+                    rect.extent[0],
+                    rect.extent[1],
                 )
             } {
                 return None;
@@ -205,11 +175,7 @@ unsafe fn reinsert(
         return None;
     }
     let src = unsafe { texture_desc(source.as_ptr()) };
-    if src.width != rect.width()
-        || src.height != rect.height()
-        || src.layers != 1
-        || src.samples != 1
-    {
+    if [src.width, src.height] != rect.extent || src.layers != 1 || src.samples != 1 {
         return None;
     }
     let device = unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }?;
@@ -262,10 +228,10 @@ unsafe fn reinsert(
                     context,
                     dest,
                     copy,
-                    rect.left,
-                    rect.top,
-                    rect.width(),
-                    rect.height(),
+                    rect.bounds[0],
+                    rect.bounds[1],
+                    rect.extent[0],
+                    rect.extent[1],
                 )
             };
         }

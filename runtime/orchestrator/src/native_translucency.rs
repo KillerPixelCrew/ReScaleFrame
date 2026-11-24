@@ -12,6 +12,7 @@ use crate::native_regions::{
     MaskTarget, Region, SourceView, compile_compute, create_constants, crop, output_texture,
     update_constants,
 };
+use crate::sr_session::has_capacity;
 use crate::sync::lock;
 use crate::sys::rsf_native_translucency_masks as Masks;
 use crate::sys::{RSF_D3D11_FORMAT_R32_FLOAT, rsf_d3d11_texture_desc};
@@ -721,10 +722,7 @@ unsafe fn translucency(context: Object, pass: &Pass, begin: bool) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_translucency_pass(context: Object, pass: *const Pass, begin: u32) {
-    if context.is_null()
-        || pass.is_null()
-        || unsafe { pass.cast::<u32>().read() } < size_of::<Pass>() as u32
-    {
+    if context.is_null() || !unsafe { has_capacity(pass) } {
         return;
     }
     let pass = unsafe { &*pass };
@@ -759,11 +757,7 @@ pub(super) unsafe extern "C" fn rsf_native_translucency_take(
     sr_pass: *const Pass,
     out: *mut Masks,
 ) -> i32 {
-    if sr_pass.is_null()
-        || out.is_null()
-        || unsafe { sr_pass.cast::<u32>().read() } < size_of::<Pass>() as u32
-        || unsafe { out.cast::<u32>().read() } < size_of::<Masks>() as u32
-    {
+    if !unsafe { has_capacity(sr_pass) && has_capacity(out.cast_const()) } {
         return 0;
     }
     let key = Key::of(unsafe { &*sr_pass });

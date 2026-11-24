@@ -50,6 +50,8 @@ use crate::native_translucency::rsf_native_translucency_release;
 use crate::native_window::rsf_native_window_reset;
 use crate::owned_handle::OwnedHandle;
 #[cfg(not(test))]
+use crate::sr_session::has_capacity;
+#[cfg(not(test))]
 use crate::sys::RSF_D3D11_FORMAT_RGBA16_FLOAT;
 #[cfg(not(test))]
 use crate::sys::rsf_native_translucency_masks as Masks;
@@ -257,10 +259,7 @@ pub(crate) unsafe extern "C" fn rsf_native_sr_evaluate(
 
 #[cfg(not(test))]
 unsafe fn evaluate(context: *mut c_void, pass: *const Pass) -> i32 {
-    if context.is_null()
-        || pass.is_null()
-        || unsafe { pass.cast::<u32>().read() } < size_of::<Pass>() as u32
-    {
+    if context.is_null() || !unsafe { has_capacity(pass) } {
         return INVALID;
     }
     let pass = unsafe { &*pass };
@@ -576,12 +575,7 @@ pub(crate) unsafe extern "C" fn rsf_native_sr_capture_fg(
     pass: *const Pass,
     motion: *const DecodeParams,
 ) -> i32 {
-    if context.is_null()
-        || pass.is_null()
-        || motion.is_null()
-        || unsafe { pass.cast::<u32>().read() } < size_of::<Pass>() as u32
-        || unsafe { motion.cast::<u32>().read() } < size_of::<DecodeParams>() as u32
-    {
+    if context.is_null() || !unsafe { has_capacity(pass) && has_capacity(motion) } {
         return INVALID;
     }
     let pass = unsafe { &*pass };

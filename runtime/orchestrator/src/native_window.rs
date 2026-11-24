@@ -11,6 +11,8 @@ use core::{
     cell::{Cell, RefCell},
     ffi::c_void,
 };
+// Each descriptor starts with the readable struct_size prefix, including output descriptors.
+use rsf_game_sys::ffi_util::has_capacity;
 use rsf_game_sys::{RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
 use windows::core::Interface;
 use windows_sys::Win32::{
@@ -85,11 +87,6 @@ impl WindowScopes {
 thread_local! {
     static SCOPES: RefCell<WindowScopes> = const { RefCell::new(WindowScopes::new()) };
     static LAST_PRESENT: Cell<Option<rsf_native_present_record>> = const { Cell::new(None) };
-}
-
-// Each descriptor starts with the readable struct_size prefix, including output descriptors.
-unsafe fn has_capacity<T>(descriptor: *const T) -> bool {
-    !descriptor.is_null() && (unsafe { descriptor.cast::<u32>().read() } as usize) >= size_of::<T>()
 }
 
 #[unsafe(no_mangle)]

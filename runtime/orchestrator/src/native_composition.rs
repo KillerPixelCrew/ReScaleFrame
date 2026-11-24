@@ -5,6 +5,7 @@ use crate::d3d11_output_platform::{
     rsf_d3d11_output_child_device, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_texture,
     rsf_d3d11_output_query_texture,
 };
+use crate::sr_session::has_capacity;
 use crate::sys::{
     RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_USAGE_DEFAULT, rsf_native_composition_frame as Frame,
 };
@@ -261,10 +262,7 @@ unsafe extern "C" fn rsf_native_composition_capture(
     pass: *const Pass,
     begin: u32,
 ) -> i32 {
-    if context.is_null()
-        || pass.is_null()
-        || (unsafe { pass.cast::<u32>().read() } as usize) < size_of::<Pass>()
-    {
+    if context.is_null() || !unsafe { has_capacity(pass) } {
         return 0;
     }
     let pass = unsafe { &*pass };
@@ -295,7 +293,7 @@ extern "C" fn rsf_native_composition_request(scopes: u32) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_composition_read(frame: *mut Frame) -> i32 {
-    if frame.is_null() || (unsafe { frame.cast::<u32>().read() } as usize) < size_of::<Frame>() {
+    if !unsafe { has_capacity(frame) } {
         return 0;
     }
     let Some(captured) = COMPOSITION.with(|state| state.frame()).flatten() else {
