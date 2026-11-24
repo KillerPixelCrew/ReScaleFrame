@@ -15,6 +15,7 @@ use crate::native_fg_cpu::{self as cpu_owner, Failure, Frame as CpuOwner};
 use crate::now_qpc;
 use crate::sync::lock;
 use crate::sys::*;
+pub(crate) use rsf_graphics::dump_options::Log as Sink;
 use crate::sys::{
     RSF_FG_ABI_VERSION, RSF_FG_DYNAMIC, RSF_FG_FIXED, RSF_FG_OFF, RSF_PACING_NONE,
     RSF_PACING_REFLEX, RSF_REFLEX_BOOST, RSF_REFLEX_OFF, rsf_backend_log_fn as Log,
@@ -120,9 +121,6 @@ struct Settings {
     eligibility_lines: u32,
 }
 
-// The log user is an opaque value handed back to the sink.
-unsafe impl Send for Settings {}
-
 static SETTINGS: Mutex<Settings> = Mutex::new(Settings {
     requested: Options {
         struct_size: size_of::<Options>() as u32,
@@ -132,7 +130,7 @@ static SETTINGS: Mutex<Settings> = Mutex::new(Settings {
         frame_limit_us: 0,
         debug: 0,
     },
-    sink: Sink::SILENT,
+    sink: SILENT,
     cached: unsafe { std::mem::zeroed() },
     pending_generation: 0,
     completed_generation: 0,
@@ -142,30 +140,16 @@ static SETTINGS: Mutex<Settings> = Mutex::new(Settings {
     eligibility_lines: 0,
 });
 
-#[derive(Clone, Copy)]
-pub(crate) struct Sink(Log, Handle);
-
-impl Sink {
-    const SILENT: Self = Self(None, ptr::null_mut());
-
-    pub(crate) fn available(self) -> bool {
-        self.0.is_some()
-    }
-
-    pub(crate) fn say(self, text: &str) {
-        if let Some(log) = self.0
-            && let Ok(text) = CString::new(text)
-        {
-            unsafe { log(self.1, text.as_ptr()) };
-        }
-    }
-}
+const SILENT: Sink = Sink {
+    callback: None,
+    user: 0,
+};
 
 // Copy the sink under its lock before invoking the callback.
 pub(crate) fn sink(debug_only: bool) -> Sink {
     let settings = lock(&SETTINGS);
     if debug_only && settings.requested.debug == 0 {
-        Sink::SILENT
+        SILENT
     } else {
         settings.sink
     }
@@ -700,7 +684,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_options_set(options: *const Option
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_native_fg_set_log(log: Log, user: Handle) {
-    lock(&SETTINGS).sink = Sink(log, user);
+    lock(&SETTINGS).sink = Sink::new(log, user);
 }
 
 #[unsafe(no_mangle)]
@@ -1508,10 +1492,10 @@ pub(super) unsafe extern "C" fn rsf_native_fg_prepare(
             settings.last_eligibility = eligibility;
             settings.sink
         } else {
-            Sink::SILENT
+            SILENT
         }
     };
-    if diagnostic.available() {
+    if diagnostic.callback.is_some() {
         diagnostic.say(&format!(
             "FG eligibility source={} window={} scene={} sampled={} direct={} inputs={} hudless={} submission={} identity={} allowed_scene={} continuous={} vsync={} cpu={} mask={} screen={} flags={} configure={}",
             source,
@@ -1896,8 +1880,8 @@ pub(crate) unsafe extern "C" fn rsf_native_fg_dump_inputs(
             name.as_ptr(),
             view,
             scale,
-            log.0,
-            log.1
+            log.callback,
+            log.user as Handle
         );
         if result == 0 {
             written += 1;

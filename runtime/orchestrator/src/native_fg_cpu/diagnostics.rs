@@ -105,7 +105,7 @@ pub(super) fn audit(source: Source) {
         (frame, snapshot)
     };
     let log = sink(true);
-    if log.available() {
+    if log.callback.is_some() {
         log.say(&format!(
             "FG ownership screen={} source={} native={} frames={} expected={} scene_begin={} scene_end={} sr={} presents={} windows={} rhi_begin={} rhi_end={} no_present={} multi={} window_mismatch={} native_gaps={} submission={}..{} view={:x}..{:x}",
             frame.screen, source.id, frame.native_frame, total.frames, total.expected, total.scenes,
@@ -174,7 +174,7 @@ pub(crate) fn report_timing(cpu: &Facts, owner: &Frame, screen: u32, wait: u64, 
     });
     let log = sink(false);
     if let Some(timing) = snapshot
-        && log.available()
+        && log.callback.is_some()
     {
         let avg = |i: usize| timing.sum[i] / timing.frames as f64;
         let peak = timing.peak;
@@ -204,7 +204,7 @@ pub(super) fn report_latency_window() {
         (reported, anti, previous_anti)
     };
     let log = sink(false);
-    if log.available() {
+    if log.callback.is_some() {
         let delta = u64::wrapping_sub;
         log.say(&format!(
             "Latency window: inputs_keyboard={} mouse={} controller={} pcl_ping={} substitute={} duplicate={} marker_order_violations={} pcl_expired={} Anti-Lag2_updates={} Anti-Lag2_refused={}",
@@ -286,7 +286,7 @@ pub(super) fn failure(
         return;
     }
     let log = sink(false);
-    if !log.available() || REPORTED.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
+    if log.callback.is_none() || REPORTED.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
         return;
     }
     log.say(&format!(
@@ -344,7 +344,7 @@ pub(crate) fn stage(
         return;
     }
     let log = sink(false);
-    if !log.available() {
+    if log.callback.is_none() {
         return;
     }
     static BUDGET: LazyLock<Mutex<StageBudget>> =

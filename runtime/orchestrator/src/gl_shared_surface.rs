@@ -12,14 +12,14 @@
 use crate::com_ref;
 use crate::d3d12_fence::FenceState;
 use crate::sr_session::has_capacity;
-use crate::sys::rsf_backend_log_fn;
 use crate::sys::{
     RSF_GL_R32F, RSF_GL_RG16F, RSF_GL_RGBA8, RSF_GL_RGBA16F, rsf_gl_setup, rsf_gl_texture_info,
 };
 use rsf_game_sys::backend_result::{
     ABI_MISMATCH, FEATURE_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED, OK,
 };
-use std::ffi::{CStr, CString, c_void};
+use rsf_graphics::dump_options::Log;
+use std::ffi::{CStr, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::{Mutex, MutexGuard};
 use windows::core::{IUnknown, Interface};
@@ -76,7 +76,6 @@ const GL_ENTRY_POINTS: [&CStr; 13] = [
 ];
 
 type Handle = *mut c_void;
-type Log = rsf_backend_log_fn;
 
 // Native GL leaves and the fixture borrow the resolved entry points.
 #[repr(C)]
@@ -119,12 +118,6 @@ fn native_format(format: u32) -> Option<(u32, u32)> {
         RSF_GL_RG16F => Some((DXGI_R16G16_FLOAT, GL_RG16F)),
         RSF_GL_RGBA8 => Some((DXGI_R8G8B8A8_UNORM, GL_RGBA8)),
         _ => None,
-    }
-}
-
-fn message(log: Log, user: Handle, text: &str) {
-    if let (Some(log), Ok(text)) = (log, CString::new(text)) {
-        unsafe { log(user, text.as_ptr()) };
     }
 }
 
@@ -215,7 +208,6 @@ pub(crate) struct Context {
     gl_context: Handle,
     thread: u32,
     log: Log,
-    user: Handle,
     // Fields drop in declaration order, after the semaphore is deleted.
     state: Mutex<State>,
     semaphore: u32,
@@ -257,12 +249,8 @@ impl Context {
         crate::sync::try_lock(&self.state)
     }
 
-    fn message(&self, text: &str) {
-        message(self.log, self.user, text);
-    }
-
     fn failure(&self, operation: &str, code: u32) {
-        self.message(&format!(
+        self.log.say(&format!(
             "OpenGL sharing: {operation} failed (0x{code:08x})"
         ));
     }
@@ -509,7 +497,8 @@ fn create_context_device(luid: &[u8; 8]) -> Result<IUnknown, i32> {
 }
 
 fn open(setup: &rsf_gl_setup, gl_context: Handle) -> Result<Context, i32> {
-    let say = |text: &str| message(setup.log, setup.user, text);
+    let log = Log::new(setup.log, setup.user);
+    let say = |text: &str| log.say(text);
     let Some(gl) = GlProcs::load() else {
         say("OpenGL sharing requires EXT_memory_object_win32 and EXT_semaphore_win32.");
         return Err(NOT_SUPPORTED);
@@ -582,8 +571,7 @@ fn open(setup: &rsf_gl_setup, gl_context: Handle) -> Result<Context, i32> {
         gl,
         gl_context,
         thread: unsafe { GetCurrentThreadId() },
-        log: setup.log,
-        user: setup.user,
+        log,
         state: Mutex::new(State {
             serial: 0,
             slots,
