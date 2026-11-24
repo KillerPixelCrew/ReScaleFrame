@@ -6,6 +6,7 @@ mod streamline;
 
 // The RDR2 runtime setup this fixture calls, carried in the archive (Cargo.toml).
 use rsf_rdr2 as _;
+
 use crate::sys::*;
 use gpu::{COPY_SOURCE, Gpu, SHADER_READ};
 use rsf_game_sys::{

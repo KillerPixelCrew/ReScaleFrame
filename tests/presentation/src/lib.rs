@@ -17,9 +17,9 @@ mod sys {
 
 #[cfg(feature = "ac7-render-scope")]
 use rsf_ac7_plugin as _;
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT};
 #[cfg(feature = "gl-device-fixture")]
 use rsf_minecraft as _;
-use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT};
 
 // The AC7 fixture's render scope calls come with ac7-render-scope; its helpers are dead code without it.
 #[cfg_attr(not(feature = "ac7-render-scope"), allow(dead_code))]
