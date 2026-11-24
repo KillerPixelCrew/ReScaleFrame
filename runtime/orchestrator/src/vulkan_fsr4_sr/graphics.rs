@@ -68,7 +68,7 @@ unsafe fn capsule<'a>(graphics: Handle) -> &'a mut Graphics {
 
 /// Resolves the five Vulkan commands through the host's procedure callbacks, which may throw,
 /// and opens the capsule.
-pub(super) unsafe extern "C" fn open(setup: *const Setup, out: *mut Handle) -> i32 {
+pub(super) unsafe fn open(setup: *const Setup, out: *mut Handle) -> i32 {
     let setup = unsafe { &*setup };
     let (Some(instance_proc), Some(device_proc)) = (setup.instance_proc, setup.device_proc) else {
         return FEATURE_FAILED;
@@ -108,13 +108,13 @@ pub(super) unsafe extern "C" fn open(setup: *const Setup, out: *mut Handle) -> i
     0
 }
 
-pub(super) unsafe extern "C" fn close(graphics: Handle) {
+pub(super) unsafe fn close(graphics: Handle) {
     if !graphics.is_null() {
         drop(unsafe { Box::from_raw(graphics.cast::<Graphics>()) });
     }
 }
 
-pub(super) unsafe extern "C" fn capture_initialize(
+pub(super) unsafe fn capture_initialize(
     graphics: Handle,
     setup: *const Setup,
     provider: u64,
@@ -138,11 +138,11 @@ pub(super) unsafe extern "C" fn capture_initialize(
     }
 }
 
-pub(super) unsafe extern "C" fn capture_begin(record: *const Record) {
+pub(super) unsafe fn capture_begin(record: *const Record) {
     unsafe { rsf_input_dump_begin_record(record, RSF_SR_FSR4) };
 }
 
-pub(super) unsafe extern "C" fn capture_parameters(frame: *const Frame, reset: u32) {
+pub(super) unsafe fn capture_parameters(frame: *const Frame, reset: u32) {
     let frame = unsafe { &*frame };
     unsafe {
         rsf_capture_sr_parameters(
@@ -156,7 +156,7 @@ pub(super) unsafe extern "C" fn capture_parameters(frame: *const Frame, reset: u
     }
 }
 
-pub(super) unsafe extern "C" fn capture_record(
+pub(super) unsafe fn capture_record(
     graphics: Handle,
     commands: Handle,
     image: *const Image,
@@ -179,20 +179,16 @@ pub(super) unsafe extern "C" fn capture_record(
     }
 }
 
-pub(super) unsafe extern "C" fn capture_flush(graphics: Handle) -> i32 {
+pub(super) unsafe fn capture_flush(graphics: Handle) -> i32 {
     unsafe { rsf_core_capture_vk_flush(&capsule(graphics).capture, 0, ptr::null_mut()) }
 }
 
-pub(super) unsafe extern "C" fn transition(
-    graphics: Handle,
-    commands: Handle,
-    plan: *const Barrier,
-) {
+pub(super) unsafe fn transition(graphics: Handle, commands: Handle, plan: *const Barrier) {
     let graphics = unsafe { capsule(graphics) };
     unsafe { rsf_core_vkfg_record_barrier(graphics.barrier, command_buffer(commands), &*plan) };
 }
 
-pub(super) unsafe extern "C" fn copy(
+pub(super) unsafe fn copy(
     graphics: Handle,
     commands: Handle,
     source: u64,
@@ -205,7 +201,7 @@ pub(super) unsafe extern "C" fn copy(
     unsafe { rsf_core_vkfg_record_copy(graphics.copy, command_buffer(commands), &plan) };
 }
 
-pub(super) unsafe extern "C" fn sharpen(
+pub(super) unsafe fn sharpen(
     graphics: Handle,
     setup: *const Setup,
     commands: Handle,
@@ -216,7 +212,7 @@ pub(super) unsafe extern "C" fn sharpen(
     unsafe { rsf_sharpenvk_host_run(&mut graphics.sharpen, &*setup, commands, &*frame, output) };
 }
 
-pub(super) unsafe extern "C" fn retire(graphics: Handle, commands: Handle) {
+pub(super) unsafe fn retire(graphics: Handle, commands: Handle) {
     let graphics = unsafe { capsule(graphics) };
     unsafe {
         rsf_core_capture_vk_retire(&graphics.capture, commands);
@@ -224,16 +220,11 @@ pub(super) unsafe extern "C" fn retire(graphics: Handle, commands: Handle) {
     }
 }
 
-pub(super) unsafe extern "C" fn clear_sharpen(graphics: Handle) {
+pub(super) unsafe fn clear_sharpen(graphics: Handle) {
     unsafe { rsf_sharpenvk_host_clear(&mut capsule(graphics).sharpen) };
 }
 
-pub(super) unsafe extern "C" fn wait(
-    graphics: Handle,
-    semaphore: u64,
-    value: u64,
-    timeout: u64,
-) -> i32 {
+pub(super) unsafe fn wait(graphics: Handle, semaphore: u64, value: u64, timeout: u64) -> i32 {
     let graphics = unsafe { capsule(graphics) };
     let semaphores = [vk::Semaphore::from_raw(semaphore)];
     let values = [value];
@@ -243,7 +234,7 @@ pub(super) unsafe extern "C" fn wait(
     unsafe { (graphics.wait)(graphics.device, &wait, timeout).as_raw() }
 }
 
-pub(super) unsafe extern "C" fn idle(graphics: Handle) -> i32 {
+pub(super) unsafe fn idle(graphics: Handle) -> i32 {
     let graphics = unsafe { capsule(graphics) };
     unsafe { (graphics.idle)(graphics.device).as_raw() }
 }

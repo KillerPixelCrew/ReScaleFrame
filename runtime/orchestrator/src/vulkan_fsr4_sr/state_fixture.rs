@@ -74,7 +74,7 @@ macro_rules! leaf {
     }};
 }
 
-pub(crate) unsafe extern "C" fn open(setup: *const Setup, owner: *mut Handle) -> i32 {
+pub(crate) unsafe fn open(setup: *const Setup, owner: *mut Handle) -> i32 {
     with(|c| check!(c, unsafe { (*setup).device } == DEVICE));
     unsafe { owner.write(DEVICE) };
     0
@@ -243,11 +243,11 @@ pub(crate) mod interop {
     }
 }
 
-pub(crate) unsafe extern "C" fn close(_: Handle) {
+pub(crate) unsafe fn close(_: Handle) {
     with(|c| c.retirement.push(Step::Graphics))
 }
 
-pub(crate) unsafe extern "C" fn bridge_create(setup: *const BridgeCreate, out: *mut Handle) -> i32 {
+pub(crate) unsafe fn bridge_create(setup: *const BridgeCreate, out: *mut Handle) -> i32 {
     let setup = unsafe { &*setup };
     with(|c| {
         check!(
@@ -277,7 +277,7 @@ pub(crate) unsafe extern "C" fn bridge_create(setup: *const BridgeCreate, out: *
     0
 }
 
-pub(crate) unsafe extern "C" fn bridge_plan(
+pub(crate) unsafe fn bridge_plan(
     owner: Handle,
     quality: u32,
     width: *mut u32,
@@ -291,7 +291,7 @@ pub(crate) unsafe extern "C" fn bridge_plan(
     0
 }
 
-pub(crate) unsafe extern "C" fn bridge_info(owner: *const c_void, out: *mut Info) -> i32 {
+pub(crate) unsafe fn bridge_info(owner: *const c_void, out: *mut Info) -> i32 {
     let info = unsafe { &mut *out };
     with(|c| {
         check!(
@@ -313,7 +313,7 @@ pub(crate) unsafe extern "C" fn create_fence(owner: Handle, out: *mut Handle) ->
     event(out)
 }
 
-pub(crate) unsafe extern "C" fn create_image(
+pub(crate) unsafe fn create_image(
     owner: Handle,
     width: u32,
     height: u32,
@@ -340,7 +340,7 @@ pub(crate) unsafe extern "C" fn release_image(_: Handle) {
     with(|c| c.retirement.push(Step::Com))
 }
 
-pub(crate) unsafe extern "C" fn capture_initialize(
+pub(crate) unsafe fn capture_initialize(
     _: Handle,
     _: *const Setup,
     provider: u64,
@@ -349,12 +349,12 @@ pub(crate) unsafe extern "C" fn capture_initialize(
     0
 }
 
-pub(crate) unsafe extern "C" fn capture_begin(record: *const Record) {
+pub(crate) unsafe fn capture_begin(record: *const Record) {
     let r = unsafe { &*record };
     with(|c| check!(c, r.session_id == 10 && r.view_id == 11));
 }
 
-pub(crate) unsafe extern "C" fn capture_record(
+pub(crate) unsafe fn capture_record(
     _: Handle,
     commands: Handle,
     image: *const Image,
@@ -366,18 +366,18 @@ pub(crate) unsafe extern "C" fn capture_record(
     with(|c| c.captures.push((commands, image, role, reset)));
 }
 
-pub(crate) unsafe extern "C" fn capture_parameters(_: *const Frame, reset: u32) {
+pub(crate) unsafe fn capture_parameters(_: *const Frame, reset: u32) {
     with(|c| check!(c, c.dispatches.last().is_some_and(|f| f.reset == reset)));
 }
 
-pub(crate) unsafe extern "C" fn capture_flush(_: Handle) -> i32 {
+pub(crate) unsafe fn capture_flush(_: Handle) -> i32 {
     with(|c| {
         c.retirement.push(Step::Flush);
         i32::from(!c.flush_error)
     })
 }
 
-pub(crate) unsafe extern "C" fn transition(_: Handle, commands: Handle, plan: *const Barrier) {
+pub(crate) unsafe fn transition(_: Handle, commands: Handle, plan: *const Barrier) {
     let plan = unsafe { *plan };
     with(|c| {
         check!(
@@ -388,7 +388,7 @@ pub(crate) unsafe extern "C" fn transition(_: Handle, commands: Handle, plan: *c
     });
 }
 
-pub(crate) unsafe extern "C" fn copy(
+pub(crate) unsafe fn copy(
     _: Handle,
     commands: Handle,
     source: u64,
@@ -405,7 +405,7 @@ pub(crate) unsafe extern "C" fn copy(
     });
 }
 
-pub(crate) unsafe extern "C" fn split(
+pub(crate) unsafe fn split(
     handoff: *const Handoff,
     commands: Handle,
     sem: u64,
@@ -427,7 +427,7 @@ pub(crate) unsafe extern "C" fn split(
     0
 }
 
-pub(crate) unsafe extern "C" fn bridge_sharpness(owner: Handle, amount: f32) -> i32 {
+pub(crate) unsafe fn bridge_sharpness(owner: Handle, amount: f32) -> i32 {
     with(|c| {
         check!(c, owner == BRIDGE);
         c.sharpness = amount;
@@ -435,7 +435,7 @@ pub(crate) unsafe extern "C" fn bridge_sharpness(owner: Handle, amount: f32) -> 
     0
 }
 
-pub(crate) unsafe extern "C" fn bridge_evaluate(owner: Handle, frame: *const BridgeFrame) -> i32 {
+pub(crate) unsafe fn bridge_evaluate(owner: Handle, frame: *const BridgeFrame) -> i32 {
     let frame = unsafe { *frame };
     with(|c| {
         check!(
@@ -474,7 +474,7 @@ pub(crate) unsafe extern "C" fn bridge_evaluate(owner: Handle, frame: *const Bri
     })
 }
 
-pub(crate) unsafe extern "C" fn sharpen(
+pub(crate) unsafe fn sharpen(
     _: Handle,
     _: *const Setup,
     commands: Handle,
@@ -498,18 +498,18 @@ pub(crate) unsafe extern "C" fn sharpen(
     });
 }
 
-pub(crate) unsafe extern "C" fn retire(_: Handle, commands: Handle) {
+pub(crate) unsafe fn retire(_: Handle, commands: Handle) {
     with(|c| {
         check!(c, commands == RESUMED);
         c.retires += 1;
     })
 }
 
-pub(crate) unsafe extern "C" fn clear_sharpen(_: Handle) {
+pub(crate) unsafe fn clear_sharpen(_: Handle) {
     with(|c| c.retirement.push(Step::Clear))
 }
 
-pub(crate) unsafe extern "C" fn wait(_: Handle, sem: u64, target: u64, timeout: u64) -> i32 {
+pub(crate) unsafe fn wait(_: Handle, sem: u64, target: u64, timeout: u64) -> i32 {
     with(|c| {
         check!(
             c,
@@ -520,14 +520,14 @@ pub(crate) unsafe extern "C" fn wait(_: Handle, sem: u64, target: u64, timeout: 
     })
 }
 
-pub(crate) unsafe extern "C" fn idle(_: Handle) -> i32 {
+pub(crate) unsafe fn idle(_: Handle) -> i32 {
     with(|c| {
         c.retirement.push(Step::Idle);
         c.idle_error
     })
 }
 
-pub(crate) unsafe extern "C" fn bridge_prepare_destroy(owner: Handle) -> i32 {
+pub(crate) unsafe fn bridge_prepare_destroy(owner: Handle) -> i32 {
     with(|c| {
         check!(c, owner == BRIDGE);
         c.retirement.push(Step::Prepare);
@@ -535,7 +535,7 @@ pub(crate) unsafe extern "C" fn bridge_prepare_destroy(owner: Handle) -> i32 {
     })
 }
 
-pub(crate) unsafe extern "C" fn bridge_destroy(owner: Handle) -> i32 {
+pub(crate) unsafe fn bridge_destroy(owner: Handle) -> i32 {
     with(|c| {
         check!(c, owner == BRIDGE);
         c.retirement.push(Step::Bridge);

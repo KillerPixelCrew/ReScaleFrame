@@ -46,31 +46,31 @@ fn fake(id: usize) -> Handle {
     ptr::without_provenance_mut(id)
 }
 
-pub(super) unsafe extern "C" fn allocate(telemetry: Handle, notify: GeneratedFn) -> Handle {
+pub(super) unsafe fn allocate(telemetry: Handle, notify: GeneratedFn) -> Handle {
     with(|c| c.notify = Some((telemetry, notify)));
     fake(1)
 }
 
-pub(super) unsafe extern "C" fn release(_: Handle) {
+pub(super) unsafe fn release(_: Handle) {
     with(|c| c.releases += 1)
 }
 
-pub(super) unsafe extern "C" fn create_factory(_: Handle, flags: u32) -> i32 {
+pub(super) unsafe fn create_factory(_: Handle, flags: u32) -> i32 {
     with(|c| check!(c, flags == 0));
     0
 }
 
-pub(super) unsafe extern "C" fn find_adapter(_: Handle, luid: u64) -> i32 {
+pub(super) unsafe fn find_adapter(_: Handle, luid: u64) -> i32 {
     with(|c| check!(c, luid == LUID));
     0
 }
 
-pub(super) unsafe extern "C" fn get_adapter_vendor(_: Handle, vendor: *mut u32) -> i32 {
+pub(super) unsafe fn get_adapter_vendor(_: Handle, vendor: *mut u32) -> i32 {
     unsafe { vendor.write(0x1002) };
     0
 }
 
-pub(super) unsafe extern "C" fn create_device(_: Handle, level: u32) -> i32 {
+pub(super) unsafe fn create_device(_: Handle, level: u32) -> i32 {
     with(|c| {
         check!(c, level == 0xc000);
         c.objects |= DEVICE;
@@ -78,11 +78,11 @@ pub(super) unsafe extern "C" fn create_device(_: Handle, level: u32) -> i32 {
     0
 }
 
-pub(super) unsafe extern "C" fn load(_: Handle, _: *const u16) -> i32 {
+pub(super) unsafe fn load(_: Handle, _: *const u16) -> i32 {
     0
 }
 
-pub(super) unsafe extern "C" fn versions(_: Handle, out: *mut Version, count: *mut u64) -> i32 {
+pub(super) unsafe fn versions(_: Handle, out: *mut Version, count: *mut u64) -> i32 {
     with(|c| check!(c, unsafe { count.read() } >= 1));
     unsafe {
         count.write(1);
@@ -97,7 +97,7 @@ pub(super) unsafe extern "C" fn versions(_: Handle, out: *mut Version, count: *m
     0
 }
 
-pub(super) unsafe extern "C" fn create_generation(
+pub(super) unsafe fn create_generation(
     _: Handle,
     _: *const BridgeCreate,
     provider: u64,
@@ -109,12 +109,12 @@ pub(super) unsafe extern "C" fn create_generation(
     0
 }
 
-pub(super) unsafe extern "C" fn get_provider(_: Handle, out: *mut u64) -> i32 {
+pub(super) unsafe fn get_provider(_: Handle, out: *mut u64) -> i32 {
     unsafe { out.write(with(|c| c.reported_provider)) };
     0
 }
 
-pub(super) unsafe extern "C" fn create_queue(_: Handle, desc: *const QueueDesc) -> i32 {
+pub(super) unsafe fn create_queue(_: Handle, desc: *const QueueDesc) -> i32 {
     let d = unsafe { &*desc };
     with(|c| {
         check!(
@@ -125,22 +125,22 @@ pub(super) unsafe extern "C" fn create_queue(_: Handle, desc: *const QueueDesc) 
     0
 }
 
-pub(super) unsafe extern "C" fn create_allocator(_: Handle, kind: u32) -> i32 {
+pub(super) unsafe fn create_allocator(_: Handle, kind: u32) -> i32 {
     with(|c| check!(c, kind == 0));
     0
 }
 
-pub(super) unsafe extern "C" fn create_command_list(_: Handle, mask: u32, kind: u32) -> i32 {
+pub(super) unsafe fn create_command_list(_: Handle, mask: u32, kind: u32) -> i32 {
     with(|c| check!(c, mask == 0 && kind == 0));
     0
 }
 
-pub(super) unsafe extern "C" fn create_completion_fence(_: Handle, value: u64, flags: u32) -> i32 {
+pub(super) unsafe fn create_completion_fence(_: Handle, value: u64, flags: u32) -> i32 {
     with(|c| check!(c, value == 0 && flags == 0));
     0
 }
 
-pub(super) unsafe extern "C" fn create_event(_: Handle, manual: u32, initial: u32) -> i32 {
+pub(super) unsafe fn create_event(_: Handle, manual: u32, initial: u32) -> i32 {
     with(|c| {
         check!(c, manual == 0 && initial == 0);
         c.objects |= LOCAL_FENCE;
@@ -148,11 +148,11 @@ pub(super) unsafe extern "C" fn create_event(_: Handle, manual: u32, initial: u3
     0
 }
 
-pub(super) unsafe extern "C" fn objects(_: Handle) -> u32 {
+pub(super) unsafe fn objects(_: Handle) -> u32 {
     with(|c| c.objects)
 }
 
-pub(super) unsafe extern "C" fn create_swapchain(
+pub(super) unsafe fn create_swapchain(
     _: Handle,
     _: Handle,
     desc: *const SwapchainDesc,
@@ -172,7 +172,7 @@ pub(super) unsafe extern "C" fn create_swapchain(
     0
 }
 
-pub(super) unsafe extern "C" fn create_image(
+pub(super) unsafe fn create_image(
     _: Handle,
     _: u32,
     _: u32,
@@ -183,13 +183,13 @@ pub(super) unsafe extern "C" fn create_image(
     ERROR
 }
 
-pub(super) unsafe extern "C" fn create_fence(_: Handle, out: *mut Handle) -> i32 {
+pub(super) unsafe fn create_fence(_: Handle, out: *mut Handle) -> i32 {
     unsafe { out.write(fake(2)) };
     with(|c| c.objects |= SHARED_FENCE);
     0
 }
 
-pub(super) unsafe extern "C" fn describe_texture(resource: Handle, out: *mut Texture) {
+pub(super) unsafe fn describe_texture(resource: Handle, out: *mut Texture) {
     let (width, height, format) = match resource.addr() {
         DEPTH => (320, 180, 41),
         MOTION => (320, 180, 34),
@@ -210,17 +210,17 @@ pub(super) unsafe extern "C" fn describe_texture(resource: Handle, out: *mut Tex
     };
 }
 
-pub(super) unsafe extern "C" fn reset_commands(_: Handle) -> i32 {
+pub(super) unsafe fn reset_commands(_: Handle) -> i32 {
     with(|c| c.steps.push(b'R'));
     0
 }
 
-pub(super) unsafe extern "C" fn close_commands(_: Handle) -> i32 {
+pub(super) unsafe fn close_commands(_: Handle) -> i32 {
     with(|c| c.steps.push(b'C'));
     0
 }
 
-pub(super) unsafe extern "C" fn configure(
+pub(super) unsafe fn configure(
     _: Handle,
     sequence: u64,
     width: u32,
@@ -237,7 +237,7 @@ pub(super) unsafe extern "C" fn configure(
     })
 }
 
-pub(super) unsafe extern "C" fn shader_read(_: Handle, image: Handle, enter: u32) {
+pub(super) unsafe fn shader_read(_: Handle, image: Handle, enter: u32) {
     with(|c| {
         c.steps.push(if enter != 0 {
             b'+'
@@ -249,7 +249,7 @@ pub(super) unsafe extern "C" fn shader_read(_: Handle, image: Handle, enter: u32
     });
 }
 
-pub(super) unsafe extern "C" fn prepare(
+pub(super) unsafe fn prepare(
     _: Handle,
     _: *const BridgeFrame,
     sequence: u64,
@@ -263,7 +263,7 @@ pub(super) unsafe extern "C" fn prepare(
     0
 }
 
-pub(super) unsafe extern "C" fn copy_to_backbuffer(_: Handle, image: Handle) -> i32 {
+pub(super) unsafe fn copy_to_backbuffer(_: Handle, image: Handle) -> i32 {
     with(|c| {
         check!(c, image == fake(COLOR));
         c.steps.push(b'B');
@@ -271,7 +271,7 @@ pub(super) unsafe extern "C" fn copy_to_backbuffer(_: Handle, image: Handle) -> 
     0
 }
 
-pub(super) unsafe extern "C" fn wait_shared(_: Handle, ready: u64) -> i32 {
+pub(super) unsafe fn wait_shared(_: Handle, ready: u64) -> i32 {
     with(|c| {
         check!(c, ready == c.done + 1);
         c.steps.push(b'W');
@@ -279,11 +279,11 @@ pub(super) unsafe extern "C" fn wait_shared(_: Handle, ready: u64) -> i32 {
     0
 }
 
-pub(super) unsafe extern "C" fn execute(_: Handle) {
+pub(super) unsafe fn execute(_: Handle) {
     with(|c| c.steps.push(b'X'))
 }
 
-pub(super) unsafe extern "C" fn present(_: Handle, vsync: u32) -> i32 {
+pub(super) unsafe fn present(_: Handle, vsync: u32) -> i32 {
     with(|c| {
         check!(c, vsync == 1);
         c.steps.push(b'P');
@@ -292,14 +292,14 @@ pub(super) unsafe extern "C" fn present(_: Handle, vsync: u32) -> i32 {
     0
 }
 
-pub(super) unsafe extern "C" fn wait_presents(_: Handle) -> i32 {
+pub(super) unsafe fn wait_presents(_: Handle) -> i32 {
     with(|c| {
         c.steps.push(b'A');
         c.wait_result
     })
 }
 
-pub(super) unsafe extern "C" fn signal(_: Handle, value: u64, shared: u32) -> i32 {
+pub(super) unsafe fn signal(_: Handle, value: u64, shared: u32) -> i32 {
     with(|c| {
         if shared != 0 {
             check!(c, value == c.done + 2);
@@ -314,7 +314,7 @@ pub(super) unsafe extern "C" fn signal(_: Handle, value: u64, shared: u32) -> i3
     0
 }
 
-pub(super) unsafe extern "C" fn wait_local(_: Handle, value: u64) -> i32 {
+pub(super) unsafe fn wait_local(_: Handle, value: u64) -> i32 {
     with(|c| {
         check!(c, value == c.completion);
         c.steps.push(b'L');
@@ -322,12 +322,12 @@ pub(super) unsafe extern "C" fn wait_local(_: Handle, value: u64) -> i32 {
     0
 }
 
-pub(super) unsafe extern "C" fn get_present_count(_: Handle, out: *mut u32) -> i32 {
+pub(super) unsafe fn get_present_count(_: Handle, out: *mut u32) -> i32 {
     unsafe { out.write(with(|c| c.presents)) };
     0
 }
 
-pub(super) unsafe extern "C" fn destroy_generation(_: Handle) -> i32 {
+pub(super) unsafe fn destroy_generation(_: Handle) -> i32 {
     with(|c| {
         c.destroys_generation += 1;
         if c.fail_generation_destroy {
@@ -338,14 +338,14 @@ pub(super) unsafe extern "C" fn destroy_generation(_: Handle) -> i32 {
     })
 }
 
-pub(super) unsafe extern "C" fn release_chain(_: Handle) {
+pub(super) unsafe fn release_chain(_: Handle) {
     with(|c| {
         c.releases_chain += 1;
         c.objects &= !CHAIN;
     })
 }
 
-pub(super) unsafe extern "C" fn destroy_swapchain(_: Handle) -> i32 {
+pub(super) unsafe fn destroy_swapchain(_: Handle) -> i32 {
     with(|c| {
         c.destroys_swapchain += 1;
         if c.fail_swapchain_destroy {

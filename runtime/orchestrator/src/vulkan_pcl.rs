@@ -33,7 +33,6 @@ fn epoch_tag() -> isize {
     std::ptr::addr_of!(EPOCH_TAG) as isize
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Status {
     pub(crate) message: u32,
@@ -57,13 +56,13 @@ static PCL: Mutex<Pcl> = Mutex::new(Pcl {
     registered: None,
 });
 
-pub(crate) extern "C" fn rsf_core_latencyvk_pcl_reset() {
+pub(crate) fn rsf_core_latencyvk_pcl_reset() {
     if PCL.lock().unwrap().registered.take().is_some() {
         rsf_native_cpu_ping_message(0);
     }
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_pcl_status() -> Status {
+pub(crate) fn rsf_core_latencyvk_pcl_status() -> Status {
     PCL.lock()
         .unwrap()
         .registered
@@ -73,16 +72,16 @@ pub(crate) extern "C" fn rsf_core_latencyvk_pcl_status() -> Status {
 
 // The native caller serializes vendor registration against SDK initialization
 // and shutdown. The PCL lock is never held for a vendor call.
-pub(crate) extern "C" fn rsf_core_latencyvk_pcl_bind(use_input_thread: u32, sdk: &Sdk) -> i32 {
+pub(crate) fn rsf_core_latencyvk_pcl_bind(use_input_thread: bool, sdk: &Sdk) -> bool {
     let thread = unsafe { GetCurrentThreadId() };
     let previous = {
         let mut pcl = PCL.lock().unwrap();
         if pcl
             .registered
             .as_ref()
-            .is_some_and(|r| use_input_thread == 0 || r.thread == thread)
+            .is_some_and(|r| !use_input_thread || r.thread == thread)
         {
-            return 1;
+            return true;
         }
         // The old queue stays untouched while the SDK changes its target.
         pcl.registered.take()
@@ -93,7 +92,7 @@ pub(crate) extern "C" fn rsf_core_latencyvk_pcl_bind(use_input_thread: u32, sdk:
     sdk_result(result, 0);
     if result != 0 {
         PCL.lock().unwrap().registered = previous;
-        return 0;
+        return false;
     }
     let id = unsafe { (sdk.message.unwrap())() };
     if !(0xc000..=0xffff).contains(&id) {
@@ -101,7 +100,7 @@ pub(crate) extern "C" fn rsf_core_latencyvk_pcl_bind(use_input_thread: u32, sdk:
             rsf_native_cpu_ping_message(0);
         }
         sdk_result(NOT_READY, 0);
-        return 0;
+        return false;
     }
     let mut status = Status {
         message: id,
@@ -129,10 +128,10 @@ pub(crate) extern "C" fn rsf_core_latencyvk_pcl_bind(use_input_thread: u32, sdk:
     if !posted {
         sdk_result(FEATURE_FAILED, 0);
     }
-    i32::from(posted)
+    posted
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_pcl_ping(window: HWND) -> i32 {
+pub(crate) fn rsf_core_latencyvk_pcl_ping(window: HWND) -> i32 {
     let id = rsf_core_latencyvk_pcl_status().message;
     i32::from(!window.is_null() && id != 0 && unsafe { PostMessageW(window, id, 0, 0) } != 0)
 }

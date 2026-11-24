@@ -108,7 +108,7 @@ pub(super) unsafe fn graphics<'a>(native: Handle) -> &'a mut Graphics {
     unsafe { &mut capsule(native).graphics }
 }
 
-pub(super) unsafe extern "C" fn allocate(telemetry: Handle, generated: GeneratedFn) -> Handle {
+pub(super) unsafe fn allocate(telemetry: Handle, generated: GeneratedFn) -> Handle {
     let native = unsafe { alloc_zeroed(Layout::new::<Native>()) }.cast::<Native>();
     if let Some(native) = unsafe { native.as_mut() } {
         native.telemetry = telemetry;
@@ -117,7 +117,7 @@ pub(super) unsafe extern "C" fn allocate(telemetry: Handle, generated: Generated
     native.cast()
 }
 
-pub(super) unsafe extern "C" fn release(native: Handle) {
+pub(super) unsafe fn release(native: Handle) {
     let owner = unsafe { capsule(native) };
     unsafe {
         sdk::release_provider_objects(&owner.graphics, owner.module);
@@ -125,7 +125,7 @@ pub(super) unsafe extern "C" fn release(native: Handle) {
     }
 }
 
-pub(super) unsafe extern "C" fn load(native: Handle, path: *const u16) -> i32 {
+pub(super) unsafe fn load(native: Handle, path: *const u16) -> i32 {
     let native = unsafe { capsule(native) };
     let mut module = ptr::null_mut();
     let code = unsafe {
@@ -143,16 +143,12 @@ pub(super) unsafe extern "C" fn load(native: Handle, path: *const u16) -> i32 {
     code
 }
 
-pub(super) unsafe extern "C" fn versions(
-    native: Handle,
-    out: *mut Version,
-    count: *mut u64,
-) -> i32 {
+pub(super) unsafe fn versions(native: Handle, out: *mut Version, count: *mut u64) -> i32 {
     let native = unsafe { capsule(native) };
     unsafe { sdk::sdk_versions(native.query, native.graphics.device, out, count) }
 }
 
-pub(super) unsafe extern "C" fn create_generation(
+pub(super) unsafe fn create_generation(
     native: Handle,
     setup: *const BridgeCreate,
     provider: u64,
@@ -182,12 +178,12 @@ pub(super) unsafe extern "C" fn create_generation(
     }
 }
 
-pub(super) unsafe extern "C" fn get_provider(native: Handle, actual: *mut u64) -> i32 {
+pub(super) unsafe fn get_provider(native: Handle, actual: *mut u64) -> i32 {
     let native = unsafe { capsule(native) };
     unsafe { sdk::sdk_provider(native.query, &mut native.generation, actual) }
 }
 
-pub(super) unsafe extern "C" fn objects(native: Handle) -> u32 {
+pub(super) unsafe fn objects(native: Handle) -> u32 {
     let native = unsafe { capsule(native) };
     let graphics = &native.graphics;
     let local =
@@ -205,7 +201,7 @@ pub(super) unsafe extern "C" fn objects(native: Handle) -> u32 {
     .fold(0, |objects, (_, bit)| objects | bit)
 }
 
-pub(super) unsafe extern "C" fn create_swapchain(
+pub(super) unsafe fn create_swapchain(
     native: Handle,
     window: Handle,
     setup: *const SwapchainDesc,
@@ -257,7 +253,7 @@ unsafe extern "C" fn describe_resource(resource: Handle, state: u32, out: *mut F
     }
 }
 
-pub(super) unsafe extern "C" fn configure(
+pub(super) unsafe fn configure(
     native: Handle,
     sequence: u64,
     width: u32,
@@ -284,7 +280,7 @@ pub(super) unsafe extern "C" fn configure(
     }
 }
 
-pub(super) unsafe extern "C" fn prepare(
+pub(super) unsafe fn prepare(
     native: Handle,
     frame: *const BridgeFrame,
     sequence: u64,
@@ -304,7 +300,7 @@ pub(super) unsafe extern "C" fn prepare(
     }
 }
 
-pub(super) unsafe extern "C" fn wait_presents(native: Handle) -> i32 {
+pub(super) unsafe fn wait_presents(native: Handle) -> i32 {
     let native = unsafe { capsule(native) };
     unsafe { sdk::sdk_wait_presents(native.dispatch, &mut native.swapchain) }
 }
@@ -320,12 +316,12 @@ fn destroy_context(destroy: PfnFfxDestroyContext, context: &mut ffxContext) -> i
     code as i32
 }
 
-pub(super) unsafe extern "C" fn destroy_generation(native: Handle) -> i32 {
+pub(super) unsafe fn destroy_generation(native: Handle) -> i32 {
     let native = unsafe { capsule(native) };
     destroy_context(native.destroy, &mut native.generation)
 }
 
-pub(super) unsafe extern "C" fn destroy_swapchain(native: Handle) -> i32 {
+pub(super) unsafe fn destroy_swapchain(native: Handle) -> i32 {
     let native = unsafe { capsule(native) };
     destroy_context(native.destroy, &mut native.swapchain)
 }

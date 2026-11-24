@@ -35,7 +35,7 @@ pub(super) struct Graphics {
     pub(super) event: Handle,
 }
 
-pub(super) unsafe extern "C" fn release_chain(native: Handle) {
+pub(super) unsafe fn release_chain(native: Handle) {
     let graphics = unsafe { graphics(native) };
     if !graphics.chain.is_null() {
         drop(unsafe { IDXGISwapChain4::from_raw(graphics.chain) });
@@ -43,7 +43,7 @@ pub(super) unsafe extern "C" fn release_chain(native: Handle) {
     }
 }
 
-pub(super) unsafe extern "C" fn create_factory(native: Handle, flags: u32) -> i32 {
+pub(super) unsafe fn create_factory(native: Handle, flags: u32) -> i32 {
     let graphics = unsafe { graphics(native) };
     dx12::store_interface(
         unsafe { CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(flags)) },
@@ -51,7 +51,7 @@ pub(super) unsafe extern "C" fn create_factory(native: Handle, flags: u32) -> i3
     )
 }
 
-pub(super) unsafe extern "C" fn find_adapter(native: Handle, luid: u64) -> i32 {
+pub(super) unsafe fn find_adapter(native: Handle, luid: u64) -> i32 {
     let graphics = unsafe { graphics(native) };
     let factory: &IDXGIFactory4 = unsafe { dx12::borrow(&graphics.factory) };
     let luid = LUID {
@@ -64,13 +64,13 @@ pub(super) unsafe extern "C" fn find_adapter(native: Handle, luid: u64) -> i32 {
     )
 }
 
-pub(super) unsafe extern "C" fn get_adapter_vendor(native: Handle, vendor: *mut u32) -> i32 {
+pub(super) unsafe fn get_adapter_vendor(native: Handle, vendor: *mut u32) -> i32 {
     let graphics = unsafe { graphics(native) };
     let adapter: &IDXGIAdapter1 = unsafe { dx12::borrow(&graphics.adapter) };
     dx12::status(unsafe { adapter.GetDesc1() }.map(|desc| unsafe { vendor.write(desc.VendorId) }))
 }
 
-pub(super) unsafe extern "C" fn create_device(native: Handle, level: u32) -> i32 {
+pub(super) unsafe fn create_device(native: Handle, level: u32) -> i32 {
     let graphics = unsafe { graphics(native) };
     unsafe {
         dx12::create_device(
@@ -81,7 +81,7 @@ pub(super) unsafe extern "C" fn create_device(native: Handle, level: u32) -> i32
     }
 }
 
-pub(super) unsafe extern "C" fn create_event(native: Handle, manual: u32, initial: u32) -> i32 {
+pub(super) unsafe fn create_event(native: Handle, manual: u32, initial: u32) -> i32 {
     let graphics = unsafe { graphics(native) };
     use windows_sys::Win32::{Foundation::GetLastError, System::Threading::CreateEventW};
     graphics.event = unsafe {
@@ -99,7 +99,7 @@ pub(super) unsafe extern "C" fn create_event(native: Handle, manual: u32, initia
     }
 }
 
-pub(super) unsafe extern "C" fn create_queue(native: Handle, desc: *const QueueDesc) -> i32 {
+pub(super) unsafe fn create_queue(native: Handle, desc: *const QueueDesc) -> i32 {
     let graphics = unsafe { graphics(native) };
     let desc = unsafe { &*desc };
     let device: &ID3D12Device = unsafe { dx12::borrow(&graphics.device) };
@@ -115,7 +115,7 @@ pub(super) unsafe extern "C" fn create_queue(native: Handle, desc: *const QueueD
     )
 }
 
-pub(super) unsafe extern "C" fn create_allocator(native: Handle, kind: u32) -> i32 {
+pub(super) unsafe fn create_allocator(native: Handle, kind: u32) -> i32 {
     let graphics = unsafe { graphics(native) };
     let device: &ID3D12Device = unsafe { dx12::borrow(&graphics.device) };
     let kind = D3D12_COMMAND_LIST_TYPE(kind as i32);
@@ -125,11 +125,7 @@ pub(super) unsafe extern "C" fn create_allocator(native: Handle, kind: u32) -> i
     )
 }
 
-pub(super) unsafe extern "C" fn create_command_list(
-    native: Handle,
-    node_mask: u32,
-    kind: u32,
-) -> i32 {
+pub(super) unsafe fn create_command_list(native: Handle, node_mask: u32, kind: u32) -> i32 {
     let graphics = unsafe { graphics(native) };
     let device = unsafe { dx12::borrow(&graphics.device) };
     let allocator = unsafe { dx12::borrow(&graphics.allocator) };
@@ -144,11 +140,7 @@ pub(super) unsafe extern "C" fn create_command_list(
     )
 }
 
-pub(super) unsafe extern "C" fn create_completion_fence(
-    native: Handle,
-    value: u64,
-    flags: u32,
-) -> i32 {
+pub(super) unsafe fn create_completion_fence(native: Handle, value: u64, flags: u32) -> i32 {
     let graphics = unsafe { graphics(native) };
     let device: &ID3D12Device = unsafe { dx12::borrow(&graphics.device) };
     let result =
@@ -156,7 +148,7 @@ pub(super) unsafe extern "C" fn create_completion_fence(
     dx12::store_interface(result, &mut graphics.completion)
 }
 
-pub(super) unsafe extern "C" fn create_fence(native: Handle, handle: *mut Handle) -> i32 {
+pub(super) unsafe fn create_fence(native: Handle, handle: *mut Handle) -> i32 {
     let graphics = unsafe { graphics(native) };
     unsafe { dx12::create_shared_fence(graphics.device, &mut graphics.shared, &mut *handle) }
 }
@@ -166,14 +158,14 @@ pub(crate) unsafe extern "C" fn RsfFsr4FgReleaseImage(image: Handle) {
     unsafe { dx12::release_image(image) };
 }
 
-pub(super) unsafe extern "C" fn reset_commands(native: Handle) -> i32 {
+pub(super) unsafe fn reset_commands(native: Handle) -> i32 {
     let graphics = unsafe { graphics(native) };
     dx12::status(unsafe {
         dx12::reset_commands(dx12::borrow(&graphics.commands), graphics.allocator)
     })
 }
 
-pub(super) unsafe extern "C" fn close_commands(native: Handle) -> i32 {
+pub(super) unsafe fn close_commands(native: Handle) -> i32 {
     let graphics = unsafe { graphics(native) };
     dx12::status(unsafe { dx12::borrow::<ID3D12GraphicsCommandList>(&graphics.commands).Close() })
 }
@@ -205,7 +197,7 @@ pub(super) unsafe fn dxgi_description(
     desc.SwapEffect = DXGI_SWAP_EFFECT(setup.swap_effect as i32);
 }
 
-pub(super) unsafe extern "C" fn create_image(
+pub(super) unsafe fn create_image(
     native: Handle,
     width: u32,
     height: u32,
@@ -233,7 +225,7 @@ pub(super) unsafe extern "C" fn create_image(
     }
 }
 
-pub(super) unsafe extern "C" fn describe_texture(resource: Handle, out: *mut Texture) {
+pub(super) unsafe fn describe_texture(resource: Handle, out: *mut Texture) {
     let desc = unsafe { dx12::borrow::<ID3D12Resource>(&resource).GetDesc() };
     unsafe {
         out.write(Texture {
@@ -247,7 +239,7 @@ pub(super) unsafe extern "C" fn describe_texture(resource: Handle, out: *mut Tex
     }
 }
 
-pub(super) unsafe extern "C" fn shader_read(native: Handle, image: Handle, enter: u32) {
+pub(super) unsafe fn shader_read(native: Handle, image: Handle, enter: u32) {
     let graphics = unsafe { graphics(native) };
     let commands = unsafe { dx12::borrow(&graphics.commands) };
     let image = unsafe { dx12::borrow(&image) };
@@ -261,7 +253,7 @@ pub(super) unsafe extern "C" fn shader_read(native: Handle, image: Handle, enter
     dx12::transition(commands, image, before, after);
 }
 
-pub(super) unsafe extern "C" fn copy_to_backbuffer(native: Handle, color: Handle) -> i32 {
+pub(super) unsafe fn copy_to_backbuffer(native: Handle, color: Handle) -> i32 {
     let graphics = unsafe { graphics(native) };
     let chain: &IDXGISwapChain4 = unsafe { dx12::borrow(&graphics.chain) };
     let backbuffer: ID3D12Resource =
@@ -285,12 +277,12 @@ pub(super) unsafe extern "C" fn copy_to_backbuffer(native: Handle, color: Handle
     0
 }
 
-pub(super) unsafe extern "C" fn execute(native: Handle) {
+pub(super) unsafe fn execute(native: Handle) {
     let graphics = unsafe { graphics(native) };
     unsafe { dx12::execute(graphics.queue, graphics.commands) };
 }
 
-pub(super) unsafe extern "C" fn signal(native: Handle, value: u64, shared: u32) -> i32 {
+pub(super) unsafe fn signal(native: Handle, value: u64, shared: u32) -> i32 {
     let graphics = unsafe { graphics(native) };
     let fence = if shared != 0 {
         graphics.shared
@@ -300,13 +292,13 @@ pub(super) unsafe extern "C" fn signal(native: Handle, value: u64, shared: u32) 
     unsafe { dx12::queue_fence(graphics.queue, fence, value, true) }
 }
 
-pub(super) unsafe extern "C" fn present(native: Handle, vsync: u32) -> i32 {
+pub(super) unsafe fn present(native: Handle, vsync: u32) -> i32 {
     let graphics = unsafe { graphics(native) };
     let chain: &IDXGISwapChain4 = unsafe { dx12::borrow(&graphics.chain) };
     dx12::status(unsafe { chain.Present(vsync, DXGI_PRESENT(0)) }.ok())
 }
 
-pub(super) unsafe extern "C" fn get_present_count(native: Handle, count: *mut u32) -> i32 {
+pub(super) unsafe fn get_present_count(native: Handle, count: *mut u32) -> i32 {
     let graphics = unsafe { graphics(native) };
     let chain: &IDXGISwapChain4 = unsafe { dx12::borrow(&graphics.chain) };
     dx12::status(
@@ -314,12 +306,12 @@ pub(super) unsafe extern "C" fn get_present_count(native: Handle, count: *mut u3
     )
 }
 
-pub(super) unsafe extern "C" fn wait_shared(native: Handle, value: u64) -> i32 {
+pub(super) unsafe fn wait_shared(native: Handle, value: u64) -> i32 {
     let graphics = unsafe { graphics(native) };
     unsafe { dx12::queue_fence(graphics.queue, graphics.shared, value, false) }
 }
 
-pub(super) unsafe extern "C" fn wait_local(native: Handle, value: u64) -> i32 {
+pub(super) unsafe fn wait_local(native: Handle, value: u64) -> i32 {
     let graphics = unsafe { graphics(native) };
     unsafe { wait_fence(graphics.completion, value, graphics.event, 10_000) }
 }

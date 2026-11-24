@@ -130,21 +130,21 @@ impl Frames {
 // or CPU ledger access runs while holding this state lock.
 static FRAMES: Mutex<Frames> = Mutex::new(Frames::new());
 
-pub(crate) extern "C" fn rsf_core_latencyvk_frames_reset() {
+pub(crate) fn rsf_core_latencyvk_frames_reset() {
     PRESENTING.set(None);
     *FRAMES.lock().unwrap() = Frames::new();
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_frame_boundary(session: u64, frame: u64, skipped: u32) {
+pub(crate) fn rsf_core_latencyvk_frame_boundary(session: u64, frame: u64, skipped: bool) {
     FRAMES
         .lock()
         .unwrap()
-        .boundary(Frame { session, id: frame }, skipped != 0);
+        .boundary(Frame { session, id: frame }, skipped);
 }
 
 // A positive result identifies one marker, zero is a duplicate and a
 // negative result is the public error. Only the prefix through source_frame_id is read.
-pub(crate) unsafe extern "C" fn rsf_core_latencyvk_execution(
+pub(crate) unsafe fn rsf_core_latencyvk_execution(
     pass: *const rsf_game_render_pass,
     begin: u32,
 ) -> i32 {
@@ -184,11 +184,11 @@ pub(crate) unsafe extern "C" fn rsf_core_latencyvk_execution(
     result
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_legacy_render(frame: u64) {
+pub(crate) fn rsf_core_latencyvk_legacy_render(frame: u64) {
     FRAMES.lock().unwrap().legacy.rendered = frame;
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_legacy_present(begin: u32) -> u64 {
+pub(crate) fn rsf_core_latencyvk_legacy_present(begin: u32) -> u64 {
     FRAMES.lock().unwrap().legacy.present(begin != 0)
 }
 

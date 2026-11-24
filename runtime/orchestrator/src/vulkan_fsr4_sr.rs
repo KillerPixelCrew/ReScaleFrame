@@ -45,14 +45,11 @@ mod leaf {
         rsf_streamline_vk::sdk_api::guarded_or(FEATURE_FAILED, call)
     }
 
-    pub(super) unsafe extern "C" fn bridge_create(
-        setup: *const BridgeCreate,
-        out: *mut Handle,
-    ) -> i32 {
+    pub(super) unsafe fn bridge_create(setup: *const BridgeCreate, out: *mut Handle) -> i32 {
         guarded(|| unsafe { bridge::create_public(setup, out.cast()) })
     }
 
-    pub(super) unsafe extern "C" fn bridge_plan(
+    pub(super) unsafe fn bridge_plan(
         bridge: Handle,
         quality: u32,
         w: *mut u32,
@@ -61,7 +58,7 @@ mod leaf {
         guarded(|| unsafe { bridge::plan(bridge.cast(), quality, w, h) })
     }
 
-    pub(super) unsafe extern "C" fn bridge_info(bridge: *const c_void, info: *mut Info) -> i32 {
+    pub(super) unsafe fn bridge_info(bridge: *const c_void, info: *mut Info) -> i32 {
         unsafe { bridge::info(bridge.cast(), info) }
     }
 
@@ -70,7 +67,7 @@ mod leaf {
     }
 
     /// The resource output is written on every path, including a contained exception.
-    pub(super) unsafe extern "C" fn create_image(
+    pub(super) unsafe fn create_image(
         bridge: Handle,
         width: u32,
         height: u32,
@@ -99,7 +96,7 @@ mod leaf {
         unsafe { rsf_fsr4_compat::dx12_bridge::release_image(resource) };
     }
 
-    pub(super) unsafe extern "C" fn split(
+    pub(super) unsafe fn split(
         handoff: *const Handoff,
         commands: Handle,
         timeline: u64,
@@ -130,22 +127,19 @@ mod leaf {
         })
     }
 
-    pub(super) unsafe extern "C" fn bridge_sharpness(bridge: Handle, amount: f32) -> i32 {
+    pub(super) unsafe fn bridge_sharpness(bridge: Handle, amount: f32) -> i32 {
         unsafe { bridge::sharpness(bridge.cast(), amount) }
     }
 
-    pub(super) unsafe extern "C" fn bridge_evaluate(
-        bridge: Handle,
-        frame: *const BridgeFrame,
-    ) -> i32 {
+    pub(super) unsafe fn bridge_evaluate(bridge: Handle, frame: *const BridgeFrame) -> i32 {
         guarded(|| unsafe { bridge::evaluate(bridge.cast(), frame) })
     }
 
-    pub(super) unsafe extern "C" fn bridge_prepare_destroy(bridge: Handle) -> i32 {
+    pub(super) unsafe fn bridge_prepare_destroy(bridge: Handle) -> i32 {
         guarded(|| unsafe { bridge::prepare_destroy(bridge.cast()) })
     }
 
-    pub(super) unsafe extern "C" fn bridge_destroy(bridge: Handle) -> i32 {
+    pub(super) unsafe fn bridge_destroy(bridge: Handle) -> i32 {
         guarded(|| unsafe { bridge::destroy(bridge.cast()) })
     }
 

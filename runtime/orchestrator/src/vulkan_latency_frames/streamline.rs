@@ -71,7 +71,7 @@ fn emit(sdk: &SdkTokens, token: &mut Token, kind: u32) -> i32 {
     0
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_token_begin(session: u64, id: u64, sdk: &SdkTokens) {
+pub(crate) fn rsf_core_latencyvk_token_begin(session: u64, id: u64, sdk: &SdkTokens) {
     let frame = Frame { session, id };
     let index = {
         let mut frames = FRAMES.lock().unwrap();
@@ -108,55 +108,42 @@ pub(crate) extern "C" fn rsf_core_latencyvk_token_begin(session: u64, id: u64, s
     }
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_token_lookup(
-    session: u64,
-    id: u64,
-    sdk: &SdkTokens,
-) -> usize {
+pub(crate) fn rsf_core_latencyvk_token_lookup(session: u64, id: u64, sdk: &SdkTokens) -> usize {
     validated(sdk, session, id).map_or(0, |token| token.handle)
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_token_pace_begin(
-    session: u64,
-    id: u64,
-    sdk: &SdkTokens,
-) -> i32 {
+pub(crate) fn rsf_core_latencyvk_token_pace_begin(session: u64, id: u64, sdk: &SdkTokens) -> bool {
     let Some(mut token) = validated(sdk, session, id) else {
-        return 0;
+        return false;
     };
     if token.pacing_attempted || unsafe { (sdk.current.unwrap())() } != token.handle {
-        return 0;
+        return false;
     }
     let mut frames = FRAMES.lock().unwrap();
     if frames.streamline.pacing {
-        return 0;
+        return false;
     }
     token.pacing_attempted = true;
     *frames.streamline.slot(id) = Some(token);
     frames.streamline.pacing = true;
-    1
+    true
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_token_pace_end() {
+pub(crate) fn rsf_core_latencyvk_token_pace_end() {
     FRAMES.lock().unwrap().streamline.pacing = false;
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_token_pacing() -> i32 {
-    i32::from(FRAMES.lock().unwrap().streamline.pacing)
+pub(crate) fn rsf_core_latencyvk_token_pacing() -> bool {
+    FRAMES.lock().unwrap().streamline.pacing
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_token_mark(
-    session: u64,
-    id: u64,
-    kind: u32,
-    sdk: &SdkTokens,
-) {
+pub(crate) fn rsf_core_latencyvk_token_mark(session: u64, id: u64, kind: u32, sdk: &SdkTokens) {
     if let Some(mut token) = validated(sdk, session, id) {
         let _ = emit(sdk, &mut token, kind);
     }
 }
 
-pub(crate) extern "C" fn rsf_core_latencyvk_token_input(
+pub(crate) fn rsf_core_latencyvk_token_input(
     session: u64,
     id: u64,
     kind: u32,

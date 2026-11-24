@@ -174,7 +174,7 @@ impl Host {
         let mut owner = RSF_PACING_NONE;
         if !self.closing && !lease.closing {
             let reflex = self.sdk(platform).is_some_and(|sdk| {
-                bind_pcl(0, &sdk.pcl) != 0 && rsf_core_latencyvk_pcl_status().available != 0
+                bind_pcl(false, &sdk.pcl) && rsf_core_latencyvk_pcl_status().available != 0
             });
             let amd = rsf_core_amd_vk_status().available;
             let required = if lease.xell(platform) {
@@ -210,7 +210,7 @@ pub(crate) fn amd_device_retired() {
     if host.owner == AMD {
         host.owner = RSF_PACING_NONE;
     }
-    if host.claimed_owner == AMD && rsf_core_latencyvk_token_pacing() == 0 {
+    if host.claimed_owner == AMD && !rsf_core_latencyvk_token_pacing() {
         rsf_native_latency_release_claim(CLIENT);
         host.claimed_owner = RSF_PACING_NONE;
     }
@@ -431,7 +431,7 @@ unsafe extern "C" fn fact(user: *mut c_void, event: *const rsf_game_cpu_event) {
         if keyed
             && matches!(stage, RSF_GAME_CPU_FRAME_BEGIN | RSF_GAME_CPU_INPUT_SAMPLE)
             && let Some(sdk) = host.sdk(platform)
-            && bind_pcl(1, &sdk.pcl) == 0
+            && !bind_pcl(true, &sdk.pcl)
         {
             return;
         }
@@ -484,9 +484,9 @@ unsafe extern "C" fn fact(user: *mut c_void, event: *const rsf_game_cpu_event) {
         return;
     }
     if stage == RSF_GAME_CPU_FRAME_BEGIN || skipped {
-        rsf_core_latencyvk_frame_boundary(session, id, u32::from(skipped));
+        rsf_core_latencyvk_frame_boundary(session, id, skipped);
     }
-    let Some(sdk) = host.sdk(platform).filter(|sdk| bind_pcl(0, &sdk.pcl) != 0) else {
+    let Some(sdk) = host.sdk(platform).filter(|sdk| bind_pcl(false, &sdk.pcl)) else {
         return;
     };
     if stage == RSF_GAME_CPU_FRAME_BEGIN {
@@ -495,7 +495,7 @@ unsafe extern "C" fn fact(user: *mut c_void, event: *const rsf_game_cpu_event) {
         && owner != RSF_PACING_NONE
         && host.owner == owner
         && rsf_native_latency_has_claim(CLIENT) != 0
-        && rsf_core_latencyvk_token_pace_begin(session, id, &sdk.tokens) != 0
+        && rsf_core_latencyvk_token_pace_begin(session, id, &sdk.tokens)
     {
         drop(host);
         let reflex = owner == RSF_PACING_REFLEX;
@@ -718,7 +718,7 @@ pub fn rsf_core_latencyvk_shutdown(platform: &Platform) -> i32 {
     };
     {
         let mut host = HOST.lock().unwrap();
-        if host.closing || rsf_core_latencyvk_token_pacing() != 0 {
+        if host.closing || rsf_core_latencyvk_token_pacing() {
             return NOT_READY;
         }
         if let Some(sdk) = host.sdk(platform) {
