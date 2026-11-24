@@ -7,6 +7,7 @@ use crate::sys::{
     rsf_fgvk_status as Status,
 };
 use crate::sys::{rsf_srvk_image as Image, rsf_srvk_setup as Graphics};
+use crate::vulkan_dispatch::succeeded;
 use crate::vulkan_external_copy::{
     self, ALL_COMMANDS, Barrier, FAMILY_EXTERNAL, GENERAL, TRANSFER_DST, Transfer, UNDEFINED,
 };
@@ -509,10 +510,6 @@ pub(super) unsafe fn create<V: Vendor>(
         chain.write(identity);
     }
     0
-}
-
-pub(super) fn succeeded(result: i32) -> Result<(), i32> {
-    if result == 0 { Ok(()) } else { Err(result) }
 }
 
 #[derive(Default)]

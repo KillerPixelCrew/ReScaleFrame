@@ -5,7 +5,7 @@ use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
 use crate::sys::*;
 use crate::sys::{RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK};
-use crate::vulkan_dispatch::promoted_device_proc_alias;
+use crate::vulkan_dispatch::{promoted_device_proc_alias, succeeded};
 use crate::vulkan_fg_copy::{Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED};
 use crate::vulkan_fg_resources::Image as OwnedImage;
 use crate::vulkan_fg_resources::Platform as ImageOps;
@@ -536,10 +536,6 @@ struct FidelityFx {
     history: History,
 }
 
-fn check(result: i32) -> Result<(), i32> {
-    if result == 0 { Ok(()) } else { Err(result) }
-}
-
 impl FfxOps {
     fn open_sdk(&self, setup: &Setup, module: &SdkModule) -> Result<Handle, i32> {
         let handle = unsafe { (self.allocate)(setup) };
@@ -581,7 +577,7 @@ impl FfxOps {
         if memory.is_none() {
             return Err(MISSING_ENTRY_POINT);
         }
-        check(unsafe { (self.initialize_graphics)(handle, setup, &entries, memory) })
+        succeeded(unsafe { (self.initialize_graphics)(handle, setup, &entries, memory) })
     }
 }
 
@@ -618,7 +614,7 @@ impl FidelityFx {
 
     unsafe fn initialize(&mut self, setup: &Setup, output: [u32; 2]) -> Result<[u32; 2], i32> {
         let (ops, handle) = (self.ops, self.handle);
-        check(dispatch_register_with_lookup(
+        succeeded(dispatch_register_with_lookup(
             setup.device,
             setup.device_proc,
             Some(ops.lookup),
@@ -627,7 +623,7 @@ impl FidelityFx {
         ops.prepare_graphics(handle, setup)?;
         let mut versions = [Version::default(); MAX_VERSIONS];
         let mut count = 0;
-        check(unsafe { (ops.versions)(handle, &mut versions, &mut count) })?;
+        succeeded(unsafe { (ops.versions)(handle, &mut versions, &mut count) })?;
         let count = usize::try_from(count).map_err(|_| NOT_SUPPORTED)?;
         let version = ffx_version::select(
             versions.get(..count).ok_or(NOT_SUPPORTED)?,
@@ -643,9 +639,9 @@ impl FidelityFx {
             | (setup.motion_jittered * FFX_JITTER_CANCELLATION);
         // Creation can leave a partial context for the cleanup leaf.
         self.effect_live = true;
-        check(unsafe { (ops.create_effect)(handle, setup, version, flags) })?;
+        succeeded(unsafe { (ops.create_effect)(handle, setup, version, flags) })?;
         let mut effective = 0;
-        check(unsafe { (ops.effective_version)(handle, &mut effective) })?;
+        succeeded(unsafe { (ops.effective_version)(handle, &mut effective) })?;
         if effective != version {
             return Err(NOT_SUPPORTED);
         }
@@ -655,7 +651,7 @@ impl FidelityFx {
             output
         } else {
             let (mut width, mut height) = (0, 0);
-            check(unsafe { (ops.plan)(handle, setup, &mut width, &mut height) })?;
+            succeeded(unsafe { (ops.plan)(handle, setup, &mut width, &mut height) })?;
             [width, height]
         };
         if plan.contains(&0) {

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
-use crate::dx12_vulkan_interop::{Owner as Interop, checked};
+use crate::dx12_vulkan_interop::Owner as Interop;
 use crate::frame_capture_vk::sr_capture_inputs;
 use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
 use crate::sys::rsf_dx12vk_shared_image;
 use crate::sys::*;
+use crate::vulkan_dispatch::succeeded;
 use crate::vulkan_external_copy::{self, Barrier, FAMILY_EXTERNAL, FAMILY_IGNORED, Transfer};
 use crate::vulkan_sr::{
     GENERAL, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, SHADER_READ, SHARPENING_VENDOR,
@@ -261,9 +262,9 @@ impl Owner {
             motion_jittered: self.setup.motion_jittered,
             reserved: 0,
         };
-        checked(unsafe { leaf::bridge_create(&request, &mut self.bridge) })?;
+        succeeded(unsafe { leaf::bridge_create(&request, &mut self.bridge) })?;
         let [width, height] = &mut self.render;
-        checked(unsafe { leaf::bridge_plan(self.bridge, self.setup.quality, width, height) })?;
+        succeeded(unsafe { leaf::bridge_plan(self.bridge, self.setup.quality, width, height) })?;
         let mut info = Info {
             struct_size: size_of::<Info>() as u32,
             abi_version: RSF_FSR4_BRIDGE_ABI_VERSION,
@@ -272,8 +273,8 @@ impl Owner {
             vendor_id: 0,
             int8_compatibility: 0,
         };
-        checked(self.info(&mut info))?;
-        checked(unsafe {
+        succeeded(self.info(&mut info))?;
+        succeeded(unsafe {
             leaf::capture_initialize(self.graphics.handle, &self.setup, info.provider_version)
         })?;
 
@@ -566,7 +567,7 @@ impl Owner {
         // The bridge orders its done signal after the producer's ready value
         // even when the SDK refuses the dispatch. The host can record fallback
         // on this continuation, with no copy from the failed provider output.
-        checked(unsafe { leaf::bridge_evaluate(self.bridge, &dispatch) })?;
+        succeeded(unsafe { leaf::bridge_evaluate(self.bridge, &dispatch) })?;
         self.history.valid = true;
         self.record_output(*continuation, frame, record, images[3], dispatch.reset);
         Ok(())
@@ -578,7 +579,7 @@ impl Owner {
         }
         let graphics = self.graphics.handle;
         if self.history.done != 0 {
-            checked(unsafe {
+            succeeded(unsafe {
                 leaf::wait(
                     graphics,
                     self.interop.as_ref().unwrap().timeline(),
@@ -589,12 +590,12 @@ impl Owner {
         }
         // DX12 done protects the shared payload. Vulkan idle additionally
         // covers the continuation, including copies, captures and sharpening.
-        checked(unsafe { leaf::idle(graphics) })?;
+        succeeded(unsafe { leaf::idle(graphics) })?;
         // Once SDK teardown starts, keep the imports for retries but close
         // admission. A capture or SDK failure can leave the context half retired.
         self.images = None;
         if !self.bridge.is_null() {
-            checked(unsafe { leaf::bridge_prepare_destroy(self.bridge) })?;
+            succeeded(unsafe { leaf::bridge_prepare_destroy(self.bridge) })?;
         }
         if unsafe { leaf::capture_flush(graphics) } == 0 {
             return Err(UNKNOWN);
@@ -603,7 +604,7 @@ impl Owner {
         self.history.done = 0;
         unsafe { leaf::clear_sharpen(graphics) };
         drop(self.interop.take());
-        checked(unsafe { leaf::bridge_destroy(self.bridge) })
+        succeeded(unsafe { leaf::bridge_destroy(self.bridge) })
     }
 }
 

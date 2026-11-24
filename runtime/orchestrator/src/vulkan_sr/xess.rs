@@ -146,7 +146,7 @@ unsafe impl Sync for Library {}
 impl Library {
     fn resolve(ops: &'static XessOps, module: SdkModule) -> Result<Self, i32> {
         let mut handle = ptr::null_mut();
-        check(unsafe { (ops.allocate_table)(&mut handle) })?;
+        succeeded(unsafe { (ops.allocate_table)(&mut handle) })?;
         if handle.is_null() {
             return Err(LOAD_FAILED);
         }
@@ -349,7 +349,7 @@ impl XessOwner {
     ) -> Result<Box<Self>, CreateError<Box<Self>>> {
         let library = session().clone().ok_or(NOT_READY)?;
         let mut native = ptr::null_mut();
-        check(unsafe { (ops.open)(library.handle, &mut native) })?;
+        succeeded(unsafe { (ops.open)(library.handle, &mut native) })?;
         if native.is_null() {
             return Err(INIT_FAILED.into());
         }
@@ -410,7 +410,7 @@ impl XessOwner {
             return Err(INIT_FAILED);
         }
         (self.plan, self.minimum, self.maximum) = (plan, minimum, maximum);
-        check(unsafe { (ops.bind_device)(native, &setup) })?;
+        succeeded(unsafe { (ops.bind_device)(native, &setup) })?;
         let mut version = xess_version_t::default();
         // A missing version leaves an unidentified provider in capture metadata.
         let _ = unsafe { (ops.version)(self._library.handle, &mut version) };

@@ -10,6 +10,7 @@ use crate::sys::{
     rsf_fgvk_latency_status as LatencyStatus, rsf_fgvk_setup as Setup, rsf_fgvk_status as Status,
 };
 use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup as Graphics};
+use crate::vulkan_dispatch::succeeded;
 use crate::vulkan_dx12_fg::{self as shared, *};
 use crate::vulkan_latency_frames::{Marker, legacy_present_source};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};

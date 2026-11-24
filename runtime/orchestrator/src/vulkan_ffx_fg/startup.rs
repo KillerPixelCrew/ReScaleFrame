@@ -2,6 +2,7 @@
 use super::{Handle, Host, INIT_FAILED, OK, Setup};
 use crate::sdk_module::FFX_CONTEXT_EXPORTS;
 use crate::sys::rsf_vk_function;
+use crate::vulkan_dispatch::succeeded;
 use rsf_game_sys::backend_result::MISSING_ENTRY_POINT;
 use std::ffi::{CStr, c_char};
 use std::ptr;
@@ -45,10 +46,6 @@ const _: () = {
     assert!(size_of::<WsiEntries>() == 6 * size_of::<Handle>());
 };
 
-fn checked(result: i32) -> Result<(), i32> {
-    if result == OK { Ok(()) } else { Err(result) }
-}
-
 impl Platform {
     fn prepare(&self, native: Handle, module: Handle) -> Result<Handle, i32> {
         let mut core = [None; SDK_ENTRY_COUNT + DEVICE_NAMES.len()];
@@ -60,14 +57,14 @@ impl Platform {
             return Err(MISSING_ENTRY_POINT);
         }
         for (entry, name) in core[SDK_ENTRY_COUNT..].iter_mut().zip(DEVICE_NAMES) {
-            checked(unsafe { (self.device_proc)(native, name.as_ptr(), 1, entry) })?;
+            succeeded(unsafe { (self.device_proc)(native, name.as_ptr(), 1, entry) })?;
             if entry.is_none() {
                 return Err(MISSING_ENTRY_POINT);
             }
         }
         unsafe { (self.bind_core)(native, &core) };
         let mut memory = None;
-        checked(unsafe {
+        succeeded(unsafe {
             (self.instance_proc)(
                 native,
                 c"vkGetPhysicalDeviceMemoryProperties".as_ptr(),
@@ -77,10 +74,10 @@ impl Platform {
         if memory.is_none() {
             return Err(MISSING_ENTRY_POINT);
         }
-        checked(unsafe { (self.read_memory)(native, memory) })?;
-        checked(unsafe { (self.load_resources)(native) })?;
+        succeeded(unsafe { (self.read_memory)(native, memory) })?;
+        succeeded(unsafe { (self.load_resources)(native) })?;
         let mut resources = ptr::null_mut();
-        checked(unsafe { (self.initialize_capture)(native, &mut resources) })?;
+        succeeded(unsafe { (self.initialize_capture)(native, &mut resources) })?;
 
         let mut wsi = [None; 1 + WSI_NAMES.len()];
         wsi[0] = unsafe { (self.symbol)(module, c"rsfFfxSetVulkanWsiDispatch".as_ptr()) };
@@ -89,7 +86,7 @@ impl Platform {
         }
         // All five WSI names use the original device resolver, without alias promotion.
         for (entry, name) in wsi[1..].iter_mut().zip(WSI_NAMES) {
-            checked(unsafe { (self.device_proc)(native, name.as_ptr(), 0, entry) })?;
+            succeeded(unsafe { (self.device_proc)(native, name.as_ptr(), 0, entry) })?;
         }
         if wsi[1..].iter().any(Option::is_none) {
             return Err(INIT_FAILED);

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
 use crate::dx12_vulkan_interop::{
-    BGRA8_UNORM as VK_BGRA8_UNORM, R32_FLOAT as VK_R32_FLOAT, RG16_FLOAT as VK_RG16_FLOAT, checked,
+    BGRA8_UNORM as VK_BGRA8_UNORM, R32_FLOAT as VK_R32_FLOAT, RG16_FLOAT as VK_RG16_FLOAT,
 };
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::sr_session::has_capacity;
+use crate::vulkan_dispatch::succeeded;
 use rsf_game_sys::windows_path::absolute_wide_path;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION,
@@ -213,10 +214,10 @@ impl Bridge {
     fn open_device(&mut self) -> Result<(), i32> {
         let native = self.native;
         unsafe {
-            checked(leaf::create_factory(native, 0))?;
-            checked(leaf::find_adapter(native, self.luid))?;
-            checked(leaf::get_adapter_vendor(native, &mut self.vendor))?;
-            checked(leaf::create_device(native, FEATURE_LEVEL_12_0))
+            succeeded(leaf::create_factory(native, 0))?;
+            succeeded(leaf::find_adapter(native, self.luid))?;
+            succeeded(leaf::get_adapter_vendor(native, &mut self.vendor))?;
+            succeeded(leaf::create_device(native, FEATURE_LEVEL_12_0))
         }
     }
 
@@ -227,8 +228,8 @@ impl Bridge {
         let mut path = [0; PROVIDER_PATH_CAPACITY];
         provider_path(directory, &mut path)?;
         unsafe {
-            checked(leaf::load(self.native, path.as_ptr()))?;
-            checked(leaf::versions(
+            succeeded(leaf::load(self.native, path.as_ptr()))?;
+            succeeded(leaf::versions(
                 self.native,
                 versions.as_mut_ptr(),
                 &mut count,
@@ -251,12 +252,12 @@ impl Bridge {
         };
         let native = self.native;
         unsafe {
-            checked(leaf::create_queue(native, &queue))?;
-            checked(leaf::create_allocator(native, COMMAND_LIST_DIRECT))?;
-            checked(leaf::create_command_list(native, 0, COMMAND_LIST_DIRECT))?;
-            checked(leaf::close_commands(native))?;
-            checked(leaf::create_completion_fence(native, 0, FENCE_FLAGS_NONE))?;
-            checked(leaf::create_event(native, 0, 0))
+            succeeded(leaf::create_queue(native, &queue))?;
+            succeeded(leaf::create_allocator(native, COMMAND_LIST_DIRECT))?;
+            succeeded(leaf::create_command_list(native, 0, COMMAND_LIST_DIRECT))?;
+            succeeded(leaf::close_commands(native))?;
+            succeeded(leaf::create_completion_fence(native, 0, FENCE_FLAGS_NONE))?;
+            succeeded(leaf::create_event(native, 0, 0))
         }
     }
 
@@ -268,7 +269,7 @@ impl Bridge {
         self.discover(setup.runtime_directory)?;
         let mut actual = 0;
         unsafe {
-            checked(leaf::create_generation(self.native, setup, self.provider))?;
+            succeeded(leaf::create_generation(self.native, setup, self.provider))?;
             if leaf::get_provider(self.native, &mut actual) != 0 || actual != self.provider {
                 return Err(UNSUPPORTED);
             }
@@ -333,7 +334,7 @@ impl Bridge {
     fn configure(&mut self, enabled: u32, hudless: Handle) -> Result<(), i32> {
         let [width, height] = self.output;
         self.sequence = self.sequence.wrapping_add(1);
-        checked(unsafe {
+        succeeded(unsafe {
             leaf::configure(self.native, self.sequence, width, height, enabled, hudless)
         })?;
         self.configured = true;
@@ -345,14 +346,14 @@ impl Bridge {
 
     fn wait_presents(&self) -> Result<(), i32> {
         if self.has(SWAPCHAIN) {
-            checked(unsafe { leaf::wait_presents(self.native) })?;
+            succeeded(unsafe { leaf::wait_presents(self.native) })?;
         }
         Ok(())
     }
 
     fn wait_local(&self) -> Result<(), i32> {
         if self.completion != 0 {
-            checked(unsafe { leaf::wait_local(self.native, self.completion) })?;
+            succeeded(unsafe { leaf::wait_local(self.native, self.completion) })?;
         }
         Ok(())
     }
@@ -497,19 +498,19 @@ impl Bridge {
                 unsafe { leaf::shader_read(native, resource, 0) };
             }
         }
-        checked(unsafe { leaf::copy_to_backbuffer(native, frame.color) })
+        succeeded(unsafe { leaf::copy_to_backbuffer(native, frame.color) })
     }
 
     fn record_commands(&mut self, frame: &BridgeFrame) -> Result<(), i32> {
-        checked(unsafe { leaf::reset_commands(self.native) })?;
+        succeeded(unsafe { leaf::reset_commands(self.native) })?;
         let recorded = self.record_frame(frame);
-        let closed = checked(unsafe { leaf::close_commands(self.native) });
+        let closed = succeeded(unsafe { leaf::close_commands(self.native) });
         recorded.and(closed)
     }
 
     fn submit_frame(&mut self, frame: &BridgeFrame) -> Result<i32, i32> {
         let native = self.native;
-        checked(unsafe { leaf::wait_shared(native, frame.ready_value) })?;
+        succeeded(unsafe { leaf::wait_shared(native, frame.ready_value) })?;
         unsafe { leaf::execute(native) };
         let presented = unsafe { leaf::present(native, frame.vsync) };
 
@@ -518,9 +519,9 @@ impl Bridge {
         self.signal_local()?;
         self.wait_local()?;
         if frame.enabled != 0 {
-            checked(unsafe { leaf::reset_commands(native) })?;
+            succeeded(unsafe { leaf::reset_commands(native) })?;
             unsafe { leaf::shader_read(native, frame.hudless, 0) };
-            checked(unsafe { leaf::close_commands(native) })?;
+            succeeded(unsafe { leaf::close_commands(native) })?;
             unsafe { leaf::execute(native) };
         }
         Ok(presented)
@@ -571,7 +572,7 @@ impl Bridge {
         if self.prepared_destroy {
             return Ok(());
         }
-        checked(self.terminal)?;
+        succeeded(self.terminal)?;
         self.wait_presents()?;
         if self.has(LOCAL_FENCE) {
             self.signal_local()?;
@@ -583,20 +584,20 @@ impl Bridge {
         if self.prepared_destroy {
             return Ok(());
         }
-        checked(self.terminal)?;
+        succeeded(self.terminal)?;
         if self.has(CHAIN) && self.configured {
             self.configure(0, ptr::null_mut())?;
         }
         self.drain()?;
         let native = self.native;
         if self.has(GENERATION) {
-            checked(unsafe { leaf::destroy_generation(native) })?;
+            succeeded(unsafe { leaf::destroy_generation(native) })?;
         }
         if self.has(CHAIN) {
             unsafe { leaf::release_chain(native) };
         }
         if self.has(SWAPCHAIN) {
-            checked(unsafe { leaf::destroy_swapchain(native) })?;
+            succeeded(unsafe { leaf::destroy_swapchain(native) })?;
         }
         self.prepared_destroy = true;
         Ok(())

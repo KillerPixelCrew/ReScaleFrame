@@ -11,3 +11,8 @@ pub(super) fn promoted_device_proc_alias(name: &CStr) -> Option<&'static CStr> {
         _ => None,
     }
 }
+
+/// A zero Vulkan, vendor or backend status as `Ok`, anything else as the error.
+pub(crate) fn succeeded(result: i32) -> Result<(), i32> {
+    if result == 0 { Ok(()) } else { Err(result) }
+}

@@ -4,6 +4,7 @@ use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
 use crate::sys::*;
 use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup};
+use crate::vulkan_dispatch::succeeded;
 use ash::vk;
 use std::ffi::c_void;
 use std::os::windows::io::AsRawHandle;
@@ -47,10 +48,6 @@ type Output = rsf_dx12vk_shared_image;
 const INVALID: i32 = RSF_DX12VK_INTEROP_INVALID_ARGUMENT;
 const ABI_MISMATCH: i32 = RSF_DX12VK_INTEROP_ABI_MISMATCH;
 
-pub(super) fn checked(result: i32) -> Result<(), i32> {
-    if result == 0 { Ok(()) } else { Err(result) }
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -76,13 +73,13 @@ impl Owner {
 
     pub(super) fn adapter_luid(setup: &rsf_srvk_setup) -> Result<u64, i32> {
         let mut luid = 0;
-        checked(unsafe { leaf::adapter_luid(setup, &mut luid) })?;
+        succeeded(unsafe { leaf::adapter_luid(setup, &mut luid) })?;
         Ok(luid)
     }
 
     pub(super) fn open(setup: &rsf_srvk_setup, release_image: ImageRelease) -> Result<Self, i32> {
         let mut native = ptr::null_mut();
-        checked(unsafe { leaf::open(setup, &mut native) })?;
+        succeeded(unsafe { leaf::open(setup, &mut native) })?;
         if native.is_null() {
             return Err(INITIALIZATION_FAILED);
         }
@@ -178,16 +175,16 @@ impl Owner {
         if unsafe { leaf::timeline_importable(self.native) } == 0 {
             return Err(INVALID_EXTERNAL_HANDLE);
         }
-        checked(unsafe { leaf::create_timeline(self.native, &mut self.timeline) })?;
+        succeeded(unsafe { leaf::create_timeline(self.native, &mut self.timeline) })?;
         if self.timeline == 0 {
             return Err(INITIALIZATION_FAILED);
         }
         let mut raw = ptr::null_mut();
         let result = unsafe { create(user, &mut raw) };
         let handle = unsafe { owned_win32_handle(raw) };
-        checked(result)?;
+        succeeded(result)?;
         let handle = handle.ok_or(INVALID_EXTERNAL_HANDLE)?;
-        checked(unsafe {
+        succeeded(unsafe {
             leaf::import_timeline(self.native, self.timeline, handle.as_raw_handle())
         })
     }
@@ -201,7 +198,7 @@ impl Owner {
         create: impl FnOnce(*mut Handle, *mut Handle) -> i32,
     ) -> Result<(), i32> {
         let (mut importable, mut max_width, mut max_height) = (0, 0, 0);
-        checked(unsafe {
+        succeeded(unsafe {
             leaf::image_properties(
                 self.native,
                 format,
@@ -218,12 +215,12 @@ impl Owner {
         let mut raw = ptr::null_mut();
         let result = create(&mut raw, &mut image.dx12);
         let handle = unsafe { owned_win32_handle(raw) };
-        checked(result)?;
+        succeeded(result)?;
         let handle = handle.ok_or(INVALID_EXTERNAL_HANDLE)?;
         if image.dx12.is_null() {
             return Err(INVALID_EXTERNAL_HANDLE);
         }
-        checked(unsafe {
+        succeeded(unsafe {
             leaf::create_image(
                 self.native,
                 format,
@@ -238,7 +235,7 @@ impl Owner {
         }
         let (mut bytes, mut image_types, mut handle_types) = (0u64, 0u32, 0u32);
         unsafe { leaf::image_requirements(self.native, image.image, &mut bytes, &mut image_types) };
-        checked(unsafe {
+        succeeded(unsafe {
             leaf::handle_memory_types(self.native, handle.as_raw_handle(), &mut handle_types)
         })?;
         let memory_types =
@@ -246,7 +243,7 @@ impl Owner {
         if memory_types == 0 {
             return Err(INCOMPATIBLE_DRIVER);
         }
-        checked(unsafe {
+        succeeded(unsafe {
             leaf::allocate_memory(
                 self.native,
                 image.image,
@@ -259,7 +256,7 @@ impl Owner {
         if image.memory == 0 {
             return Err(INITIALIZATION_FAILED);
         }
-        checked(unsafe { leaf::bind_image(self.native, image.image, image.memory) })?;
+        succeeded(unsafe { leaf::bind_image(self.native, image.image, image.memory) })?;
         Ok(())
     }
 }
