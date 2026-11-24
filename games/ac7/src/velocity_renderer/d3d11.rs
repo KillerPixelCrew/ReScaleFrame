@@ -4,10 +4,10 @@ use crate::sys::rsf_frame_tap_geometry as Geometry;
 use crate::sys::{rsf_d3d11_state, rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::velocity_commit::*;
 use crate::velocity_device::{Device, Kernels};
-use crate::velocity_history::*;
 use crate::velocity_pass_cache::VariantRequest;
 use crate::velocity_stream::*;
 use rsf_game_sys::{RSF_GAME_RENDER_RESET, rsf_game_render_pass as Pass};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::{from_ref, null_mut};
 use std::sync::OnceLock;
@@ -152,13 +152,64 @@ fn upload<T>(context: &ID3D11DeviceContext, buffer: &ID3D11Buffer, value: &T) {
     unsafe { context.UpdateSubresource(buffer, 0, None, from_ref(value).cast(), 0, 0) }
 }
 
-#[derive(Default)]
+const NO_FRAME: u32 = u32::MAX;
+// An entry survives the frame end it was used in and the one after.
+const RETAINED_EPOCHS: u64 = 2;
+
+/// The session and the history key, or the view key when the scope has none.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct ViewKey(u64, u64);
+
+impl ViewKey {
+    fn of(pass: &Pass) -> Self {
+        let key = if pass.history_key != 0 {
+            pass.history_key
+        } else {
+            pass.view_key
+        };
+        Self(pass.session_id, key)
+    }
+}
+
+/// A draw's geometry identity. Particles drop the vertex factory and the draw offsets.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct ModelKey {
+    view: ViewKey,
+    primitive: u64,
+    material: u64,
+    vertex_hash: u32,
+    vertex_factory: u64,
+    start: u32,
+    base_vertex: i32,
+    geometry_hash: u32,
+}
+
+/// One model's GPU history: last frame's records and this frame's, the native frame they belong
+/// to, this frame's record count and the frame-end epoch it was last used in.
 struct Model {
     previous: Option<Writable>,
     now: Option<Writable>,
+    frame: u32,
+    records: u32,
+    epoch: u64,
+    usable: bool,
 }
 
-struct View {
+impl Default for Model {
+    fn default() -> Self {
+        Self {
+            previous: None,
+            now: None,
+            frame: NO_FRAME,
+            records: 0,
+            epoch: 0,
+            usable: false,
+        }
+    }
+}
+
+/// The owned depth, translucent motion and merge targets of one view.
+struct Targets {
     native_depth: ID3D11Texture2D,
     depth: ID3D11Texture2D,
     depth_target: ID3D11DepthStencilView,
@@ -169,7 +220,7 @@ struct View {
     merged_target: ID3D11RenderTargetView,
 }
 
-impl View {
+impl Targets {
     fn new(
         device: &ID3D11Device,
         native_depth: ID3D11Texture2D,
@@ -208,17 +259,45 @@ impl View {
     }
 }
 
-fn slot<T: Default>(entries: &mut Vec<T>, slot: u32) -> Option<&mut T> {
-    let slot = slot as usize;
-    if slot >= entries.len() {
-        entries.try_reserve(slot + 1 - entries.len()).ok()?;
-        entries.resize_with(slot + 1, T::default);
+/// One view: the native frame, view and family its targets were last prepared for, their extent,
+/// whether translucent motion was written since, and the frame-end epoch it was last used in.
+struct View {
+    targets: Option<Targets>,
+    frame: u32,
+    width: u32,
+    height: u32,
+    family: u64,
+    view: u64,
+    epoch: u64,
+    written: bool,
+}
+
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            targets: None,
+            frame: NO_FRAME,
+            width: 0,
+            height: 0,
+            family: 0,
+            view: 0,
+            epoch: 0,
+            written: false,
+        }
     }
-    entries.get_mut(slot)
+}
+
+impl View {
+    /// Prepared for this pass's frame, view and family.
+    fn matches(&self, pass: &Pass) -> bool {
+        self.frame == pass.native_frame as u32
+            && self.view == pass.view_key
+            && self.family == pass.family_key
+    }
 }
 
 pub(super) struct Renderer {
-    device: ID3D11Device,
+    pub(super) device: ID3D11Device,
     shaders: Device,
     parameters: ID3D11Buffer,
     hash_parameters: ID3D11Buffer,
@@ -228,8 +307,9 @@ pub(super) struct Renderer {
     raster: ID3D11RasterizerState,
     stream: Option<Writable>,
     captured: Option<Buffer>,
-    models: Vec<Model>,
-    views: Vec<Option<View>>,
+    models: HashMap<ModelKey, Model>,
+    views: HashMap<ViewKey, View>,
+    epoch: u64,
 }
 
 impl Renderer {
@@ -276,8 +356,9 @@ impl Renderer {
             raster,
             stream: None,
             captured: None,
-            models: Vec::new(),
-            views: Vec::new(),
+            models: HashMap::new(),
+            views: HashMap::new(),
+            epoch: 1,
         })
     }
 
@@ -326,7 +407,10 @@ impl Renderer {
         Some(())
     }
 
-    fn view(&mut self, c: &ID3D11DeviceContext, g: &Geometry, scope: &Pass) -> Option<u32> {
+    /// The draw's view with its targets prepared for this native frame: allocated at the native
+    /// depth's extent, the depth copied and the motion cleared at the frame's first draw. A later
+    /// draw of the same frame needs the same view, family, extent and native depth.
+    fn view(&mut self, c: &ID3D11DeviceContext, g: &Geometry, scope: &Pass) -> Option<ViewKey> {
         let dsv = unsafe { ID3D11DepthStencilView::from_raw_borrowed(&g.depth_view) }?;
         let source = unsafe { dsv.GetResource() }.ok()?;
         let depth: ID3D11Texture2D = source.cast().ok()?;
@@ -340,55 +424,51 @@ impl Renderer {
         {
             return None;
         }
-        let draw = ViewDraw {
-            session_id: scope.session_id,
-            history_key: scope.history_key,
-            view_key: scope.view_key,
-            family_key: scope.family_key,
-            frame: scope.native_frame as u32,
-            width: desc.Width,
-            height: desc.Height,
-        };
-        let decision = view_begin(&draw);
-        if decision.action == ViewAction::Unavailable || decision.slot == NO_SLOT {
-            return None;
+        let key = ViewKey::of(scope);
+        self.views.try_reserve(1).ok()?;
+        let view = self.views.entry(key).or_default();
+        let extent = view.width == desc.Width && view.height == desc.Height;
+        if let Some(targets) = &view.targets
+            && view.frame == scope.native_frame as u32
+        {
+            return (view.matches(scope)
+                && extent
+                && targets.native_depth.as_raw() == depth.as_raw())
+            .then_some(key);
         }
-        let entry = slot(&mut self.views, decision.slot)?;
-        if decision.action == ViewAction::SameFrame {
-            return entry
-                .as_ref()
-                .filter(|v| v.native_depth.as_raw() == depth.as_raw())
-                .map(|_| decision.slot);
+        if view.targets.is_none() || !extent {
+            // The old targets go first; the view stays unprepared until every target exists.
+            *view = View {
+                width: desc.Width,
+                height: desc.Height,
+                ..View::default()
+            };
+            view.targets = Some(Targets::new(&self.device, depth.clone(), dsv, desc)?);
         }
-        if decision.action == ViewAction::Allocate {
-            *entry = None;
-            *entry = Some(View::new(&self.device, depth.clone(), dsv, desc)?);
-        }
-        let view = entry.as_mut()?;
-        view.native_depth = depth;
+        let targets = view.targets.as_mut()?;
+        targets.native_depth = depth;
         unsafe {
-            c.CopyResource(&view.depth, &view.native_depth);
-            c.ClearRenderTargetView(&view.motion_target, &[0.; 4]);
+            c.CopyResource(&targets.depth, &targets.native_depth);
+            c.ClearRenderTargetView(&targets.motion_target, &[0.; 4]);
         }
-        view_ready(decision.slot, &draw);
-        Some(decision.slot)
+        view.frame = scope.native_frame as u32;
+        view.family = scope.family_key;
+        view.view = scope.view_key;
+        view.epoch = self.epoch;
+        view.written = false;
+        Some(key)
     }
 
-    pub(super) fn retire(&mut self, retired: Retired) {
-        match retired {
-            Retired::Model(slot) => {
-                if let Some(entry) = self.models.get_mut(slot as usize) {
-                    *entry = Model::default();
-                }
-            }
-            Retired::View(slot) => {
-                if let Some(entry) = self.views.get_mut(slot as usize) {
-                    *entry = None;
-                }
-            }
-        }
+    /// Advances the epoch and releases the models and views not used in the last two frames.
+    pub(super) fn frame_end(&mut self) {
+        log_frame_end(self.count(), self.models.len());
+        self.epoch += 1;
+        let epoch = self.epoch;
+        self.models
+            .retain(|_, model| model.epoch + RETAINED_EPOCHS >= epoch);
+        self.views
+            .retain(|_, view| view.epoch + RETAINED_EPOCHS >= epoch);
     }
-
     pub(super) fn count(&self) -> u32 {
         self.shaders.count
     }
@@ -441,26 +521,26 @@ impl Renderer {
             refused(c"indirect argument buffer or native mesh capacity is invalid");
             return None;
         }
-        let Some(view_slot) = self.view(c, g, scope) else {
+        let Some(view_key) = self.view(c, g, scope) else {
             refused(c"native scene depth allocation/identity differs from the draw");
             return None;
         };
-        let view = self.views[view_slot as usize].as_ref()?;
-        let draw = ModelDraw {
-            session_id: scope.session_id,
-            history_key: scope.history_key,
-            view_key: scope.view_key,
-            primitive_key: scope.primitive_key,
-            material_key: scope.material_key,
-            vertex_factory_key: scope.vertex_factory_key,
+        let view = self.views.get(&view_key)?;
+        let targets = view.targets.as_ref()?;
+        let particle = variant.particle;
+        let key = ModelKey {
+            view: view_key,
+            primitive: scope.primitive_key,
+            material: scope.material_key,
             vertex_hash: variant.vertex_hash,
+            vertex_factory: if particle {
+                0
+            } else {
+                scope.vertex_factory_key
+            },
+            start: if particle { 0 } else { g.start },
+            base_vertex: if particle { 0 } else { g.base_vertex },
             geometry_hash: variant.geometry_hash,
-            start: g.start,
-            base_vertex: g.base_vertex,
-            particle: u32::from(variant.particle),
-            frame: scope.native_frame as u32,
-            reset: u32::from(scope.flags & RSF_GAME_RENDER_RESET != 0),
-            records: count,
         };
         let hash = HashPass {
             c,
@@ -468,7 +548,18 @@ impl Renderer {
             parameters: &self.hash_parameters,
             indirect: &self.indirect,
         };
-        let Some((model, decision)) = model(&mut self.models, &self.device, &hash, &draw) else {
+        let frame = scope.native_frame as u32;
+        let reset = scope.flags & RSF_GAME_RENDER_RESET != 0;
+        let Some(model) = model(
+            &mut self.models,
+            self.epoch,
+            &self.device,
+            &hash,
+            key,
+            frame,
+            reset,
+            count,
+        ) else {
             refused(c"geometry-history allocation failed");
             return None;
         };
@@ -561,7 +652,7 @@ impl Renderer {
             scope,
             viewports,
             rect,
-            decision.usable,
+            model.usable,
             previous.map_or(0, |b| b.count),
         )?;
         let previous = [previous.map(|b| b.view.clone())];
@@ -579,20 +670,22 @@ impl Renderer {
             c.GSSetShader(variant.geometry.as_ref(), None);
             c.PSSetShader(variant.pixel.as_ref(), None);
             c.OMSetRenderTargets(
-                Some(&[Some(view.motion_target.clone())]),
-                &view.depth_target,
+                Some(&[Some(targets.motion_target.clone())]),
+                &targets.depth_target,
             );
             c.OMSetDepthStencilState(&self.depth_state, 0);
             c.OMSetBlendState(&self.blend, None, u32::MAX);
             c.SetPredication(predicate.0, predicate.1);
             submit(c, g, &self.indirect.read.buffer);
             c.SetPredication(None, false);
-            view_written(view_slot);
             c.GSSetShaderResources(variant.history_slot, Some(&[None]));
             c.OMSetRenderTargets(None, None);
             if tess {
                 c.DSSetShaderResources(127, Some(&[None]));
             }
+        }
+        if let Some(view) = self.views.get_mut(&view_key) {
+            view.written = true;
         }
         if hash
             .build(
@@ -604,29 +697,39 @@ impl Renderer {
                 predicate,
             )
             .is_some()
+            && count <= RECORD_LIMIT - model.records
         {
-            model_record(decision.slot, draw.frame, draw.records);
+            // Charged only once the native build ran, so a refused draw leaves no records.
+            model.records += count;
         }
         Some(())
     }
 
-    pub(super) fn commit(&self, c: &ID3D11DeviceContext, pass: &Pass) -> Option<()> {
-        let found = commit_view(pass)?;
-        let view = self.views.get(found.slot as usize)?.as_ref()?;
-        if view.native_depth.as_raw() != pass.depth {
+    /// Merges the view's translucent motion into the native motion target and puts its depth
+    /// back, when the pass leases both and the view has motion written for its frame, view and
+    /// family on the same native depth.
+    pub(super) fn commit(&mut self, c: &ID3D11DeviceContext, pass: &Pass) -> Option<()> {
+        if pass.motion.is_null() || pass.depth.is_null() {
+            return None;
+        }
+        let view_key = ViewKey::of(pass);
+        let view = self.views.get(&view_key)?;
+        let targets = view.targets.as_ref()?;
+        if !view.written || !view.matches(pass) || targets.native_depth.as_raw() != pass.depth {
             return None;
         }
         let native = unsafe { ID3D11Texture2D::from_raw_borrowed(&pass.motion) }?;
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         unsafe { native.GetDesc(&mut desc) };
-        let target = CommitTarget {
-            width: desc.Width,
-            height: desc.Height,
-            samples: desc.SampleDesc.Count,
-            array_size: desc.ArraySize,
-            format: desc.Format.0 as u32,
-        };
-        if !target_matches(&found, &target) {
+        if desc.Width != view.width
+            || desc.Height != view.height
+            || desc.SampleDesc.Count != 1
+            || desc.ArraySize != 1
+            || !matches!(
+                desc.Format,
+                DXGI_FORMAT_R16G16_UNORM | DXGI_FORMAT_R16G16_TYPELESS
+            )
+        {
             return None;
         }
         let device = unsafe { c.GetDevice() }.ok()?;
@@ -649,8 +752,8 @@ impl Renderer {
             c.RSSetViewports(Some(&[D3D11_VIEWPORT {
                 TopLeftX: 0.,
                 TopLeftY: 0.,
-                Width: found.width as f32,
-                Height: found.height as f32,
+                Width: view.width as f32,
+                Height: view.height as f32,
                 MinDepth: 0.,
                 MaxDepth: 1.,
             }]));
@@ -674,9 +777,9 @@ impl Renderer {
         unsafe {
             c.PSSetShaderResources(
                 0,
-                Some(&[Some(native_view.clone()), Some(view.motion_view.clone())]),
+                Some(&[Some(native_view.clone()), Some(targets.motion_view.clone())]),
             );
-            c.OMSetRenderTargets(Some(&[Some(view.merged_target.clone())]), None);
+            c.OMSetRenderTargets(Some(&[Some(targets.merged_target.clone())]), None);
             super::replay::merge(|| c.Draw(3, 0));
             c.OMSetRenderTargets(None, None);
             c.VSSetShaderResources(0, Some(&empty));
@@ -685,10 +788,12 @@ impl Renderer {
             c.HSSetShaderResources(0, Some(&empty));
             c.DSSetShaderResources(0, Some(&empty));
             c.CSSetShaderResources(0, Some(&empty));
-            c.CopyResource(native, &view.merged);
-            c.CopyResource(&view.native_depth, &view.depth);
+            c.CopyResource(native, &targets.merged);
+            c.CopyResource(&targets.native_depth, &targets.depth);
         }
-        view_committed(found.slot);
+        if let Some(view) = self.views.get_mut(&view_key) {
+            view.written = false;
+        }
         log_commit();
         Some(())
     }
@@ -739,41 +844,57 @@ impl HashPass<'_> {
     }
 }
 
+/// The model's history for this draw. At the first draw of a native frame it rotates: history is
+/// usable only for the next native frame without a reset, and the new current buffer is cleared.
+/// The epoch is refreshed even when the record count is then refused. The current buffer grows to
+/// twice the frame's records, keeping what it already holds.
+#[allow(clippy::too_many_arguments)]
 fn model<'a>(
-    models: &'a mut Vec<Model>,
+    models: &'a mut HashMap<ModelKey, Model>,
+    epoch: u64,
     device: &ID3D11Device,
     hash: &HashPass<'_>,
-    draw: &ModelDraw,
-) -> Option<(&'a Model, ModelDecision)> {
-    let (admitted, decision) = model_begin(draw);
-    if decision.slot == NO_SLOT {
-        return None;
-    }
-    let model = slot(models, decision.slot)?;
-    if decision.rotate {
+    key: ModelKey,
+    frame: u32,
+    reset: bool,
+    count: u32,
+) -> Option<&'a mut Model> {
+    models.try_reserve(1).ok()?;
+    let model = models.entry(key).or_default();
+    if model.frame != frame {
+        model.usable = model.frame != NO_FRAME && model.frame.wrapping_add(1) == frame && !reset;
+        model.frame = frame;
+        model.records = 0;
         std::mem::swap(&mut model.previous, &mut model.now);
         if let Some(now) = &model.now {
             unsafe { hash.c.ClearUnorderedAccessViewUint(&now.write, &[0; 4]) };
         }
     }
-    if !admitted {
+    model.epoch = epoch;
+    if count > u32::MAX - model.records || model.records + count > RECORD_LIMIT {
         return None;
+    }
+    let mut capacity = MIN_CAPACITY;
+    while capacity < (model.records + count) * 2 {
+        if capacity > u32::MAX / 2 {
+            return None;
+        }
+        capacity *= 2;
     }
     if model
         .now
         .as_ref()
-        .is_none_or(|now| now.read.count < decision.capacity)
+        .is_none_or(|now| now.read.count < capacity)
     {
-        let larger = writable(device, decision.capacity, false)?;
+        let larger = writable(device, capacity, false)?;
         unsafe { hash.c.ClearUnorderedAccessViewUint(&larger.write, &[0; 4]) };
         if let Some(now) = &model.now {
             let _ = hash.build(&now.read, &larger, now.read.count, 1, false, (None, false));
         }
         model.now = Some(larger);
     }
-    Some((model, decision))
+    Some(model)
 }
-
 pub(super) struct Pipeline {
     geometry: Option<ID3D11GeometryShader>,
     hull: Option<ID3D11HullShader>,

@@ -1,23 +1,24 @@
 // SPDX-License-Identifier: MIT
-//! Scope facts and synchronous leases for AC7 D3D11 replay.
+//! Scope facts and synchronous leases for AC7 D3D11 replay, and the renderer of the current D3D11
+//! device. One lock spans admission through the final use of the D3D11 variants and history.
 use super::d3d11::{Pipeline, Renderer, clock_ms};
-#[cfg(feature = "warp-fixture")]
-use super::release_renderer;
-use super::{LIFETIME, admit, lock, published, reset_for_renderer};
 use crate::sys::rsf_frame_tap_geometry;
-use crate::velocity_commit::{Log, log_frame_end, refused, set_log};
-use crate::velocity_history;
+use crate::velocity_commit::{Log, refused, reset_profile, set_log};
+use crate::velocity_pass_cache;
 use crate::velocity_stream::draw_admitted;
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::rsf_game_render_pass;
 use std::cell::{Cell, RefCell};
 use std::ffi::{c_char, c_void};
-use std::ptr::null_mut;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use windows::Win32::Graphics::Direct3D11::{D3D11_DEVICE_CONTEXT_IMMEDIATE, ID3D11DeviceContext};
 use windows::core::Interface;
 
-static REPLAY: Mutex<()> = Mutex::new(());
+static REPLAY: Mutex<Option<Box<Renderer>>> = Mutex::new(None);
+
+fn lock() -> MutexGuard<'static, Option<Box<Renderer>>> {
+    REPLAY.lock().unwrap_or_else(|error| error.into_inner())
+}
 
 thread_local! {
     static SCOPE: RefCell<Option<rsf_game_render_pass>> = const { RefCell::new(None) };
@@ -29,7 +30,7 @@ pub(crate) unsafe extern "C" fn rsf_ac7_velocity_set_log(
     log: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
     user: *mut c_void,
 ) {
-    let _lease = lock(&REPLAY);
+    let _lease = lock();
     set_log(log.map(|write| Log { write, user }));
 }
 
@@ -63,7 +64,7 @@ pub(crate) unsafe extern "C" fn rsf_ac7_velocity_geometry(draw: *const rsf_frame
     if !draw_admitted(&scope, draw) {
         return;
     }
-    let _lease = lock(&REPLAY);
+    let mut renderer = lock();
     let Some(context) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&draw.context) }) else {
         return;
     };
@@ -77,26 +78,24 @@ pub(crate) unsafe extern "C" fn rsf_ac7_velocity_geometry(draw: *const rsf_frame
     let Ok(device) = (unsafe { context.GetDevice() }) else {
         return;
     };
-    let renderer = admit(
-        &LIFETIME,
-        device.as_raw(),
-        || {
-            Renderer::new(&device)
-                .and_then(try_box)
-                .map_or(null_mut(), |renderer| Box::into_raw(renderer).cast())
-        },
-        destroy,
-        reset_for_renderer,
-    );
-    let Some(renderer) = (unsafe { renderer.cast::<Renderer>().as_mut() }) else {
-        refused(c"device-side pass initialization failed");
-        return;
-    };
-    let _ = renderer.draw(context, &scope, draw, pipeline, entered);
-}
-
-unsafe fn destroy(renderer: *mut c_void) {
-    drop(unsafe { Box::from_raw(renderer.cast::<Renderer>()) });
+    // A different device gets a new renderer, which starts without variants, history or
+    // profile. A failed creation keeps the current renderer and refuses the draw.
+    if renderer
+        .as_ref()
+        .is_none_or(|renderer| renderer.device.as_raw() != device.as_raw())
+    {
+        let Some(made) = Renderer::new(&device).and_then(try_box) else {
+            refused(c"device-side pass initialization failed");
+            return;
+        };
+        // The old renderer goes before the resets.
+        *renderer = Some(made);
+        velocity_pass_cache::reset_variants();
+        reset_profile();
+    }
+    if let Some(renderer) = renderer.as_mut() {
+        let _ = renderer.draw(context, &scope, draw, pipeline, entered);
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -104,16 +103,15 @@ pub(crate) unsafe extern "C" fn rsf_ac7_velocity_commit(
     context: *mut c_void,
     pass: *const rsf_game_render_pass,
 ) -> i32 {
-    let _lease = lock(&REPLAY);
+    let mut renderer = lock();
     // The queued renderer lends the pass; only its leading size is read before admission.
     if pass.is_null() || unsafe { (*pass).struct_size as usize } < size_of::<rsf_game_render_pass>()
     {
         return 0;
     }
-    let (Some(renderer), Some(context)) = (
-        unsafe { published(&LIFETIME).cast::<Renderer>().as_ref() },
-        unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) },
-    ) else {
+    let (Some(renderer), Some(context)) = (renderer.as_mut(), unsafe {
+        ID3D11DeviceContext::from_raw_borrowed(&context)
+    }) else {
         return 0;
     };
     i32::from(renderer.commit(context, unsafe { &*pass }).is_some())
@@ -132,25 +130,24 @@ pub(super) fn merge(draw: impl FnOnce()) {
 
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_ac7_velocity_frame_end() {
-    let _lease = lock(&REPLAY);
-    let renderer = published(&LIFETIME);
-    let Some(owner) = (unsafe { renderer.cast::<Renderer>().as_mut() }) else {
-        return;
-    };
-    log_frame_end(owner.count());
-    velocity_history::frame_end(|retired| owner.retire(retired));
+    let mut renderer = lock();
+    if let Some(renderer) = renderer.as_mut() {
+        renderer.frame_end();
+    }
 }
 
 #[cfg(feature = "warp-fixture")]
 pub(crate) fn shader_creation_count() -> u32 {
-    let _lease = lock(&REPLAY);
-    unsafe { published(&LIFETIME).cast::<Renderer>().as_ref() }.map_or(0, Renderer::count)
+    let renderer = lock();
+    renderer.as_ref().map_or(0, |renderer| renderer.count())
 }
 
 /// Destroys the renderer between fixture cases. The carrier never retires it before exit.
 #[cfg(feature = "warp-fixture")]
 pub(crate) fn rsf_ac7_velocity_release() {
-    let _lease = lock(&REPLAY);
-    release_renderer();
+    let mut renderer = lock();
+    *renderer = None;
+    velocity_pass_cache::release();
+    reset_profile();
     let _ = SCOPE.replace(None);
 }

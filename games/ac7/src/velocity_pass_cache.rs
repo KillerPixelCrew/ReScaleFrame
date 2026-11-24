@@ -348,12 +348,12 @@ pub(crate) fn variant_count() -> usize {
     lock(&CACHE).variants.len()
 }
 
-/// The native variant list was discarded with its renderer (`velocity_renderer.rs`).
+/// The native variant list was discarded with its renderer (velocity_renderer/replay.rs).
 pub(crate) fn reset_variants() {
     lock(&CACHE).reset_variants();
 }
 
-/// The pass was released (`velocity_renderer.rs`).
+/// The pass was released (velocity_renderer/replay.rs).
 #[cfg(feature = "warp-fixture")]
 pub(crate) fn release() {
     lock(&CACHE).release();

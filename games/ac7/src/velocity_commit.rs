@@ -1,20 +1,10 @@
 // SPDX-License-Identifier: MIT
-//! The translucent velocity pass's commit and reporting policy: the commit pass's admission and
-//! its view identity, the native motion target's extent, sample, array and format check, the
-//! refusal and commit log budgets, and the per-frame CPU profile with its report thresholds.
-//! The D3D11 replay keeps the renderer and context checks, the view's native depth identity, the
-//! target's description and device check, the state scope, the merge draw, the copies, the clock,
-//! and the device shader object count.
+//! The translucent velocity pass's reporting policy: the refusal and commit log budgets and the
+//! per-frame CPU profile with its report thresholds, and the merge pass shaders.
 
-use crate::velocity_history::{self, ViewAction, ViewDecision, ViewDraw};
-use rsf_game_sys::rsf_game_render_pass;
 #[cfg(windows)]
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::{LazyLock, Mutex, MutexGuard};
-
-// DXGI_FORMAT_R16G16_TYPELESS and DXGI_FORMAT_R16G16_UNORM, the engine's velocity target.
-const R16G16_TYPELESS: u32 = 33;
-const R16G16_UNORM: u32 = 35;
 
 // How many refusals and commits are logged per log attachment.
 const REFUSAL_BUDGET: u32 = 12;
@@ -23,18 +13,6 @@ const COMMIT_BUDGET: u32 = 3;
 // A frame's CPU profile is reported when all its callbacks or a single one took this long.
 const REPORT_TOTAL_MS: f64 = 8.0;
 const REPORT_PEAK_MS: f64 = 4.0;
-
-/// The native motion target's description: width, height, sample count, array size and
-/// DXGI format.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[allow(dead_code)] // constructed by D3D11 replay
-pub(crate) struct CommitTarget {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) samples: u32,
-    pub(crate) array_size: u32,
-    pub(crate) format: u32,
-}
 
 /// One admitted draw callback's CPU time from entry to return, the part spent admitting its
 /// variant, the part spent preparing resources, its native frame and its record bound.
@@ -59,33 +37,6 @@ struct ProfileReport {
     frame: u32,
     callbacks: u32,
     largest_records: u32,
-}
-
-/// The view identity of a complete pass that leases both depth and motion.
-fn commit_identity(pass: &rsf_game_render_pass) -> Option<ViewDraw> {
-    if pass.motion.is_null() || pass.depth.is_null() {
-        return None;
-    }
-    Some(ViewDraw {
-        session_id: pass.session_id,
-        history_key: pass.history_key,
-        view_key: pass.view_key,
-        family_key: pass.family_key,
-        // The history keeps the low 32 bits, as the draw does.
-        frame: pass.native_frame as u32,
-        width: 0,
-        height: 0,
-    })
-}
-
-/// A single-sample, unarrayed R16G16 UNORM or typeless target at the committed view's extent.
-pub(crate) fn target_matches(view: &ViewDecision, target: &CommitTarget) -> bool {
-    view.action == ViewAction::Commit
-        && target.width == view.width
-        && target.height == view.height
-        && target.samples == 1
-        && target.array_size == 1
-        && matches!(target.format, R16G16_UNORM | R16G16_TYPELESS)
 }
 
 #[derive(Default)]
@@ -167,13 +118,6 @@ fn lock() -> MutexGuard<'static, Pass> {
     PASS.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-/// The decision's slot and extent when the pass's view has translucent motion written for its
-/// frame, view and family.
-pub(crate) fn commit_view(pass: &rsf_game_render_pass) -> Option<ViewDecision> {
-    let decision = velocity_history::commit(&commit_identity(pass)?);
-    (decision.action == ViewAction::Commit).then_some(decision)
-}
-
 #[cfg(windows)]
 pub(crate) fn set_log(log: Option<Log>) {
     let mut pass = lock();
@@ -221,7 +165,7 @@ pub(crate) fn profile_sample(sample: &ProfileSample) {
 
 /// The totals restart on every renderer frame end, even without a log attachment.
 #[cfg(windows)]
-pub(crate) fn log_frame_end(shader_objects: u32) {
+pub(crate) fn log_frame_end(shader_objects: u32, models: usize) {
     let (report, log) = {
         let mut pass = lock();
         (pass.profile.end_frame(), pass.log)
@@ -238,7 +182,7 @@ pub(crate) fn log_frame_end(shader_objects: u32) {
         report.resource_ms,
         report.peak_ms,
         report.largest_records,
-        velocity_history::model_count(),
+        models,
         crate::velocity_pass_cache::variant_count(),
     );
     if let Ok(message) = CString::new(message) {
@@ -246,7 +190,7 @@ pub(crate) fn log_frame_end(shader_objects: u32) {
     }
 }
 
-/// The renderer that owned the profile was replaced or released (`velocity_renderer.rs`).
+/// The renderer that owned the profile was replaced or released (velocity_renderer/replay.rs).
 pub(crate) fn reset_profile() {
     lock().profile = Profile::default();
 }

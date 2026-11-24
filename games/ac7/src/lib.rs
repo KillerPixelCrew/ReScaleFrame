@@ -4,8 +4,8 @@
 //! (`carrier.rs`, ac7_carrier.h: executable and window identifiers, GameSDK probe, decrypted
 //! patch policy), the view reader (`view.rs`), the F9 motion capture and the translucent velocity
 //! pass. The velocity pass keeps shader compilation, DXBC transforms, D3D11 shader objects and
-//! variant publication in Rust. The Rust renderer owns the replay and scope lease, the history
-//! and stream modules own their decisions, and the commit module owns admission and reports. The
+//! variant publication in Rust. The Rust renderer owns the replay, scope lease and history, the
+//! stream module owns its decisions and the commit module its reports. The
 //! D3D11 replay allocates and submits under the shared binding-state lease.
 //!
 //! The GameSDK table, the renderer lifecycle and the native renderer with its hooks are the
@@ -47,7 +47,6 @@ mod velocity_container;
 mod velocity_device;
 #[cfg(windows)]
 mod velocity_geometry;
-mod velocity_history;
 mod velocity_pass_cache;
 #[cfg(windows)]
 mod velocity_pixel;

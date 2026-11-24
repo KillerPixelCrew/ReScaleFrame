@@ -6,13 +6,17 @@
 //! the borrowed context, including the argument copy, GPU validation, draws and hash build.
 
 use crate::sys::rsf_frame_tap_geometry;
-use crate::velocity_history::{MIN_CAPACITY, RECORD_LIMIT};
 use rsf_game_sys::{
     RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_TRANSLUCENT_MESH, rsf_game_render_pass,
 };
 use std::mem::offset_of;
 
 // Bound shader stages besides vertex and pixel.
+// The smallest history, capture and zero-source buffer, in records.
+pub(crate) const MIN_CAPACITY: u32 = 1024;
+// Records are 64 bytes and the hash table keeps twice the records. This also bounds one draw's
+// stream-output records.
+pub(crate) const RECORD_LIMIT: u32 = u32::MAX / 128;
 pub(crate) const STAGE_GEOMETRY: u32 = 1;
 pub(crate) const STAGE_HULL: u32 = 2;
 pub(crate) const STAGE_DOMAIN: u32 = 4;

@@ -1,40 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::velocity_history::UNAVAILABLE_VIEW;
-use std::ptr::{NonNull, null_mut};
-
-fn pass() -> rsf_game_render_pass {
-    // SAFETY: Every field of the plain C pass is valid as zero.
-    let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
-    pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
-    pass.session_id = 1;
-    pass.history_key = 2;
-    pass.view_key = 3;
-    pass.family_key = 4;
-    pass.native_frame = 0x1_0000_0005;
-    pass.depth = NonNull::<u8>::dangling().as_ptr().cast();
-    pass.motion = NonNull::<u8>::dangling().as_ptr().cast();
-    pass
-}
-
-fn committed(width: u32, height: u32) -> ViewDecision {
-    ViewDecision {
-        slot: 0,
-        action: ViewAction::Commit,
-        width,
-        height,
-    }
-}
-
-fn target(format: u32) -> CommitTarget {
-    CommitTarget {
-        width: 16,
-        height: 8,
-        samples: 1,
-        array_size: 1,
-        format,
-    }
-}
 
 fn sample(elapsed_ms: f64, frame: u32, records: u32) -> ProfileSample {
     ProfileSample {
@@ -44,57 +9,6 @@ fn sample(elapsed_ms: f64, frame: u32, records: u32) -> ProfileSample {
         frame,
         records,
     }
-}
-
-#[test]
-fn commit_identity_carries_the_pass_keys_and_low_frame() {
-    let identity = commit_identity(&pass()).unwrap();
-    assert_eq!(
-        (
-            identity.session_id,
-            identity.history_key,
-            identity.view_key,
-            identity.family_key,
-            identity.frame,
-        ),
-        (1, 2, 3, 4, 5)
-    );
-    assert_eq!((identity.width, identity.height), (0, 0));
-}
-
-#[test]
-fn commit_needs_both_depth_and_motion() {
-    let mut no_motion = pass();
-    no_motion.motion = null_mut();
-    assert!(commit_identity(&no_motion).is_none());
-    let mut no_depth = pass();
-    no_depth.depth = null_mut();
-    assert!(commit_identity(&no_depth).is_none());
-}
-
-#[test]
-fn target_must_match_the_view_extent_and_format() {
-    let view = committed(16, 8);
-    assert!(target_matches(&view, &target(R16G16_UNORM)));
-    assert!(target_matches(&view, &target(R16G16_TYPELESS)));
-    // R16G16_FLOAT and R16G16_UINT are refused.
-    assert!(!target_matches(&view, &target(34)));
-    assert!(!target_matches(&view, &target(36)));
-
-    let mut wide = target(R16G16_UNORM);
-    wide.width = 17;
-    assert!(!target_matches(&view, &wide));
-    let mut tall = target(R16G16_UNORM);
-    tall.height = 9;
-    assert!(!target_matches(&view, &tall));
-    let mut multisampled = target(R16G16_UNORM);
-    multisampled.samples = 4;
-    assert!(!target_matches(&view, &multisampled));
-    let mut arrayed = target(R16G16_UNORM);
-    arrayed.array_size = 2;
-    assert!(!target_matches(&view, &arrayed));
-
-    assert!(!target_matches(&UNAVAILABLE_VIEW, &target(R16G16_UNORM)));
 }
 
 #[test]
