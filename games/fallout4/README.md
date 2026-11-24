@@ -19,9 +19,9 @@ The executable is recognized by name; its SHA-256 is logged and passed to the ho
 Structure offsets stay documented constants, fixed by the patterns that address them where code
 does.
 
-The Steam overlay forwarding the creation path relies on (`integrations/steam`) is still an exact
-gameoverlayrenderer64.dll profile, because it patches the overlay's own code; another overlay
-build refuses preparation with an unrecognized-fingerprint message.
+The Steam overlay forwarding the creation path relies on (`integrations/steam`) finds the
+gameoverlayrenderer64.dll code it patches by signature as well, logging the overlay's hash only; a
+missing overlay site refuses preparation and names the site.
 
 Discovery has been verified against the installed executable (`discovery::tests`), not yet inside
 a game run. See [site discovery](../../docs/research/fallout4-site-discovery.md) for how each site

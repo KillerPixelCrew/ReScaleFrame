@@ -6,6 +6,10 @@ This follows [scoped creation](scoped-d3d11-creation-20261116.md) and the
 [ENB ownership audit](skyrim-enb-chain-ownership-20261116.md). The worker made
 source/static checks only, with no build, game/GPU run, deployment or commit.
 
+Since 2026-11-24 the overlay sites are discovered by signature rather than accepted by file hash
+([Steam overlay site discovery](steam-overlay-site-discovery.md)); the RVAs here are the
+researched build's.
+
 ## Exact evidence and rejected installer interception
 
 Steam GameOverlayRenderer64.dll SHA256 is

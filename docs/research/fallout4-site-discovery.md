@@ -84,10 +84,10 @@ inside the game.
 ## Third-party modules
 
 The Steam overlay forwarding the creation path uses (`integrations/steam`, shared with Skyrim SE)
-is still an exact `gameoverlayrenderer64.dll` profile: it patches the overlay's own load sites, so
-an overlay build other than the recorded one refuses with `Steam swapchain forwarding refused:
-unrecognized overlay fingerprint.` and Fallout 4 preparation refuses with it. F4SE and ENB are
-not matched by this adapter.
+finds the `gameoverlayrenderer64.dll` code it patches by signature too and logs the overlay's hash
+only ([Steam overlay site discovery](steam-overlay-site-discovery.md)); a missing overlay site
+refuses the forwarding, and with it Fallout 4 preparation, naming the site. F4SE and ENB are not
+matched by this adapter.
 
 ## Sites
 | Site | Found by | 1.11.240.0 RVA |

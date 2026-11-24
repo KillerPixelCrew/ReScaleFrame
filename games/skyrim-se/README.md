@@ -50,9 +50,13 @@ leaves and the C render, CPU and compatibility subsystems. See
 [the migration note](../../docs/research/rust-skyrim-native-creation.md) for the
 moved behaviour and the remaining Skyrim owners.
 
-The Community Shaders 1.9.1 and SSE Display Tweaks 0.5.25 profiles remain exact
-third-party module profiles. Discovery has been verified against the installed
-executable (`discovery::tests`), not yet inside a game run.
+SSE Display Tweaks is found the same way in its loaded module: its creation wrapper and its call
+of the retained game thunk are unique patterns and the retained slot is that call's operand
+(`discovery::display_tweaks`); its file hash is logged only. The Steam overlay sites the shared
+forwarding patches are discovered in `integrations/steam` too. The Community Shaders 1.9.1 profile
+remains exact (file SHA-256 plus module RVAs): no copy of that build is available here to derive
+and prove patterns from. Discovery has been verified against the installed executable, Display
+Tweaks plugin and Steam overlay (`discovery::tests`, `rsf-steam`), not yet inside a game run.
 
 See [research](../../docs/research/skyrim-se-integration.md) for the discovery
 evidence, the source/binary evidence, deployment receipt location and remaining work.
