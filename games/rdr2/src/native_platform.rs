@@ -64,35 +64,20 @@ unsafe extern "C" fn blit_bridge(
 
 pub(crate) use rsf_game_sys::win32::read_process as read;
 
-pub(crate) unsafe extern "C" fn module_path(
-    address: usize,
-    base: *mut usize,
-    path: *mut c_char,
-    capacity: usize,
-) -> bool {
-    unsafe { base.write(0) };
-    if capacity == 0 {
-        return false;
-    }
-    unsafe { path.write(0) };
+/// The base and file path of the module holding ddress, or (0, empty) when none does.
+pub(crate) fn module_at(address: usize) -> (usize, String) {
     let mut owner = null_mut();
     let flags =
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
     if unsafe { GetModuleHandleExW(flags, address as _, &mut owner) } == 0 || owner.is_null() {
-        return false;
+        return (0, String::new());
     }
-    unsafe { base.write(owner as usize) };
     let mut wide = [0u16; 260];
     let len = unsafe { GetModuleFileNameW(owner, wide.as_mut_ptr(), wide.len() as u32) };
-    let name = String::from_utf16_lossy(&wide[..len as usize]);
-    if name.is_empty() || name.len() >= capacity {
-        return false;
-    }
-    unsafe {
-        ptr::copy_nonoverlapping(name.as_ptr(), path.cast(), name.len());
-        path.add(name.len()).write(0);
-    }
-    true
+    (
+        owner as usize,
+        String::from_utf16_lossy(&wide[..len as usize]),
+    )
 }
 
 // D3D12 GetDesc uses a hidden output pointer after this on Windows x64.
@@ -203,7 +188,7 @@ unsafe fn clone_table<const N: usize>(
     }
     installed
 }
-pub(crate) unsafe extern "C" fn attach_queue(
+pub(crate) unsafe fn attach_queue(
     queue: *mut c_void,
     detour: *const c_void,
     original: *mut *mut c_void,
@@ -222,7 +207,7 @@ pub(crate) unsafe extern "C" fn attach_queue(
     unsafe { add_ref(queue) };
     true
 }
-pub(crate) unsafe extern "C" fn attach_present(
+pub(crate) unsafe fn attach_present(
     chain: *mut c_void,
     detour: *const c_void,
     original: *mut *mut c_void,
@@ -242,34 +227,22 @@ pub(crate) unsafe extern "C" fn attach_present(
     }
     true
 }
-pub(crate) unsafe extern "C" fn resource_facts(
-    resource: *mut c_void,
-    out: *mut ResourceFacts,
-) -> bool {
-    if resource.is_null() || out.is_null() {
-        return false;
+pub(crate) unsafe fn resource_facts(resource: *mut c_void) -> Option<ResourceFacts> {
+    if resource.is_null() {
+        return None;
     }
     type GetDesc = unsafe extern "system" fn(*mut c_void, *mut ResourceDesc) -> *mut ResourceDesc;
     let get: GetDesc = unsafe { method(resource, RESOURCE_DESC) };
     let mut desc = ResourceDesc::default();
-    unsafe {
-        get(resource, &mut desc);
-        out.write(ResourceFacts {
-            width: desc.width,
-            height: desc.height,
-            format: desc.format,
-            samples: desc.samples,
-            _reserved: 0,
-        });
-    }
-    true
+    unsafe { get(resource, &mut desc) };
+    Some(ResourceFacts {
+        width: desc.width,
+        height: desc.height,
+        format: desc.format,
+        samples: desc.samples,
+    })
 }
-pub(crate) unsafe extern "C" fn barrier(
-    list: *mut c_void,
-    resource: *mut c_void,
-    before: u32,
-    after: u32,
-) {
+pub(crate) unsafe fn barrier(list: *mut c_void, resource: *mut c_void, before: u32, after: u32) {
     let barrier = TransitionBarrier {
         kind: 0,
         flags: 0,
@@ -283,27 +256,17 @@ pub(crate) unsafe extern "C" fn barrier(
         unsafe { method(list, BARRIER) };
     unsafe { record(list, 1, &barrier) };
 }
-pub(crate) unsafe extern "C" fn swapchain_facts(
-    chain: *mut c_void,
-    buffers: *mut u32,
-    window: *mut u64,
-) -> bool {
+/// The buffer count and output window of a live swapchain.
+pub(crate) unsafe fn swapchain_facts(chain: *mut c_void) -> Option<(u32, u64)> {
     if chain.is_null() {
-        return false;
+        return None;
     }
     let get: unsafe extern "system" fn(*mut c_void, *mut SwapchainDesc) -> i32 =
         unsafe { method(chain, SWAPCHAIN_DESC) };
     let mut desc = SwapchainDesc::default();
-    if unsafe { get(chain, &mut desc) } < 0 {
-        return false;
-    }
-    unsafe {
-        buffers.write(desc.buffers);
-        window.write(desc.window as u64);
-    }
-    true
+    (unsafe { get(chain, &mut desc) } >= 0).then_some((desc.buffers, desc.window as u64))
 }
-pub(crate) unsafe extern "C" fn swapchain_buffer(chain: *mut c_void, index: u32) -> *mut c_void {
+pub(crate) unsafe fn swapchain_buffer(chain: *mut c_void, index: u32) -> *mut c_void {
     if chain.is_null() {
         return null_mut();
     }
@@ -316,30 +279,30 @@ pub(crate) unsafe extern "C" fn swapchain_buffer(chain: *mut c_void, index: u32)
     }
     buffer
 }
-pub(crate) unsafe extern "C" fn back_buffer_index(chain: *mut c_void) -> u32 {
+pub(crate) unsafe fn back_buffer_index(chain: *mut c_void) -> u32 {
     let get: unsafe extern "system" fn(*mut c_void) -> u32 = unsafe { method(chain, BACK_BUFFER) };
     unsafe { get(chain) }
 }
-pub(crate) unsafe extern "C" fn release(object: *mut c_void) {
+pub(crate) unsafe fn release(object: *mut c_void) {
     if !object.is_null() {
         let release: unsafe extern "system" fn(*mut c_void) -> u32 = unsafe { method(object, 2) };
         unsafe { release(object) };
     }
 }
 
-pub(crate) unsafe extern "C" fn main_module() -> usize {
+pub(crate) unsafe fn main_module() -> usize {
     unsafe { GetModuleHandleW(ptr::null()) as usize }
 }
-pub(crate) unsafe extern "C" fn module_handle(name: *const c_char) -> usize {
+pub(crate) unsafe fn module_handle(name: *const c_char) -> usize {
     unsafe { GetModuleHandleA(name.cast()) as usize }
 }
-pub(crate) unsafe extern "C" fn export_address(module: usize, name: *const c_char) -> usize {
+pub(crate) unsafe fn export_address(module: usize, name: *const c_char) -> usize {
     if module == 0 {
         return 0;
     }
     unsafe { GetProcAddress(module as _, name.cast()).map_or(0, |entry| entry as usize) }
 }
-pub(crate) unsafe extern "C" fn initialize() -> bool {
+pub(crate) unsafe fn initialize() -> bool {
     matches!(
         unsafe { MH_Initialize() },
         MH_OK | MH_ERROR_ALREADY_INITIALIZED

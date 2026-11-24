@@ -26,7 +26,7 @@ use rsf_game_sys::{
 };
 use rsf_game_sys::{RSF_SCREEN_FLIGHT, RSF_SCREEN_UNKNOWN};
 use std::collections::BTreeMap;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{c_char, c_void};
 use std::ptr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -324,18 +324,17 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
             "RDR2 SR native fallback: worker camera, frame time or NGX creation flags unavailable.",
         );
     };
-    let mut output = ResourceFacts::default();
-    if !unsafe { platform::resource_facts(d.output, &mut output) }
-        || output.width > u64::from(d3d::MAX_EXTENT)
-        || output.height > d3d::MAX_EXTENT
-        || output.format != d3d::R16G16B16A16_FLOAT
-    {
+    let Some(output) = (unsafe { platform::resource_facts(d.output) }).filter(|output| {
+        output.width <= u64::from(d3d::MAX_EXTENT)
+            && output.height <= d3d::MAX_EXTENT
+            && output.format == d3d::R16G16B16A16_FLOAT
+    }) else {
         return refusal(
             host,
             RSF_GAME_RENDER_FEEDBACK_OUTPUT_UNSUPPORTED,
             "RDR2 SR native fallback: output format/extent unsupported.",
         );
-    }
+    };
     let reset =
         d.reset != 0 || history.generation != generation || history.frame.wrapping_add(1) != frame;
     let input = CameraInputs {
@@ -531,12 +530,7 @@ fn report_fsr_caller(ctx: &Context, caller: usize) {
     if !report {
         return;
     }
-    let mut base = 0usize;
-    let mut path = [0u8; 1024];
-    unsafe { platform::module_path(caller, &mut base, path.as_mut_ptr().cast(), path.len()) };
-    let path = CStr::from_bytes_until_nul(&path)
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let (base, path) = platform::module_at(caller);
     let name = path.rsplit('\\').next().unwrap_or_default();
     let name = if name.is_empty() { "<unknown>" } else { name };
     let measured =

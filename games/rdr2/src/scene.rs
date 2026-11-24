@@ -10,7 +10,7 @@ use crate::layout::{
     draw,
 };
 use crate::platform::{
-    self, ResourceFacts, Retained, Scope, lock, read_bytes, read_pointer, read_value, trampoline,
+    self, Retained, Scope, lock, read_bytes, read_pointer, read_value, trampoline,
 };
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
@@ -327,12 +327,11 @@ fn completed_scene(image: usize) {
     };
     // Match the actual colour resource rather than the swapchain's current CPU index on a recording
     // worker. References are local to this callback and cannot block a later resize.
-    let (mut buffers, mut window) = (0u32, 0u64);
-    if !unsafe { platform::swapchain_facts(chain, &mut buffers, &mut window) }
-        || buffers > MAX_BUFFERS
-    {
+    let Some((buffers, window)) = (unsafe { platform::swapchain_facts(chain) })
+        .filter(|&(buffers, _)| buffers <= MAX_BUFFERS)
+    else {
         return;
-    }
+    };
     let mut surface = None;
     for index in 0..buffers {
         let candidate = Retained(unsafe { platform::swapchain_buffer(chain, index) });
@@ -342,12 +341,11 @@ fn completed_scene(image: usize) {
         }
     }
     let Some(surface) = surface else { return };
-    let mut facts = ResourceFacts::default();
-    if !unsafe { platform::resource_facts(surface.0, &mut facts) }
-        || facts.width != u64::from(pass.camera.output_width)
-        || facts.height != pass.camera.output_height
-        || facts.samples != 1
-    {
+    if !unsafe { platform::resource_facts(surface.0) }.is_some_and(|facts| {
+        facts.width == u64::from(pass.camera.output_width)
+            && facts.height == pass.camera.output_height
+            && facts.samples == 1
+    }) {
         return;
     }
     {

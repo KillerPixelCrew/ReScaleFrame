@@ -23,7 +23,7 @@ pub(crate) use input::{
 #[cfg(windows)]
 pub(crate) use native::{
     attach_present, attach_queue, back_buffer_index, barrier, blit_detour, export_address,
-    fsr_dispatch_detour, initialize as hook_initialize, main_module, module_handle, module_path,
+    fsr_dispatch_detour, initialize as hook_initialize, main_module, module_at, module_handle,
     output_detour, pop_detour, read as read_process_memory, release, resource_facts,
     swapchain_buffer, swapchain_facts,
 };
@@ -52,16 +52,12 @@ pub(crate) unsafe fn trampoline<F: Copy>(slot: &AtomicPtr<c_void>) -> Option<F> 
 }
 
 #[derive(Clone, Copy, Default)]
-#[repr(C)]
 pub(crate) struct ResourceFacts {
     pub(crate) width: u64,
     pub(crate) height: u32,
     pub(crate) format: u32,
     pub(crate) samples: u32,
-    _reserved: u32,
 }
-
-const _: () = assert!(size_of::<ResourceFacts>() == 24);
 
 pub(crate) use rsf_game_sys::win32::{read as read_value, read_bytes};
 
