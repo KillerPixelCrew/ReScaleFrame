@@ -2,11 +2,11 @@
 use super::*;
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
 use crate::sys::rsf_d3d11_state;
+use rsf_test_support::Library;
+use rsf_test_support::device::{Device, TestResult};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::{Common::*, CreateDXGIFactory, IDXGIFactory};
-use rsf_test_support::Library;
-use rsf_test_support::device::{Device, TestResult};
 use windows::Win32::System::LibraryLoader::{
     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
 };

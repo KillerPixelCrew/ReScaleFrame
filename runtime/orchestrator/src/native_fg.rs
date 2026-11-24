@@ -4,7 +4,6 @@
 // that fill them, HUD-less copies, provider admission at Prepare, retirement, Present observation and
 // window-end sequencing, and the requested/observed FG status. The platform module owns native
 // calls. native_fg_cpu.rs owns CPU pacing and latency markers.
-use crate::now_qpc;
 use crate::com_ref;
 use crate::fg_scene::{read_scene, set_scene, with_capture_scene};
 use crate::fg_status;
@@ -13,6 +12,7 @@ use crate::native_cpu::{
     rsf_native_cpu_reservation_read,
 };
 use crate::native_fg_cpu::{self as cpu_owner, Failure, Frame as CpuOwner};
+use crate::now_qpc;
 use crate::sync::lock;
 use crate::sys::*;
 use crate::sys::{
@@ -984,7 +984,10 @@ fn capture(context: Handle, frame: *const DlssFrame) {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssFrame) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_native_fg_evaluate(
+    context: Handle,
+    frame: *const DlssFrame,
+) -> i32 {
     let started = now_qpc();
     let host = call!(present_host);
     if host.is_null() {

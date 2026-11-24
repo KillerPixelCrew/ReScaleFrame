@@ -139,7 +139,6 @@ pub(super) unsafe fn fence_wait(fence: Handle, value: u64, timeout: u32) -> i32 
     if status >= 0 { 1 } else { -1 }
 }
 
-
 pub(super) use crate::d3d11_present::{
     rsf_d3d11_present_backend as present_backend,
     rsf_d3d11_present_backend_choices as present_backend_choices,

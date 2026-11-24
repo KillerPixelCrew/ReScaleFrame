@@ -461,7 +461,10 @@ fn now_qpc() -> u64 {
 
 // A copy of a C string the caller may leave null, `fallback` then. `text` is null or a live
 // NUL-terminated string.
-unsafe fn copy_c_string(text: *const std::ffi::c_char, fallback: &std::ffi::CStr) -> std::ffi::CString {
+unsafe fn copy_c_string(
+    text: *const std::ffi::c_char,
+    fallback: &std::ffi::CStr,
+) -> std::ffi::CString {
     if text.is_null() {
         fallback.to_owned()
     } else {

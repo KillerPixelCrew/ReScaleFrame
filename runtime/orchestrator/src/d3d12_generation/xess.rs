@@ -475,7 +475,11 @@ unsafe fn rsf_core_xeg12_create(setup: *const Setup, out: *mut Raw, chain: *mut 
         return result;
     }
     let setup = unsafe { &*setup };
-    if let Err(result) = preflight(setup, leaf::streamline_loaded, setup.chain.ui_mode != UI_LAYER) {
+    if let Err(result) = preflight(
+        setup,
+        leaf::streamline_loaded,
+        setup.chain.ui_mode != UI_LAYER,
+    ) {
         return result;
     }
     let sdk = match Bindings::open(

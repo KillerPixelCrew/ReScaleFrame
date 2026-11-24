@@ -34,7 +34,11 @@ pub(crate) unsafe fn typed<T: Copy>(function: rsf_vk_function) -> Option<T> {
 /// # Safety
 ///
 /// `T` is the exact system-ABI signature of the command `name`.
-pub(crate) unsafe fn entry<T: Copy>(proc: rsf_vk_get_proc, object: Handle, name: &CStr) -> Option<T> {
+pub(crate) unsafe fn entry<T: Copy>(
+    proc: rsf_vk_get_proc,
+    object: Handle,
+    name: &CStr,
+) -> Option<T> {
     unsafe { typed(lookup(proc, object, name)) }
 }
 // Selects the resolver and dispatch object for an `instance` or `device` scoped entry.

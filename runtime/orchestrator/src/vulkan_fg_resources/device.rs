@@ -84,10 +84,7 @@ impl Device {
             };
         }
         if with_view {
-            device.views = Some((
-                get!(c"vkCreateImageView"),
-                get!(c"vkDestroyImageView"),
-            ));
+            device.views = Some((get!(c"vkCreateImageView"), get!(c"vkDestroyImageView")));
         }
         if let Some(fg) = fg {
             device.fences = Some(Fences {

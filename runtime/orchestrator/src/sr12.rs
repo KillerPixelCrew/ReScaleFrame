@@ -4,12 +4,12 @@
 // history, the normalization dispatch, capture ordering, sharpening, output reinsertion and the
 // handoff of accepted normalized depth and motion to the D3D12 frame generation owner.
 // Its native calls go through `native` (sr12/native.rs; fakes under test).
-use crate::retain_object;
 use crate::com_ref;
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
     R32_TYPELESS, R32G8X24_TYPELESS, RGBA16_FLOAT, RGBA32_FLOAT, half_to_f32,
 };
+use crate::retain_object;
 use crate::sharpening_policy;
 use crate::sr_session::checked;
 use crate::sync::lock;

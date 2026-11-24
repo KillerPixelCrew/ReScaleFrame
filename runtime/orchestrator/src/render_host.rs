@@ -5,7 +5,6 @@
 //! commit, SR context lifetime, recording slots, fence retirement, scene and Present matching,
 //! the frontend status and overlay routing. Settings keys and text belong to settings_store.rs,
 //! SR vendor selection to rsf_gpu_select_sr_backend and FG provider admission to fg_choice.rs.
-use crate::retain_object;
 use crate::com_ref;
 use crate::d3d12_observer::ObserverSetup;
 use crate::fg_choice;
@@ -13,6 +12,7 @@ use crate::overlay_settings::{
     apply_settings_intent, fill_sharpening_stats, settings_changed, sr_name,
 };
 use crate::present_rates::Rates;
+use crate::retain_object;
 use crate::settings_store::{
     self, read_settings_and_fg_mode, rsf_settings_store_read_layout, rsf_settings_store_write,
     rsf_settings_store_write_layout, set_sharpening, sharpening_of,

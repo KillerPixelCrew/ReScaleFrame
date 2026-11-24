@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::d3d11_d3d12::transition_barrier;
 use super::*;
+use crate::d3d11_d3d12::transition_barrier;
 use crate::d3d12_generation::fsr_abi::*;
 use crate::d3d12_sr::{ffx_abi::*, ffx_resource};
 use std::cell::UnsafeCell;

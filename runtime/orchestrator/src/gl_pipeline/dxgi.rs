@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Typed COM operations on the pipeline's leased graphics interfaces.
-use crate::d3d11_d3d12::transition_barrier;
 use super::Handle;
+use crate::d3d11_d3d12::transition_barrier;
 use std::ptr::null_mut;
 use windows::Win32::{
     Foundation::HWND,

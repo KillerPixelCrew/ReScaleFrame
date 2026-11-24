@@ -3,8 +3,8 @@
 // This module decides admission and
 // publication, provider switching, frame and slot sequencing, accepted Present,
 // fallback, resize and retirement, status and callback order, and latency routing.
-use crate::copy_c_string;
 use crate::com_ref;
+use crate::copy_c_string;
 use crate::d3d11_host_abi::{
     RSF_D3D11_DISPATCH_PRESENT, RSF_D3D11_DISPATCH_PRESENT1, RSF_D3D11_DISPATCH_RELEASE,
     RSF_D3D11_DISPATCH_RESIZE_BUFFERS, RSF_D3D11_DISPATCH_RESIZE_BUFFERS1,

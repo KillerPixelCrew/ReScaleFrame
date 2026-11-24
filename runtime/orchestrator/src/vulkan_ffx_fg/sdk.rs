@@ -11,9 +11,9 @@
 // inside an SDK call. Only the SDK-written contexts, the chain and the
 // replacement table change after publication, so they are UnsafeCell fields
 // and every later step takes a shared reference.
-use crate::dx12_vulkan_platform::typed;
 use super::startup::{self, CoreEntries, Platform, WsiEntries};
 use super::{BGRA8, FEATURE_FAILED, Frame, Handle, INIT_FAILED, Image, OK, RGBA8, Record, Setup};
+use crate::dx12_vulkan_platform::typed;
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_create, rsf_core_capture_vk_destroy,
     rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize, rsf_core_capture_vk_provider,
@@ -32,9 +32,7 @@ use crate::vulkan_fg_wsi::{
     rsf_core_vkfg_graphics_submit, rsf_core_vkfg_wsi_acquire, rsf_core_vkfg_wsi_create,
     rsf_core_vkfg_wsi_destroy, rsf_core_vkfg_wsi_images, rsf_core_vkfg_wsi_present,
 };
-use crate::vulkan_timing::{
-    timing_begin, timing_end,
-};
+use crate::vulkan_timing::{timing_begin, timing_end};
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::RSF_FRAME_FLAG_RESET;
 use std::cell::UnsafeCell;

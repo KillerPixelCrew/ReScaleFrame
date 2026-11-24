@@ -40,11 +40,7 @@ pub(crate) unsafe extern "C" fn rsf_dlss_evaluate(context: Handle, frame: *const
     unsafe { rsf_core_dlss_streamline_evaluate(context, frame, 0) }
 }
 
-pub(crate) unsafe fn rsf_dlss_evaluate_shared(
-    list: Handle,
-    frame: *const Frame,
-    id: u64,
-) -> i32 {
+pub(crate) unsafe fn rsf_dlss_evaluate_shared(list: Handle, frame: *const Frame, id: u64) -> i32 {
     if id == 0 {
         return NOT_READY;
     }

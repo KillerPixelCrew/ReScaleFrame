@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d11_present::rsf_d3d11_present_graphics;
-use crate::sys::rsf_streamline_graphics;
 use crate::native_cpu::rsf_native_cpu_rendered_source_set;
+use crate::sys::rsf_streamline_graphics;
 use diagnostics::report_stage;
 use std::ffi::c_char;
 use std::ptr::null_mut;

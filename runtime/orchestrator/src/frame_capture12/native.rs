@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::d3d11_d3d12::transition_barrier;
 use super::{Handle, Layout};
+use crate::d3d11_d3d12::transition_barrier;
 use std::mem::ManuallyDrop;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D12::*;

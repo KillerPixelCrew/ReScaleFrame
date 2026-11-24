@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::d3d11_d3d12::transition_barrier;
 use super::*;
+use crate::d3d11_d3d12::transition_barrier;
 use ::windows::Win32::{
     Foundation::{HANDLE, HWND},
     Graphics::{

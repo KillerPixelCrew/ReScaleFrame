@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{TestResult, check};
-use crate::d3d11_sharpening::Frame;
 use crate::d3d11_d3d12::transition_barrier as transition;
+use crate::d3d11_sharpening::Frame;
 use crate::d3d12_sharpening::Sharpen12;
 use crate::owned_win32_handle;
 use crate::sharpening_policy::defaults;

@@ -2,23 +2,22 @@
 // The production leaves of the D3D11 SR pipeline; dlss_pipeline_tests.rs defines fakes with the
 // same names and signatures.
 use super::*;
-use crate::d3d11_d3d12::borrow;
 use crate::colour_d3d11::{
     rsf_colour_fidelity_create, rsf_colour_fidelity_destroy, rsf_colour_fidelity_run,
     rsf_colour_transport_create, rsf_colour_transport_decode, rsf_colour_transport_destroy,
     rsf_colour_transport_encode,
 };
+use crate::d3d11_d3d12::borrow;
 pub(super) use crate::d3d11_output_platform::{
     rsf_d3d11_output_create_texture as create_texture,
     rsf_d3d11_output_texture_desc as texture_desc,
 };
 pub(super) use crate::d3d11_present::rsf_d3d11_present_host as present_host;
-use crate::d3d11_sharpening::{Frame as SharpenFrame, rsf_core_sharpen11_run};
 pub(super) use crate::d3d11_sharpening::rsf_core_sharpen11_destroy as sharpen_destroy;
+use crate::d3d11_sharpening::{Frame as SharpenFrame, rsf_core_sharpen11_run};
 pub(super) use crate::dlss_streamline::exports::{
-    rsf_dlss_evaluate as evaluate_layer, rsf_dlss_load as load,
-    rsf_dlss_plan_render_size as plan, rsf_dlss_query_support as query_support,
-    rsf_dlss_release_resources as release_resources,
+    rsf_dlss_evaluate as evaluate_layer, rsf_dlss_load as load, rsf_dlss_plan_render_size as plan,
+    rsf_dlss_query_support as query_support, rsf_dlss_release_resources as release_resources,
     rsf_dlss_release_viewport as release_viewport, rsf_dlss_set_device as set_device,
     rsf_dlss_share_host as share_host, rsf_dlss_shutdown as shutdown,
 };
@@ -106,7 +105,6 @@ pub(super) unsafe fn create_zeroed(device: Raw, desc: *const TextureDesc, row_pi
     result.map_or(null_mut(), Interface::into_raw)
 }
 
-
 pub(super) unsafe fn decode_create(
     device: Raw,
     width: u32,
@@ -128,7 +126,12 @@ pub(super) unsafe fn decode_create(
 }
 
 // The pass owners type their pass pointers; the pipeline keeps them as raw handles.
-pub(super) unsafe fn decode_run(pass: Raw, context: Raw, motion: Raw, params: *const DecodeParams) -> i32 {
+pub(super) unsafe fn decode_run(
+    pass: Raw,
+    context: Raw,
+    motion: Raw,
+    params: *const DecodeParams,
+) -> i32 {
     unsafe { rsf_motion_decode_run(pass.cast(), context, motion, params) }
 }
 
@@ -211,7 +214,9 @@ pub(super) unsafe fn transport_encode(
     height: u32,
     out: *mut Raw,
 ) -> i32 {
-    unsafe { rsf_colour_transport_encode(pass.cast(), context, scene, exposure, width, height, out) }
+    unsafe {
+        rsf_colour_transport_encode(pass.cast(), context, scene, exposure, width, height, out)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

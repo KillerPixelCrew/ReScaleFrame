@@ -16,13 +16,13 @@ use super::{
 // The facade state's leaves; the unit test below fakes them.
 #[cfg(not(test))]
 use super::native::{state_describe, state_destroy, state_device, state_parent};
-#[cfg(test)]
-use tests::{state_describe, state_destroy, state_device, state_parent};
 use crate::allocate_handle;
 use crate::d3d11_present_abi::{Chain, Raw};
 use std::ffi::c_void;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering};
+#[cfg(test)]
+use tests::{state_describe, state_destroy, state_device, state_parent};
 use windows::Win32::Foundation::{E_NOINTERFACE, HANDLE, HWND, S_OK};
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_UNSPECIFIED, DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT, DXGI_MODE_DESC,

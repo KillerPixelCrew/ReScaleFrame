@@ -8,8 +8,8 @@
 //! Settings keys belong to settings_store.rs, SR vendor selection to rsf_gpu_select_sr_backend.
 //! The adapter's only policy input is `set_engine_spatial`, which learns whether the engine
 //! upscales spatially itself, never the vendor.
-use crate::copy_c_string;
 use crate::com_ref;
+use crate::copy_c_string;
 use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening, sr_name};
 #[cfg(not(test))]
 use crate::plugin_session::Session;

@@ -404,11 +404,7 @@ pub(crate) unsafe fn rsf_fsr4gvk_hudless(
 ) -> i32 {
     unsafe { shared::hudless(owner, commands, frame) }
 }
-pub(crate) unsafe fn rsf_fsr4gvk_submitted(
-    owner: *mut Owner,
-    commands: *const Handle,
-    count: u32,
-) {
+pub(crate) unsafe fn rsf_fsr4gvk_submitted(owner: *mut Owner, commands: *const Handle, count: u32) {
     unsafe { shared::submitted(owner, commands, count) };
 }
 pub(crate) unsafe fn rsf_fsr4gvk_enable_options(
@@ -460,10 +456,7 @@ pub(crate) unsafe fn rsf_fsr4gvk_present_source(
         platform::rsf_dx12gvk_present_marshaled(present_marshaled, owner.cast(), info, source, 1)
     }
 }
-pub(crate) unsafe fn rsf_fsr4gvk_status(
-    owner: *const Owner,
-    status: *mut Status,
-) -> i32 {
+pub(crate) unsafe fn rsf_fsr4gvk_status(owner: *const Owner, status: *mut Status) -> i32 {
     unsafe { shared::status(owner, status) }
 }
 pub(crate) unsafe fn rsf_fsr4gvk_drain(owner: *mut Owner) -> i32 {

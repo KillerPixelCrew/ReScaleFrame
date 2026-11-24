@@ -211,7 +211,11 @@ pub(crate) unsafe extern "C" fn rsf_core_fg12_setup_header(
     OK
 }
 
-pub(super) unsafe extern "C" fn check_setup(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn check_setup(
+    setup: *const Setup,
+    out: *mut Raw,
+    chain: *mut Raw,
+) -> i32 {
     let result = unsafe { rsf_core_fg12_setup_header(setup, out, chain) };
     if result == OK {
         unsafe { rsf_core_fg12_setup(setup) }
@@ -240,5 +244,3 @@ pub(super) unsafe extern "C" fn load_library(setup: &Setup, name: *const u16) ->
     }
     module
 }
-
-

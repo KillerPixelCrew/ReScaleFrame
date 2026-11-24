@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The FidelityFX Vulkan SR leaves of vulkan_sr.rs: the SDK capsule, its guarded SDK calls and
 //! the Vulkan graphics, sharpening and capture state. `NATIVE` in vulkan_sr.rs names them.
-use crate::dx12_vulkan_platform::typed;
 use super::ffx_descriptors::abi::{
     FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE, FFX_API_DESC_TYPE_OVERRIDE_VERSION,
     FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION, FFX_API_QUERY_DESC_TYPE_GET_VERSIONS,
@@ -15,6 +14,7 @@ use super::{
     DISPATCH, FfxDeviceEntries, FfxDispatch, FfxExports, Frame, Handle, INIT_FAILED, Image,
     NOT_SUPPORTED, Setup, lookup_device_proc, rsf_vk_function,
 };
+use crate::dx12_vulkan_platform::typed;
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_create, rsf_core_capture_vk_destroy,

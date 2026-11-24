@@ -26,7 +26,8 @@ fn fake(name: &str, device: Handle) -> Handle {
         device,
     }))
     .cast()
-}fn object<'a>(handle: Handle) -> &'a Fake {
+}
+fn object<'a>(handle: Handle) -> &'a Fake {
     unsafe { &*handle.cast::<Fake>() }
 }
 fn refs(handle: Handle) -> u32 {

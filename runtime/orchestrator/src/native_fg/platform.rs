@@ -2,10 +2,10 @@
 use super::{Handle, Log, TextureInfo};
 use crate::d3d11_d3d12::*;
 use crate::d3d11_present::rsf_d3d11_present_graphics;
-use crate::sys::rsf_streamline_graphics;
 use crate::shared_surface::{
     ABI_VERSION as SURFACE_ABI, SurfaceSetup, rsf_shared_fence_create, rsf_shared_surface_create,
 };
+use crate::sys::rsf_streamline_graphics;
 use crate::sys::*;
 use std::ffi::c_char;
 use std::ptr::null_mut;

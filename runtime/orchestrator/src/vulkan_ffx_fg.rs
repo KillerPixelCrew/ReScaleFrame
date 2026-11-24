@@ -558,16 +558,7 @@ impl Owner {
             (false, false) => "ffx_configure_disabled",
         };
         let enabled = record.is_some();
-        if unsafe {
-            leaf::configure(
-                self.native,
-                u32::from(enabled),
-                color,
-                frame,
-                stage,
-            )
-        } != OK
-        {
+        if unsafe { leaf::configure(self.native, u32::from(enabled), color, frame, stage) } != OK {
             return FEATURE_FAILED;
         }
         let mut route = route();

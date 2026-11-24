@@ -70,7 +70,11 @@ static QUEUE: MockCom = MockCom::new();
 static CHAIN: MockCom = MockCom::new();
 static FENCE: MockCom = MockCom::new();
 
-pub(super) unsafe extern "C" fn setup_outputs(_: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn setup_outputs(
+    _: *const Setup,
+    out: *mut Raw,
+    chain: *mut Raw,
+) -> i32 {
     unsafe {
         out.write(null_mut());
         chain.write(null_mut());

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-pub(super) use crate::d3d11_d3d12::create_fence;
 use super::*;
+pub(super) use crate::d3d11_d3d12::create_fence;
 use rsf_game_sys::backend_result::MISSING_ENTRY_POINT;
 
 use rsf_vk_xess_fg::sdk::*;

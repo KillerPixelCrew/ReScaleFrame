@@ -503,11 +503,12 @@ impl Session for Fsr {
     }
 
     unsafe fn prepare(&self, command: Raw, frame: *const Frame) -> i32 {
-        let (frame, record) =
-            match unsafe { read_frame(admission::rsf_core_fg12_frame, frame, self.device.as_raw()) } {
-                Ok(frame) => frame,
-                Err(result) => return result,
-            };
+        let (frame, record) = match unsafe {
+            read_frame(admission::rsf_core_fg12_frame, frame, self.device.as_raw())
+        } {
+            Ok(frame) => frame,
+            Err(result) => return result,
+        };
         let chain = self.chain();
         let mut before = self.state.read();
         if chain.is_null() || record.frame_id <= before.order.last_prepare {
@@ -516,8 +517,7 @@ impl Session for Fsr {
         let enabled = frame.interpolate != 0 && before.mode() != RSF_FG_OFF;
         let hudless = enabled && self.ui_mode == HUDLESS;
         if enabled {
-            let result =
-                unsafe { admission::rsf_core_fg12_command(command, self.device.as_raw()) };
+            let result = unsafe { admission::rsf_core_fg12_command(command, self.device.as_raw()) };
             if result != OK {
                 return result;
             }

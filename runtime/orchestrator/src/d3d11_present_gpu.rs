@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! D3D12 platform leaves with the same raw output and HRESULT contracts used by
 //! the fake platform and the C++ state capsule.
-use crate::d3d11_d3d12::transition_barrier;
 use super::{E_FAIL, S_OK};
 use crate::com_ref;
+use crate::d3d11_d3d12::transition_barrier;
 use crate::d3d11_present_abi::Raw;
 use rsf_game_sys::backend_result::FEATURE_FAILED;
 use std::ptr::{null, null_mut};

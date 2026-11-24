@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Typed DXGI and D3D12 calls for the GL interop owner's native table.
-pub(super) use crate::d3d11_d3d12::{execute as queue_execute, fence_completed};
 use super::Handle;
+pub(super) use crate::d3d11_d3d12::{execute as queue_execute, fence_completed};
 // The leaves gl_shared_surface.rs calls as `native::*`; its tests fake the same names.
 pub(super) use super::native_gl::{
     acquire, current as gl_current, error as gl_error, extension_at as gl_extension_at,

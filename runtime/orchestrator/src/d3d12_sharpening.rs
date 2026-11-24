@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-use crate::d3d12_host::device_of;
 use crate::d3d11_d3d12::transition_barrier;
 use crate::d3d11_output_platform::rsf_d3d11_output_srv_format;
 use crate::d3d11_sharpening::{Frame, rsf_sharpen11_active, rsf_sharpen11_pack};
+use crate::d3d12_host::device_of;
 use crate::sharpening_policy::{FILTERS, effective_mode};
 use crate::sys::rsf_sharpening_options as Options;
 use rsf_shader_compiler::{Compiler, Request, blob_bytes, compile};

@@ -885,10 +885,7 @@ pub(crate) unsafe fn rsf_dlssgvk_acquire(
         .acquire(owner.chain, timeout, semaphore, fence, index)
 }
 
-pub(crate) unsafe fn rsf_dlssgvk_image_layout(
-    owner: *const Owner,
-    layout: *mut u32,
-) -> i32 {
+pub(crate) unsafe fn rsf_dlssgvk_image_layout(owner: *const Owner, layout: *mut u32) -> i32 {
     if owner.is_null() || layout.is_null() {
         return INVALID;
     }
@@ -897,11 +894,7 @@ pub(crate) unsafe fn rsf_dlssgvk_image_layout(
     OK
 }
 
-pub(crate) unsafe fn rsf_dlssgvk_enable(
-    owner: *mut Owner,
-    enabled: u32,
-    count: u32,
-) -> i32 {
+pub(crate) unsafe fn rsf_dlssgvk_enable(owner: *mut Owner, enabled: u32, count: u32) -> i32 {
     let Some(owner) = (unsafe { owner.as_mut() }) else {
         return INVALID;
     };
@@ -937,11 +930,7 @@ unsafe fn record(owner: *mut Owner, commands: Handle, frame: *const Frame, hudle
     owner.record(commands, frame, record, hudless != 0)
 }
 
-pub(crate) unsafe fn rsf_dlssgvk_submitted(
-    owner: *mut Owner,
-    commands: *const Handle,
-    count: u32,
-) {
+pub(crate) unsafe fn rsf_dlssgvk_submitted(owner: *mut Owner, commands: *const Handle, count: u32) {
     if let Some(owner) = unsafe { owner.as_mut() }
         && !commands.is_null()
     {
@@ -964,10 +953,7 @@ unsafe fn present(
     owner.present(info, source)
 }
 
-pub(crate) unsafe fn rsf_dlssgvk_get_status(
-    owner: *mut Owner,
-    status: *mut Status,
-) -> i32 {
+pub(crate) unsafe fn rsf_dlssgvk_get_status(owner: *mut Owner, status: *mut Status) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID;
     };

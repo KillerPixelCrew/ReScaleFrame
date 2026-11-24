@@ -15,7 +15,9 @@ struct Fake {
 }
 
 unsafe fn released(object: *mut com_ref::test::Fake) {
-    event(format!("release {}", unsafe { (*object.cast::<Fake>()).name }));
+    event(format!("release {}", unsafe {
+        (*object.cast::<Fake>()).name
+    }));
 }
 
 fn fake_com(name: &'static str) -> *mut Fake {

@@ -12,8 +12,8 @@
 // frame-thread entry refuses instead of racing. Cross-thread fields sit behind a second lock that
 // is never held across a leaf call or a log line. The sink has its own lock, so vendor lines
 // forwarded from inside a leaf never wait on either.
-use crate::copy_c_string;
 use crate::com_ref;
+use crate::copy_c_string;
 use crate::dlss_pipeline_abi::*;
 use crate::frame_assembly::rsf_assemble_dlss_frame;
 use crate::frame_capture_vk::general;
@@ -434,9 +434,7 @@ pub(super) struct Pipeline {
 static PROCESS: Pipeline = Pipeline::new();
 
 // Applies saved settings to the process pipeline; used by the overlay in every build.
-pub(crate) fn rsf_core_dlss_pipeline_apply_sharpening(
-    settings: &crate::sys::rsf_render_settings,
-) {
+pub(crate) fn rsf_core_dlss_pipeline_apply_sharpening(settings: &crate::sys::rsf_render_settings) {
     let options = crate::settings_store::sharpening_of(settings, &sharpening_policy::defaults());
     let _ = unsafe { PROCESS.set_sharpening(&raw const options) };
 }
@@ -870,13 +868,7 @@ impl Pipeline {
             }
         } else {
             unsafe {
-                self.select_alternate(
-                    owned,
-                    backend,
-                    [width, height],
-                    setup.quality,
-                    &mut range,
-                )
+                self.select_alternate(owned, backend, [width, height], setup.quality, &mut range)
             }
         };
         if result != OK {
@@ -1137,7 +1129,8 @@ impl Pipeline {
                 frame.motion_depth_layer,
                 camera.jitter_pixels,
             );
-            if unsafe { leaf::resolve_run(o.dense, context, dlss.motion, dlss.depth, &params) } == 0 {
+            if unsafe { leaf::resolve_run(o.dense, context, dlss.motion, dlss.depth, &params) } == 0
+            {
                 return self.finish(o, RESOURCE_FAILED);
             }
             dlss.motion = unsafe { leaf::resolve_motion(o.dense) };
@@ -1354,9 +1347,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         // Post-SR, after decoding and fidelity correction. Failure keeps the vendor's valid output.
         unsafe { self.sharpen(o, context, frame, &dlss, &sharpen, backend) };
         if let Some(prefix) = prefix {
-            unsafe {
-                self.write_dump(o, context, frame, &submitted, backend, &prefix, [ow, oh])
-            };
+            unsafe { self.write_dump(o, context, frame, &submitted, backend, &prefix, [ow, oh]) };
         }
         unsafe {
             leaf::input_dump(
@@ -1728,12 +1719,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         OK
     }
 
-    pub(super) unsafe fn prepare_layer(
-        &self,
-        width: u32,
-        height: u32,
-        out: *mut Raw,
-    ) -> i32 {
+    pub(super) unsafe fn prepare_layer(&self, width: u32, height: u32, out: *mut Raw) -> i32 {
         if out.is_null() || width == 0 || height == 0 {
             return INVALID;
         }
@@ -2057,7 +2043,8 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         unsafe { leaf::texture_desc(o.output(), &mut desc) };
         desc.width = width;
         desc.height = height;
-        let Some(replacement) = (unsafe { com_ref::owned(leaf::create_texture(o.device(), &desc)) })
+        let Some(replacement) =
+            (unsafe { com_ref::owned(leaf::create_texture(o.device(), &desc)) })
         else {
             unsafe { rsf_sr_legacy_destroy(next_alternate) };
             return RESOURCE_FAILED;

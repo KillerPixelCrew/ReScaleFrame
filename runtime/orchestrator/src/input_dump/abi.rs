@@ -358,7 +358,8 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_named_texture(
     unsafe { native::encode_texture(context, texture.as_raw(), &options, 0, &mut encoding) };
     if encoding.preview == 0
         && !report.is_null()
-        && unsafe { report.cast::<u32>().read() } as usize >= size_of::<rsf_named_frame_dump_report>()
+        && unsafe { report.cast::<u32>().read() } as usize
+            >= size_of::<rsf_named_frame_dump_report>()
     {
         unsafe {
             std::ptr::addr_of_mut!((*report).width).write(surface.width);
