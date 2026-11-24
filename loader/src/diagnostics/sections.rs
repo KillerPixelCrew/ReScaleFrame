@@ -134,7 +134,7 @@ fn thread_module(start: u64, modules: &[rsf_module_entry]) -> Option<(&rsf_modul
     })
 }
 
-fn wide(out: &mut Stream, value: &[u16]) {
+pub(super) fn wide(out: &mut Stream, value: &[u16]) {
     for &unit in value.iter().take_while(|&&unit| unit != 0) {
         escape_unit(out, unit);
     }

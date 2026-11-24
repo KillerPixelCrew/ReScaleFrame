@@ -2,7 +2,7 @@
 use super::image::{Section, sidecar_section, write_imports};
 use super::names::{escape_unit, write_names};
 use super::rtti::write_rtti;
-use super::sections::{Stream, rsf_dump_now_ms, write_functions, write_threads};
+use super::sections::{Stream, rsf_dump_now_ms, wide, write_functions, write_threads};
 use crate::sys::{rsf_dump_sidecar_info, rsf_dump_sidecar_stats};
 use std::ffi::CStr;
 use std::fmt::Write as _;
@@ -14,12 +14,6 @@ fn fixed(out: &mut Stream, number: f64) {
     }
     let scaled = (number.abs() * 10000.0 + 0.5) as u64;
     let _ = write!(out, "{}.{:04}", scaled / 10000, scaled % 10000);
-}
-
-fn wide(out: &mut Stream, value: &[u16]) {
-    for &unit in value.iter().take_while(|&&unit| unit != 0) {
-        escape_unit(out, unit);
-    }
 }
 
 unsafe fn path(out: &mut Stream, source: *const u16) {
