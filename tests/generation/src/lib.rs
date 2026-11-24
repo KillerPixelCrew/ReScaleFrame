@@ -18,7 +18,6 @@ mod sys {
 extern crate rsf_test_support;
 
 mod assembly;
-mod choice;
 mod device;
 mod dll;
 mod latency;

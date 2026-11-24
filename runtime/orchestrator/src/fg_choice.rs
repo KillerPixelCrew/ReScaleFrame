@@ -216,4 +216,64 @@ mod tests {
         assert_eq!(rsf_fg_select_auto_backend(2, all | 4), FSR3);
         assert_eq!(rsf_fg_select_auto_backend(DLSS, 0), 0);
     }
+
+    #[test]
+    fn default_backend_follows_the_adapter_vendor() {
+        assert_eq!(rsf_fg_default_backend(0x8086, 0), XESS);
+        assert_eq!(rsf_fg_default_backend(0x10de, 0), DLSS);
+        assert_eq!(rsf_fg_default_backend(0x1002, 0), FSR3);
+        assert_eq!(rsf_fg_default_backend(0x8086, 1), 0);
+        assert_eq!(rsf_fg_default_backend(0xffff, 0), 0);
+    }
+
+    // The only test that starts a choice session: SETTINGS is process-wide.
+    #[test]
+    fn saved_choice_reloads_and_refuses_what_the_host_cannot_serve() {
+        let ini = crate::temporary_ini::TemporaryIni::new("fg-choice", "persistence");
+        let path = ini.wide().as_ptr();
+        let start = |fallback, choices| unsafe { rsf_fg_choice_start(path, fallback, choices) };
+        assert_eq!(PROVIDERS | 1, 0x3b);
+
+        assert_eq!(start(DLSS, 0x3b), DLSS);
+        assert_eq!(rsf_fg_choice_save(FSR3), 0);
+        let choice = rsf_fg_choice_get();
+        assert_eq!((choice.backend, choice.last_result), (FSR3, 0));
+        assert_eq!(start(DLSS, 0x3b), FSR3);
+        // Off is saved and reloaded; an unknown ID is refused and leaves Off.
+        assert_eq!(rsf_fg_choice_save(0), 0);
+        assert_eq!(start(DLSS, 0x3b), 0);
+        assert_eq!(rsf_fg_choice_save(2), NOT_SUPPORTED);
+        assert_eq!(rsf_fg_choice_get().backend, 0);
+        // A renderer without DLSS refuses it and keeps XeSS.
+        assert_eq!(start(0, 0x39), 0);
+        assert_eq!(rsf_fg_choice_save(DLSS), NOT_SUPPORTED);
+        assert_eq!(rsf_fg_choice_save(XESS), 0);
+        assert_eq!(start(0, 0x39), XESS);
+        // A corrupt saved value falls back.
+        assert_eq!(
+            unsafe { rsf_settings_store_write_integer(path, SECTION, KEY_UTF8.as_ptr(), 2) },
+            0
+        );
+        assert_eq!(start(FSR3, 0x39), FSR3);
+        assert_eq!(start(9, PROVIDERS), 0);
+        // Memory-only settings cannot save.
+        unsafe { rsf_fg_choice_start(std::ptr::null(), DLSS, 0x3b) };
+        assert_eq!(rsf_fg_choice_save(FSR3), FEATURE_FAILED);
+        let choice = rsf_fg_choice_get();
+        assert_eq!((choice.backend, choice.last_result), (DLSS, FEATURE_FAILED));
+        drop(ini);
+
+        // Auto resolves once; a saved provider wins over Auto.
+        let ini = crate::temporary_ini::TemporaryIni::new("fg-choice", "auto");
+        let path = ini.wide().as_ptr();
+        let start = |fallback, choices| unsafe { rsf_fg_choice_start(path, fallback, choices) };
+        assert_eq!(start(AUTO, PROVIDERS), AUTO);
+        rsf_fg_choice_resolve_auto(XESS);
+        assert_eq!(rsf_fg_choice_get().backend, XESS);
+        assert_eq!(start(AUTO, PROVIDERS), AUTO);
+        assert_eq!(rsf_fg_choice_save(FSR3), 0);
+        assert_eq!(start(AUTO, PROVIDERS), FSR3);
+        rsf_fg_choice_resolve_auto(XESS);
+        assert_eq!(rsf_fg_choice_get().backend, FSR3);
+    }
 }

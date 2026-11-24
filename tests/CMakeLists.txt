@@ -453,9 +453,6 @@ target_link_libraries(rsf_sr12_abi_test PRIVATE rsf_orchestrator rsf_build_optio
 add_test(NAME sr12_abi COMMAND rsf_sr12_abi_test)
 
 
-add_executable(rsf_fg_choice_test generation/fg_choice_main.c)
-target_link_libraries(rsf_fg_choice_test PRIVATE rsf_generation_fixtures_rust rsf_orchestrator rsf_build_options)
-add_test(NAME fg_choice COMMAND rsf_fg_choice_test)
 rsf_add_fixture_test(rsf_fg_provider_test NAME fg_provider ENTRY rsf_test_fg_provider ARGV
     LIBS rsf_generation_fixtures_rust rsf_orchestrator TIMEOUT 120 SKIP77)
 
