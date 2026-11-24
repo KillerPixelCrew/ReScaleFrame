@@ -5,7 +5,7 @@
 //! frame-token lease. admission.rs admits the interposer by the digest the build
 //! selects.
 use super::{GetCurrentThreadId, GetProcAddress, LIFECYCLE, Win32, rsf_slvk_log_message};
-use crate::frame_generation::{Options, Platform as FgPlatform};
+use crate::frame_generation::Options;
 use crate::lifecycle::{Platform, feature_mask};
 use crate::sdk_api::{self, FEATURE_DLSS_G, FEATURE_PCL, FEATURE_REFLEX, OK, guarded};
 use crate::sdk_fg_options::{self, Packed, Sample, State};
@@ -160,11 +160,11 @@ unsafe extern "C" fn present_error(error: *const i32) {
 
 // Frame-generation leaves. Rust invokes them only under the initialized session.
 
-unsafe extern "C" fn fg_options_bound() -> u32 {
+pub(crate) unsafe fn fg_options_bound() -> u32 {
     u32::from(FG_OPTIONS.get().is_some())
 }
 
-unsafe extern "C" fn fg_apply(request: &Packed) -> i32 {
+pub(crate) unsafe fn fg_apply(request: &Packed) -> i32 {
     let Some(apply) = FG_OPTIONS.get() else {
         return -1;
     };
@@ -180,19 +180,13 @@ unsafe extern "C" fn fg_apply(request: &Packed) -> i32 {
     guarded(|| unsafe { apply(&viewport, &options) })
 }
 
-unsafe extern "C" fn fg_release() -> i32 {
+pub(crate) unsafe fn fg_release() -> i32 {
     let Some(free) = FREE.get() else {
         return -1;
     };
     let viewport = sdk_api::viewport(VIEWPORT);
     guarded(|| unsafe { free(FEATURE_DLSS_G, &viewport) })
 }
-
-static FG_PLATFORM: FgPlatform = FgPlatform {
-    options_bound: fg_options_bound,
-    apply: fg_apply,
-    release: fg_release,
-};
 
 /// Runs a synchronous call that pins the initialized SDK session.
 fn with_sdk(inactive: i32, call: impl FnOnce() -> i32) -> i32 {
@@ -577,7 +571,7 @@ extern "C" fn rsf_vk_sl_set_frame_generation(
     let inactive = if enabled { -1 } else { 0 };
     let options = Options::new(count, width, height, format, back_buffers);
     LIFECYCLE.with_frame_generation(inactive, |fg, revision| unsafe {
-        fg.set(&FG_PLATFORM, revision, enabled, options)
+        fg.set(revision, enabled, options)
     })
 }
 
@@ -586,7 +580,7 @@ extern "C" fn rsf_vk_sl_set_frame_generation(
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vk_sl_disable_frame_generation_for_release() -> i32 {
     LIFECYCLE.with_frame_generation(0, |fg, revision| unsafe {
-        fg.disable(&FG_PLATFORM, revision)
+        fg.disable(revision)
     })
 }
 
@@ -594,7 +588,7 @@ extern "C" fn rsf_vk_sl_disable_frame_generation_for_release() -> i32 {
 /// GPU and present work. Ownership clears only when slFreeResources succeeds.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vk_sl_free_frame_generation_resources() -> i32 {
-    LIFECYCLE.with_frame_generation(0, |fg, _| unsafe { fg.free(&FG_PLATFORM) })
+    LIFECYCLE.with_frame_generation(0, |fg, _| unsafe { fg.free() })
 }
 
 fn read_fg_sample(output: impl FnOnce(&Sample)) -> i32 {

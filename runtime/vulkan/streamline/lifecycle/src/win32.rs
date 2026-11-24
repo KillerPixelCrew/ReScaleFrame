@@ -5,6 +5,8 @@
 mod bridge;
 mod wsi;
 
+pub(crate) use bridge::{fg_apply, fg_options_bound, fg_release};
+
 use crate::lifecycle::{Lifecycle, System};
 use std::ffi::{CStr, c_char, c_void};
 use std::io::{self, Write};

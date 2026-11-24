@@ -2,7 +2,7 @@
 //! DLSS-G state for the standalone Streamline bridge. The orchestrator's
 //! rsf_dlssgvk owner has its own proxy, frame inputs and retirement protocol.
 
-use crate::sdk_fg_options::{self, Packed};
+use crate::sdk_fg_options;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -34,14 +34,8 @@ impl Options {
     }
 }
 
-#[repr(C)]
-pub(crate) struct Platform {
-    pub options_bound: unsafe extern "C" fn() -> u32,
-    pub apply: unsafe extern "C" fn(&Packed) -> i32,
-    pub release: unsafe extern "C" fn() -> i32,
-}
-
-const _: () = assert!(size_of::<Platform>() == 3 * size_of::<*mut std::ffi::c_void>());
+// The SDK option and release leaves in the Windows bridge.
+use crate::win32::{fg_apply, fg_options_bound, fg_release};
 
 // sl::Result::eWarnOutOfVRAM, checked in sdk_records_checks.h.
 const OUT_OF_VRAM: i32 = 39;
@@ -98,7 +92,6 @@ impl FrameGeneration {
 
     pub(crate) unsafe fn set(
         &mut self,
-        platform: &Platform,
         revision: u64,
         enabled: bool,
         requested: Options,
@@ -108,7 +101,7 @@ impl FrameGeneration {
         if !enabled && !self.enabled {
             return 0;
         }
-        if unsafe { (platform.options_bound)() } == 0 {
+        if unsafe { fg_options_bound() } == 0 {
             return -1;
         }
         if enabled && requested.count == 0 {
@@ -129,7 +122,7 @@ impl FrameGeneration {
             requested.back_buffers,
         );
         sdk_options.ui_recomposition = 1;
-        let result = unsafe { (platform.apply)(&sdk_options) };
+        let result = unsafe { fg_apply(&sdk_options) };
         if result == 0 {
             // Keep the pre-call revision. A WSI callback during SetOptions
             // invalidates this result for reuse while ownership still updates.
@@ -145,21 +138,21 @@ impl FrameGeneration {
         result
     }
 
-    pub(crate) unsafe fn disable(&mut self, platform: &Platform, revision: u64) -> i32 {
+    pub(crate) unsafe fn disable(&mut self, revision: u64) -> i32 {
         if !self.resources_may_exist || !self.enabled {
             return 0;
         }
-        unsafe { self.set(platform, revision, false, self.last_options) }
+        unsafe { self.set(revision, false, self.last_options) }
     }
 
-    pub(crate) unsafe fn free(&mut self, platform: &Platform) -> i32 {
-        if !self.resources_may_exist || unsafe { (platform.options_bound)() } == 0 {
+    pub(crate) unsafe fn free(&mut self) -> i32 {
+        if !self.resources_may_exist || unsafe { fg_options_bound() } == 0 {
             return 0;
         }
         if self.enabled {
             return -1;
         }
-        let result = unsafe { (platform.release)() };
+        let result = unsafe { fg_release() };
         if result == 0 {
             self.configured_at = None;
             self.resources_may_exist = false;
