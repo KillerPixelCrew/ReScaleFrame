@@ -198,22 +198,9 @@ const FG_EXPORTS: [&CStr; 13] = [
 ];
 type SdkEntries = [Handle; XELL_EXPORTS.len() + FG_EXPORTS.len()];
 
+// The bridge and session records are bindgen output with their own layout checks; this pins the
+// hand-written mirror of rsf_xess_bridge_platform.
 const _: () = {
-    assert!(size_of::<Modules>() == 16);
-    assert!(size_of::<Frame>() == 216 && align_of::<Frame>() == 8);
-    assert!(std::mem::offset_of!(Frame, color) == 16);
-    assert!(std::mem::offset_of!(Frame, view) == 56);
-    assert!(std::mem::offset_of!(Frame, ready) == 200);
-    assert!(size_of::<IntegratedFrame>() == 216 && align_of::<IntegratedFrame>() == 8);
-    assert!(std::mem::offset_of!(IntegratedFrame, struct_size) == 0);
-    assert!(std::mem::offset_of!(IntegratedFrame, abi_version) == 4);
-    assert!(std::mem::offset_of!(IntegratedFrame, color) == 24);
-    assert!(size_of::<PresentResourceDesc>() == 16 && align_of::<PresentResourceDesc>() == 8);
-    assert!(std::mem::offset_of!(PresentResourceDesc, height) == 8);
-    assert!(std::mem::offset_of!(PresentResourceDesc, format) == 12);
-    assert!(size_of::<IntegratedStatus>() == 24);
-    assert!(std::mem::offset_of!(IntegratedStatus, struct_size) == 0);
-    assert!(std::mem::offset_of!(IntegratedStatus, abi_version) == 4);
     assert!(size_of::<Platform>() == 544 && align_of::<Platform>() == 8);
     assert!(std::mem::offset_of!(Platform, allocate) == 0);
     assert!(std::mem::offset_of!(Platform, init_swapchain) == 104);

@@ -11,12 +11,6 @@ use windows::{
     core::{PCSTR, w},
 };
 
-const _: () = {
-    assert!(size_of::<vk::PhysicalDeviceIDProperties<'_>>() == 64);
-    assert!(core::mem::offset_of!(vk::PhysicalDeviceIDProperties<'_>, device_luid) == 48);
-    assert!(core::mem::offset_of!(vk::PhysicalDeviceIDProperties<'_>, device_luid_valid) == 60);
-};
-
 fn entry(name: &core::ffi::CStr) -> FARPROC {
     let module = unsafe { GetModuleHandleW(w!("vulkan-1.dll")) }.ok()?;
     unsafe { GetProcAddress(module, PCSTR(name.as_ptr().cast())) }

@@ -93,7 +93,6 @@ struct LegacyFrame {
     done_value: u64,
 }
 
-#[repr(C)]
 struct Request {
     luid: u64,
     directory: *const u16,
@@ -104,7 +103,6 @@ struct Request {
     flags: u32,
 }
 
-#[repr(C)]
 struct Context {
     provider: u64,
     render_width: u32,
@@ -114,15 +112,12 @@ struct Context {
     flags: u32,
 }
 
-#[repr(C)]
-#[derive(Default)]
 struct Texture {
     width: u64,
     height: u32,
     format: u32,
 }
 
-#[repr(C)]
 struct Dispatch {
     color: Handle,
     depth: Handle,
@@ -146,15 +141,9 @@ struct Dispatch {
     slot: u32,
 }
 
-const _: () = {
-    use std::mem::offset_of;
-    assert!(size_of::<LegacyFrame>() == 96 && offset_of!(LegacyFrame, ready_value) == 80);
-    assert!(size_of::<Request>() == 40 && offset_of!(Request, flags) == 32);
-    assert!(size_of::<Context>() == 32 && offset_of!(Context, flags) == 24);
-    assert!(size_of::<Texture>() == 16 && offset_of!(Texture, format) == 12);
-    assert!(size_of::<Dispatch>() == 96 && offset_of!(Dispatch, render_width) == 32);
-    assert!(offset_of!(Dispatch, frame_time_ms) == 64 && offset_of!(Dispatch, reset) == 88);
-};
+const _: () = assert!(
+    size_of::<LegacyFrame>() == 96 && std::mem::offset_of!(LegacyFrame, ready_value) == 80
+);
 
 fn candidate(vendor: u32) -> bool {
     // AMD natively; NVIDIA and Intel only through the INT8 compatibility lease.

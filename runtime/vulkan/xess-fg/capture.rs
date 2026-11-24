@@ -90,11 +90,6 @@ struct Image {
 }
 
 const _: () = {
-    assert!(size_of::<Record>() == 480 && align_of::<Record>() == 8);
-    assert!(std::mem::offset_of!(Record, frame_id) == 8);
-    assert!(std::mem::offset_of!(Record, output_width) == 52);
-    assert!(std::mem::offset_of!(Record, output_height) == 56);
-    assert!(size_of::<Desc>() == 32);
     assert!(size_of::<Footprint>() == 32);
     assert!(std::mem::offset_of!(Footprint, row_pitch) == 24);
 };

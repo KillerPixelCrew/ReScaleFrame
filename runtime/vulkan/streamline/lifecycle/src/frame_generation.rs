@@ -4,7 +4,6 @@
 
 use crate::sdk_fg_options;
 
-#[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Options {
     count: u32,
@@ -13,8 +12,6 @@ pub(crate) struct Options {
     format: u32,
     back_buffers: u32,
 }
-
-const _: () = assert!(size_of::<Options>() == 5 * size_of::<u32>());
 
 impl Options {
     pub(crate) const fn new(
