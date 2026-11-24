@@ -459,6 +459,14 @@ fn now_qpc() -> u64 {
     now as u64
 }
 
+// Performance counter ticks per second; 0 if the counter is unavailable.
+#[cfg(windows)]
+fn qpc_frequency() -> u64 {
+    let mut frequency = 0i64;
+    unsafe { windows_sys::Win32::System::Performance::QueryPerformanceFrequency(&mut frequency) };
+    frequency.max(0) as u64
+}
+
 // A copy of a C string the caller may leave null, `fallback` then. `text` is null or a live
 // NUL-terminated string.
 unsafe fn copy_c_string(

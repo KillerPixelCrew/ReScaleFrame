@@ -1309,10 +1309,7 @@ impl Owner {
         let b = self.b();
         let setup = settings();
         let identity = prepared().is_some_and(|value| value.identity);
-        let mut frequency = 0_i64;
-        unsafe {
-            windows_sys::Win32::System::Performance::QueryPerformanceFrequency(&mut frequency)
-        };
+        let frequency = crate::qpc_frequency();
         lock(&self.timing).tick_ms = if frequency > 0 {
             1000.0 / frequency as f64
         } else {

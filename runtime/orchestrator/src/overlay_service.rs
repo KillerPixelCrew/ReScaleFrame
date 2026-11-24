@@ -76,7 +76,6 @@ use std::{
         atomic::{AtomicBool, AtomicU8, Ordering},
     },
 };
-use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 const OK: i32 = 0;
 const INVALID_ARGUMENT: i32 = -1;
@@ -977,14 +976,8 @@ fn sample_latency(stats: &mut rsf_overlay_stats) {
         rsf_native_latency_status_get,
         rsf_core_native_input_routes_get,
     );
-    let mut ticks = 0;
-    let mut frequency = 0;
-    unsafe {
-        QueryPerformanceCounter(&mut ticks);
-        QueryPerformanceFrequency(&mut frequency);
-    }
-    stats.sample_qpc = ticks as u64;
-    stats.qpc_frequency = frequency as u64;
+    stats.sample_qpc = crate::now_qpc();
+    stats.qpc_frequency = crate::qpc_frequency();
 }
 
 fn read_options(config: &Config) -> [rsf_overlay_host_option; OPTION_LIMIT] {

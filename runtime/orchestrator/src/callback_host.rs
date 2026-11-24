@@ -54,7 +54,6 @@ use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use windows::core::Interface;
-use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::core::{PCWSTR, w};
 
 #[cfg(test)]
@@ -367,13 +366,8 @@ impl Host {
         if unsafe { leaf::last_present_count(pass.swapchain, &mut presented) } != 0 {
             stats.application_presented_frames = u64::from(presented);
         }
-        let (mut now, mut frequency) = (0i64, 0i64);
-        unsafe {
-            QueryPerformanceCounter(&mut now);
-            QueryPerformanceFrequency(&mut frequency);
-        }
-        stats.sample_qpc = now as u64;
-        stats.qpc_frequency = frequency as u64;
+        stats.sample_qpc = crate::now_qpc();
+        stats.qpc_frequency = crate::qpc_frequency();
         let mut fg = FgStatus {
             struct_size: size_of::<FgStatus>() as u32,
             ..unsafe { std::mem::zeroed() }

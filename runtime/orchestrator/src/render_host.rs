@@ -56,7 +56,6 @@ use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use windows::core::{IUnknown, Interface};
-use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileStringW;
 use windows_sys::core::w;
@@ -1193,13 +1192,8 @@ impl Host {
         stats.application_presented_frames = status.application_presents;
         stats.show_performance_hud = prefs.status_overlay;
         stats.ui_preferences = self.ui_preferences.load(Ordering::Relaxed);
-        let (mut now, mut frequency) = (0i64, 0i64);
-        unsafe {
-            QueryPerformanceCounter(&mut now);
-            QueryPerformanceFrequency(&mut frequency);
-        }
-        stats.sample_qpc = now as u64;
-        stats.qpc_frequency = frequency as u64;
+        stats.sample_qpc = crate::now_qpc();
+        stats.qpc_frequency = crate::qpc_frequency();
         unsafe { leaf::overlay_fill_fg(&mut stats, &fg) };
         // Keep the saved provider for re-enabling FG, but Off is the selected UI choice while
         // disabled. A retained SDK context is not an active provider.
