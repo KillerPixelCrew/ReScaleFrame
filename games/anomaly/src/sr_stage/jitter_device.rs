@@ -294,16 +294,7 @@ impl Fixture {
     }
 }
 
-fn half(value: u16) -> f32 {
-    let sign = u32::from(value & 0x8000) << 16;
-    let exponent = u32::from((value >> 10) & 31);
-    let mantissa = u32::from(value & 1023);
-    if exponent == 0 {
-        return (mantissa as f32 / 16_777_216.).copysign(f32::from_bits(sign));
-    }
-    let exponent = if exponent == 31 { 255 } else { exponent + 112 };
-    f32::from_bits(sign | exponent << 23 | mantissa << 13)
-}
+use rsf_test_support::device::half_to_f32 as half;
 
 fn run(device: &Device) -> Result<()> {
     check(

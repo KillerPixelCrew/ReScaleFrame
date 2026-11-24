@@ -2,6 +2,7 @@
 //! Executes the locally compiled stock and patched FXC bytecode in D3D11.
 
 use rsf_shader_compiler::{Request, compile_system_checked};
+use rsf_test_support::device::Device;
 use std::{env, ffi::CStr, fs, path::Path, ptr, slice};
 use windows::Win32::Graphics::Direct3D::{Fxc::*, *};
 use windows::Win32::Graphics::Direct3D11::*;
@@ -610,17 +611,15 @@ impl Default for PixelDraw {
 impl Gpu {
     fn target(&self, format: DXGI_FORMAT, samples: u32) -> Fixture<Target> {
         let desc = D3D11_TEXTURE2D_DESC {
-            Width: WIDTH,
-            Height: WIDTH,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: format,
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: samples,
                 Quality: 0,
             },
-            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-            ..Default::default()
+            ..Device::desc(
+                [WIDTH; 2],
+                format,
+                D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+            )
         };
         unsafe {
             let texture = created("MRT texture", |out| {
@@ -700,19 +699,11 @@ impl Gpu {
                             binding.Dimension == D3D_SRV_DIMENSION_TEXTURE2D,
                             "unexpected material resource dimension",
                         )?;
-                        let desc = D3D11_TEXTURE2D_DESC {
-                            Width: 2,
-                            Height: 2,
-                            MipLevels: 1,
-                            ArraySize: 1,
-                            Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
-                            SampleDesc: DXGI_SAMPLE_DESC {
-                                Count: 1,
-                                Quality: 0,
-                            },
-                            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-                            ..Default::default()
-                        };
+                        let desc = Device::desc(
+                            [2, 2],
+                            DXGI_FORMAT_R32G32B32A32_FLOAT,
+                            D3D11_BIND_SHADER_RESOURCE,
+                        );
                         let alpha = if name(binding.Name)? == "s_base" {
                             alpha
                         } else {

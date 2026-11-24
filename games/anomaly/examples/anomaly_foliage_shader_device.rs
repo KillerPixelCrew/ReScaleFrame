@@ -3,9 +3,11 @@
 #[cfg(windows)]
 mod fixture {
     use rsf_shader_compiler::{Request, compile_system_checked};
+    use rsf_test_support::device::{Device, half_to_f32 as half};
     use std::ffi::{CStr, CString};
     use std::fmt::Write;
     use std::path::Path;
+    use std::ops::Deref;
     use std::ptr::{from_ref, null_mut, read_unaligned};
     use windows::Win32::Graphics::Direct3D::Fxc::D3DReflect;
     use windows::Win32::Graphics::Direct3D::*;
@@ -358,9 +360,14 @@ mod fixture {
         assert!(size_of::<Capture>() == 36);
     };
 
-    struct Gpu {
-        device: ID3D11Device,
-        context: ID3D11DeviceContext,
+    /// The support crate's device with this fixture's buffer, draw and raster passes.
+    struct Gpu(Device);
+
+    impl Deref for Gpu {
+        type Target = Device;
+        fn deref(&self) -> &Device {
+            &self.0
+        }
     }
 
     impl Gpu {
@@ -369,18 +376,16 @@ mod fixture {
                 (D3D_DRIVER_TYPE_HARDWARE, "hardware"),
                 (D3D_DRIVER_TYPE_WARP, "WARP"),
             ] {
-                let Ok((device, context)) =
-                    rsf_test_support::d3d11_device(driver, D3D11_CREATE_DEVICE_FLAG(0), None)
-                else {
+                let Some(gpu) = Device::create(driver, None) else {
                     continue;
                 };
-                let level = unsafe { device.GetFeatureLevel() };
+                let level = unsafe { gpu.device.GetFeatureLevel() };
                 require(
                     level.0 >= D3D_FEATURE_LEVEL_11_0.0,
                     "feature level 11 required",
                 )?;
 
-                let dxgi = device.cast::<IDXGIDevice>()?;
+                let dxgi = gpu.device.cast::<IDXGIDevice>()?;
                 let adapter = unsafe { dxgi.GetAdapter()?.GetDesc()? };
                 let name_end = adapter
                     .Description
@@ -393,7 +398,7 @@ mod fixture {
                     "adapter={adapter_name} vendor={} device={}",
                     adapter.VendorId, adapter.DeviceId
                 );
-                return Ok(Self { device, context });
+                return Ok(Self(gpu));
             }
             Err("D3D11CreateDevice: hardware and WARP refused".into())
         }
@@ -415,19 +420,6 @@ mod fixture {
                     .CreateBuffer(&desc, data.map(from_ref), Some(&mut out))
             }?;
             out.ok_or_else(|| "CreateBuffer returned null".into())
-        }
-
-        fn texture(
-            &self,
-            desc: &D3D11_TEXTURE2D_DESC,
-            data: Option<&D3D11_SUBRESOURCE_DATA>,
-        ) -> Result<ID3D11Texture2D> {
-            let mut out = None;
-            unsafe {
-                self.device
-                    .CreateTexture2D(desc, data.map(from_ref), Some(&mut out))
-            }?;
-            out.ok_or_else(|| "CreateTexture2D returned null".into())
         }
 
         fn vertices(&self, shader: &Shader, vertices: &[Vertex], detail: bool) -> Result<()> {
@@ -620,19 +612,7 @@ mod fixture {
                 ..Default::default()
             };
             let white = self.texture(
-                &D3D11_TEXTURE2D_DESC {
-                    Width: 1,
-                    Height: 1,
-                    MipLevels: 1,
-                    ArraySize: 1,
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                    BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-                    ..Default::default()
-                },
+                &Device::desc([1, 1], DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE),
                 Some(&initial),
             )?;
             let mut srv = None;
@@ -705,19 +685,7 @@ mod fixture {
                 DXGI_FORMAT_R32G32B32A32_FLOAT,
                 DXGI_FORMAT_R16G16B16A16_FLOAT,
             ] {
-                let desc = D3D11_TEXTURE2D_DESC {
-                    Width: 16,
-                    Height: 16,
-                    MipLevels: 1,
-                    ArraySize: 1,
-                    Format: format,
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
-                    ..Default::default()
-                };
+                let desc = Device::desc([16, 16], format, D3D11_BIND_RENDER_TARGET);
                 let texture = self.texture(&desc, None)?;
                 let mut view = None;
                 unsafe {
@@ -734,50 +702,21 @@ mod fixture {
                 ctx.Draw(3, 0);
                 ctx.OMSetRenderTargets(None, None::<&ID3D11DepthStencilView>);
             }
+            // The center texel (8,8) of each target.
+            const CENTER: usize = (8 * 16 + 8) * 4;
             let mut result = [[0.0; 4]; 3];
             for (out, (texture, desc)) in result.iter_mut().zip(&targets) {
-                let staging = self.texture(
-                    &D3D11_TEXTURE2D_DESC {
-                        Usage: D3D11_USAGE_STAGING,
-                        BindFlags: 0,
-                        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-                        ..*desc
-                    },
-                    None,
-                )?;
-                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-                unsafe {
-                    ctx.CopyResource(&staging, texture);
-                    ctx.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
-                }
-                let valid = !mapped.pData.is_null();
-                if valid {
-                    let half_format = desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT;
-                    // Read the center texel (8,8) at the staging row pitch.
-                    let offset = 8 * mapped.RowPitch as usize + if half_format { 64 } else { 128 };
-                    let address = unsafe { mapped.pData.cast::<u8>().add(offset) };
-                    *out = if half_format {
-                        unsafe { read_unaligned(address.cast::<[u16; 4]>()) }.map(half)
-                    } else {
-                        unsafe { read_unaligned(address.cast::<[f32; 4]>()) }
-                    };
-                }
-                unsafe { ctx.Unmap(&staging, 0) };
-                require(valid, "MRT Map returned null")?;
+                // RGBA32F and RGBA16F targets: four components per texel.
+                *out = if desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT {
+                    let texels = unsafe { self.read::<u16>(texture, desc, 4) }?;
+                    std::array::from_fn(|i| half(texels[CENTER + i]))
+                } else {
+                    let texels = unsafe { self.read::<f32>(texture, desc, 4) }?;
+                    std::array::from_fn(|i| texels[CENTER + i])
+                };
             }
             Ok(result)
         }
-    }
-
-    fn half(bits: u16) -> f32 {
-        let exp = i32::from((bits >> 10) & 31);
-        let fraction = f32::from(bits & 1023);
-        let value = match exp {
-            0 => fraction * 2.0f32.powi(-24),
-            31 => f32::NAN,
-            _ => (1.0 + fraction / 1024.0) * 2.0f32.powi(exp - 15),
-        };
-        if bits & 0x8000 != 0 { -value } else { value }
     }
 
     fn equal(actual: [f32; 4], expected: [f32; 4], label: &str) -> Result<()> {

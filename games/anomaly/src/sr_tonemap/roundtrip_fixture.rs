@@ -6,23 +6,9 @@ use super::{
 };
 use std::ffi::c_void;
 
-pub(crate) fn half_to_float(half: u16) -> f32 {
-    let sign = u32::from(half & 0x8000) << 16;
-    let exponent = u32::from((half >> 10) & 0x1f);
-    let mantissa = u32::from(half & 0x3ff);
-    if exponent == 0 && mantissa != 0 {
-        // The smallest half-precision subnormal is exactly 2^-24.
-        return (mantissa as f32 / 16_777_216.0).copysign(f32::from_bits(sign));
-    }
-    let bits = match exponent {
-        0 => sign,
-        31 => sign | 0x7f80_0000 | (mantissa << 13),
-        _ => sign | ((exponent + 112) << 23) | (mantissa << 13),
-    };
-    f32::from_bits(bits)
-}
+pub(crate) use rsf_test_support::device::half_to_f32 as half_to_float;
 
-pub(crate) extern "C" fn rsf_anomaly_sr_float_to_half(value: f32) -> u16 {
+pub(crate) fn rsf_anomaly_sr_float_to_half(value: f32) -> u16 {
     let bits = value.to_bits();
     let sign = ((bits >> 16) & 0x8000) as u16;
     let magnitude = bits & 0x7fff_ffff;

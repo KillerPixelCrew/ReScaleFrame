@@ -3,16 +3,14 @@
 #[cfg(windows)]
 mod probe {
     use rsf_shader_compiler::{Request, compile_system_checked};
+    use rsf_test_support::device::Device;
     use std::ffi::CStr;
-    use std::ptr::read_unaligned;
     use windows::Win32::Graphics::Direct3D::{
         D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0,
         D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
     };
     use windows::Win32::Graphics::Direct3D11::*;
-    use windows::Win32::Graphics::Dxgi::Common::{
-        DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_SAMPLE_DESC,
-    };
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32G32B32A32_FLOAT;
     use windows::Win32::Graphics::Dxgi::{
         CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1,
     };
@@ -20,7 +18,7 @@ mod probe {
 
     const SOURCE: &[u8] = include_bytes!("motion_tess_probe.hlsl");
 
-    fn device(debug: bool) -> Option<(ID3D11Device, ID3D11DeviceContext)> {
+    fn device(debug: bool) -> Option<Device> {
         let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.ok()?;
         for vendor in [Some(0x10de), None] {
             for index in 0.. {
@@ -57,7 +55,7 @@ mod probe {
                         "device: {description} (vendor {:#06x}, debug layer {debug})",
                         desc.VendorId
                     );
-                    return Some((device, context));
+                    return Some(Device { device, context });
                 }
             }
         }
@@ -122,11 +120,8 @@ mod probe {
         }
     }
 
-    fn draw(
-        device: &ID3D11Device,
-        context: &ID3D11DeviceContext,
-        tessellated: bool,
-    ) -> Result<Probe, Box<dyn std::error::Error>> {
+    fn draw(gpu: &Device, tessellated: bool) -> Result<Probe, Box<dyn std::error::Error>> {
+        let (device, context) = (&gpu.device, &gpu.context);
         let vs = bytecode(
             if tessellated {
                 c"vs_main"
@@ -151,35 +146,11 @@ mod probe {
             return Err("shader creation returned an empty interface".into());
         };
 
-        let desc = D3D11_TEXTURE2D_DESC {
-            Width: 8,
-            Height: 8,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
-            ..Default::default()
-        };
-        let mut target = None;
-        unsafe { device.CreateTexture2D(&desc, None, Some(&mut target)) }?;
-        let target = target.ok_or("target unavailable")?;
+        let desc = Device::desc([8, 8], DXGI_FORMAT_R32G32B32A32_FLOAT, D3D11_BIND_RENDER_TARGET);
+        let target = gpu.texture(&desc, None)?;
         let mut view = None;
         unsafe { device.CreateRenderTargetView(&target, None, Some(&mut view)) }?;
         let view = view.ok_or("target view unavailable")?;
-        let mut staging = None;
-        let staging_desc = D3D11_TEXTURE2D_DESC {
-            Usage: D3D11_USAGE_STAGING,
-            BindFlags: 0,
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-            ..desc
-        };
-        unsafe { device.CreateTexture2D(&staging_desc, None, Some(&mut staging)) }?;
-        let staging = staging.ok_or("staging texture unavailable")?;
 
         let info = device.cast::<ID3D11InfoQueue>().ok();
         let views = [Some(view)];
@@ -210,18 +181,9 @@ mod probe {
                 context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             }
             context.Draw(3, 0);
-            context.CopyResource(&staging, &target);
-            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            if context
-                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-                .is_ok()
-            {
-                // Texel (1,1) lies inside the probe triangle.
-                if !mapped.pData.is_null() {
-                    let point = mapped.pData.cast::<u8>().add(mapped.RowPitch as usize + 16);
-                    probe.value = read_unaligned(point.cast());
-                }
-                context.Unmap(&staging, 0);
+            // Texel (1,1) lies inside the probe triangle; a failed readback leaves the probe undefined.
+            if let Ok(texels) = gpu.read::<f32>(&target, &desc, 4) {
+                probe.value.copy_from_slice(&texels[(8 + 1) * 4..][..4]);
             }
             context.ClearState();
         }
@@ -235,14 +197,11 @@ mod probe {
         let mut any = false;
         let mut failures = 0;
         for debug in [true, false] {
-            let Some((device, context)) = device(debug) else {
+            let Some(gpu) = device(debug) else {
                 continue;
             };
             any = true;
-            let (direct, tess) = match (
-                draw(&device, &context, false),
-                draw(&device, &context, true),
-            ) {
+            let (direct, tess) = match (draw(&gpu, false), draw(&gpu, true)) {
                 (Ok(direct), Ok(tess)) => (direct, tess),
                 (Err(error), _) | (_, Err(error)) => {
                     eprintln!("FAIL: {error}");

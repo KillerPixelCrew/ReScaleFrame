@@ -92,20 +92,7 @@ pub(super) fn target_of(stage: u8) -> &'static str {
     }
 }
 
-/// Half-float decode with denormals, enough for these checks.
-pub(super) fn half(value: u16) -> f32 {
-    let sign = u32::from(value & 0x8000) << 16;
-    let exponent = u32::from((value >> 10) & 0x1f);
-    let mantissa = u32::from(value & 0x3ff);
-    match exponent {
-        0 => {
-            let magnitude = mantissa as f32 * 2f32.powi(-24);
-            if sign != 0 { -magnitude } else { magnitude }
-        }
-        31 => f32::from_bits(sign | 0x7f80_0000 | (mantissa << 13)),
-        _ => f32::from_bits(sign | ((exponent + 112) << 23) | (mantissa << 13)),
-    }
-}
+pub(super) use rsf_test_support::device::half_to_f32 as half;
 
 pub(super) fn zero(value: &Half4) -> bool {
     value.iter().all(|&lane| lane == 0)
