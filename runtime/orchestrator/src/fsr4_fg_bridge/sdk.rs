@@ -26,34 +26,21 @@ pub(super) unsafe fn load_provider(
         Err(error) => return error.code().0,
     };
     *out = module.0;
+    let export = |name| unsafe { provider_module::module_export(module, name) };
     // Each optional export uses its SDK signature on Windows x64.
     unsafe {
-        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(
-            provider_module::module_export(module, c"ffxCreateContext"),
-        );
-        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(
-            provider_module::module_export(module, c"ffxDestroyContext"),
-        );
-        *configure = core::mem::transmute::<FARPROC, PfnFfxConfigure>(
-            provider_module::module_export(module, c"ffxConfigure"),
-        );
-        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(
-            provider_module::module_export(module, c"ffxDispatch"),
-        );
-        *query = core::mem::transmute::<FARPROC, PfnFfxQuery>(provider_module::module_export(
-            module,
-            c"ffxQuery",
-        ));
+        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(export(c"ffxCreateContext"));
+        *destroy =
+            core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(export(c"ffxDestroyContext"));
+        *configure = core::mem::transmute::<FARPROC, PfnFfxConfigure>(export(c"ffxConfigure"));
+        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(export(c"ffxDispatch"));
+        *query = core::mem::transmute::<FARPROC, PfnFfxQuery>(export(c"ffxQuery"));
     }
-    if [
-        create.is_some(),
-        destroy.is_some(),
-        configure.is_some(),
-        dispatch.is_some(),
-        query.is_some(),
-    ]
-    .into_iter()
-    .all(|bound| bound)
+    if create.is_some()
+        && destroy.is_some()
+        && configure.is_some()
+        && dispatch.is_some()
+        && query.is_some()
     {
         0
     } else {
