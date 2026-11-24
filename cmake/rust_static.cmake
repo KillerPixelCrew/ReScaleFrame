@@ -7,6 +7,15 @@ endif()
 set(RSF_CARGO_DIR "${CMAKE_BINARY_DIR}/cargo")
 set(RSF_CARGO_ARTIFACTS "${RSF_CARGO_DIR}/${RSF_RUST_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>")
 
+# Builds of one package run one after another: each waits for the previous build target of its package.
+function(rsf_serialize_rust_build build_target package)
+    get_property(previous GLOBAL PROPERTY RSF_RUST_BUILD_${package})
+    if(previous)
+        add_dependencies(${build_target} ${previous})
+    endif()
+    set_property(GLOBAL PROPERTY RSF_RUST_BUILD_${package} ${build_target})
+endfunction()
+
 # Every archive builds in the one target directory, so each dependency compiles once. Cargo writes a
 # package's archive to <archive>.lib whatever its features, and a second build of the package
 # (the plugin entry, the fixtures) would overwrite the first, so each build copies its archive to a
@@ -25,11 +34,7 @@ function(rsf_add_rust_static target build_target package archive)
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         BYPRODUCTS "${rust_archive}"
         COMMAND_EXPAND_LISTS VERBATIM)
-    get_property(previous GLOBAL PROPERTY RSF_RUST_BUILD_${package})
-    if(previous)
-        add_dependencies(${build_target} ${previous})
-    endif()
-    set_property(GLOBAL PROPERTY RSF_RUST_BUILD_${package} ${build_target})
+    rsf_serialize_rust_build(${build_target} ${package})
     add_library(${target} INTERFACE)
     add_dependencies(${target} ${build_target})
     target_link_libraries(${target} INTERFACE "${rust_archive}" ntdll userenv ws2_32 dbghelp)
@@ -71,9 +76,5 @@ function(rsf_add_rust_artifacts build_target package directory)
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         BYPRODUCTS ${outputs}
         COMMAND_EXPAND_LISTS VERBATIM)
-    get_property(previous GLOBAL PROPERTY RSF_RUST_BUILD_${package})
-    if(previous)
-        add_dependencies(${build_target} ${previous})
-    endif()
-    set_property(GLOBAL PROPERTY RSF_RUST_BUILD_${package} ${build_target})
+    rsf_serialize_rust_build(${build_target} ${package})
 endfunction()
