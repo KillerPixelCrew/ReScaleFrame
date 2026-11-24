@@ -23,6 +23,7 @@ use crate::layout::{self, asi};
 use crate::platform::{self, lock, read_value};
 use crate::runtime_worker::log;
 use rsf_game_sys::win32::module_path;
+use rsf_game_sys::windows_path::leaf_is;
 use rsf_minhook_sys::MH_StatusToString;
 use std::ffi::{CStr, c_char};
 use std::ptr::{self, null_mut};
@@ -121,20 +122,10 @@ fn record(message: impl Into<String>) {
     lock(&RESULTS).push(message.into());
 }
 
-pub(crate) use rsf_game_sys::ffi_util::wide;
+pub(crate) use rsf_game_sys::ffi_util::{wide, wide_path};
 #[cfg(feature = "research")]
 fn terminated(text: &[u16]) -> Vec<u16> {
-    rsf_game_sys::ffi_util::wide_path(text, "")
-}
-
-/// True when the executable path names the supported game, ignoring ASCII case.
-pub(crate) fn is_game(executable: &[u16]) -> bool {
-    let start = executable
-        .iter()
-        .rposition(|&unit| unit == u16::from(b'\\'))
-        .map_or(0, |separator| separator + 1);
-    String::from_utf16(&executable[start..])
-        .is_ok_and(|name| name.as_bytes().eq_ignore_ascii_case(layout::EXECUTABLE))
+    wide_path(text, "")
 }
 
 /// The deployment root (the ASI's directory, with its trailing separator) and the
@@ -142,9 +133,7 @@ pub(crate) fn is_game(executable: &[u16]) -> bool {
 pub(crate) fn deployment(module: &[u16]) -> Option<(Vec<u16>, Vec<u16>)> {
     let separator = module.iter().rposition(|&unit| unit == u16::from(b'\\'))?;
     let root = module[..=separator].to_vec();
-    let mut configuration = root.clone();
-    configuration.extend("ReScaleFrame.ini".encode_utf16());
-    configuration.push(0);
+    let configuration = wide_path(&root, "ReScaleFrame.ini");
     (configuration.len() <= LONG_PATH as usize).then_some((root, configuration))
 }
 
@@ -287,7 +276,7 @@ fn attach(module: HMODULE) {
     let Some(executable) = (unsafe { module_path(null_mut()) }) else {
         return;
     };
-    if !is_game(executable.units()) {
+    if !leaf_is(executable.units(), layout::EXECUTABLE_NAME) {
         return;
     }
     if let Some((root, path)) =
@@ -344,9 +333,7 @@ fn arm_research(config: &Configuration, root: &[u16], applied: bool) -> bool {
     // The census initializes this ASI's MinHook instance; the optional game trace reuses it.
     let trace = config.enabled("TraceD3D12");
     if trace {
-        let mut path = root.to_vec();
-        path.extend("ReScaleFrame\\rdr2-d3d12-errors.log".encode_utf16());
-        path.push(0);
+        let path = wide_path(root, "ReScaleFrame\\rdr2-d3d12-errors.log");
         record(trace_d3d12(applied, &path));
     }
     if applied && config.enabled("CameraProbe") {

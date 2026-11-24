@@ -10,6 +10,7 @@ use rsf_game_sys::rsf_plugin_session_options;
 use rsf_game_sys::session::carrier_log::CarrierLog;
 use rsf_game_sys::session::{Probe, host_services, with_session_options};
 use rsf_game_sys::win32::{module_path, typed_export};
+use rsf_game_sys::windows_path::leaf_is;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
@@ -131,14 +132,7 @@ unsafe extern "C" fn rsf_rdr2_runtime_log(_: *mut c_void, message: *const c_char
     unsafe { LOG.write_c_message(GetTickCount64(), message) };
 }
 
-pub(crate) fn append_path(parent: &[u16], suffix: &str) -> Vec<u16> {
-    parent
-        .iter()
-        .copied()
-        .chain(suffix.encode_utf16())
-        .chain([0])
-        .collect()
-}
+pub(crate) use rsf_game_sys::ffi_util::wide_path as append_path;
 
 fn profile_string(
     section: PCWSTR,
@@ -247,7 +241,7 @@ fn run_session(
         )
     };
     let executable = unsafe { module_path(null_mut()) }
-        .filter(|path| asi::is_game(path.units()))
+        .filter(|path| leaf_is(path.units(), layout::EXECUTABLE_NAME))
         .ok_or(Refusal {
             stage: "executable admission",
             result: 1,

@@ -7,6 +7,7 @@ fn units(text: &str) -> Vec<u16> {
 
 #[test]
 fn only_the_game_executable_is_admitted() {
+    let is_game = |path: &[u16]| leaf_is(path, layout::EXECUTABLE_NAME);
     assert!(is_game(&units(
         "C:\\Games\\Red Dead Redemption 2\\RDR2.exe"
     )));
