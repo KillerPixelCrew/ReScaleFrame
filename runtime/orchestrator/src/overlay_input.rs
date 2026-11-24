@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::overlay_cursor_capture::{self as capture, Effects};
+use crate::overlay_cursor_capture as capture;
 use crate::overlay_cursor_hooks::{self as hooks, Platform as HookPlatform};
 use crate::overlay_input_route::{Contact, Disposition, rsf_core_overlay_route_message};
 use crate::overlay_pointer::{self as pointer, ClientPoint};
@@ -154,7 +154,7 @@ pub(super) unsafe extern "C" fn record_button(key: u32, down: u32) {
     }
 }
 
-unsafe extern "C" fn genuine_position(point: *mut POINT) -> i32 {
+pub(super) unsafe extern "C" fn genuine_position(point: *mut POINT) -> i32 {
     cursor_call!(
         GET_POS,
         GetCursorPos,
@@ -163,7 +163,7 @@ unsafe extern "C" fn genuine_position(point: *mut POINT) -> i32 {
     )
 }
 
-unsafe extern "C" fn genuine_clip(rect: *const RECT) {
+pub(super) unsafe extern "C" fn genuine_clip(rect: *const RECT) {
     cursor_call!(
         CLIP,
         ClipCursor,
@@ -172,7 +172,7 @@ unsafe extern "C" fn genuine_clip(rect: *const RECT) {
     );
 }
 
-unsafe extern "C" fn genuine_show(show: i32) -> i32 {
+pub(super) unsafe extern "C" fn genuine_show(show: i32) -> i32 {
     cursor_call!(
         SHOW,
         ShowCursor,
@@ -194,16 +194,9 @@ fn arrow() -> HCURSOR {
     unsafe { LoadCursorW(null_mut(), IDC_ARROW) }
 }
 
-unsafe extern "C" fn set_arrow() {
+pub(super) fn set_arrow() {
     genuine_set(arrow());
 }
-
-static EFFECTS: Effects = Effects {
-    get: genuine_position,
-    clip: genuine_clip,
-    show: genuine_show,
-    arrow: set_arrow,
-};
 
 unsafe extern "system" fn hooked_set_position(x: i32, y: i32) -> i32 {
     if capture::rsf_core_overlay_cursor_swallow_warp() != 0 {
@@ -340,7 +333,7 @@ pub(super) unsafe extern "C" fn install_cursor() {
 
 pub(super) unsafe extern "C" fn retire_cursor(visible: u32, window_alive: u32) -> i32 {
     if visible != 0 {
-        capture::rsf_core_overlay_cursor_capture(0, window_alive, &EFFECTS);
+        capture::rsf_core_overlay_cursor_capture(0, window_alive);
     }
     let retired = hooks::rsf_core_overlay_cursor_retire(&minhook::PLATFORM);
     capture::rsf_core_overlay_cursor_reset_capture();
@@ -349,7 +342,7 @@ pub(super) unsafe extern "C" fn retire_cursor(visible: u32, window_alive: u32) -
 
 pub(super) unsafe extern "C" fn apply_visibility(visible: u32, route: u32) {
     pointer::rsf_core_overlay_pointer_clear();
-    capture::rsf_core_overlay_cursor_capture(visible, 1, &EFFECTS);
+    capture::rsf_core_overlay_cursor_capture(visible, 1);
     if visible != 0 {
         let mut point = ClientPoint::default();
         if unsafe { sample_cursor(window::rsf_core_overlay_input_window(), &mut point) } != 0 {

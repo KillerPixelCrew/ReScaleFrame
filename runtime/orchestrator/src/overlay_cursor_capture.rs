@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::overlay_cursor_hooks::rsf_core_overlay_cursor_ready;
+use crate::overlay_input::{genuine_clip, genuine_position, genuine_show, set_arrow};
 use crate::overlay_visibility::rsf_core_overlay_visible;
 use crate::overlay_window::diagnostic;
 use std::cell::Cell;
@@ -11,19 +12,6 @@ use windows_sys::Win32::Foundation::{POINT, RECT};
 
 const SHOW_LIMIT: u32 = 64;
 type Show = unsafe extern "C" fn(i32) -> i32;
-
-#[repr(C)]
-pub(super) struct Effects {
-    pub(super) get: unsafe extern "C" fn(*mut POINT) -> i32,
-    pub(super) clip: unsafe extern "C" fn(*const RECT),
-    pub(super) show: Show,
-    pub(super) arrow: unsafe extern "C" fn(),
-}
-
-const _: () = {
-    assert!(size_of::<POINT>() == 8 && size_of::<RECT>() == 16);
-    assert!(size_of::<Effects>() == 4 * size_of::<Show>());
-};
 
 struct Capture {
     last_clip: Option<RECT>,
@@ -106,20 +94,20 @@ pub(super) extern "C" fn rsf_core_overlay_cursor_show(visible: i32, original: Sh
     })
 }
 
-fn open(effects: &Effects) {
+fn open() {
     let mut point = POINT::default();
-    let present = unsafe { (effects.get)(&mut point) } != 0;
+    let present = unsafe { genuine_position(&mut point) } != 0;
     lock().frozen = present.then_some(point);
-    unsafe { (effects.clip)(ptr::null()) };
+    unsafe { genuine_clip(ptr::null()) };
     let mut shows = 0;
     while shows < SHOW_LIMIT {
         shows += 1;
-        if unsafe { (effects.show)(1) } >= 0 {
+        if unsafe { genuine_show(1) } >= 0 {
             break;
         }
     }
     lock().shows = shows;
-    unsafe { (effects.arrow)() };
+    set_arrow();
     SWALLOWED_WARPS.store(0, Ordering::Relaxed);
     SWALLOWED_HIDES.store(0, Ordering::Relaxed);
     let suffix = if shows == 1 { "" } else { "s" };
@@ -128,17 +116,17 @@ fn open(effects: &Effects) {
     ));
 }
 
-fn close(effects: &Effects, restore_clip: bool) {
+fn close(restore_clip: bool) {
     let (shows, clip) = {
         let mut state = lock();
         state.frozen = None;
         (mem::take(&mut state.shows), state.last_clip)
     };
     for _ in 0..shows {
-        unsafe { (effects.show)(0) };
+        unsafe { genuine_show(0) };
     }
     if restore_clip && let Some(clip) = clip {
-        unsafe { (effects.clip)(&clip) };
+        unsafe { genuine_clip(&clip) };
     }
     let warps = SWALLOWED_WARPS.load(Ordering::Relaxed);
     let hides = SWALLOWED_HIDES.load(Ordering::Relaxed);
@@ -147,18 +135,14 @@ fn close(effects: &Effects, restore_clip: bool) {
     ));
 }
 
-pub(super) extern "C" fn rsf_core_overlay_cursor_capture(
-    visible: u32,
-    restore_clip: u32,
-    effects: &Effects,
-) {
+pub(super) fn rsf_core_overlay_cursor_capture(visible: u32, restore_clip: u32) {
     if rsf_core_overlay_cursor_ready() == 0 {
         return;
     }
     if visible != 0 {
-        open(effects);
+        open();
     } else {
-        close(effects, restore_clip != 0);
+        close(restore_clip != 0);
     }
 }
 
