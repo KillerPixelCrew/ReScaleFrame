@@ -20,8 +20,7 @@ use rsf_game_sys::backend_result::{
     NOT_READY as FIXTURE_NOT_READY, NOT_SUPPORTED as FIXTURE_NOT_SUPPORTED, OK as FIXTURE_OK,
 };
 use rsf_game_sys::{
-    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
-    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
+    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET, rsf_frame_record,
 };
 use std::{
     ffi::{CStr, c_char, c_int, c_void},
@@ -42,43 +41,12 @@ fn cmd(address: usize) -> *mut c_void {
 
 fn record(session: u64, frame: u64, view: u32, generation: u32, flags: u32) -> rsf_frame_record {
     let mut result = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
-        session_id: session,
-        frame_id: frame,
-        view_id: view,
         resource_generation: generation,
         flags,
-        render_width: 640,
-        render_height: 360,
-        output_width: 640,
-        output_height: 360,
         frame_time_ms: 16.667,
-        // The frame ABI contains integer, float and array fields.
-        ..unsafe { std::mem::zeroed() }
+        ..rsf_test_support::frame_record(session, frame, view, [640, 360], [640, 360])
     };
-    let camera = &mut result.camera;
-    camera.struct_size = size_of_val(camera) as u32;
-    camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-    camera.render_width = 640;
-    camera.output_width = 640;
-    camera.render_height = 360;
-    camera.output_height = 360;
-    camera.near_plane = 0.05;
-    camera.far_plane = 100.0;
-    camera.vertical_fov_radians = 1.0;
-    camera.depth_inverted = 1;
-    for matrix in [
-        &mut camera.view_to_clip,
-        &mut camera.clip_to_view,
-        &mut camera.view_to_world,
-        &mut camera.world_to_view,
-        &mut camera.clip_to_previous_clip,
-    ] {
-        for i in [0, 5, 10, 15] {
-            matrix[i] = 1.0;
-        }
-    }
+    rsf_test_support::sr_camera(&mut result, 0.05, 100.0);
     result
 }
 

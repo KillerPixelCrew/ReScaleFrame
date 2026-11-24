@@ -28,6 +28,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, PCSTR, PCWSTR, Result};
 
+use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
+
 /// Ends the fixture process at the first failed condition, naming the file and line.
 #[macro_export]
 macro_rules! check {
@@ -42,6 +44,63 @@ macro_rules! check {
             std::process::exit(1);
         }
     };
+}
+
+/// A frame record with the ABI header, identity and sizes set and everything else zero. Callers
+/// change the rest with struct update syntax.
+pub fn frame_record(
+    session_id: u64,
+    frame_id: u64,
+    view_id: u32,
+    render: [u32; 2],
+    output: [u32; 2],
+) -> rsf_frame_record {
+    rsf_frame_record {
+        struct_size: size_of::<rsf_frame_record>() as u32,
+        abi_version: RSF_GAME_FRAME_ABI_VERSION,
+        session_id,
+        frame_id,
+        view_id,
+        render_width: render[0],
+        render_height: render[1],
+        output_width: output[0],
+        output_height: output[1],
+        ..Default::default()
+    }
+}
+
+/// Gives `record` an inverted-depth camera with identity matrices and the record's own sizes.
+pub fn sr_camera(record: &mut rsf_frame_record, near_plane: f32, far_plane: f32) {
+    let sizes = [
+        record.render_width,
+        record.render_height,
+        record.output_width,
+        record.output_height,
+    ];
+    let camera = &mut record.camera;
+    camera.struct_size = size_of_val(camera) as u32;
+    camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
+    [
+        camera.render_width,
+        camera.render_height,
+        camera.output_width,
+        camera.output_height,
+    ] = sizes;
+    camera.depth_inverted = 1;
+    camera.near_plane = near_plane;
+    camera.far_plane = far_plane;
+    camera.vertical_fov_radians = 1.0;
+    for matrix in [
+        &mut camera.view_to_clip,
+        &mut camera.clip_to_view,
+        &mut camera.view_to_world,
+        &mut camera.world_to_view,
+        &mut camera.clip_to_previous_clip,
+    ] {
+        for diagonal in [0, 5, 10, 15] {
+            matrix[diagonal] = 1.0;
+        }
+    }
 }
 
 /// A D3D11 device and its immediate context on `driver`. Fixtures that prefer hardware call this

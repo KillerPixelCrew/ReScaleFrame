@@ -2,7 +2,8 @@
 use super::{bundles, contents, entry, root, utf8};
 use crate::sys::*;
 use ash::vk;
-use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
+use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
+use rsf_test_support::frame_record;
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};
 use std::os::windows::ffi::OsStrExt;
@@ -63,18 +64,7 @@ fn run(path: &Path, api: &rsf_fixture_vk_capture_api) -> i32 {
         user: raw,
     };
     let mut owner = ptr::null_mut();
-    let frame = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
-        session_id: 31,
-        frame_id: 32,
-        view_id: 33,
-        render_width: 1,
-        render_height: 1,
-        output_width: 1,
-        output_height: 1,
-        ..unsafe { std::mem::zeroed() }
-    };
+    let frame = frame_record(31, 32, 33, [1, 1], [1, 1]);
     let image = rsf_srvk_image {
         device: raw,
         image: 1,

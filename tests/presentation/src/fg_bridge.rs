@@ -4,9 +4,10 @@
 use crate::sys::*;
 use crate::sys::{rsf_fg_fixture_inputs as FgInputs, rsf_fg_fixture_submission};
 use rsf_game_sys::{
-    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, RSF_SCREEN_FLIGHT, rsf_camera_frame,
-    rsf_frame_record, rsf_game_render_pass,
+    RSF_GAME_CAMERA_ABI_VERSION, RSF_SCREEN_FLIGHT, rsf_camera_frame, rsf_frame_record,
+    rsf_game_render_pass,
 };
+use rsf_test_support::frame_record;
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use windows::Win32::Foundation::{HANDLE, RECT, WAIT_OBJECT_0};
@@ -232,21 +233,20 @@ pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_frame(
 ) {
     let output = unsafe { borrow::<ID3D12Resource>(&backbuffer).GetDesc() };
     let render = unsafe { borrow::<ID3D12Resource>(&depth).GetDesc() };
-    let mut record: rsf_frame_record = unsafe { std::mem::zeroed() };
-    record.struct_size = size_of::<rsf_frame_record>() as u32;
-    record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    record.session_id = 1;
-    record.frame_id = source;
-    record.resource_generation = 1;
-    record.view_id = 1;
-    record.input_qpc = input_qpc;
-    record.phase = phase;
-    record.screen = RSF_SCREEN_FLIGHT;
-    record.output_width = output.Width as u32;
-    record.output_height = output.Height;
-    record.render_width = render.Width as u32;
-    record.render_height = render.Height;
-    record.frame_time_ms = 16.67;
+    let mut record = rsf_frame_record {
+        resource_generation: 1,
+        input_qpc,
+        phase,
+        screen: RSF_SCREEN_FLIGHT,
+        frame_time_ms: 16.67,
+        ..frame_record(
+            1,
+            source,
+            1,
+            [render.Width as u32, render.Height],
+            [output.Width as u32, output.Height],
+        )
+    };
     let camera = &mut record.camera;
     camera.struct_size = size_of::<rsf_camera_frame>() as u32;
     camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;

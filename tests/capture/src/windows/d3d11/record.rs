@@ -39,13 +39,8 @@ fn depth_domains(pass: &mut rsf_game_render_pass) {
 
 pub(super) fn inspect(root: &Path, context: *mut c_void, ui: *mut c_void) {
     let mut generic = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
-        session_id: 29,
-        frame_id: 30,
-        view_id: 31,
         resource_generation: 2,
-        ..unsafe { std::mem::zeroed() }
+        ..frame_record(29, 30, 31, [0, 0], [0, 0])
     };
     unsafe {
         rsf_input_dump_request();

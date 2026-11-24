@@ -7,9 +7,7 @@ use ash::{
     Device,
     vk::{self, Handle as _},
 };
-use rsf_game_sys::{
-    RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
-};
+use rsf_game_sys::{RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
 use std::{
     ffi::c_void,
     mem,
@@ -126,19 +124,12 @@ fn check(result: i32) -> Result<(), i32> {
 
 fn frame_record(frame: u32) -> rsf_frame_record {
     // The fixture leaves unspecified scalar camera and provenance fields zero.
-    let mut record: rsf_frame_record = unsafe { mem::zeroed() };
-    record.struct_size = size_of::<rsf_frame_record>() as u32;
-    record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    record.frame_id = u64::from(frame + 1);
-    record.session_id = 1;
-    record.view_id = 1;
-    record.resource_generation = 1;
-    record.flags = if frame == 0 { RSF_FRAME_FLAG_RESET } else { 0 };
-    record.frame_time_ms = 16.666667;
-    record.render_width = 640;
-    record.render_height = 360;
-    record.output_width = 1280;
-    record.output_height = 720;
+    let mut record = rsf_frame_record {
+        resource_generation: 1,
+        flags: if frame == 0 { RSF_FRAME_FLAG_RESET } else { 0 },
+        frame_time_ms: 16.666667,
+        ..rsf_test_support::frame_record(1, u64::from(frame + 1), 1, [640, 360], [1280, 720])
+    };
     let camera = &mut record.camera;
     camera.struct_size = size_of_val(camera) as u32;
     camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;

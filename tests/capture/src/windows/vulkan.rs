@@ -2,9 +2,8 @@
 use super::{bundles, contents, entry, root, utf8};
 use crate::sys::*;
 use ash::vk::{self, Handle as _};
-use rsf_game_sys::{
-    RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
-};
+use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, rsf_frame_record};
+use rsf_test_support::frame_record;
 use std::ffi::{c_char, c_void};
 use std::sync::OnceLock;
 use std::{fs, mem, path::Path, ptr, slice};
@@ -313,17 +312,8 @@ fn run(path: &Path, api: &'static rsf_fixture_vk_capture_api) -> i32 {
     let root_utf8 = utf8(&root);
     let setup = device.setup();
     let record = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
         flags: RSF_FRAME_FLAG_NO_SR | RSF_FRAME_FLAG_NO_FG,
-        session_id: 31,
-        frame_id: 32,
-        view_id: 33,
-        render_width: 4,
-        output_width: 4,
-        render_height: 2,
-        output_height: 2,
-        ..unsafe { mem::zeroed() }
+        ..frame_record(31, 32, 33, [4, 2], [4, 2])
     };
     let input = rsf_srvk_image {
         device: setup.graphics.device,

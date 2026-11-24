@@ -30,6 +30,7 @@ xess-device = [
 ash = { workspace = true, optional = true }
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
+rsf-test-support = { path = "../support" }
 
 [target."cfg(windows)".dependencies]
 windows-sys = { workspace = true, features = [

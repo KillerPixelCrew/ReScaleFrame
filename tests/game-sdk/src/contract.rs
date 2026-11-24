@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{ABI_MISMATCH, INVALID_ARGUMENT, Module, NATIVE_REFUSED, NOT_READY, OK, run};
 use rsf_game_sys::*;
+use rsf_test_support::frame_record;
 use std::ffi::CStr;
 use std::path::Path;
 use std::ptr::null;
@@ -216,11 +217,7 @@ fn frame_policy() {
         (RSF_SCREEN_FLIGHT, RSF_FRAME_FLAG_NO_FG, true, false),
         (RSF_SCREEN_FLIGHT, RSF_FRAME_FLAG_NO_SR, false, false),
     ];
-    let mut record = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
-        ..Default::default()
-    };
+    let mut record = frame_record(0, 0, 0, [0, 0], [0, 0]);
     for (screen, flags, sr, fg) in cases {
         record.screen = screen;
         record.flags = flags;

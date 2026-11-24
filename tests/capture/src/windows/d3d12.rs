@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::{bundles, contents, directory_argument, entry, root, utf8};
 use crate::sys::*;
-use rsf_game_sys::{
-    RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
-};
+use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, rsf_frame_record};
+use rsf_test_support::frame_record;
 use std::ffi::{CStr, c_char, c_int};
 use std::mem::ManuallyDrop;
 use std::{fs, path::Path, ptr};
@@ -225,17 +224,8 @@ fn run(path: &Path) -> i32 {
     let root = root(path, "core-dump-dx12");
     let root_utf8 = utf8(&root);
     let mut frame = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
         flags: RSF_FRAME_FLAG_NO_SR | RSF_FRAME_FLAG_NO_FG,
-        session_id: 13,
-        frame_id: 17,
-        view_id: 3,
-        render_width: 4,
-        output_width: 4,
-        render_height: 2,
-        output_height: 2,
-        ..unsafe { std::mem::zeroed() }
+        ..frame_record(13, 17, 3, [4, 2], [4, 2])
     };
     unsafe {
         rsf_input_dump_configure(

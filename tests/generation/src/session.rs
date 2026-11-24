@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::rsf_fg_retirement;
 use crate::sys::*;
-use rsf_game_sys::{
-    RSF_FRAME_SOURCE_RENDERED, RSF_GAME_FRAME_ABI_VERSION, RSF_SCREEN_FLIGHT, rsf_frame_record,
-};
+use rsf_game_sys::{RSF_FRAME_SOURCE_RENDERED, RSF_SCREEN_FLIGHT, rsf_frame_record};
+use rsf_test_support::frame_record;
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr::{null_mut, without_provenance_mut};
@@ -282,11 +281,8 @@ extern "C" fn rsf_test_fg_session() -> i32 {
         check!(unsafe { rsf_fg_session_marker(live_session, 1, i, 11 + u64::from(i), 0) } == 0);
     }
     let mut record = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
-        frame_id: 1,
         screen: RSF_SCREEN_FLIGHT,
-        ..unsafe { std::mem::zeroed() }
+        ..frame_record(0, 1, 0, [0, 0], [0, 0])
     };
     let frame = rsf_fg_frame {
         struct_size: size_of::<rsf_fg_frame>() as u32,

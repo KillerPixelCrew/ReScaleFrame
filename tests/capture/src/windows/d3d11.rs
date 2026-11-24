@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{bundles, contents, directory_argument, entry, root, utf8};
 use crate::sys::*;
-use rsf_test_support::{Window, warp_swapchain};
+use rsf_test_support::{Window, frame_record, warp_swapchain};
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::{fs, path::Path, ptr};
@@ -148,17 +148,8 @@ fn debug_messages(device: &ID3D11Device) {
 
 fn clocks(bundle: &Path, pass: &rsf_game_render_pass) {
     let mut record = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
-        session_id: 9,
-        frame_id: 101,
-        view_id: pass.view_key as u32,
-        render_width: 4,
-        output_width: 4,
-        render_height: 2,
-        output_height: 2,
         frame_time_ms: 16.67,
-        ..unsafe { std::mem::zeroed() }
+        ..frame_record(9, 101, pass.view_key as u32, [4, 2], [4, 2])
     };
     let mut fg = rsf_fg_frame {
         struct_size: size_of::<rsf_fg_frame>() as u32,

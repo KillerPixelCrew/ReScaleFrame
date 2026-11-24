@@ -7,9 +7,8 @@ use crate::sys::{
     RSF_SR_FSR4, RSF_SRVK_ABI_VERSION, RSF_SRVK_SPLIT_TRACKED_ABI_VERSION, rsf_fsr4vk_handoff,
 };
 use ash::vk::{self, Handle as _};
-use rsf_game_sys::{
-    RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
-};
+use rsf_game_sys::{RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
+use rsf_test_support::frame_record;
 use std::{
     ffi::{CStr, CString},
     ptr,
@@ -244,19 +243,10 @@ impl Run {
                 seed(gpu, images);
             }
             let mut record = rsf_frame_record {
-                struct_size: size_of::<rsf_frame_record>() as u32,
-                abi_version: RSF_GAME_FRAME_ABI_VERSION,
-                frame_id: id as u64,
-                session_id: 1,
-                view_id: 1,
                 resource_generation: 1,
-                render_width: width,
-                render_height: height,
-                output_width: WIDTH,
-                output_height: HEIGHT,
                 frame_time_ms: 16.666667,
                 flags: if id == 1 { RSF_FRAME_FLAG_RESET } else { 0 },
-                ..unsafe { std::mem::zeroed() }
+                ..frame_record(1, id as u64, 1, [width, height], [WIDTH, HEIGHT])
             };
             let camera = &mut record.camera;
             camera.struct_size = std::mem::size_of_val(camera) as u32;

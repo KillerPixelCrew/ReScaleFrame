@@ -3,9 +3,10 @@ use super::{bundles, contents, directory_argument, entry, root, utf8};
 use crate::sys::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_CAMERA_ABI_VERSION,
-    RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR,
-    RSF_GAME_RENDER_WINDOW, rsf_frame_record, rsf_game_render_pass,
+    RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW, rsf_frame_record,
+    rsf_game_render_pass,
 };
+use rsf_test_support::frame_record;
 use std::ffi::{c_char, c_int, c_void};
 use std::{fs, path::Path, ptr};
 
@@ -23,17 +24,8 @@ fn run(path: &Path) -> i32 {
     let root_utf8 = utf8(&root);
     let mut messages = 0u32;
     let mut frame = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
-        session_id: 7,
-        frame_id: 11,
-        view_id: 13,
         resource_generation: 2,
-        render_width: 32,
-        render_height: 32,
-        output_width: 64,
-        output_height: 64,
-        ..unsafe { std::mem::zeroed() }
+        ..frame_record(7, 11, 13, [32, 32], [64, 64])
     };
     frame.camera.struct_size = size_of_val(&frame.camera) as u32;
     frame.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION + 1;

@@ -11,7 +11,8 @@ use crate::xess_sdk_abi::{
     xess_vk_execute_params_t, xess_vk_init_params_t,
 };
 use ash::vk::{self, Handle as _};
-use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
+use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
+use rsf_test_support::frame_record;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
@@ -529,21 +530,17 @@ fn run() -> Result<(), &'static str> {
         "live context refuses shutdown",
     )?;
 
-    let mut record: rsf_frame_record = unsafe { std::mem::zeroed() };
-    record.struct_size = size_of::<rsf_frame_record>() as u32;
-    record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    let mut record = rsf_frame_record {
+        resource_generation: 1,
+        frame_time_ms: 16.0,
+        ..frame_record(1, 0, 1, [0, 0], [1920, 1080])
+    };
     record.camera.struct_size = size_of_val(&record.camera) as u32;
     record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-    record.session_id = 1;
-    record.view_id = 1;
-    record.resource_generation = 1;
-    record.frame_time_ms = 16.0;
     record.camera.near_plane = 0.1;
     record.camera.far_plane = 100.0;
     record.camera.vertical_fov_radians = 1.0;
-    record.output_width = 1920;
     record.camera.output_width = 1920;
-    record.output_height = 1080;
     record.camera.output_height = 1080;
     let mut input: rsf_srvk_frame = unsafe { std::mem::zeroed() };
     input.struct_size = size_of::<rsf_srvk_frame>() as u32;

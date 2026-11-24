@@ -2,9 +2,8 @@
 use crate::sys::rsf_sharpening_options;
 use crate::sys::{RSF_SR_XESS, RSF_SRVK_ABI_VERSION, rsf_srvk_frame, rsf_srvk_setup};
 use crate::sys::{RSF_XESSVK_REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup};
-use rsf_game_sys::{
-    RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
-};
+use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record};
+use rsf_test_support::{frame_record, sr_camera};
 use std::{
     ffi::{CStr, c_char, c_void},
     mem,
@@ -191,39 +190,12 @@ fn device_cases(directory: *const c_char) -> Result<(), Failure> {
 }
 
 fn record(quality: u32, width: u32, height: u32) -> rsf_frame_record {
-    let mut record: rsf_frame_record = unsafe { mem::zeroed() };
-    record.struct_size = size_of::<rsf_frame_record>() as u32;
-    record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    record.session_id = u64::from(43 + quality);
-    record.view_id = 1;
-    record.resource_generation = 1;
-    record.frame_time_ms = 16.667;
-    record.render_width = width;
-    record.render_height = height;
-    record.output_width = 320;
-    record.output_height = 180;
-    let camera = &mut record.camera;
-    camera.struct_size = size_of_val(camera) as u32;
-    camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-    camera.render_width = width;
-    camera.render_height = height;
-    camera.output_width = 320;
-    camera.output_height = 180;
-    camera.depth_inverted = 1;
-    camera.near_plane = 0.1;
-    camera.far_plane = 100.0;
-    camera.vertical_fov_radians = 1.0;
-    for matrix in [
-        &mut camera.view_to_clip,
-        &mut camera.clip_to_view,
-        &mut camera.view_to_world,
-        &mut camera.world_to_view,
-        &mut camera.clip_to_previous_clip,
-    ] {
-        for i in [0, 5, 10, 15] {
-            matrix[i] = 1.0;
-        }
-    }
+    let mut record = rsf_frame_record {
+        resource_generation: 1,
+        frame_time_ms: 16.667,
+        ..frame_record(u64::from(43 + quality), 0, 1, [width, height], [320, 180])
+    };
+    sr_camera(&mut record, 0.1, 100.0);
     record
 }
 

@@ -446,17 +446,8 @@ fn create() -> (i32, Fsr4Owner, u64) {
 
 fn source(frame: u64) -> rsf_frame_record {
     let mut record = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
-        frame_id: frame,
-        session_id: 11,
-        view_id: 12,
         resource_generation: 13,
-        render_width: 320,
-        render_height: 180,
-        output_width: 640,
-        output_height: 360,
-        ..unsafe { std::mem::zeroed() }
+        ..rsf_test_support::frame_record(11, frame, 12, [320, 180], [640, 360])
     };
     record.camera.struct_size = size_of_val(&record.camera) as u32;
     record.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;

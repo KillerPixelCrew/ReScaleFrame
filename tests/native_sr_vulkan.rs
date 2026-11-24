@@ -15,9 +15,9 @@ use crate::sys::{
 use crate::vulkan_fg_copy::COLOR_RANGE as RANGE;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{
-    RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_FRAME_BEGIN,
-    RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record, rsf_game_cpu_event,
+    RSF_FRAME_FLAG_RESET, RSF_GAME_CPU_FRAME_BEGIN, rsf_frame_record, rsf_game_cpu_event,
 };
+use rsf_test_support::{frame_record, sr_camera};
 use std::{
     ffi::{CStr, CString, c_char, c_void},
     ptr,
@@ -576,40 +576,11 @@ fn device_case(gpu: &mut Gpu, api: &Calls, directory: &CStr, backend: u32) -> Te
     let output = gpu.image(extent(W, H), RGBA, BOTH)?;
     let bias = gpu.image(render, vk::Format::R8_UNORM, input_usage)?;
     let mut record = rsf_frame_record {
-        struct_size: size_of::<rsf_frame_record>() as u32,
-        abi_version: RSF_GAME_FRAME_ABI_VERSION,
-        session_id: 43,
-        view_id: 1,
         resource_generation: 1,
         frame_time_ms: 16.667,
-        render_width: width,
-        render_height: height,
-        output_width: W as u32,
-        output_height: H as u32,
-        ..unsafe { std::mem::zeroed() }
+        ..frame_record(43, 0, 1, [width, height], [W as u32, H as u32])
     };
-    let camera = &mut record.camera;
-    camera.struct_size = std::mem::size_of_val(camera) as u32;
-    camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-    camera.render_width = width;
-    camera.render_height = height;
-    camera.output_width = W as u32;
-    camera.output_height = H as u32;
-    camera.depth_inverted = 1;
-    camera.near_plane = 0.1;
-    camera.far_plane = 100.;
-    camera.vertical_fov_radians = 1.;
-    for matrix in [
-        &mut camera.view_to_clip,
-        &mut camera.clip_to_view,
-        &mut camera.view_to_world,
-        &mut camera.world_to_view,
-        &mut camera.clip_to_previous_clip,
-    ] {
-        for i in 0..4 {
-            matrix[i * 4 + i] = 1.;
-        }
-    }
+    sr_camera(&mut record, 0.1, 100.);
     let mut fallback_logs = 0u32;
     let mut frame = Frame {
         struct_size: size_of::<Frame>() as u32,
