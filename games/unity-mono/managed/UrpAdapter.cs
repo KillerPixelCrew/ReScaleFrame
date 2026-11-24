@@ -93,7 +93,9 @@ namespace ReScaleFrame.Unity
             methods[(int)Site.UpdateResolution] = RequireMethod(recorder, "UpdateCameraResolution", typeof(RenderGraph), camera, typeof(Vector2Int));
             methods[(int)Site.InitializeStackedCamera] = RequireMethod(pipeline, "InitializeStackedCameraData", typeof(Camera), typeof(UniversalAdditionalCameraData), camera);
             methods[(int)Site.InitializeAdditionalCamera] = RequireMethod(pipeline, "InitializeAdditionalCameraData", typeof(Camera), typeof(UniversalAdditionalCameraData), typeof(bool), typeof(bool), camera);
-            methods[(int)Site.JitterMatrix] = RequireMethod(typeof(TemporalAA), "CalculateJitterMatrix", camera, typeof(TemporalAA).GetNestedType("JitterFunc", BindingFlags.NonPublic));
+            var jitterFunc = typeof(TemporalAA).GetNestedType("JitterFunc", BindingFlags.NonPublic) ??
+                throw new TypeLoadException(typeof(TemporalAA).FullName + "+JitterFunc is missing.");
+            methods[(int)Site.JitterMatrix] = RequireMethod(typeof(TemporalAA), "CalculateJitterMatrix", camera, jitterFunc);
             methods[(int)Site.RenderStp] = RequireMethod(recorder, "RenderSTP", typeof(RenderGraph), typeof(UniversalResourceData), camera,
                 typeof(TextureHandle).MakeByRefType(), typeof(TextureHandle).MakeByRefType());
             methods[(int)Site.PostProcessing] = RequireMethod(recorder, "RenderPostProcessingRenderGraph", typeof(RenderGraph), typeof(ContextContainer),
