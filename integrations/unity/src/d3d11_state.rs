@@ -48,7 +48,6 @@ const SURFACES: usize = 6;
 
 /// Transferred COM references and the shared fence. A copy is a view borrowed under a frame
 /// callback, the creation claim or the checked close.
-#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DeviceHandles {
     device11: *mut c_void,
@@ -58,12 +57,6 @@ struct DeviceHandles {
     completion: *mut c_void,
     sharing: *mut c_void,
 }
-
-const _: () = assert!(
-    size_of::<DeviceHandles>() == 48
-        && std::mem::offset_of!(DeviceHandles, device12) == 16
-        && std::mem::offset_of!(DeviceHandles, sharing) == 40
-);
 
 impl DeviceHandles {
     const EMPTY: Self = Self {
@@ -90,15 +83,11 @@ impl DeviceHandles {
 }
 
 /// One ring slot's transferred allocator and command list.
-#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CommandSlot {
     allocator: *mut c_void,
     list: *mut c_void,
 }
-
-const _: () =
-    assert!(size_of::<CommandSlot>() == 16 && std::mem::offset_of!(CommandSlot, list) == 8);
 
 impl CommandSlot {
     const EMPTY: Self = Self {
@@ -110,9 +99,6 @@ impl CommandSlot {
         !self.allocator.is_null() && !self.list.is_null()
     }
 }
-
-/// The view the fence readers read, copied out for a check outside the state mutex.
-type Proof = DeviceHandles;
 
 /// The source texture description a surface was created for: three fields of
 /// `D3D11_TEXTURE2D_DESC`. The shared format derived from them is not part of the key.
@@ -230,11 +216,6 @@ impl State {
         self.creation.device.as_ref().map(|device| device.handles)
     }
 
-    /// The published view for a frame callback's completion wait.
-    fn waiter(&self) -> Option<Proof> {
-        self.view()
-    }
-
     fn slot(&self, index: usize) -> Option<CommandSlot> {
         if self.closed {
             return None;
@@ -305,7 +286,7 @@ impl State {
 
     /// Closes admission and copies the fence readers. None while a creation is in progress or a
     /// frame callback holds the surface lease.
-    fn close(&mut self) -> Option<Option<Proof>> {
+    fn close(&mut self) -> Option<Option<DeviceHandles>> {
         if self.creation.creating || self.leased {
             return None;
         }
@@ -488,7 +469,7 @@ fn shared_surface(
 /// leaf outside the state mutex. The callback keeps the record published. False without one.
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(crate) fn wait_completion(value: u64) -> bool {
-    let Some(handles) = lock().waiter() else {
+    let Some(handles) = lock().view() else {
         return false;
     };
     unsafe { ops::wait(&handles, value) }
@@ -746,11 +727,11 @@ mod tests {
         assert_eq!(state.view(), Some(handles));
         assert!(state.slot(SLOTS - 1).unwrap().complete());
         assert!(state.slot(SLOTS).is_none());
-        assert_eq!(state.waiter(), Some(handles));
+        assert_eq!(state.view(), Some(handles));
         let proof = state.close().unwrap().unwrap();
         assert_eq!(proof, handles);
         assert!(state.view().is_none());
-        assert!(state.waiter().is_none());
+        assert!(state.view().is_none());
         assert!(state.slot(0).is_none());
         assert_eq!(state.claim(), Claim::Busy);
         calls();

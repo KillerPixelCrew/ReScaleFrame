@@ -102,12 +102,11 @@ unsafe fn prepare_device(host: &rsf_game_host_services, out: &mut DeviceHandles)
     Some(())
 }
 
-pub(super) unsafe fn create(host: *const rsf_game_host_services, out: *mut DeviceHandles) -> bool {
-    unsafe { prepare_device(&*host, &mut *out) }.is_some()
+pub(super) unsafe fn create(host: *const rsf_game_host_services, out: &mut DeviceHandles) -> bool {
+    unsafe { prepare_device(&*host, out) }.is_some()
 }
 
-pub(super) unsafe fn destroy(shared: *const DeviceHandles) {
-    let shared = unsafe { &*shared };
+pub(super) unsafe fn destroy(shared: &DeviceHandles) {
     unsafe {
         rsf_shared_fence_destroy(shared.sharing.cast());
         release(shared.completion);
@@ -136,32 +135,29 @@ unsafe fn prepare_slot(shared: &DeviceHandles, out: &mut CommandSlot) -> Option<
     unsafe { borrowed::<ID3D12GraphicsCommandList>(&out.list).Close() }.ok()
 }
 
-pub(super) unsafe fn create_slot(shared: *const DeviceHandles, out: *mut CommandSlot) -> bool {
-    unsafe { prepare_slot(&*shared, &mut *out) }.is_some()
+pub(super) unsafe fn create_slot(shared: &DeviceHandles, out: &mut CommandSlot) -> bool {
+    unsafe { prepare_slot(shared, out) }.is_some()
 }
 
-pub(super) unsafe fn destroy_slot(slot: *const CommandSlot) {
-    let slot = unsafe { &*slot };
+pub(super) unsafe fn destroy_slot(slot: &CommandSlot) {
     unsafe {
         release(slot.list);
         release(slot.allocator);
     }
 }
 
-pub(super) unsafe fn completed(shared: *const DeviceHandles) -> u64 {
-    let shared = unsafe { &*shared };
+pub(super) unsafe fn completed(shared: &DeviceHandles) -> u64 {
     unsafe { ID3D12Fence::from_raw_borrowed(&shared.completion) }
         .map_or(0, |fence| unsafe { fence.GetCompletedValue() })
 }
 
-pub(super) unsafe fn shared_completed(shared: *const DeviceHandles) -> u64 {
-    let raw = unsafe { rsf_shared_fence_d3d11((*shared).sharing.cast()) };
+pub(super) unsafe fn shared_completed(shared: &DeviceHandles) -> u64 {
+    let raw = unsafe { rsf_shared_fence_d3d11(shared.sharing.cast()) };
     unsafe { ID3D11Fence::from_raw_borrowed(&raw) }
         .map_or(0, |fence| unsafe { fence.GetCompletedValue() })
 }
 
-pub(super) unsafe fn wait(shared: *const DeviceHandles, value: u64) -> bool {
-    let shared = unsafe { &*shared };
+pub(super) unsafe fn wait(shared: &DeviceHandles, value: u64) -> bool {
     let Some(fence) = (unsafe { ID3D12Fence::from_raw_borrowed(&shared.completion) }) else {
         return false;
     };
@@ -183,14 +179,13 @@ pub(super) unsafe fn wait(shared: *const DeviceHandles, value: u64) -> bool {
 }
 
 pub(super) unsafe fn create_surface(
-    shared: *const DeviceHandles,
+    shared: &DeviceHandles,
     host: *const rsf_game_host_services,
     width: u32,
     height: u32,
     format: u32,
-    out: *mut *mut c_void,
+    out: &mut *mut c_void,
 ) -> bool {
-    let shared = unsafe { &*shared };
     let host = unsafe { host.as_ref() };
     let setup = rsf_shared_surface_setup {
         struct_size: size_of::<rsf_shared_surface_setup>() as u32,
@@ -207,7 +202,7 @@ pub(super) unsafe fn create_surface(
     let result = unsafe {
         rsf_shared_surface_create(shared.device11, shared.device12, &setup, &mut surface)
     };
-    unsafe { out.write(surface.cast()) };
+    *out = surface.cast();
     result == RSF_SHARED_OK
 }
 
