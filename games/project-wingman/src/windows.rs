@@ -33,13 +33,27 @@ pub(crate) unsafe extern "C" fn copy(
     unsafe { rsf_game_sys::win32::read_process(input as usize, output, bytes) }
 }
 
-pub(crate) fn verify_executable() -> bool {
-    unsafe { module_path(null_mut()) }
-        .filter(|path| leaf_is(path.units(), crate::EXECUTABLE))
+/// Whether this process runs the game's executable, by name; the build is discovered.
+pub(crate) fn is_game_process() -> bool {
+    unsafe { module_path(null_mut()) }.is_some_and(|path| leaf_is(path.units(), crate::EXECUTABLE))
+}
+
+/// The running executable's SHA-256 and PE timestamp, logged as evidence and never compared.
+pub(crate) fn executable_evidence() -> String {
+    let digest = unsafe { module_path(null_mut()) }
         .and_then(|path| {
             rsf_windows::sha256_file_hex(&PathBuf::from(OsString::from_wide(path.units())))
         })
-        .is_some_and(|digest| &digest[..64] == crate::SHA256.to_bytes())
+        .and_then(|digest| String::from_utf8(digest[..64].to_vec()).ok())
+        .unwrap_or_else(|| "unavailable".into());
+    let base = image_base();
+    let field = |offset: usize| {
+        let mut bytes = [0; 4];
+        rsf_game_sys::win32::read_bytes(base.wrapping_add(offset), &mut bytes)
+            .then(|| u32::from_le_bytes(bytes) as usize)
+    };
+    let timestamp = field(0x3c).and_then(|nt| field(nt + 8)).unwrap_or(0);
+    format!("executable sha256 {digest}, PE timestamp 0x{timestamp:x}")
 }
 
 pub(crate) fn image_base() -> usize {

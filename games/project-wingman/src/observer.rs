@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Guarded temporal graph observation and its GameSDK lifecycle.
 use crate::INVALID_ARGUMENT;
-use crate::camera::{JITTER, read};
+use crate::camera::read;
+use crate::discovery::{self, Site};
 use crate::execution;
 use crate::windows::{
-    create_hook, disable_hook, enable_hook, image_base, tick_count, verify_executable,
+    create_hook, disable_hook, enable_hook, image_base, is_game_process, tick_count,
 };
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
@@ -20,14 +21,6 @@ use rsf_game_sys::{
     RSF_ERROR_BUSY as BUSY, RSF_ERROR_NATIVE_REFUSED as NATIVE_REFUSED,
     RSF_ERROR_NOT_READY as NOT_READY, RSF_OK as OK,
 };
-const ADD_PASSES: usize = 0x5c4_42b0;
-const ADD_PASSES_BYTES: [u8; 32] = [
-    0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x40, 0x48,
-    0x8b, 0x05, 0xda, 0x50, 0x8d, 0x03, 0x49, 0x8b, 0xf9, 0x49, 0x8b, 0xd8, 0x48, 0x8b, 0xf2, 0x83,
-];
-const INPUT_RECT: usize = 0x1670;
-pub(crate) const HISTORY: usize = 0x1680;
-pub(crate) const CAMERA_CUT: usize = 0xd90;
 
 static ACCEPTING: AtomicBool = AtomicBool::new(false);
 static CALLS: AtomicU32 = AtomicU32::new(0);
@@ -117,13 +110,19 @@ fn state() -> MutexGuard<'static, State> {
     lock_or_recover(&STATE)
 }
 
-fn target() -> Option<usize> {
-    if !verify_executable() {
-        return None;
+/// The discovered AddPasses entry, still matching its pattern in live memory, or why not.
+fn target() -> Result<usize, &'static CStr> {
+    if !is_game_process() {
+        return Err(c"Native temporal observer refused: not the Project Wingman executable.");
     }
+    discovery::admit()?;
     let image = image_base();
-    let entry: [u8; ADD_PASSES_BYTES.len()] = unsafe { read(image, ADD_PASSES) }?;
-    (entry == ADD_PASSES_BYTES).then_some(image + ADD_PASSES)
+    if !discovery::verify(image, Site::AddPasses) {
+        return Err(
+            c"Native temporal observer refused: site 'default temporal upscaler AddPasses' changed since discovery.",
+        );
+    }
+    Ok(image + discovery::rva(Site::AddPasses))
 }
 
 pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> rsf_result {
@@ -144,18 +143,31 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
     if state.host.is_some() || CALLS.load(Ordering::Acquire) != 0 {
         return BUSY;
     }
-    let Some(target) = target() else {
-        state.reason =
-            c"Native temporal observer refused: executable identity or entry bytes differ.";
-        return NATIVE_REFUSED;
+    let prepared = target().and_then(|target| {
+        if !install_trampoline(target, add_passes as *const () as usize, &ORIGINAL) {
+            return Err(
+                c"Native temporal observer refused: the AddPasses hook could not be created.",
+            );
+        }
+        execution::prepare().map(|()| target)
+    });
+    // Evidence only: the build is logged, the discovered sites decide.
+    let evidence = discovery::evidence();
+    if !evidence.is_empty() {
+        let outcome =
+            prepared.map_or_else(|reason| reason, |_| c"Native temporal sites discovered.");
+        host_log(
+            host,
+            &format!("PW {evidence}. {}", outcome.to_string_lossy()),
+        );
+    }
+    let target = match prepared {
+        Ok(target) => target,
+        Err(reason) => {
+            state.reason = reason;
+            return NATIVE_REFUSED;
+        }
     };
-    if !install_trampoline(target, add_passes as *const () as usize, &ORIGINAL) {
-        return NATIVE_REFUSED;
-    }
-    if !execution::prepare() {
-        state.reason = c"Native temporal execution refused: queued-pass entry bytes differ or hooks could not be created.";
-        return NATIVE_REFUSED;
-    }
     state.target = target;
     state.host = Some(*host);
     state.samples = [Sample::EMPTY; 16];
@@ -265,11 +277,12 @@ impl Observation {
         output_rect: usize,
         half: usize,
     ) -> Option<()> {
+        let fields = discovery::view();
         self.inputs = unsafe { read(input, 0) }?;
-        self.render = unsafe { read(view, INPUT_RECT) }?;
-        self.history = unsafe { read(view, HISTORY) }?;
-        self.jitter = unsafe { read(view, JITTER) }?;
-        self.camera_cut = unsafe { read(view, CAMERA_CUT) }?;
+        self.render = unsafe { read(view, fields.rect) }?;
+        self.history = unsafe { read(view, fields.state) }?;
+        self.jitter = unsafe { read(view, fields.jitter) }?;
+        self.camera_cut = unsafe { read(view, fields.camera_cut) }?;
         self.output = unsafe { read(output, 0) }?;
         self.result = unsafe { read(output_rect, 0) }?;
         self.half_output = unsafe { read(half, 0) }?;

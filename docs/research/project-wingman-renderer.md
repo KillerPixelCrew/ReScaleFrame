@@ -1,5 +1,56 @@
 # Project Wingman renderer investigation
 
+## Signature discovery, 24 November 2026
+
+Question: find every site the observer hooks or reads in whatever build is running (AGENTS.md
+Rule 4), instead of accepting only the build with SHA256 `092e8422...abc85a` and fixed RVAs.
+
+The game is no longer installed: its Steam folder holds only the earlier deployment's files. The
+user's Ghidra project of the researched executable (`%USERPROFILE%\ProjectWingman.rep`,
+program `00000000`, `db.1.gbf`) still holds the imported file. `tools/ghidra/file-bytes.py` reads
+that database without Ghidra and recovered 159,688,704 bytes whose SHA256 equals the recorded
+`092e84225624a4de9c05d2404ff55269bd4a2aa2ff0548f2a183c6bf36abc85a`. That byte-exact copy is the
+build the patterns are derived from and proven against. Nothing was written to the game folder or
+the project, and the game was not launched.
+
+`tools/derive-site-patterns.py` produced unique entry patterns for `AddPasses`, `FreeChunks`,
+`AddTemporalAAPass` and pass setup. The other sites needed a different anchor because their own
+bytes are not unique:
+
+- The TAA compute pass helper (`0x5c2d4a0`) is a template instance: its 38-byte entry matches
+  five sibling instances (`0x59e9710` and others), and so do both vtable `lea` sequences. It is
+  found through its only call, in `AddTemporalAAPass` at `0x5c45924`, which is followed by the
+  `test byte [rbx+4fac],1` of the view. The entry is then checked.
+- The two vtables are the targets of the `lea` instructions at helper + `0xb6` and + `0xed`,
+  each matched as the only occurrence within the helper's first 0x180 bytes. The helper is
+  0x19e bytes long and a sibling starts right after it. The first pattern fixes the 0x120-byte
+  allocation from graph + 0x10, the second the pass vtable store at owner + 8.
+- The execute entry (`0x5c4c9c0`) has an identical twin at `0x5c4ca00` that differs only in its
+  call target, so it is the compute vtable's slot 1. The destructor (`0x591d000`) is the tracked
+  vtable's slot 0; its 33-byte entry check also matches at `0x591d0b0`. Both entries are checked
+  after the slot read. The execute check also fixes the parameter pointer at pass + 0xf0.
+
+The four view fields the observer reads are decoded from instructions that read them, not
+pinned: the camera cut from `cmp byte [rbx+0d90h],0` at `0x5c449d6`, the jitter from
+`mov r8,[r8+4fa4h]` at `0x5c44ec9`, the view state from `mov rcx,[rsi+1680h]` at `0x5c41208`
+(followed by `add rcx,990h`) and the view rectangle from `movups xmm0,[rdx+1670h]` at
+`0x5c41062`. Each pattern is unique in `.text`. The camera matrices, family frame fields, TAA
+parameter and UAV fields, RDG texture field and RHI command-list fields stay documented
+constants: no code located in this research reveals them. The camera decode and the vtable
+checks in `bind_pass` remain their structural checks.
+
+At prepare, the adapter copies the loaded executable's code sections, resolves every site,
+re-reads the vtable slots and re-matches each hooked entry in live memory before creating its
+disabled hook. A missing or ambiguous site refuses prepare with the site's name. Detection is by
+executable name; the SHA256 and PE timestamp (`0x67556a66`) are logged, never compared.
+`every_site_resolves_in_the_installed_executable` proves uniqueness and the recorded RVAs against
+the installed executable or `RSF_PROJECT_WINGMAN_EXE`. It passed on the recovered copy.
+
+Uncertainty: discovery has not run inside the game since the conversion. The live section copy,
+the live re-match and the logged evidence need a game run. A later game build that changes any of
+these sequences refuses the observer rather than following it.
+
+The sections below are the earlier exact-build work. Their RVAs are build 16671873 evidence.
 ## Queued temporal packet retirement
 
 The Rust execution port at `e2942e45` recorded an RDG packet before the compute pass
@@ -43,8 +94,8 @@ The graph clear paths were checked in `RenderGraphBuilder.cpp` (SHA256
 `b9bc5a9034abc73805b5084ae4744bb95845940dcfd5c8583eaa7b942827bfa7`).
 
 Setup and allocator free entry guards are `48895424105553565741544155415641`
-and `488bc4488950105341574883ec48488b`, respectively. Prepare checks both loaded vtable
-slots and all five entry guards. Admission additionally matches the construction
+and `488bc4488950105341574883ec48488b`, respectively. Prepare checked both loaded vtable
+slots and all five entry guards; signature discovery (above) replaced these fixed guards. Admission additionally matches the construction
 graph and parameter block, and both actual vtable identities. The observer starts
 admitting only after every hook is enabled, and disables admission before teardown.
 This is static source and binary evidence. The regression fixtures and game
@@ -333,7 +384,8 @@ The new carrier forwards the system DLL's eight named exports and ordinals 100-1
 starts the runtime's existing plugin-session lifecycle outside the loader lock. Controller
 state/vibration forwarding is independent of observer startup.
 
-The loaded executable must match the recorded hash and this 32-byte entry fingerprint:
+The loaded executable had to match the recorded hash and this 32-byte entry fingerprint
+(superseded by signature discovery, above):
 `48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 40 48 8b 05 da 50 8d 03 49 8b f9 49 8b d8 48 8b f2 83`.
 These are comparison bytes, not a claim that 32 bytes are overwritten. MinHook creates
 the trampoline; start enables it. The native eight-argument method still executes before

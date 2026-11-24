@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Project Wingman game SDK entry and exact-build identity.
+//! Project Wingman game SDK entry. Recognized by executable name; prepare discovers whether the
+//! running build is usable.
 mod camera;
+mod discovery;
 mod execution;
 mod observer;
 #[cfg(windows)]
@@ -15,11 +17,17 @@ use std::ffi::CStr;
 
 use rsf_game_sys::RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT;
 const EXECUTABLE: &CStr = c"ProjectWingman-Win64-Shipping.exe";
-const SHA256: &CStr = c"092e84225624a4de9c05d2404ff55269bd4a2aa2ff0548f2a183c6bf36abc85a";
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 
 unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> rsf_detection {
-    unsafe { Probe::detect(probe, |probe| probe.matches(EXECUTABLE, SHA256)) }
+    unsafe {
+        Probe::detect(probe, |probe| {
+            probe
+                .executable
+                .to_bytes()
+                .eq_ignore_ascii_case(EXECUTABLE.to_bytes())
+        })
+    }
 }
 
 #[unsafe(no_mangle)]

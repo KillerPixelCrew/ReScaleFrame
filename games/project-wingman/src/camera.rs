@@ -14,7 +14,6 @@ const WORLD_TO_VIEW: usize = 0x340;
 const VIEW_TO_WORLD: usize = 0x380;
 const CURRENT_TRANSLATED: usize = 0x480;
 const CURRENT_TRANSLATION: usize = 0x600;
-pub(crate) const JITTER: usize = 0x4fa4;
 const PREVIOUS_PROJECTION: usize = 0x5010;
 const PREVIOUS_TRANSLATED: usize = 0x51d0;
 const PREVIOUS_TRANSLATION: usize = 0x5350;
@@ -42,8 +41,9 @@ fn extent(rect: [i32; 4]) -> Option<[u32; 2]> {
 
 fn decode(view: usize, pass: &mut rsf_game_render_pass, jitter: Option<[f32; 2]>) -> Option<()> {
     let camera = &mut pass.camera;
-    // These exact view and family offsets are verified for the matched Wingman build. Each field
-    // is copied so an unreadable view is a refusal rather than a Rust reference.
+    // Documented view and family offsets of build 16671873 that no discovered code reveals; the
+    // checks below refuse a view whose matrices are not a camera. Each field is copied so an
+    // unreadable view is a refusal rather than a Rust reference.
     let family: usize = unsafe { read(view, FAMILY) }?;
     let frame: u32 = unsafe { read(family, FAMILY_FRAME) }?;
     camera.frame_time_seconds = unsafe { read(family, FAMILY_FRAME_TIME) }?;
@@ -122,8 +122,9 @@ fn decode(view: usize, pass: &mut rsf_game_render_pass, jitter: Option<[f32; 2]>
         .then_some(())
 }
 
-pub(crate) fn read_camera(view: usize, pass: &mut rsf_game_render_pass) -> bool {
-    let jitter = unsafe { read(view, JITTER) };
+/// Decodes the view's camera; `jitter` is the discovered offset of its jitter in render pixels.
+pub(crate) fn read_camera(view: usize, jitter: usize, pass: &mut rsf_game_render_pass) -> bool {
+    let jitter = unsafe { read(view, jitter) };
     pass.camera.jitter_pixels = jitter.unwrap_or_default();
     pass.camera_valid = u32::from(decode(view, pass, jitter).is_some());
     pass.camera_valid != 0

@@ -8,7 +8,7 @@ fn store<T: Copy>(bytes: &mut [u8], offset: usize, value: T) {
 }
 
 fn sample(view: &[u8], pass: &mut rsf_game_render_pass) -> bool {
-    read_camera(view.as_ptr() as usize, pass)
+    read_camera(view.as_ptr() as usize, 0x4fa4, pass)
 }
 
 fn camera_fixture() -> bool {

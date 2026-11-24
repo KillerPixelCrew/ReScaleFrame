@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Admission and retirement of native temporal graph packets and RHI callbacks.
 use crate::camera::{read, read_camera};
-use crate::observer::{self, CAMERA_CUT, Entry, HISTORY, install_trampoline};
+use crate::discovery::{self, Site, rva};
+use crate::observer::{self, Entry, install_trampoline};
 use crate::windows::{
     disable_hook, enable_hook, image_base, rsf_wingman_acquire_texture,
     rsf_wingman_release_texture, rsf_wingman_report_execution, tick_count,
@@ -13,42 +14,24 @@ use rsf_game_sys::{
 };
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::ffi::CStr;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
-// Install allocator retirement before any hook can publish a packet.
-const RVAS: [usize; 5] = [0x538_21d0, 0x5c4_4910, 0x5c2_d4a0, 0x656_9660, 0x5c4_c9c0];
-const EXPECTED: [[u8; 16]; 5] = [
-    [
-        0x48, 0x8b, 0xc4, 0x48, 0x89, 0x50, 0x10, 0x53, 0x41, 0x57, 0x48, 0x83, 0xec, 0x48, 0x48,
-        0x8b,
-    ],
-    [
-        0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41,
-        0x56,
-    ],
-    [
-        0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18,
-        0x48,
-    ],
-    [
-        0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
-        0x41,
-    ],
-    [
-        0x48, 0x83, 0xec, 0x38, 0xf2, 0x0f, 0x10, 0x81, 0x08, 0x01, 0x00, 0x00, 0x4c, 0x8d, 0x4c,
-        0x24,
-    ],
-];
+// Hooks in `discovery::HOOKS` order: allocator retirement is installed before any hook can
+// publish a packet.
+const HOOKS: usize = discovery::HOOKS.len();
 const CAPACITY: u32 = 256;
+// Documented layout constants no discovered code reveals; bind_pass checks the pass and owner
+// vtables before either is trusted.
 const COMPUTE_OUTPUT_UAV: usize = 0x278;
 const UAV_RESOURCE: usize = 0x28;
+// Fixed by the execute entry's pattern (discovery.rs).
 const PASS_PARAMETERS: usize = 0xf0;
+// Fixed by the compute helper's patterns (discovery.rs): the pass at owner + 8 and the graph's
+// allocator at graph + 0x10.
 const TRACKED_PASS_OFFSET: usize = 8;
-const TRACKED_VTABLE: usize = 0x839_0f78;
-const TRACKED_DESTRUCTOR: usize = 0x591_d000;
-const COMPUTE_VTABLE: usize = 0x83f_6838;
 const GRAPH_MEM_STACK: usize = 0x10;
 
 #[repr(C)]
@@ -87,8 +70,8 @@ struct Construction {
 }
 
 struct State {
-    sites: [usize; RVAS.len()],
-    installed: [bool; RVAS.len()],
+    sites: [usize; HOOKS],
+    installed: [bool; HOOKS],
     // Keyed by the concrete pass inside the graph's tracked allocation.
     pending: HashMap<usize, Packet>,
 }
@@ -123,8 +106,8 @@ unsafe impl Send for State {}
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
     Mutex::new(State {
-        sites: [0; RVAS.len()],
-        installed: [false; RVAS.len()],
+        sites: [0; HOOKS],
+        installed: [false; HOOKS],
         pending: HashMap::new(),
     })
 });
@@ -132,7 +115,7 @@ static EXECUTING: AtomicU32 = AtomicU32::new(0);
 static QUEUED: AtomicU32 = AtomicU32::new(0);
 static NEXT_LOG: AtomicU64 = AtomicU64::new(0);
 static HAS_PENDING: AtomicBool = AtomicBool::new(false);
-static ORIGINAL: [AtomicUsize; RVAS.len()] = [const { AtomicUsize::new(0) }; RVAS.len()];
+static ORIGINAL: [AtomicUsize; HOOKS] = [const { AtomicUsize::new(0) }; HOOKS];
 
 thread_local! {
     static CONSTRUCTION: Cell<Option<Packet>> = const { Cell::new(None) };
@@ -143,21 +126,29 @@ fn state() -> MutexGuard<'static, State> {
     lock_or_recover(&STATE)
 }
 
-pub(crate) fn prepare() -> bool {
+/// Creates the disabled execution hooks at the discovered sites, after the live vtables still
+/// name the discovered entries and every entry still matches its pattern.
+pub(crate) fn prepare() -> Result<(), &'static CStr> {
     let mut state = state();
     let image = image_base();
-    if unsafe { read(image, TRACKED_VTABLE) } != Some(image + TRACKED_DESTRUCTOR)
-        || unsafe { read(image, COMPUTE_VTABLE + size_of::<usize>()) } != Some(image + RVAS[4])
+    let slot = |vtable, index: usize| unsafe { read::<usize>(image + rva(vtable), index * 8) };
+    if slot(Site::TrackedVtable, 0) != Some(image + rva(Site::Destructor))
+        || slot(Site::ComputeVtable, 1) != Some(image + rva(Site::Execute))
+        || !discovery::verify(image, Site::Destructor)
     {
-        return false;
+        return Err(
+            c"Native temporal execution refused: the pass vtables changed since discovery.",
+        );
     }
-    for (&rva, expected) in RVAS.iter().zip(&EXPECTED) {
-        let bytes: Option<[u8; 16]> = unsafe { read(image, rva) };
-        if bytes.as_ref() != Some(expected) {
-            return false;
-        }
+    if !discovery::HOOKS
+        .iter()
+        .all(|&site| discovery::verify(image, site))
+    {
+        return Err(
+            c"Native temporal execution refused: a queued-pass entry changed since discovery.",
+        );
     }
-    state.sites = RVAS.map(|rva| image + rva);
+    state.sites = discovery::HOOKS.map(|site| image + rva(site));
     let detours = [
         free_chunks as *const (),
         add_taa as *const (),
@@ -165,12 +156,15 @@ pub(crate) fn prepare() -> bool {
         setup_pass as *const (),
         execute_pass as *const (),
     ];
-    state
+    let created = state
         .sites
         .into_iter()
         .zip(detours)
         .zip(&ORIGINAL)
-        .all(|((site, detour), original)| install_trampoline(site, detour as usize, original))
+        .all(|((site, detour), original)| install_trampoline(site, detour as usize, original));
+    created
+        .then_some(())
+        .ok_or(c"Native temporal execution refused: queued-pass hooks could not be created.")
 }
 
 pub(crate) fn start() -> bool {
@@ -203,13 +197,14 @@ fn capture(graph: usize, view: usize, parameters: usize, history: usize) -> Opti
     pass.view_key = view as u64;
     pass.render_rect = input.input;
     pass.output_rect = input.output;
-    pass.history_key = unsafe { read(view, HISTORY) }.unwrap_or(0);
-    let cut: u8 = unsafe { read(view, CAMERA_CUT) }.unwrap_or(0);
+    let fields = discovery::view();
+    pass.history_key = unsafe { read(view, fields.state) }.unwrap_or(0);
+    let cut: u8 = unsafe { read(view, fields.camera_cut) }.unwrap_or(0);
     let old_history: usize = unsafe { read(history, 0) }.unwrap_or(0);
     if cut != 0 || old_history == 0 {
         pass.flags = RSF_GAME_RENDER_RESET;
     }
-    read_camera(view, &mut pass);
+    read_camera(view, fields.jitter, &mut pass);
     Some(Packet {
         pass,
         rdg: [input.colour, input.depth, input.motion, 0],
@@ -240,8 +235,8 @@ fn bind_pass(graph: usize, pass: usize) {
     let image = image_base();
     if candidate.packet.graph != graph
         || unsafe { read(pass, PASS_PARAMETERS) } != Some(candidate.parameters)
-        || unsafe { read(pass, 0) } != Some(image + COMPUTE_VTABLE)
-        || unsafe { read(owner, 0) } != Some(image + TRACKED_VTABLE)
+        || unsafe { read(pass, 0) } != Some(image + rva(Site::ComputeVtable))
+        || unsafe { read(owner, 0) } != Some(image + rva(Site::TrackedVtable))
     {
         return;
     }
@@ -527,20 +522,20 @@ mod tests {
     #[test]
     fn partial_enable_can_retry_after_rollback() {
         unsafe fn refuse_one(site: usize) -> bool {
-            site != RVAS[2]
+            site != 3
         }
         unsafe fn succeed(_: usize) -> bool {
             true
         }
         let mut state = State {
-            sites: RVAS,
-            installed: [false; RVAS.len()],
+            sites: [1, 2, 3, 4, 5],
+            installed: [false; HOOKS],
             pending: HashMap::new(),
         };
         assert!(!state.enable_hooks(refuse_one));
         assert_eq!(state.installed, [true, true, false, false, false]);
         assert!(state.disable_hooks(succeed));
         assert!(state.enable_hooks(succeed));
-        assert_eq!(state.installed, [true; RVAS.len()]);
+        assert_eq!(state.installed, [true; HOOKS]);
     }
 }
