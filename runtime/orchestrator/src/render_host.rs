@@ -992,9 +992,7 @@ impl Host {
         } else {
             "SDK reports inactive"
         };
-        for (target, &byte) in value.reason.iter_mut().zip(reason.as_bytes()) {
-            *target = byte as c_char;
-        }
+        crate::write_c_text(&mut value.reason, reason.as_bytes());
         value
     }
 

@@ -480,6 +480,18 @@ unsafe fn copy_c_string(
     }
 }
 
+// `text` in a fixed C character field, truncated to leave room for its terminator.
+fn write_c_text(target: &mut [std::ffi::c_char], text: &[u8]) {
+    let Some(last) = target.len().checked_sub(1) else {
+        return;
+    };
+    let length = text.len().min(last);
+    for (out, &byte) in target.iter_mut().zip(&text[..length]) {
+        *out = byte as std::ffi::c_char;
+    }
+    target[length] = 0;
+}
+
 // One more reference to a COM object the caller may leave null. `object` is null or live.
 #[cfg(windows)]
 unsafe fn retain_object(object: *mut std::ffi::c_void) -> Option<windows::core::IUnknown> {

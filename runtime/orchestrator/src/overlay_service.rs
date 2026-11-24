@@ -539,12 +539,6 @@ impl State {
     }
 }
 
-fn copy_reason(dest: &mut [c_char], reason: &CStr) {
-    for (out, byte) in dest.iter_mut().zip(reason.to_bytes_with_nul()) {
-        *out = *byte as c_char;
-    }
-}
-
 fn forward_fg(value: &Settings) -> i32 {
     let mut current: FgStatus = unsafe { std::mem::zeroed() };
     current.struct_size = abi_size::<FgStatus>();
@@ -798,7 +792,7 @@ impl State {
         let vendor = &sample.fg.vendor;
         let fg_enabled = settings.fg_enabled != 0;
         if let Some(text) = self.description(config, false) {
-            copy_reason(reason, text);
+            crate::write_c_text(reason, text.to_bytes());
         }
         let mut stats = rsf_overlay_stats {
             struct_size: abi_size::<rsf_overlay_stats>(),
@@ -961,7 +955,7 @@ impl State {
             ..Default::default()
         };
         if let Some(text) = self.description(config, true) {
-            copy_reason(&mut value.reason, text);
+            crate::write_c_text(&mut value.reason, text.to_bytes());
         }
         value
     }

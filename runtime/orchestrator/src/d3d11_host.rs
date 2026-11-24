@@ -74,11 +74,7 @@ fn current_thread() -> u32 {
 }
 
 fn set_reason(report: &mut rsf_overlay_sr_report, text: &str) {
-    let bytes = &text.as_bytes()[..text.len().min(report.reason.len() - 1)];
-    for (target, &byte) in report.reason.iter_mut().zip(bytes) {
-        *target = byte as c_char;
-    }
-    report.reason[bytes.len()] = 0;
+    crate::write_c_text(&mut report.reason, text.as_bytes());
 }
 
 fn fresh_report() -> rsf_overlay_sr_report {
