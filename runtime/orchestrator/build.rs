@@ -108,7 +108,6 @@ fn native_leaves() {
 fn bindings() {
     const HEADERS: &[&str] = &[
         "runtime/orchestrator/src/d3d11_host_foreign.h",
-        "runtime/orchestrator/src/fg12_platform.h",
         "runtime/orchestrator/src/native_fg_xess_vulkan.h",
         "runtime/orchestrator/src/render_host_foreign.h",
         "runtime/graphics/src/sharpening/d3d11.h",

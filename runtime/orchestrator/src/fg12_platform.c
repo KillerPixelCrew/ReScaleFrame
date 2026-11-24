@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Module lifetime of the Rust D3D12 FG capture owner. It reads capture
    preferences at module attach and releases capture tickets and resources at
-   unload, the ordering the former C++ static object had. */
+   unload. */
 #include "fg12_platform.h"
 #include <stdlib.h>
 

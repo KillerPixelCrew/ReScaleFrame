@@ -757,7 +757,15 @@ pub(super) unsafe extern "C" fn rsf_core_fg12_submitted(session: u64, id: u64) {
         .and_then(|fence| unsafe { fence.signal() });
 }
 
-unsafe fn texture_desc(resource: *mut c_void) -> rsf_fg12_texture_desc {
+/// The size and format of a D3D12 texture.
+#[derive(Clone, Copy)]
+pub(crate) struct TextureDesc {
+    pub(crate) width: u64,
+    pub(crate) height: u32,
+    pub(crate) format: u32,
+}
+
+unsafe fn texture_desc(resource: *mut c_void) -> TextureDesc {
     let mut desc = std::mem::MaybeUninit::uninit();
     unsafe {
         native!(texture_desc(resource, desc.as_mut_ptr()));

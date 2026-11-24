@@ -44,11 +44,16 @@ const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 
-use crate::sys::rsf_fg12_readback_layout as Layout;
-
-const _: () = {
-    assert!(size_of::<Layout>() == 32);
-};
+/// Where a copied texture's rows sit in its readback buffer.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Layout {
+    pub(crate) bytes: u64,
+    pub(crate) offset: u64,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format: u32,
+    pub(crate) row_pitch: u32,
+}
 
 struct Readback {
     buffer: IUnknown,

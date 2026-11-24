@@ -3,7 +3,6 @@ use super::{
     FencePoint, FenceState, IUnknown, PRESENT_STATE, Present, SHADER_READ, log, texture_desc,
 };
 use crate::com_ref;
-use crate::sys::*;
 use std::ffi::c_void;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -15,7 +14,7 @@ const BGRA8: u32 = 87;
 
 struct Readback {
     buffer: IUnknown,
-    layout: rsf_fg12_readback_layout,
+    layout: crate::frame_capture12::Layout,
 }
 
 // Readbacks are D3D12 resources. The file worker owns them and maps only after

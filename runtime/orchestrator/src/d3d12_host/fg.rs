@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::sys::rsf_fg12_texture_desc;
+use crate::fg12::TextureDesc;
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
 use windows::core::IUnknown;
 
@@ -14,11 +14,11 @@ pub(crate) unsafe extern "C" fn rsf_fg12_platform_buffer_index(chain: Raw) -> u3
 
 pub(crate) unsafe extern "C" fn rsf_fg12_platform_texture_desc(
     resource: Raw,
-    output: *mut rsf_fg12_texture_desc,
+    output: *mut TextureDesc,
 ) {
     let desc = unsafe { borrow::<ID3D12Resource>(&resource).GetDesc() };
     unsafe {
-        output.write(rsf_fg12_texture_desc {
+        output.write(TextureDesc {
             width: desc.Width,
             height: desc.Height,
             format: desc.Format.0 as u32,
