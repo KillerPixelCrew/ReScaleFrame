@@ -11,10 +11,7 @@ use std::sync::{Mutex, MutexGuard};
 use windows::core::w;
 use windows_sys::Win32::{
     System::{
-        LibraryLoader::{
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN,
-            GetModuleHandleExW, GetModuleHandleW, GetProcAddress,
-        },
+        LibraryLoader::{GetModuleHandleW, GetProcAddress},
         Threading::{GetCurrentProcessId, GetCurrentThreadId},
     },
     UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
@@ -56,11 +53,6 @@ const _: () = {
     assert!(std::mem::offset_of!(NV_ASYNC_FRAME_MARKER_PARAMS, markerType) == 16);
     assert!(std::mem::offset_of!(NV_ASYNC_FRAME_MARKER_PARAMS, presentFrameID) == 24);
     assert!(std::mem::offset_of!(NV_ASYNC_FRAME_MARKER_PARAMS, vendorInternal) == 32);
-};
-
-use rsf_minhook_sys::{
-    MH_CreateHook, MH_DisableHook, MH_ERROR_ALREADY_INITIALIZED, MH_EnableHook, MH_Initialize,
-    MH_OK, MH_RemoveHook,
 };
 
 // MinHook writes each trampoline before its hook is enabled.
@@ -119,23 +111,29 @@ struct Hook {
     original: *mut *mut c_void,
 }
 
-// Hook operations stay replaceable so the install order can be tested without a driver.
-struct Platform {
-    initialize: unsafe fn() -> bool,
-    create: unsafe fn(&Hook) -> bool,
-    pin: unsafe fn(*mut c_void) -> bool,
-    enable: unsafe fn(*mut c_void) -> bool,
-    disable: unsafe fn(*mut c_void),
-    remove: unsafe fn(*mut c_void),
-}
+// MinHook installs the hooks in production; unit tests record the install order through same-named
+// fakes instead of a driver.
+#[cfg(not(test))]
+mod leaf {
+    use super::{Hook, c_void, null_mut};
+    use rsf_minhook_sys::{
+        MH_CreateHook, MH_DisableHook, MH_ERROR_ALREADY_INITIALIZED, MH_EnableHook, MH_Initialize,
+        MH_OK, MH_RemoveHook,
+    };
+    use windows_sys::Win32::System::LibraryLoader::{
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
+    };
 
-const MINHOOK: Platform = Platform {
-    initialize: || {
+    pub(super) unsafe fn initialize() -> bool {
         let result = unsafe { MH_Initialize() };
         result == MH_OK || result == MH_ERROR_ALREADY_INITIALIZED
-    },
-    create: |hook| unsafe { MH_CreateHook(hook.target, hook.detour, hook.original) == MH_OK },
-    pin: |address| {
+    }
+
+    pub(super) unsafe fn create(hook: &Hook) -> bool {
+        unsafe { MH_CreateHook(hook.target, hook.detour, hook.original) == MH_OK }
+    }
+
+    pub(super) unsafe fn pin(address: *mut c_void) -> bool {
         let mut module = null_mut();
         unsafe {
             GetModuleHandleExW(
@@ -144,16 +142,22 @@ const MINHOOK: Platform = Platform {
                 &mut module,
             ) != 0
         }
-    },
-    enable: |target| unsafe { MH_EnableHook(target) == MH_OK },
-    disable: |target| unsafe {
-        MH_DisableHook(target);
-    },
-    remove: |target| unsafe {
-        MH_RemoveHook(target);
-    },
-};
+    }
 
+    pub(super) unsafe fn enable(target: *mut c_void) -> bool {
+        unsafe { MH_EnableHook(target) == MH_OK }
+    }
+
+    pub(super) unsafe fn disable(target: *mut c_void) {
+        unsafe { MH_DisableHook(target) };
+    }
+
+    pub(super) unsafe fn remove(target: *mut c_void) {
+        unsafe { MH_RemoveHook(target) };
+    }
+}
+#[cfg(test)]
+use tests as leaf;
 fn describe(targets: [*mut c_void; HOOKS]) -> [Hook; HOOKS] {
     std::array::from_fn(|index| Hook {
         target: targets[index],
@@ -171,45 +175,43 @@ enum Install {
     Retained,
 }
 
-fn install(platform: &Platform) -> Install {
+fn install() -> Install {
     let Some(query) = query_interface() else {
         return Install::Missing;
     };
     let targets =
         [0xac1c_a9e0, 0xd998_4c05, 0xb9f6_faff, 0x13c9_8f73].map(|id| unsafe { query(id) });
-    install_hooks(platform, &describe(targets))
+    install_hooks(&describe(targets))
 }
 
-fn install_hooks(platform: &Platform, hooks: &[Hook; HOOKS]) -> Install {
-    if !unsafe { (platform.initialize)() } {
+fn install_hooks(hooks: &[Hook; HOOKS]) -> Install {
+    if !unsafe { leaf::initialize() } {
         return Install::Retry;
     }
     let made = hooks
         .iter()
-        .take_while(|hook| !hook.target.is_null() && unsafe { (platform.create)(hook) })
+        .take_while(|hook| !hook.target.is_null() && unsafe { leaf::create(hook) })
         .count();
     // Pinning the first detour keeps this module, and every detour, resident.
     let pinned = made == HOOKS
-        && hooks
-            .iter()
-            .all(|hook| unsafe { (platform.pin)(hook.target) })
-        && unsafe { (platform.pin)(hooks[0].detour) };
+        && hooks.iter().all(|hook| unsafe { leaf::pin(hook.target) })
+        && unsafe { leaf::pin(hooks[0].detour) };
     if !pinned {
         for hook in &hooks[..made] {
-            unsafe { (platform.remove)(hook.target) };
+            unsafe { leaf::remove(hook.target) };
         }
         return Install::Refused;
     }
     if hooks
         .iter()
-        .all(|hook| unsafe { (platform.enable)(hook.target) })
+        .all(|hook| unsafe { leaf::enable(hook.target) })
     {
         return Install::Installed;
     }
     // A failed enable can follow a reachable hook. Leave the pinned original
     // trampolines in place even if every target now disables successfully.
     for hook in hooks {
-        unsafe { (platform.disable)(hook.target) };
+        unsafe { leaf::disable(hook.target) };
     }
     Install::Retained
 }
@@ -298,10 +300,10 @@ fn audit() -> MutexGuard<'static, Audit> {
 // Optional process-lifetime observation. It never changes arguments, return
 // values or hook chains.
 pub(crate) unsafe fn rsf_reflex_audit_start(log: Log, user: *mut c_void) {
-    start(log, user, &MINHOOK);
+    start(log, user);
 }
 
-fn start(log: Log, user: *mut c_void, platform: &Platform) {
+fn start(log: Log, user: *mut c_void) {
     let Some(_output) = Output::enter() else {
         return;
     };
@@ -322,7 +324,7 @@ fn start(log: Log, user: *mut c_void, platform: &Platform) {
             return;
         }
     }
-    let result = install(platform);
+    let result = install();
     let mut state = audit();
     state.install = result;
     if result == Install::Retained {
@@ -564,23 +566,27 @@ mod tests {
         STEPS.with_borrow_mut(|steps| steps.push(step));
     }
 
-    const RECORDING: Platform = Platform {
-        initialize: || true,
-        create: |_| {
-            record("create");
-            true
-        },
-        pin: |_| {
-            record("pin");
-            true
-        },
-        enable: |target| {
-            record("enable");
-            target.addr() == 1
-        },
-        disable: |_| record("disable"),
-        remove: |_| record("remove"),
-    };
+    pub(super) unsafe fn initialize() -> bool {
+        true
+    }
+    pub(super) unsafe fn create(_: &Hook) -> bool {
+        record("create");
+        true
+    }
+    pub(super) unsafe fn pin(_: *mut c_void) -> bool {
+        record("pin");
+        true
+    }
+    pub(super) unsafe fn enable(target: *mut c_void) -> bool {
+        record("enable");
+        target.addr() == 1
+    }
+    pub(super) unsafe fn disable(_: *mut c_void) {
+        record("disable");
+    }
+    pub(super) unsafe fn remove(_: *mut c_void) {
+        record("remove");
+    }
 
     fn hooks() -> [Hook; HOOKS] {
         std::array::from_fn(|index| Hook {
@@ -601,10 +607,7 @@ mod tests {
 
     #[test]
     fn partially_exposed_hooks_disable_without_removing_trampolines() {
-        assert!(matches!(
-            install_hooks(&RECORDING, &hooks()),
-            Install::Retained
-        ));
+        assert!(matches!(install_hooks(&hooks()), Install::Retained));
         STEPS.with_borrow(|steps| {
             assert_eq!(
                 *steps,
