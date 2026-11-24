@@ -171,10 +171,7 @@ struct Transaction(RefCell<AuxiliarySr>);
 
 impl Transaction {
     fn new() -> Self {
-        let platform = unsafe { &*platform::rsf_auxiliary_sr_platform() };
-        Self(RefCell::new(
-            AuxiliarySr::new(platform).expect("the native platform is complete"),
-        ))
+        Self(RefCell::new(AuxiliarySr::new().expect("owner")))
     }
 
     fn reserve(&self, rig: &Device, pass: &Pass, surfaces: &[Surface], recovery: bool) -> bool {

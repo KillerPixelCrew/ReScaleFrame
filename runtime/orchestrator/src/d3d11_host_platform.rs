@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The host's production leaves: Windows calls, the guarded C boundaries and the Rust owners.
 //! `d3d11_host` calls them as `native::*`; its unit tests swap in fakes of the same names.
-use crate::auxiliary_sr::{AuxiliarySr, rsf_auxiliary_sr_platform};
+use crate::auxiliary_sr::AuxiliarySr;
 use crate::d3d11_device_identity::identity;
 use crate::d3d11_host_abi::{DUMP_DENSE_MOTION, DUMP_DEPTH, DUMP_HDR, DUMP_RAW, Pass};
 use crate::d3d11_host_reduced::Products;
@@ -78,8 +78,7 @@ pub(super) use crate::sys::{
 type Raw = *mut c_void;
 
 pub(super) fn auxiliary_products() -> Option<Box<dyn Products>> {
-    let platform = unsafe { rsf_auxiliary_sr_platform().as_ref()? };
-    let owner = NonNull::new(crate::allocate_handle(AuxiliarySr::new(platform)?))?;
+    let owner = NonNull::new(crate::allocate_handle(AuxiliarySr::new()?))?;
     Some(unsafe { Box::from_raw(owner.as_ptr()) })
 }
 
