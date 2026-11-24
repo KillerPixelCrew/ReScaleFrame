@@ -131,7 +131,7 @@ impl Chain {
     }
 }
 
-pub(super) unsafe extern "C" fn chain_facts(request: *const c_void, out: *mut VkChainFacts) {
+pub(super) unsafe fn chain_facts(request: *const c_void, out: *mut VkChainFacts) {
     let info = unsafe { &*request.cast::<vk::DeviceCreateInfo<'static>>() };
     let mut current = info.p_next.cast::<vk::BaseInStructure<'static>>();
     let mut seen = [StructureType::default(); LIMIT];

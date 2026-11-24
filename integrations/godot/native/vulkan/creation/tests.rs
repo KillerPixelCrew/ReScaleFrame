@@ -9,7 +9,7 @@ use crate::platform::vulkan_negotiation::{
     xess_structures,
 };
 use crate::platform::{
-    VK_CREATION_VERSION, VK_SCOPE_INSTANCE, VkChainFacts, VkDeviceDerive, VkLatencyRequirements,
+    VK_SCOPE_INSTANCE, VkChainFacts, VkDeviceDerive, VkLatencyRequirements,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -142,7 +142,7 @@ unsafe extern "C" fn underlying(object: *mut c_void, name: *const c_char) -> Opt
     Some(function)
 }
 
-unsafe extern "C" fn xess_instance_requirements(
+unsafe fn xess_instance_requirements(
     count: *mut u32,
     list: *mut *const *const c_char,
     minimum: *mut u32,
@@ -162,7 +162,7 @@ unsafe extern "C" fn xess_instance_requirements(
     0
 }
 
-unsafe extern "C" fn derive_instance(
+unsafe fn derive_instance(
     call: *mut c_void,
     base: *const c_void,
     minimum: u32,
@@ -178,7 +178,7 @@ unsafe extern "C" fn derive_instance(
     ptr::without_provenance(DERIVED_INSTANCE)
 }
 
-unsafe extern "C" fn create_instance(
+unsafe fn create_instance(
     create: VkFunction,
     request: *const c_void,
     _: *const c_void,
@@ -201,13 +201,13 @@ unsafe extern "C" fn create_instance(
     result
 }
 
-unsafe extern "C" fn chain_facts(request: *const c_void, facts: *mut VkChainFacts) {
+unsafe fn chain_facts(request: *const c_void, facts: *mut VkChainFacts) {
     record(format!("chain_facts {:#x}", request.addr()));
     // SAFETY: the owner's output.
     unsafe { facts.write(FACTS.get()) };
 }
 
-unsafe extern "C" fn xess_features(
+unsafe fn xess_features(
     _: *mut c_void,
     request: *const c_void,
     structures: u32,
@@ -222,7 +222,7 @@ unsafe extern "C" fn xess_features(
     1
 }
 
-unsafe extern "C" fn xess_device_requirements(
+unsafe fn xess_device_requirements(
     instance: *mut c_void,
     physical: *mut c_void,
     count: *mut u32,
@@ -252,7 +252,7 @@ unsafe extern "C" fn xess_device_requirements(
     0
 }
 
-unsafe extern "C" fn device_extensions(
+unsafe fn device_extensions(
     enumerate: VkFunction,
     physical: *mut c_void,
     list: *const *const c_char,
@@ -267,7 +267,7 @@ unsafe extern "C" fn device_extensions(
     u32::from(INTEROP.get())
 }
 
-unsafe extern "C" fn latency_requirements(
+unsafe fn latency_requirements(
     _: *mut c_void,
     instance: *mut c_void,
     _: *mut c_void,
@@ -304,7 +304,7 @@ unsafe extern "C" fn latency_requirements(
     1
 }
 
-unsafe extern "C" fn derive_device(
+unsafe fn derive_device(
     call: *mut c_void,
     stage: u32,
     derive: *const VkDeviceDerive,
@@ -323,7 +323,7 @@ unsafe extern "C" fn derive_device(
     ptr::without_provenance(DERIVED_DEVICE + stage as usize)
 }
 
-unsafe extern "C" fn create_device(
+unsafe fn create_device(
     create: VkFunction,
     physical: *mut c_void,
     request: *const c_void,
@@ -348,7 +348,7 @@ unsafe extern "C" fn create_device(
     result
 }
 
-unsafe extern "C" fn latency_created(
+unsafe fn latency_created(
     _: *mut c_void,
     _: *mut c_void,
     device: *mut c_void,
@@ -363,11 +363,11 @@ unsafe extern "C" fn latency_created(
     0
 }
 
-unsafe extern "C" fn latency_destroyed(device: *mut c_void) {
+unsafe fn latency_destroyed(device: *mut c_void) {
     record(format!("latency_destroyed {:#x}", device.addr()));
 }
 
-unsafe extern "C" fn destroy_device(destroy: VkFunction, device: *mut c_void, _: *const c_void) {
+unsafe fn destroy_device(destroy: VkFunction, device: *mut c_void, _: *const c_void) {
     assert_eq!(
         destroy as *const () as usize,
         destroy_marker as *const () as usize
@@ -375,7 +375,7 @@ unsafe extern "C" fn destroy_device(destroy: VkFunction, device: *mut c_void, _:
     record(format!("destroy_device {:#x}", device.addr()));
 }
 
-unsafe extern "C" fn adapter(
+unsafe fn adapter(
     properties: VkFunction,
     physical: *mut c_void,
     output: *mut VkAdapter,
@@ -391,8 +391,6 @@ unsafe extern "C" fn adapter(
 }
 
 static LEAVES: VkCreationLeaves = VkCreationLeaves {
-    struct_size: size_of::<VkCreationLeaves>() as u32,
-    version: VK_CREATION_VERSION,
     xess_instance_requirements,
     derive_instance,
     create_instance,

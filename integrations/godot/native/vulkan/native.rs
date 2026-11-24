@@ -178,14 +178,12 @@ impl Platform {
             system_resolver()
         };
         let resolver = if rsfg_vulkan_supported() != 0 {
-            let requirements = super::creation::typed::Requirements::linked();
             unsafe {
                 rsf_godot_vk_creation_resolver(
                     base,
                     u32::from(xess_result == BACKEND_OK),
                     setup.log,
                     setup.log_user,
-                    &requirements,
                 )
             }
         } else {

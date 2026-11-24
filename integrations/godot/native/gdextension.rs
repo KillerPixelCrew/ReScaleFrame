@@ -6,7 +6,7 @@
 //! hashes and the builtin sizes are those of the pinned Godot 4.7 API, which the add-on's
 //! `compatibility_minimum` requires.
 mod api;
-mod effect;
+pub(crate) mod effect;
 mod runtime;
 mod sys;
 

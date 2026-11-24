@@ -9,7 +9,7 @@ use super::sys::*;
 use super::{Dictionary, EFFECT_CLASS, Sink};
 use crate::effect::Effect;
 use crate::platform::{
-    EFFECT_MOTION_FORMAT, EffectFrame, EffectLeaves, EffectReadback, EffectResources,
+    EFFECT_MOTION_FORMAT, EffectFrame, EffectReadback, EffectResources,
 };
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
@@ -105,7 +105,7 @@ unsafe extern "C" fn render_callback(instance: *mut c_void, args: *const ConstTy
         motion: 0,
         bytes: None,
     };
-    instance.probe.render(&LEAVES, (&raw mut call).cast());
+    instance.probe.render((&raw mut call).cast());
 }
 
 /// `get_status()`.
@@ -150,12 +150,6 @@ struct Call {
     bytes: Option<PackedBytes>,
 }
 
-static LEAVES: EffectLeaves = EffectLeaves {
-    frame: leaf_frame,
-    resources: leaf_resources,
-    read_motion: leaf_read_motion,
-};
-
 fn layer(godot: &Godot, method: Bind, buffers: ObjectPtr) -> Option<u64> {
     let (index, msaa) = (0i64, 0u8);
     unsafe { godot.value(method, buffers, &[arg(&index), arg(&msaa)], 0u64) }
@@ -165,7 +159,7 @@ fn texture_valid(godot: &Godot, device: ObjectPtr, texture: u64) -> Option<u32> 
     unsafe { godot.value(Bind::TEXTURE_IS_VALID, device, &[arg(&texture)], 0u8) }.map(u32::from)
 }
 
-unsafe extern "C" fn leaf_frame(call: *mut c_void, frame: *mut EffectFrame) -> u32 {
+pub(crate) unsafe fn leaf_frame(call: *mut c_void, frame: *mut EffectFrame) -> u32 {
     let (call, frame) = unsafe { (&mut *call.cast::<Call>(), &mut *frame) };
     read_frame(call, frame).is_some().into()
 }
@@ -225,7 +219,7 @@ fn read_frame(call: &mut Call, frame: &mut EffectFrame) -> Option<()> {
     Some(())
 }
 
-unsafe extern "C" fn leaf_resources(call: *mut c_void, resources: *mut EffectResources) -> u32 {
+pub(crate) unsafe fn leaf_resources(call: *mut c_void, resources: *mut EffectResources) -> u32 {
     let (call, resources) = unsafe { (&*call.cast::<Call>(), &mut *resources) };
     read_resources(call, resources).is_some().into()
 }
@@ -262,7 +256,7 @@ fn read_resources(call: &Call, resources: &mut EffectResources) -> Option<()> {
     Some(())
 }
 
-unsafe extern "C" fn leaf_read_motion(
+pub(crate) unsafe fn leaf_read_motion(
     call: *mut c_void,
     plan: *const EffectReadback,
     data: *mut *const u8,

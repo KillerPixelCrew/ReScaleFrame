@@ -3,8 +3,7 @@
 //! and the Rust-only records `Platform` passes between this crate's owners and the Runtime, DXGI and
 //! Win32. `Platform` is implemented by `host.rs` (D3D12, window, counters) and `vulkan/native.rs`
 //! (the Vulkan owner's guard, device, presenter, SDK and SR context calls); every decision stays in
-//! this crate. The Vulkan creation and compositor effect leaves are separate tables
-//! (`VkCreationLeaves`, `EffectLeaves`). The render pass and CPU event are the generated
+//! this crate. The Vulkan creation leaves are a separate table (`VkCreationLeaves`). The render pass and CPU event are the generated
 //! `rsf_game_render_pass` and `rsf_game_cpu_event` bindings.
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
@@ -395,7 +394,7 @@ pub(crate) const VK_ROUTE_CREATE_DEVICE: u32 = 4;
 pub(crate) const VK_ROUTE_DESTROY_DEVICE: u32 = 5;
 pub(crate) mod vulkan_negotiation;
 pub(crate) use vulkan_negotiation::{
-    VK_CREATION_VERSION, VkAdapter, VkChainFacts, VkCreationLeaves, VkDeviceCall, VkDeviceDerive,
+    VkAdapter, VkChainFacts, VkCreationLeaves, VkDeviceCall, VkDeviceDerive,
     VkFunction, VkInstanceCall, VkLatencyRequirements, VkProc,
 };
 
@@ -508,14 +507,6 @@ pub(crate) struct EffectReadback {
     pub(crate) groups_y: u32,
 }
 
-/// The Godot scene and RenderingDevice reads of the compositor effect (gdextension/effect.rs).
-pub(crate) struct EffectLeaves {
-    pub(crate) frame: unsafe extern "C" fn(*mut c_void, *mut EffectFrame) -> u32,
-    pub(crate) resources: unsafe extern "C" fn(*mut c_void, *mut EffectResources) -> u32,
-    pub(crate) read_motion:
-        unsafe extern "C" fn(*mut c_void, *const EffectReadback, *mut *const u8, *mut u64) -> u32,
-}
-
 /// `RSF_GODOT_VK_LOG_*`.
 pub(crate) const VK_LOG_REJECTED: u32 = 1;
 pub(crate) const VK_LOG_FSR4_DISPATCH: u32 = 2;
@@ -575,40 +566,3 @@ pub(crate) mod fake;
 /// The native services this crate calls: the Runtime owners, DXGI and Win32. `host.rs` implements
 /// them, and a test fake with the same methods stands in under `cfg(test)`.
 pub(crate) struct Platform;
-
-// SAFETY for every unsafe block below: `call` is the render callback's live record, which outlives
-// the owner's render call.
-impl EffectLeaves {
-    /// The frame facts; `None` without a RenderingDevice, scene buffers or scene data, or when the
-    /// leaf threw.
-    pub(crate) fn frame(&self, call: *mut c_void) -> Option<EffectFrame> {
-        let mut frame = EffectFrame::default();
-        (unsafe { (self.frame)(call, &mut frame) } != 0).then_some(frame)
-    }
-
-    /// The formats and native handle facts; the defaults when the leaf threw.
-    pub(crate) fn resources(&self, call: *mut c_void) -> EffectResources {
-        let mut resources = EffectResources::default();
-        if unsafe { (self.resources)(call, &mut resources) } == 0 {
-            resources = EffectResources::default();
-        }
-        resources
-    }
-
-    /// Runs `read` over the readback bytes, which `call` keeps alive until the callback ends.
-    /// An empty slice when the readback was refused or the leaf threw.
-    pub(crate) fn read_motion<R>(
-        &self,
-        call: *mut c_void,
-        plan: &EffectReadback,
-        read: impl FnOnce(&[u8]) -> R,
-    ) -> R {
-        let (mut data, mut size): (*const u8, u64) = (std::ptr::null(), 0);
-        let completed = unsafe { (self.read_motion)(call, plan, &mut data, &mut size) } != 0;
-        if !completed || data.is_null() || size == 0 {
-            return read(&[]);
-        }
-        // SAFETY: the leaf's bytes stay in `call` for the callback.
-        read(unsafe { std::slice::from_raw_parts(data, size as usize) })
-    }
-}

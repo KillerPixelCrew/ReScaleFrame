@@ -11,14 +11,18 @@
 //! objects, RIDs and native pointers stay in the leaves' callback record; this owner keeps copied
 //! CPU facts only, and no resource lease or GPU completion is implied. The effect reads no
 //! Runtime settings or status: `ReScaleFrameRuntime` reports active SR, FG and latency.
+#[cfg(not(test))]
+use crate::gdextension::effect::{leaf_frame, leaf_read_motion, leaf_resources};
 use crate::platform::{
-    EFFECT_MOTION_FORMAT, EffectFrame, EffectLeaves, EffectReadback, EffectResources, EffectStatus,
+    EFFECT_MOTION_FORMAT, EffectFrame, EffectReadback, EffectResources, EffectStatus,
 };
 use crate::properties::Properties;
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+#[cfg(test)]
+use tests::{leaf_frame, leaf_read_motion, leaf_resources};
 
 pub(crate) const STAGE: &CStr = c"renderer_probe";
 pub(crate) const REASON: &CStr = c"Compositor motion producer/probe only. Query ReScaleFrameRuntime for active SR, FG and latency.";
@@ -89,15 +93,15 @@ impl Effect {
 
     /// One `POST_TRANSPARENT` callback on the render thread. The request is taken first, so a
     /// callback that cannot read the motion still answers it with an unsucceeded capture.
-    pub(crate) fn render(&self, leaves: &EffectLeaves, call: *mut c_void) {
+    pub(crate) fn render(&self, call: *mut c_void) {
         let requested = self.requested.swap(false, Ordering::SeqCst);
         let mut next = Snapshot::default();
         let mut sampled = Capture::default();
-        if let Some(frame) = leaves.frame(call) {
+        if let Some(frame) = frame(call) {
             next.frame = frame;
             next.buffers_available = buffers_admitted(&frame);
             if next.buffers_available {
-                next.resources = leaves.resources(call);
+                next.resources = resources(call);
                 if requested && next.resources.motion_format == EFFECT_MOTION_FORMAT {
                     // Explicit bounded diagnostics only: the readback stalls the GPU.
                     let pixels = pixels(&frame);
@@ -111,7 +115,7 @@ impl Effect {
                             groups_x: frame.internal_width.unsigned_abs().div_ceil(8),
                             groups_y: frame.internal_height.unsigned_abs().div_ceil(8),
                         };
-                        sampled = leaves.read_motion(call, &plan, |bytes| classify(bytes, pixels));
+                        sampled = read_motion(call, &plan, |bytes| classify(bytes, pixels));
                     }
                 }
             }
@@ -307,5 +311,36 @@ pub(crate) fn classify(bytes: &[u8], pixels: u64) -> Capture {
     capture
 }
 
+// The scene and RenderingDevice reads of gdextension/effect.rs (the recording fakes under test).
+// SAFETY for every unsafe block below: `call` is the render callback's live record, which outlives
+// the owner's render call.
+
+/// The frame facts; `None` without a RenderingDevice, scene buffers or scene data, or when the
+/// leaf threw.
+fn frame(call: *mut c_void) -> Option<EffectFrame> {
+    let mut frame = EffectFrame::default();
+    (unsafe { leaf_frame(call, &mut frame) } != 0).then_some(frame)
+}
+
+/// The formats and native handle facts; the defaults when the leaf threw.
+fn resources(call: *mut c_void) -> EffectResources {
+    let mut resources = EffectResources::default();
+    if unsafe { leaf_resources(call, &mut resources) } == 0 {
+        resources = EffectResources::default();
+    }
+    resources
+}
+
+/// Runs `read` over the readback bytes, which `call` keeps alive until the callback ends.
+/// An empty slice when the readback was refused or the leaf threw.
+fn read_motion<R>(call: *mut c_void, plan: &EffectReadback, read: impl FnOnce(&[u8]) -> R) -> R {
+    let (mut data, mut size): (*const u8, u64) = (std::ptr::null(), 0);
+    let completed = unsafe { leaf_read_motion(call, plan, &mut data, &mut size) } != 0;
+    if !completed || data.is_null() || size == 0 {
+        return read(&[]);
+    }
+    // SAFETY: the leaf's bytes stay in `call` for the callback.
+    read(unsafe { std::slice::from_raw_parts(data, size as usize) })
+}
 #[cfg(test)]
 mod tests;

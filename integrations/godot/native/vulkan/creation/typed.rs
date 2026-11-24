@@ -7,7 +7,7 @@ use crate::platform::vulkan_negotiation::{
     VK_XESS_SCALAR_BLOCK_LAYOUT,
 };
 use crate::platform::{
-    VK_CREATION_VERSION, VK_ROUTE_CREATE_DEVICE, VK_ROUTE_CREATE_INSTANCE, VK_ROUTE_DESTROY_DEVICE,
+    VK_ROUTE_CREATE_DEVICE, VK_ROUTE_CREATE_INSTANCE, VK_ROUTE_DESTROY_DEVICE,
     VkAdapter, VkCreationLeaves, VkDeviceCall, VkDeviceDerive, VkFunction, VkInstanceCall,
     VkLatencyRequirements, VkProc,
 };
@@ -16,7 +16,6 @@ use crate::vulkan::handle;
 use ash::vk::{self, Handle};
 use std::ffi::{c_char, c_void};
 use std::ptr;
-use std::sync::OnceLock;
 
 mod chain;
 use chain::{Chain, chain_facts};
@@ -24,63 +23,12 @@ use chain::{Chain, chain_facts};
 const NOT_SUPPORTED: i32 = -7;
 const MAX_EXTENSIONS: u32 = 4096;
 
-/// The linked Runtime services, with the native table version checked at resolver startup.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct Requirements {
-    size: u32,
-    version: u32,
-    xess_instance: unsafe extern "C" fn(*mut u32, *mut *const *const c_char, *mut u32) -> i32,
-    xess_device: unsafe extern "C" fn(
-        *mut c_void,
-        *mut c_void,
-        *mut u32,
-        *mut *const *const c_char,
-        *mut *mut c_void,
-    ) -> i32,
-    latency_require: unsafe extern "C" fn(
-        *const rsf_latencyvk_device_query,
-        *mut rsf_latencyvk_device_requirements,
-    ) -> i32,
-    latency_created: unsafe extern "C" fn(*const rsf_latencyvk_created_device) -> i32,
-    latency_destroyed: unsafe extern "C" fn(*mut c_void),
-}
-
-#[cfg(all(windows, not(test)))]
-impl Requirements {
-    pub(crate) fn linked() -> Self {
-        Self {
-            size: size_of::<Self>() as u32,
-            version: 1,
-            xess_instance: rsf_xessvk_instance_requirements,
-            xess_device: rsf_xessvk_device_requirements,
-            latency_require: rsf_latencyvk_require_device,
-            latency_created: rsf_latencyvk_device_created,
-            latency_destroyed: rsf_latencyvk_device_destroyed,
-        }
-    }
-}
-
-const _: () = {
-    assert!(size_of::<Requirements>() == 48);
-    assert!(std::mem::offset_of!(Requirements, latency_require) == 24);
+// The linked Runtime's XeSS and latency services (crate::sys); typed/tests.rs mocks them.
+#[cfg(test)]
+use tests::{
+    rsf_latencyvk_device_created, rsf_latencyvk_device_destroyed, rsf_latencyvk_require_device,
+    rsf_xessvk_device_requirements, rsf_xessvk_instance_requirements,
 };
-
-static REQUIREMENTS: OnceLock<Requirements> = OnceLock::new();
-
-/// The caller supplies at least a size word and lends the advertised bytes for this call.
-/// The functions stay mapped for the lifetime of the engine's loader resolver.
-pub(crate) unsafe fn bind_requirements(table: *const Requirements) -> bool {
-    if table.is_null() || unsafe { table.cast::<u32>().read() } < size_of::<Requirements>() as u32 {
-        return false;
-    }
-    let table = unsafe { &*table };
-    if table.version != 1 {
-        return false;
-    }
-    let _ = REQUIREMENTS.set(*table);
-    true
-}
 
 #[derive(Default)]
 struct InstanceRecord {
@@ -182,17 +130,15 @@ unsafe extern "system" fn destroy_device(
     );
 }
 
-unsafe extern "C" fn xess_instance(
+unsafe fn xess_instance(
     count: *mut u32,
     names: *mut *const *const c_char,
     minimum: *mut u32,
 ) -> i32 {
-    REQUIREMENTS.get().map_or(NOT_SUPPORTED, |ops| unsafe {
-        (ops.xess_instance)(count, names, minimum)
-    })
+    unsafe { rsf_xessvk_instance_requirements(count, names, minimum) }
 }
 
-unsafe extern "C" fn derive_instance(
+unsafe fn derive_instance(
     call: *mut c_void,
     base: *const c_void,
     minimum: u32,
@@ -212,7 +158,7 @@ unsafe extern "C" fn derive_instance(
     (&raw const record.request).cast()
 }
 
-unsafe extern "C" fn call_create_instance(
+unsafe fn call_create_instance(
     create: VkFunction,
     info: *const c_void,
     allocator: *const c_void,
@@ -222,7 +168,7 @@ unsafe extern "C" fn call_create_instance(
     unsafe { create(info.cast(), allocator.cast(), output.cast()) }.as_raw()
 }
 
-unsafe extern "C" fn xess_features(
+unsafe fn xess_features(
     call: *mut c_void,
     request: *const c_void,
     flags: u32,
@@ -260,19 +206,17 @@ unsafe extern "C" fn xess_features(
     1
 }
 
-unsafe extern "C" fn xess_device(
+unsafe fn xess_device(
     instance: *mut c_void,
     physical: *mut c_void,
     count: *mut u32,
     names: *mut *const *const c_char,
     features: *mut *mut c_void,
 ) -> i32 {
-    REQUIREMENTS.get().map_or(NOT_SUPPORTED, |ops| unsafe {
-        (ops.xess_device)(instance, physical, count, names, features)
-    })
+    unsafe { rsf_xessvk_device_requirements(instance, physical, count, names, features) }
 }
 
-unsafe extern "C" fn device_extensions(
+unsafe fn device_extensions(
     enumerate: VkFunction,
     physical: *mut c_void,
     names: *const *const c_char,
@@ -315,7 +259,7 @@ unsafe extern "C" fn device_extensions(
     }))
 }
 
-unsafe extern "C" fn latency_requirements(
+unsafe fn latency_requirements(
     call: *mut c_void,
     instance: *mut c_void,
     physical: *mut c_void,
@@ -334,9 +278,6 @@ unsafe extern "C" fn latency_requirements(
         })
     };
     *latency = Chain::default();
-    let Some(ops) = REQUIREMENTS.get() else {
-        return 1;
-    };
     *latency = match unsafe { Chain::copy(info.p_next.cast()) } {
         Ok(Some(chain)) => chain,
         Ok(None) => return 1,
@@ -355,7 +296,7 @@ unsafe extern "C" fn latency_requirements(
         abi_version: RSF_LATENCYVK_DEVICE_ABI_VERSION,
         ..Default::default()
     };
-    let result = unsafe { (ops.latency_require)(&query, &mut answer) };
+    let result = unsafe { rsf_latencyvk_require_device(&query, &mut answer) };
     unsafe {
         out.write(VkLatencyRequirements {
             result,
@@ -367,7 +308,7 @@ unsafe extern "C" fn latency_requirements(
     1
 }
 
-unsafe extern "C" fn derive_device(
+unsafe fn derive_device(
     call: *mut c_void,
     stage: u32,
     derive: *const VkDeviceDerive,
@@ -395,7 +336,7 @@ unsafe extern "C" fn derive_device(
     slot.cast()
 }
 
-unsafe extern "C" fn call_create_device(
+unsafe fn call_create_device(
     create: VkFunction,
     physical: *mut c_void,
     request: *const c_void,
@@ -414,7 +355,7 @@ unsafe extern "C" fn call_create_device(
     .as_raw()
 }
 
-unsafe extern "C" fn latency_created(
+unsafe fn latency_created(
     instance: *mut c_void,
     physical: *mut c_void,
     device: *mut c_void,
@@ -430,18 +371,14 @@ unsafe extern "C" fn latency_created(
         instance_proc: proc,
         create_info: request,
     };
-    REQUIREMENTS.get().map_or(NOT_SUPPORTED, |ops| unsafe {
-        (ops.latency_created)(&facts)
-    })
+    unsafe { rsf_latencyvk_device_created(&facts) }
 }
 
-unsafe extern "C" fn latency_destroyed(device: *mut c_void) {
-    if let Some(ops) = REQUIREMENTS.get() {
-        unsafe { (ops.latency_destroyed)(device) };
-    }
+unsafe fn latency_destroyed(device: *mut c_void) {
+    unsafe { rsf_latencyvk_device_destroyed(device) };
 }
 
-unsafe extern "C" fn call_destroy_device(
+unsafe fn call_destroy_device(
     destroy: VkFunction,
     device: *mut c_void,
     allocator: *const c_void,
@@ -450,7 +387,7 @@ unsafe extern "C" fn call_destroy_device(
     unsafe { destroy(handle(device), allocator.cast()) };
 }
 
-unsafe extern "C" fn adapter(
+unsafe fn adapter(
     function: VkFunction,
     physical: *mut c_void,
     out: *mut VkAdapter,
@@ -471,8 +408,6 @@ unsafe extern "C" fn adapter(
 }
 
 static LEAVES: VkCreationLeaves = VkCreationLeaves {
-    struct_size: size_of::<VkCreationLeaves>() as u32,
-    version: VK_CREATION_VERSION,
     xess_instance_requirements: xess_instance,
     derive_instance,
     create_instance: call_create_instance,

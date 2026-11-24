@@ -14,7 +14,6 @@ pub(crate) type VkFunction = unsafe extern "C" fn();
 /// `rsf_godot_vk_proc`: `vkGetInstanceProcAddr` or `vkGetDeviceProcAddr`.
 pub(crate) type VkProc = unsafe extern "C" fn(*mut c_void, *const c_char) -> Option<VkFunction>;
 
-pub(crate) const VK_CREATION_VERSION: u32 = 2;
 const VK_SUCCESS: i32 = 0;
 const VK_ERROR_OUT_OF_HOST_MEMORY: i32 = -1;
 const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
@@ -105,14 +104,12 @@ pub(crate) struct VkDeviceCall {
     pub(crate) extension_count: u32,
 }
 
-/// `rsf_vk_creation_leaves`, the Vulkan-typed leaves of `vulkan_creation.cpp`.
-#[repr(C)]
+/// The Vulkan-typed creation leaves: vulkan/creation/typed.rs, or the recording fakes of
+/// vulkan/creation/tests.rs. Both bind in one test binary (typed/tests.rs drives the real leaves).
 pub(crate) struct VkCreationLeaves {
-    pub(crate) struct_size: u32,
-    pub(crate) version: u32,
     pub(crate) xess_instance_requirements:
-        unsafe extern "C" fn(*mut u32, *mut *const *const c_char, *mut u32) -> i32,
-    pub(crate) derive_instance: unsafe extern "C" fn(
+        unsafe fn(*mut u32, *mut *const *const c_char, *mut u32) -> i32,
+    pub(crate) derive_instance: unsafe fn(
         *mut c_void,
         *const c_void,
         u32,
@@ -120,11 +117,11 @@ pub(crate) struct VkCreationLeaves {
         u32,
     ) -> *const c_void,
     pub(crate) create_instance:
-        unsafe extern "C" fn(VkFunction, *const c_void, *const c_void, *mut c_void) -> i32,
-    pub(crate) chain_facts: unsafe extern "C" fn(*const c_void, *mut VkChainFacts),
+        unsafe fn(VkFunction, *const c_void, *const c_void, *mut c_void) -> i32,
+    pub(crate) chain_facts: unsafe fn(*const c_void, *mut VkChainFacts),
     pub(crate) xess_features:
-        unsafe extern "C" fn(*mut c_void, *const c_void, u32, *mut *mut c_void) -> u32,
-    pub(crate) xess_device_requirements: unsafe extern "C" fn(
+        unsafe fn(*mut c_void, *const c_void, u32, *mut *mut c_void) -> u32,
+    pub(crate) xess_device_requirements: unsafe fn(
         *mut c_void,
         *mut c_void,
         *mut u32,
@@ -132,8 +129,8 @@ pub(crate) struct VkCreationLeaves {
         *mut *mut c_void,
     ) -> i32,
     pub(crate) device_extensions:
-        unsafe extern "C" fn(VkFunction, *mut c_void, *const *const c_char, u32) -> u32,
-    pub(crate) latency_requirements: unsafe extern "C" fn(
+        unsafe fn(VkFunction, *mut c_void, *const *const c_char, u32) -> u32,
+    pub(crate) latency_requirements: unsafe fn(
         *mut c_void,
         *mut c_void,
         *mut c_void,
@@ -142,24 +139,24 @@ pub(crate) struct VkCreationLeaves {
         *mut VkLatencyRequirements,
     ) -> u32,
     pub(crate) derive_device:
-        unsafe extern "C" fn(*mut c_void, u32, *const VkDeviceDerive) -> *const c_void,
-    pub(crate) create_device: unsafe extern "C" fn(
+        unsafe fn(*mut c_void, u32, *const VkDeviceDerive) -> *const c_void,
+    pub(crate) create_device: unsafe fn(
         VkFunction,
         *mut c_void,
         *const c_void,
         *const c_void,
         *mut c_void,
     ) -> i32,
-    pub(crate) latency_created: unsafe extern "C" fn(
+    pub(crate) latency_created: unsafe fn(
         *mut c_void,
         *mut c_void,
         *mut c_void,
         Option<VkProc>,
         *const c_void,
     ) -> i32,
-    pub(crate) latency_destroyed: unsafe extern "C" fn(*mut c_void),
-    pub(crate) destroy_device: unsafe extern "C" fn(VkFunction, *mut c_void, *const c_void),
-    pub(crate) adapter: unsafe extern "C" fn(VkFunction, *mut c_void, *mut VkAdapter) -> u32,
+    pub(crate) latency_destroyed: unsafe fn(*mut c_void),
+    pub(crate) destroy_device: unsafe fn(VkFunction, *mut c_void, *const c_void),
+    pub(crate) adapter: unsafe fn(VkFunction, *mut c_void, *mut VkAdapter) -> u32,
 }
 
 impl VkCreationLeaves {

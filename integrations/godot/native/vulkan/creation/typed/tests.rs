@@ -246,7 +246,7 @@ unsafe extern "C" fn mock_proc(_: *mut c_void, name: *const c_char) -> Option<Vk
     }
 }
 
-unsafe extern "C" fn mock_xess_instance(
+pub(super) unsafe fn rsf_xessvk_instance_requirements(
     count: *mut u32,
     names: *mut *const *const c_char,
     minimum: *mut u32,
@@ -259,7 +259,7 @@ unsafe extern "C" fn mock_xess_instance(
     0
 }
 
-unsafe extern "C" fn mock_xess_device(
+pub(super) unsafe fn rsf_xessvk_device_requirements(
     _: *mut c_void,
     _: *mut c_void,
     count: *mut u32,
@@ -285,7 +285,7 @@ unsafe extern "C" fn mock_xess_device(
     0
 }
 
-unsafe extern "C" fn mock_latency_require(
+pub(super) unsafe fn rsf_latencyvk_require_device(
     query: *const rsf_latencyvk_device_query,
     out: *mut rsf_latencyvk_device_requirements,
 ) -> i32 {
@@ -308,7 +308,7 @@ unsafe extern "C" fn mock_latency_require(
     0
 }
 
-unsafe extern "C" fn mock_latency_created(facts: *const rsf_latencyvk_created_device) -> i32 {
+pub(super) unsafe fn rsf_latencyvk_device_created(facts: *const rsf_latencyvk_created_device) -> i32 {
     let facts = unsafe { &*facts };
     let request = unsafe { &*facts.create_info.cast::<vk::DeviceCreateInfo<'static>>() };
     CALLS.with_borrow_mut(|calls| {
@@ -317,24 +317,14 @@ unsafe extern "C" fn mock_latency_created(facts: *const rsf_latencyvk_created_de
     0
 }
 
-unsafe extern "C" fn mock_latency_destroyed(device: *mut c_void) {
+pub(super) unsafe fn rsf_latencyvk_device_destroyed(device: *mut c_void) {
     CALLS.with_borrow_mut(|calls| calls.destroy.push(device.addr()));
 }
-
-static SERVICES: Requirements = Requirements {
-    size: size_of::<Requirements>() as u32,
-    version: 1,
-    xess_instance: mock_xess_instance,
-    xess_device: mock_xess_device,
-    latency_require: mock_latency_require,
-    latency_created: mock_latency_created,
-    latency_destroyed: mock_latency_destroyed,
-};
 
 #[test]
 fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
     assert!(
-        unsafe { crate::rsf_godot_vk_creation_resolver(None, 1, None, ptr::null_mut(), &SERVICES) }
+        unsafe { crate::rsf_godot_vk_creation_resolver(None, 1, None, ptr::null_mut()) }
             .is_none()
     );
     let begin = |xess| unsafe {
@@ -343,7 +333,6 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
             xess,
             None,
             ptr::null_mut(),
-            &SERVICES,
         )
         .unwrap()
     };

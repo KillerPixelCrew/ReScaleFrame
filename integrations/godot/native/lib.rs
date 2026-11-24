@@ -171,19 +171,14 @@ unsafe extern "C" fn rsfg_present(chain: *mut c_void) {
     }
 }
 
-use vulkan::creation::typed::{self, Requirements};
+use vulkan::creation::typed;
 
-/// On supported builds the caller lends the linked Runtime requirements table.
 unsafe extern "C" fn rsf_godot_vk_creation_resolver(
     underlying: Option<VkProc>,
     xess: u32,
     log: rsf_game_log_fn,
     log_user: *mut c_void,
-    requirements: *const Requirements,
 ) -> Option<VkProc> {
-    if !unsafe { typed::bind_requirements(requirements) } {
-        return None;
-    }
     CONTROL
         .vulkan
         .creation()

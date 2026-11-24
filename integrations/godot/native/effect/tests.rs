@@ -14,7 +14,7 @@ thread_local! {
 
 const CALL: *mut c_void = 0x40 as *mut c_void;
 
-unsafe extern "C" fn leaf_frame(call: *mut c_void, frame: *mut EffectFrame) -> u32 {
+pub(super) unsafe fn leaf_frame(call: *mut c_void, frame: *mut EffectFrame) -> u32 {
     assert_eq!(call, CALL);
     CALLS.with_borrow_mut(|calls| calls.push("frame"));
     match FRAME.get() {
@@ -27,7 +27,7 @@ unsafe extern "C" fn leaf_frame(call: *mut c_void, frame: *mut EffectFrame) -> u
     }
 }
 
-unsafe extern "C" fn leaf_resources(call: *mut c_void, resources: *mut EffectResources) -> u32 {
+pub(super) unsafe fn leaf_resources(call: *mut c_void, resources: *mut EffectResources) -> u32 {
     assert_eq!(call, CALL);
     CALLS.with_borrow_mut(|calls| calls.push("resources"));
     // SAFETY: the owner's record.
@@ -35,7 +35,7 @@ unsafe extern "C" fn leaf_resources(call: *mut c_void, resources: *mut EffectRes
     1
 }
 
-unsafe extern "C" fn leaf_read_motion(
+pub(super) unsafe fn leaf_read_motion(
     call: *mut c_void,
     plan: *const EffectReadback,
     data: *mut *const u8,
@@ -64,12 +64,6 @@ unsafe extern "C" fn leaf_read_motion(
     });
     1
 }
-
-static LEAVES: EffectLeaves = EffectLeaves {
-    frame: leaf_frame,
-    resources: leaf_resources,
-    read_motion: leaf_read_motion,
-};
 
 fn resources(motion_format: i32) -> EffectResources {
     EffectResources {
@@ -205,10 +199,10 @@ fn buffer_admission_needs_one_view_an_extent_and_three_textures() {
 fn a_requested_capture_reads_and_publishes_with_the_snapshot() {
     reset(Some(admitted()), samples(&SIX));
     let effect = Effect::default();
-    effect.render(&LEAVES, CALL);
+    effect.render(CALL);
     assert_eq!(calls(), ["frame", "resources"]);
     effect.request_capture();
-    effect.render(&LEAVES, CALL);
+    effect.render(CALL);
     assert_eq!(calls(), ["frame", "resources", "read_motion"]);
     let value = status(&effect);
     assert_eq!(value.callbacks, 2);
@@ -223,7 +217,7 @@ fn a_requested_capture_reads_and_publishes_with_the_snapshot() {
     assert_eq!(value.capture_unwritten_pixels, 1);
     assert_eq!(value.capture_nonfinite_pixels, 1);
     // The request was taken: later callbacks keep the capture and read nothing.
-    effect.render(&LEAVES, CALL);
+    effect.render(CALL);
     assert_eq!(calls(), ["frame", "resources"]);
     let later = status(&effect);
     assert_eq!(later.callbacks, 3);
@@ -237,7 +231,7 @@ fn a_request_without_readable_motion_is_answered_unsucceeded() {
     reset(Some(admitted()), samples(&SIX));
     RESOURCES.set(resources(102));
     effect.request_capture();
-    effect.render(&LEAVES, CALL);
+    effect.render(CALL);
     assert_eq!(calls(), ["frame", "resources"]);
     let value = status(&effect);
     assert_eq!((value.captures, value.capture_callback), (1, 1));
@@ -252,7 +246,7 @@ fn a_request_without_readable_motion_is_answered_unsucceeded() {
         samples(&SIX),
     );
     effect.request_capture();
-    effect.render(&LEAVES, CALL);
+    effect.render(CALL);
     assert_eq!(calls(), ["frame"]);
     let value = status(&effect);
     assert_eq!(value.buffers_available, 0);
@@ -262,7 +256,7 @@ fn a_request_without_readable_motion_is_answered_unsucceeded() {
     // No scene buffers: the default snapshot, still counted.
     reset(None, samples(&SIX));
     effect.request_capture();
-    effect.render(&LEAVES, CALL);
+    effect.render(CALL);
     assert_eq!(calls(), ["frame"]);
     let value = status(&effect);
     assert_eq!(value.callbacks, 3);
@@ -271,7 +265,7 @@ fn a_request_without_readable_motion_is_answered_unsucceeded() {
     // A refused readback (empty bytes) at the admitted extent.
     reset(Some(admitted()), Vec::new());
     effect.request_capture();
-    effect.render(&LEAVES, CALL);
+    effect.render(CALL);
     assert_eq!(calls(), ["frame", "resources", "read_motion"]);
     let value = status(&effect);
     assert_eq!(
