@@ -23,7 +23,12 @@ jobs:
   windows:
     runs-on: windows-2022
     steps:
+      # The vendor SDK submodules (vendor/streamline, fidelityfx, fidelityfx-vulkan, xess) supply the headers that
+      # switch the DLSS, FSR and XeSS backends on; compiling and linking them needs no vendor GPU. About 950 MB of
+      # checkout at depth 1. The signed Streamline runtime (eng/fetch-vendor.ps1) is not fetched: nothing here loads it.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
       # rust-toolchain.toml names the toolchain; rustup no longer installs it implicitly.
       - name: Install pinned Rust toolchain
         shell: pwsh
