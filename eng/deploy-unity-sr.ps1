@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'common.ps1')
 $taskGame = (Resolve-Path -LiteralPath $GameDirectory).Path
 $taskBin = "$taskRoot/build/windows-x64/bin/$Configuration"
 $taskMod = Join-Path $taskGame 'ReScaleFrame'
@@ -34,25 +35,10 @@ function Add-UnityCopy([string]$Source, [string]$Relative) {
     $taskCopies.Add(@{ source=$Source; path=$Relative })
 }
 Add-UnityCopy "$taskBin/ReScaleFrame.Loader.dll" 'version.dll'
-Add-UnityCopy "$taskRoot/runtime/backends/dlss/third_party/mfg_unlocker/LICENSE" 'ReScaleFrame/MFG-Unlocker-LICENSE.txt'
 foreach ($taskLeaf in @('ReScaleFrame.Runtime.dll','ReScaleFrame.Game.UnityMono.dll','ReScaleFrame.Unity.Managed.dll','rescaleframe_overlay.dll','0Harmony.dll','Harmony-LICENSE.txt')) {
     Add-UnityCopy "$taskBin/$taskLeaf" "ReScaleFrame/$taskLeaf"
 }
-$taskSl = "$taskRoot/.local/streamline/sdk"
-foreach ($taskLeaf in @('sl.interposer.dll','sl.common.dll','sl.dlss.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlss.dll','nvngx_dlssg.dll','nvngx_dlss.license.txt')) {
-    Add-UnityCopy "$taskSl/bin/x64/$taskLeaf" "ReScaleFrame/streamline/$taskLeaf"
-}
-foreach ($taskLeaf in @('license.txt','3rd-party-licenses.md')) { Add-UnityCopy "$taskSl/$taskLeaf" "ReScaleFrame/streamline/$taskLeaf" }
-$taskFfx = "$taskRoot/vendor/fidelityfx/Kits/FidelityFX"
-foreach ($taskLeaf in @('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_upscaler_dx12.dll','amd_fidelityfx_framegeneration_dx12.dll')) {
-    Add-UnityCopy "$taskFfx/signedbin/$taskLeaf" "ReScaleFrame/fidelityfx/$taskLeaf"
-}
-Add-UnityCopy "$taskFfx/docs/license.md" 'ReScaleFrame/fidelityfx/license.md'
-Add-UnityCopy "$taskRoot/vendor/fidelityfx/3rdpartynotice.md" 'ReScaleFrame/fidelityfx/3rdpartynotice.md'
-Add-UnityCopy "$taskRoot/vendor/xess/bin/libxess.dll" 'ReScaleFrame/xess/libxess.dll'
-Add-UnityCopy "$taskRoot/vendor/xess/bin/libxess_fg.dll" 'ReScaleFrame/xess/libxess_fg.dll'
-Add-UnityCopy "$taskRoot/vendor/xess/bin/libxell.dll" 'ReScaleFrame/xess/libxell.dll'
-foreach ($taskLeaf in @('LICENSE.txt','third-party-programs.txt')) { Add-UnityCopy "$taskRoot/vendor/xess/$taskLeaf" "ReScaleFrame/xess/$taskLeaf" }
+foreach ($taskVendor in (Get-RsfVendorPayload $taskRoot).GetEnumerator()) { Add-UnityCopy $taskVendor.Value "ReScaleFrame/$($taskVendor.Key)" }
 $taskCopies.Add(@{ source=$null; path='ReScaleFrame.ini' })
 foreach ($taskCopy in $taskCopies) {
     $taskDestination = Join-Path $taskGame $taskCopy.path

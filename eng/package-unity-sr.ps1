@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'common.ps1')
 # The Streamline SDK with bin/x64 (vendor/streamline may hold headers only).
 $taskStreamline = if ($StreamlineRoot) { (Resolve-Path -LiteralPath $StreamlineRoot).Path } else { Join-Path $taskRoot 'vendor/streamline' }
 $taskGame = if ($GameDirectory) { (Resolve-Path -LiteralPath $GameDirectory).Path } else { $null }
@@ -24,26 +25,13 @@ $taskStage = Join-Path $taskOutput $taskName
 $taskZip = Join-Path $taskOutput "$taskName.zip"
 if ((Test-Path -LiteralPath $taskStage) -or (Test-Path -LiteralPath $taskZip)) { throw 'Package destination already exists.' }
 if ($taskDeployment -and $taskDeployment.game -ne 'drag-n-wash') { throw 'Expected the DragNWash deployment manifest.' }
+$taskVendor = Get-RsfVendorPayload $taskRoot $taskStreamline
 $taskExpected = @(
     'version.dll', 'ReScaleFrame.ini',
     'ReScaleFrame/ReScaleFrame.Runtime.dll', 'ReScaleFrame/ReScaleFrame.Game.UnityMono.dll',
     'ReScaleFrame/ReScaleFrame.Unity.Managed.dll', 'ReScaleFrame/rescaleframe_overlay.dll',
-    'ReScaleFrame/0Harmony.dll', 'ReScaleFrame/Harmony-LICENSE.txt',
-    'ReScaleFrame/streamline/sl.interposer.dll', 'ReScaleFrame/streamline/sl.common.dll',
-    'ReScaleFrame/streamline/sl.dlss.dll', 'ReScaleFrame/streamline/sl.pcl.dll',
-    'ReScaleFrame/streamline/sl.dlss_g.dll', 'ReScaleFrame/streamline/sl.reflex.dll',
-    'ReScaleFrame/streamline/nvngx_dlssg.dll',
-    'ReScaleFrame/streamline/nvngx_dlss.dll', 'ReScaleFrame/streamline/nvngx_dlss.license.txt',
-    'ReScaleFrame/streamline/license.txt', 'ReScaleFrame/streamline/3rd-party-licenses.md',
-    'ReScaleFrame/fidelityfx/amd_fidelityfx_loader_dx12.dll',
-    'ReScaleFrame/fidelityfx/amd_fidelityfx_upscaler_dx12.dll',
-    'ReScaleFrame/fidelityfx/amd_fidelityfx_framegeneration_dx12.dll',
-    'ReScaleFrame/fidelityfx/license.md', 'ReScaleFrame/fidelityfx/3rdpartynotice.md',
-    'ReScaleFrame/xess/libxess.dll', 'ReScaleFrame/xess/libxess_fg.dll', 'ReScaleFrame/xess/libxell.dll',
-    'ReScaleFrame/xess/LICENSE.txt', 'ReScaleFrame/xess/third-party-programs.txt',
-    'ReScaleFrame/MFG-Unlocker-LICENSE.txt',
-    'ReScaleFrame/AMD-Anti-Lag-2-MIT.txt'
-)
+    'ReScaleFrame/0Harmony.dll', 'ReScaleFrame/Harmony-LICENSE.txt'
+) + @($taskVendor.Keys | ForEach-Object { "ReScaleFrame/$_" })
 if (!$taskDeployment) {
     if (& git -C $taskRoot status --porcelain) { throw 'Commit the intended source before packaging Release artifacts.' }
     # Assemble an explicit build-output payload. No game installation or deployment is involved.
@@ -52,25 +40,13 @@ if (!$taskDeployment) {
     $taskInputs = @()
     foreach ($taskRelative in $taskExpected) {
         $taskLeaf = [IO.Path]::GetFileName($taskRelative)
-        $taskSource = switch -Wildcard ($taskRelative) {
+        $taskSource = switch ($taskRelative) {
             'version.dll' { Join-Path $taskBin 'ReScaleFrame.Loader.dll'; break }
             'ReScaleFrame.ini' { $null; break }
-            'ReScaleFrame/streamline/*' {
-                if ($taskLeaf -in @('license.txt','3rd-party-licenses.md')) { Join-Path $taskStreamline $taskLeaf }
-                else { Join-Path $taskStreamline "bin/x64/$taskLeaf" }; break
+            default {
+                $taskVendorKey = $taskRelative -replace '^ReScaleFrame/', ''
+                if ($taskVendor.Contains($taskVendorKey)) { $taskVendor[$taskVendorKey] } else { Join-Path $taskBin $taskLeaf }
             }
-            'ReScaleFrame/fidelityfx/*' {
-                if ($taskLeaf -eq 'license.md') { Join-Path $taskRoot 'vendor/fidelityfx/Kits/FidelityFX/docs/license.md' }
-                elseif ($taskLeaf -eq '3rdpartynotice.md') { Join-Path $taskRoot 'vendor/fidelityfx/3rdpartynotice.md' }
-                else { Join-Path $taskRoot "vendor/fidelityfx/Kits/FidelityFX/signedbin/$taskLeaf" }; break
-            }
-            'ReScaleFrame/xess/*' {
-                if ($taskLeaf -in @('LICENSE.txt','third-party-programs.txt')) { Join-Path $taskRoot "vendor/xess/$taskLeaf" }
-                else { Join-Path $taskRoot "vendor/xess/bin/$taskLeaf" }; break
-            }
-            'ReScaleFrame/MFG-Unlocker-LICENSE.txt' { Join-Path $taskRoot 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE'; break }
-            'ReScaleFrame/AMD-Anti-Lag-2-MIT.txt' { Join-Path $taskRoot 'runtime/orchestrator/ANTILAG2-LICENSE.txt'; break }
-            default { Join-Path $taskBin $taskLeaf }
         }
         $taskDestination = Join-Path $taskGame $taskRelative
         New-Item -ItemType Directory -Path (Split-Path -Parent $taskDestination) -Force | Out-Null

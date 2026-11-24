@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'common.ps1')
 $taskPackage = Join-Path $taskRoot 'integrations/unity/com.kpc.rescaleframe'
 $taskBin = Join-Path $taskRoot "build/windows-x64/bin/$Configuration"
 if (!$StageOnly) {
@@ -29,23 +30,8 @@ foreach ($taskProcess in Get-Process Unity -ErrorAction SilentlyContinue) {
 $taskPayload = Join-Path $taskPackage 'Runtime~'
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $taskNative),$taskPayload | Out-Null
 Copy-Item -LiteralPath (Join-Path $taskBin 'ReScaleFrame.Unity.Native.dll') -Destination $taskNative
-$taskCopies = @{}
-$taskStreamline = Join-Path $taskRoot '.local/streamline/sdk'
-foreach ($taskName in @('sl.interposer.dll','sl.common.dll','sl.dlss.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlss.dll','nvngx_dlssg.dll','nvngx_dlss.license.txt')) {
-    $taskCopies["streamline/$taskName"] = Join-Path $taskStreamline "bin/x64/$taskName"
-}
-foreach ($taskName in @('license.txt','3rd-party-licenses.md')) { $taskCopies["streamline/$taskName"] = Join-Path $taskStreamline $taskName }
-$taskFidelity = Join-Path $taskRoot 'vendor/fidelityfx/Kits/FidelityFX'
-foreach ($taskName in @('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_upscaler_dx12.dll','amd_fidelityfx_framegeneration_dx12.dll')) {
-    $taskCopies["fidelityfx/$taskName"] = Join-Path $taskFidelity "signedbin/$taskName"
-}
-$taskCopies['fidelityfx/license.md'] = Join-Path $taskFidelity 'docs/license.md'
-$taskCopies['fidelityfx/3rdpartynotice.md'] = Join-Path $taskRoot 'vendor/fidelityfx/3rdpartynotice.md'
-foreach ($taskName in @('libxess.dll','libxess_fg.dll','libxell.dll')) { $taskCopies["xess/$taskName"] = Join-Path $taskRoot "vendor/xess/bin/$taskName" }
-foreach ($taskName in @('LICENSE.txt','third-party-programs.txt')) { $taskCopies["xess/$taskName"] = Join-Path $taskRoot "vendor/xess/$taskName" }
-$taskCopies['AMD-Anti-Lag-2-MIT.txt'] = Join-Path $taskRoot 'runtime/orchestrator/ANTILAG2-LICENSE.txt'
+$taskCopies = Get-RsfVendorPayload $taskRoot
 $taskCopies['Unity-Companion-LICENSE.md'] = Join-Path $UnityPluginApiDirectory 'LICENSE.md'
-$taskCopies['MFG-Unlocker-LICENSE.txt'] = Join-Path $taskRoot 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE'
 foreach ($taskCopy in $taskCopies.GetEnumerator()) {
     if (!(Test-Path -LiteralPath $taskCopy.Value -PathType Leaf)) { throw "Required runtime/license missing: $($taskCopy.Value)" }
     $taskTarget = Join-Path $taskPayload $taskCopy.Key

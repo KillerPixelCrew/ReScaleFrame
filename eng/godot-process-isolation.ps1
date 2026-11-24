@@ -67,3 +67,47 @@ public static class RsfSyncIsolationProcess {
 }
 '@
 }
+
+# Runs a Vulkan/DX12 interop fixture as an owned, bounded process under the foreground GPU lease, with
+# the validation layer from $ValidationLayerDirectory when given. The environment is restored and the
+# lease released before it returns. Needs godot-artifacts.ps1.
+function Invoke-RsfInteropFixture([string]$Fixture, [string]$Output, [string]$Arguments, [string]$ValidationLayerDirectory) {
+    New-Item -ItemType Directory -Path $Output -Force | Out-Null
+    $taskSaved = @{}
+    foreach ($taskName in @('VK_INSTANCE_LAYERS', 'VK_LAYER_PATH', 'VK_LOADER_LAYERS_DISABLE',
+        'VK_VALIDATION_VALIDATE_SYNC', 'VK_LAYER_REPORT_FLAGS', 'VK_LAYER_DEBUG_ACTION')) {
+        $taskSaved[$taskName] = [Environment]::GetEnvironmentVariable($taskName)
+    }
+    $taskLease = Enter-RsfGodotValidation
+    try {
+        $env:VK_LOADER_LAYERS_DISABLE = '~implicit~'
+        if ($ValidationLayerDirectory) {
+            $env:VK_LAYER_PATH = (Resolve-Path -LiteralPath $ValidationLayerDirectory).ProviderPath
+            $env:VK_INSTANCE_LAYERS = 'VK_LAYER_KHRONOS_validation'
+            $env:VK_VALIDATION_VALIDATE_SYNC = '1'
+            $env:VK_LAYER_REPORT_FLAGS = 'error,warn,info'
+            $env:VK_LAYER_DEBUG_ACTION = 'VK_DBG_LAYER_ACTION_LOG_MSG'
+        }
+        $taskStdout = Join-Path $Output 'stdout.log'
+        $taskStderr = Join-Path $Output 'stderr.log'
+        [uint32]$taskPolicy = 0
+        $taskProcess = [RsfSyncIsolationProcess]::Start($Fixture, $Arguments, (Get-Location).ProviderPath,
+            $taskStdout, $taskStderr, $true, [ref]$taskPolicy)
+        if (!$taskProcess.WaitForExit(60000)) {
+            $taskProcess.Kill($true); $taskProcess.WaitForExit()
+            throw 'Owned interop fixture exceeded 60 seconds.'
+        }
+        $taskLog = (Get-Content -LiteralPath $taskStdout -Raw) + (Get-Content -LiteralPath $taskStderr -Raw)
+        [pscustomobject]@{
+            Stdout = $taskStdout
+            ExitCode = $taskProcess.ExitCode
+            Policy = $taskPolicy
+            Metrics = @(Get-Content -LiteralPath $taskStdout | Where-Object { $_.StartsWith('{') })
+            SynchronizationEnabled = $taskLog.Contains('CURRENT-VALIDATION-ENABLED') -and $taskLog.Contains('Synchronization')
+            ValidationErrors = @([regex]::Matches($taskLog, 'Validation Error|VUID-|SYNC-HAZARD')).Count
+        }
+    } finally {
+        Restore-RsfGodotEnvironment $taskSaved
+        $taskLease.ReleaseMutex(); $taskLease.Dispose()
+    }
+}

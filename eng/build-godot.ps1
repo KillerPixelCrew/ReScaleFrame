@@ -11,6 +11,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'godot-artifacts.ps1')
+. (Join-Path $PSScriptRoot 'common.ps1')
 $taskSource = Join-Path $taskRoot 'integrations/godot'
 $taskBindings = Join-Path $taskRoot 'references/godot/godot-cpp'
 $taskLock = Get-Content -Raw -LiteralPath (Join-Path $taskSource 'dependencies.json') | ConvertFrom-Json
@@ -49,60 +50,48 @@ Copy-RsfGodotArtifact (Join-Path $taskRoot 'references/godot/engine/COPYRIGHT.tx
 Copy-Item -LiteralPath (Join-Path $taskSource 'dependencies.json') -Destination $taskPackage -Force
 if ($StageRuntime) {
     $taskRuntime = Join-Path $taskPackage 'runtime'
-    $taskPayload = @{}
-    foreach ($taskFile in @('sl.interposer.dll','sl.common.dll','sl.dlss.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlss.dll','nvngx_dlssg.dll','nvngx_dlss.license.txt','reflex.license.txt')) {
-        $taskPayload["streamline/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/bin/x64/$taskFile"
-    }
-    foreach ($taskFile in @('license.txt','3rd-party-licenses.md')) {
-        $taskPayload["streamline/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/$taskFile"
-    }
+    $taskPayload = Get-RsfVendorPayload $taskRoot
+    $taskSlSdk = Join-Path $taskRoot '.local/streamline/sdk'
+    $taskPayload['streamline/reflex.license.txt'] = Join-Path $taskSlSdk 'bin/x64/reflex.license.txt'
     $taskSlVulkan = Join-Path $taskRoot '.local/godot/vulkan/host/artifacts/streamline-production-selected-device-reflex/runtime'
     if (Test-Path -LiteralPath (Join-Path $taskSlVulkan 'streamline-sdk-build.json')) {
         # The one receipt verifier (also used by the Runtime build and the standalone bridge script).
         & (Get-Command cmake.exe -ErrorAction Stop).Source "-DRUNTIME=$taskSlVulkan" -P (Join-Path $taskRoot 'runtime/vulkan/streamline/verify-receipt.cmake') | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Corrected Streamline receipt differs from pinned source corrections.' }
-        foreach ($taskFile in @('sl.interposer.dll','sl.common.dll')) {
+        # The Vulkan Streamline set is the same SDK payload, except that the corrected build supplies the interposer and common DLL.
+        foreach ($taskEntry in @($taskPayload.GetEnumerator() | Where-Object { $_.Key -like 'streamline/*' })) {
+            $taskPayload['streamline-vulkan/' + $taskEntry.Key.Substring('streamline/'.Length)] = $taskEntry.Value
+        }
+        foreach ($taskFile in @('sl.interposer.dll','sl.common.dll','streamline-sdk-build.json')) {
             $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskSlVulkan $taskFile
         }
-        foreach ($taskFile in @('sl.reflex.dll','sl.pcl.dll','sl.dlss.dll','sl.dlss_g.dll','nvngx_dlss.dll','nvngx_dlssg.dll','nvngx_dlss.license.txt')) { $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/bin/x64/$taskFile" }
-        foreach ($taskFile in @('license.txt','3rd-party-licenses.md')) { $taskPayload["streamline-vulkan/$taskFile"] = Join-Path $taskRoot ".local/streamline/sdk/$taskFile" }
-        $taskPayload['streamline-vulkan/reflex.license.txt'] = Join-Path $taskRoot '.local/streamline/sdk/bin/x64/reflex.license.txt'
-        $taskPayload['streamline-vulkan/streamline-sdk-build.json'] = Join-Path $taskSlVulkan 'streamline-sdk-build.json'
-    }
-    foreach ($taskFile in @('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_upscaler_dx12.dll','amd_fidelityfx_framegeneration_dx12.dll')) {
-        $taskPayload["fidelityfx/$taskFile"] = Join-Path $taskRoot "vendor/fidelityfx/Kits/FidelityFX/signedbin/$taskFile"
-    }
-    $taskPayload['fidelityfx/license.md'] = Join-Path $taskRoot 'vendor/fidelityfx/Kits/FidelityFX/docs/license.md'
-    $taskPayload['fidelityfx/3rdpartynotice.md'] = Join-Path $taskRoot 'vendor/fidelityfx/3rdpartynotice.md'
-    foreach ($taskFile in @('libxess.dll','libxess_fg.dll','libxell.dll')) {
-        $taskPayload["xess/$taskFile"] = Join-Path $taskRoot "vendor/xess/bin/$taskFile"
-    }
-    foreach ($taskFile in @('LICENSE.txt','third-party-programs.txt')) {
-        $taskPayload["xess/$taskFile"] = Join-Path $taskRoot "vendor/xess/$taskFile"
     }
     $taskVulkan = if ($Fsr3RuntimeDirectory) { (Resolve-Path -LiteralPath $Fsr3RuntimeDirectory).Path } else { Join-Path $taskRoot '.local/godot/vulkan/runtime' }
     if (Test-Path -LiteralPath (Join-Path $taskVulkan 'amd_fidelityfx_vk.dll')) {
         $taskReceipt = Get-Content -Raw -LiteralPath (Join-Path $taskVulkan 'fsr3-sdk-build.json') | ConvertFrom-Json
         . (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/line-width.ps1')
         Assert-RsfFfxLineWidthReceipt $taskReceipt
-        if ($taskReceipt.sdkCommit -ne $taskLock.vendor.fidelityfx_vulkan.revision -or
-            $taskReceipt.buildRecipeSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/build-sdk.ps1')).Hash -or
-            $taskReceipt.swapchainLifetimePatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/swapchain-lifetime.json')).Hash -or
-            $taskReceipt.wsiDispatchHeaderSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/wsi-dispatch.h')).Hash -or
-            $taskReceipt.fsr2StoragePatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/fsr2-storage-formats.json')).Hash -or
-            $taskReceipt.descriptorPoolPatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/descriptor-pool-size.json')).Hash -or
-            $taskReceipt.presenterCpuDrainPatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/presenter-cpu-drain.json')).Hash -or
-            $taskReceipt.swapchainTracePatchSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.json')).Hash -or
-            $taskReceipt.swapchainTraceHeaderSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot 'runtime/vulkan/fsr3/sdk-fixes/swapchain-trace.h')).Hash -or
-            $taskReceipt.runtimeSha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskVulkan 'amd_fidelityfx_vk.dll')).Hash) {
-            throw 'The Vulkan FidelityFX runtime does not match its pinned build receipt.'
+        $taskFixes = 'runtime/vulkan/fsr3/sdk-fixes'
+        $taskPinned = [ordered]@{
+            buildRecipeSha256 = 'runtime/vulkan/fsr3/build-sdk.ps1'
+            swapchainLifetimePatchSha256 = "$taskFixes/swapchain-lifetime.json"
+            wsiDispatchHeaderSha256 = 'runtime/vulkan/fsr3/wsi-dispatch.h'
+            fsr2StoragePatchSha256 = "$taskFixes/fsr2-storage-formats.json"
+            descriptorPoolPatchSha256 = "$taskFixes/descriptor-pool-size.json"
+            presenterCpuDrainPatchSha256 = "$taskFixes/presenter-cpu-drain.json"
+            swapchainTracePatchSha256 = "$taskFixes/swapchain-trace.json"
+            swapchainTraceHeaderSha256 = "$taskFixes/swapchain-trace.h"
         }
+        $taskMatches = $taskReceipt.sdkCommit -eq $taskLock.vendor.fidelityfx_vulkan.revision -and
+            $taskReceipt.runtimeSha256 -eq (Get-FileHash -LiteralPath (Join-Path $taskVulkan 'amd_fidelityfx_vk.dll')).Hash
+        foreach ($taskField in $taskPinned.Keys) {
+            $taskMatches = $taskMatches -and $taskReceipt.$taskField -eq (Get-FileHash -LiteralPath (Join-Path $taskRoot $taskPinned[$taskField])).Hash
+        }
+        if (!$taskMatches) { throw 'The Vulkan FidelityFX runtime does not match its pinned build receipt.' }
         foreach ($taskFile in @('amd_fidelityfx_vk.dll','LICENSE.txt','sdk-LICENSE.txt','fsr3-sdk-build.json')) {
             $taskPayload["fidelityfx-vulkan/$taskFile"] = Join-Path $taskVulkan $taskFile
         }
     }
-    $taskPayload['AMD-Anti-Lag-2-MIT.txt'] = Join-Path $taskRoot 'runtime/orchestrator/ANTILAG2-LICENSE.txt'
-    $taskPayload['MFG-Unlocker-LICENSE.txt'] = Join-Path $taskRoot 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE'
     $taskManifest = @()
     foreach ($taskEntry in $taskPayload.GetEnumerator()) {
         if (!(Test-Path -LiteralPath $taskEntry.Value)) { throw "Required runtime or notice missing: $($taskEntry.Value)" }

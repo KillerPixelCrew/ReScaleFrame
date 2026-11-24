@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'common.ps1')
 $gameRoot = (Resolve-Path -LiteralPath $GameDirectory).Path
 if (-not (Test-Path -LiteralPath (Join-Path $gameRoot 'Ace7Game.exe') -PathType Leaf)) {
     throw 'GameDirectory must contain Ace7Game.exe.'
@@ -14,10 +15,6 @@ function Assert-GameStopped {
     if (Get-Process -Name Ace7Game -ErrorAction SilentlyContinue) {
         throw 'Close AC7 before deploying the proxy and overlay.'
     }
-}
-function Invoke-Checked([string]$Program, [string[]]$Arguments) {
-    & $Program @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "$Program failed with exit code $LASTEXITCODE" }
 }
 Assert-GameStopped
 Push-Location -LiteralPath $repoRoot

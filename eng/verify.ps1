@@ -8,13 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
-
-function Invoke-Checked([string]$Program, [string[]]$Arguments) {
-    & $Program @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Program failed with exit code $LASTEXITCODE"
-    }
-}
+. (Join-Path $PSScriptRoot 'common.ps1')
 
 Push-Location -LiteralPath $repoRoot
 try {
