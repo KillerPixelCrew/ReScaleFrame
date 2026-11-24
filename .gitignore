@@ -13,7 +13,12 @@ __pycache__/
 *.pyc
 /.local/
 /references/
-/vendor/
+# Vendor SDK sources are pinned submodules (eng/dependencies.json); everything else under vendor/ is local.
+/vendor/*
+!/vendor/streamline
+!/vendor/fidelityfx
+!/vendor/fidelityfx-vulkan
+!/vendor/xess
 /integrations/unity/com.kpc.rescaleframe/Runtime~/
 /integrations/unity/com.kpc.rescaleframe/Plugins/x86_64/*.dll
 /captures/

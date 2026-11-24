@@ -1,0 +1,16 @@
+[submodule "streamline"]
+	path = vendor/streamline
+	url = https://github.com/NVIDIA-RTX/Streamline.git
+	shallow = true
+[submodule "fidelityfx"]
+	path = vendor/fidelityfx
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git
+	shallow = true
+[submodule "fidelityfx-vulkan"]
+	path = vendor/fidelityfx-vulkan
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git
+	shallow = true
+[submodule "xess"]
+	path = vendor/xess
+	url = https://github.com/intel/xess.git
+	shallow = true
