@@ -73,38 +73,9 @@ One implementation serves every game and every vendor.
 
 ### Reference completeness and shader coverage
 
-Before designing a render integration from a working reference, inventory its full relevant
-implementation, not selected hook or SDK snippets. Pin the revision and consumed dependencies;
-account for every subsystem, feature and shader family, including shared code, settings,
-lifecycle, failure recovery, compatibility restrictions and tests. Trace the complete frame
-from native producers through reconstruction and final presentation. Maintain a comparison of
-reference mechanisms against RSF: implemented, deliberately different with evidence, missing,
-or unverified. A file list alone is not a semantic inventory. Reuse a recorded inventory while
-its revision and assumptions remain valid; reopen it when new evidence contradicts them.
-
-For shipped games, inspect the matching executable and native shader bytecode as well as
-reference source. Use REA when executable semantics require it, retaining actual tool evidence
-and failed approaches. An unavailable decompiler does not turn reference names into native
-proof. Shared engine ancestry, a nearby release, Address Library entries and matching strings
-are leads, not permission to reuse layouts, ABI, shader conventions or hook ordering.
-
-Every SR/FG integration requires a full shader and buffer coverage audit. Account for graphics
-and compute stages, permutations, actual resource bindings and formats, depth/motion writes,
-previous object/instance/bone/deformation history, transparent and forward paths, particles,
-water, volumes, UI and downstream consumers. Distinguish shader declarations from active draw
-bindings and valid zero motion from missing writes. Determine and implement verified required
-shader, buffer or producer repairs at their owner. Listing a missing input is not completing
-that repair; fabricated vectors or substituted current history do not close the gap.
-
-Native, reduced-resolution and failure paths all need valid output. Once a reduced frame is
-rendered, returning to native code is not proof that it will reconstruct the active rectangle.
-Verify recovery and every later consumer. SDK success, a green build, a stationary image or a
-single quality setting cannot establish visual or temporal correctness. Retain user-rejected
-images as failed acceptance evidence and test all required qualities, motion and transitions.
-Capture actual evaluation frames with matching source/view/resource identity; preparation-only
-or partial captures cannot prove the failing frame. Keep unresolved required coverage and
-repairs as completion blockers, without shrinking the user's goal or adopting a reference's
-unsupported-mod policy as RSF's delivery policy.
+The full procedure and its rules live in [the reference and shader audit](.agents/skills/game-render-analysis/references/reference-and-shader-audit.md).
+Before any SR/FG integration or render change, follow it: a semantic inventory of the working reference, a complete shader and buffer coverage audit,
+and valid output on native, reduced-resolution and failure paths. Unresolved required coverage is a completion blocker.
 
 Repository skills use the open [Agent Skills format](https://agentskills.io/specification) under `.agents/skills/<name>/SKILL.md`. Keep one shared skill source with standard YAML metadata. Clients with different discovery paths can load the linked file explicitly; do not fork its instructions per agent.
 
@@ -198,7 +169,6 @@ remain scaffolds. AC7 links runtime objects into its proxy, while Unity loads th
 
 | Target | Output name | Role |
 | --- | --- | --- |
-| `rsf_bootstrap` | `ReScaleFrame.Bootstrap.dll` | version-only scaffold for the intended injected entry |
 | `rsf_orchestrator` | `ReScaleFrame.Runtime.dll` | vendor SDKs, plugin lifecycle, GPU resources, presentation |
 | `rsf_game_ac7` | `ReScaleFrame.Game.AC7.dll` | native AC7 detection, hooks and engine data |
 | `rsf_game_project_wingman` | `ReScaleFrame.Game.ProjectWingman.dll` | exact-build detection scaffold, rendering refused |
@@ -207,7 +177,6 @@ remain scaffolds. AC7 links runtime objects into its proxy, while Unity loads th
 | `rsf_game_unity_mono` | `ReScaleFrame.Game.UnityMono.dll` | shared Mono/Harmony URP DX12 adapter |
 | `rsf_proxy_ac7` | `dinput8.dll` in `ac7/bin/<Config>` | dedicated AC7 carrier |
 | `rsf_proxy_dinput8` | `ReScaleFrame.Loader.dll`, `carriers/version.dll` aliases | shared Windows shim; Unity drop-in carrier |
-| `rsf_launcher` | `ReScaleFrame.exe` | help/version scaffold; launching and profiles pending |
 | `rsf_game_sdk` | `ReScaleFrame::GameSDK` (INTERFACE) | the C header both sides compile against |
 
 Working consequences of the ownership split above:
