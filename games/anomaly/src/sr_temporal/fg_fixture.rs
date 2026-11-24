@@ -33,8 +33,7 @@ impl Temporal {
     }
 
     pub(crate) fn plan(&self, [width, height]: [u32; 2]) -> Option<[u32; 2]> {
-        let (mut rw, mut rh) = (0, 0);
-        unsafe { rsf_anomaly_sr_plan(&self.0, width, height, &mut rw, &mut rh) }.then_some([rw, rh])
+        rsf_anomaly_sr_plan(&self.0, width, height)
     }
 
     #[cfg(all(feature = "fg-fixture", not(test)))]

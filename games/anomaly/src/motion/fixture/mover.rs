@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::sr_temporal::rsf_anomaly_sr_motion_decode_params;
+use crate::sr_temporal::motion_decode_params;
 use crate::sys::RSF_ANOMALY_SR_MOTION_TO_UV;
-use rsf_game_sys::rsf_motion_decode_params;
 
 const EXTENT: [f64; 2] = [960., 540.];
 
@@ -208,8 +207,7 @@ fn run(skin: i32) {
         (current - previous) as f32
     });
     let stored = [components[0], components[1], 1., 0.];
-    let mut params = rsf_motion_decode_params::default();
-    rsf_anomaly_sr_motion_decode_params(&mut params);
+    let params = motion_decode_params();
     assert!(stored[params.validity_channel as usize] > params.validity_threshold);
     let [dx, dy] = [
         (stored[0] - params.bias_x) * params.scale_x * params.output_scale_x,

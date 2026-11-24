@@ -372,8 +372,7 @@ fn adapter_binding(query: Query) {
         live.published().counters.refused[Refusal::NotRunning as usize],
         1
     );
-    let (mut w, mut h) = (0, 0);
-    assert!(!unsafe { rsf_anomaly_sr_plan(&live, 1920, 1080, &mut w, &mut h) });
+    assert!(rsf_anomaly_sr_plan(&live, 1920, 1080).is_none());
     rsf_anomaly_sr_request(
         &live,
         &Settings {

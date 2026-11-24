@@ -109,8 +109,18 @@ macro_rules! refused {
     ($($t:ty => $v:expr),* $(,)?) => { $(impl Refused for $t { fn refused() -> Self { $v } })* };
 }
 refused!(() => (), bool => false, u32 => 0, i32 => 0, u64 => 0, f32 => 0.0,
+    (i64, i64) => (0, 0), (u32, u32) => (0, 0), (u64, u64) => (0, 0),
     *mut c_void => null_mut(), *const c_void => std::ptr::null(), *const c_char => std::ptr::null(),
-    rsf_anomaly_sr_jitter_sample => rsf_anomaly_sr_jitter_sample::default());
+    rsf_anomaly_sr_jitter_sample => rsf_anomaly_sr_jitter_sample::default(),
+    rsf_anomaly_sr_controller => rsf_anomaly_sr_controller::default(),
+    rsf_anomaly_sr_swap_counters => rsf_anomaly_sr_swap_counters::default(),
+    rsf_anomaly_sr_motion_target => rsf_anomaly_sr_motion_target::default(),
+    rsf_anomaly_sr_frame_reads => rsf_anomaly_sr_frame_reads::default());
+impl<T> Refused for Option<T> {
+    fn refused() -> Self {
+        None
+    }
+}
 
 macro_rules! leaf {
     ($p:expr, $name:ident($($arg:expr),* $(,)?)) => {
@@ -334,7 +344,7 @@ impl Ini<'_> {
         };
         (offset, !disabled)
     }
-    fn float(&self, key: &CStr, fallback: f32, low: f32, high: f32) -> f32 {
+    fn float(&self, key: &CStr, fallback: f32, (low, high): (f32, f32)) -> f32 {
         let text = self.text(key, c"");
         let (value, end) = wcstod(&text);
         if text.is_empty() || end == 0 || !value.is_finite() {
@@ -364,8 +374,7 @@ impl Ini<'_> {
         out.capture_count =
             self.int(c"SRStageCaptureCount", if out.stage == 3 { 8 } else { 3 }) as u32;
         out.capture_interval = self.int(c"SRStageCaptureInterval", 300) as u32;
-        // A Stage 3 burst can hold a whole 18- or 32-phase cycle.
-        out.capture_count = out.capture_count.min(if out.stage == 3 { 32 } else { 16 });
+        out.capture_count = out.capture_count.min(capture_limit(out.stage));
         out.capture_interval = out.capture_interval.max(1);
         let exposure = self.text(c"SRExposure", c"constant");
         out.exposure_auto = exposure.len() == 4
@@ -375,8 +384,8 @@ impl Ini<'_> {
                 .eq("auto".bytes().map(u16::from));
         out.colour_transport = self.int(c"SRColourTransport", 0) != 0;
         out.first_person_zero = self.int(c"SRFirstPersonZero", 1) != 0;
-        out.cut_distance = self.float(c"SRCutDistance", 4.0, 0.1, 1000.0);
-        out.cut_degrees = self.float(c"SRCutAngle", 45.0, 1.0, 180.0);
+        out.cut_distance = self.float(c"SRCutDistance", 4.0, CUT_DISTANCE);
+        out.cut_degrees = self.float(c"SRCutAngle", 45.0, CUT_DEGREES);
         out.require_signature = self.int(c"SRRequireSignature", 0) != 0;
         // The shared frontend keys the overlay persists in the same section; a value the adapter cannot apply keeps
         // the default.
@@ -697,6 +706,33 @@ fn selected(config: &Config) -> bool {
     config.stage == 1 || world_window(config.stage) || config.capture
 }
 
+// SRMipBias as Ini::mip_bias reads it back.
+fn mip_bias_text(enabled: bool, offset: f32) -> String {
+    if enabled {
+        format!("{offset:.1}")
+    } else {
+        format!("off {offset:.1}")
+    }
+}
+
+// A Stage 3 burst can hold a whole 18- or 32-phase cycle.
+fn capture_limit(stage: u32) -> u32 {
+    if stage == 3 { 32 } else { 16 }
+}
+
+// SRCutDistance and SRCutAngle bounds.
+const CUT_DISTANCE: (f32, f32) = (0.1, 1000.0);
+const CUT_DEGREES: (f32, f32) = (1.0, 180.0);
+
+// The controller's refusal reason (static strings), empty when none.
+fn refusal_text(reason: *const c_char) -> std::borrow::Cow<'static, str> {
+    if reason.is_null() {
+        "".into()
+    } else {
+        unsafe { CStr::from_ptr(reason) }.to_string_lossy()
+    }
+}
+
 fn yes(value: bool) -> &'static str {
     if value { "true" } else { "false" }
 }
@@ -772,15 +808,11 @@ impl Stage {
     }
 
     fn controller(&self) -> rsf_anomaly_sr_controller {
-        let mut out = rsf_anomaly_sr_controller::default();
-        leaf!(self.platform(), controller(&mut out));
-        out
+        leaf!(self.platform(), controller())
     }
 
     fn counters(&self) -> rsf_anomaly_sr_swap_counters {
-        let mut out = rsf_anomaly_sr_swap_counters::default();
-        leaf!(self.platform(), swap_counters(&mut out));
-        out
+        leaf!(self.platform(), swap_counters())
     }
 
     fn publish(&self, state: &mut State, value: JitterState) {
@@ -795,30 +827,18 @@ impl Stage {
         }
     }
 
+    fn reset_jitter(&self, state: &mut State) {
+        state.main_state = default_jitter();
+        self.publish(state, default_jitter());
+    }
+
     // ---- options and configuration ------------------------------------------------------------------------
     #[cfg(test)]
-    fn read_options(&self, ini: *const c_void) -> Config {
+    fn ini(&self, ini: *const c_void) -> Ini<'_> {
         Ini {
             platform: self.platform(),
             ini,
         }
-        .options()
-    }
-    #[cfg(test)]
-    fn read_scale(&self, ini: *const c_void) -> (f32, bool) {
-        Ini {
-            platform: self.platform(),
-            ini,
-        }
-        .scale()
-    }
-    #[cfg(test)]
-    fn read_mip_bias(&self, ini: *const c_void) -> (f32, bool) {
-        Ini {
-            platform: self.platform(),
-            ini,
-        }
-        .mip_bias()
     }
 
     // The cold entry: reads the [Anomaly] SR keys from the INI at `path` (UTF-16, no terminator) and, when `apply`
@@ -988,21 +1008,12 @@ impl Stage {
                 persist_int(c"SRJitter", i32::from(enabled)),
             ),
             RSF_ANOMALY_SR_OPTION_MIP_BIAS => {
-                let offset = self.live_mip_offset();
-                let text = if enabled {
-                    format!("{offset:.1}")
-                } else {
-                    format!("off {offset:.1}")
-                };
+                let text = mip_bias_text(enabled, self.live_mip_offset());
                 set_flag(&live.mip_bias, enabled, persist_text(c"SRMipBias", &text))
             }
             RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET => {
                 let offset = value as f32 / MIP_OFFSET_DIVISOR as f32;
-                let text = if live.mip_bias.load(Ordering::Relaxed) {
-                    format!("{offset:.1}")
-                } else {
-                    format!("off {offset:.1}")
-                };
+                let text = mip_bias_text(live.mip_bias.load(Ordering::Relaxed), offset);
                 if !persist_text(c"SRMipBias", &text) {
                     return false;
                 }
@@ -1020,15 +1031,14 @@ impl Stage {
                 true
             }),
             OPTION_CUT_DISTANCE | OPTION_CUT_ANGLE => self.with(|state| {
-                let (target, key, min, max) = if id == OPTION_CUT_DISTANCE {
+                let (target, key, (min, max)) = if id == OPTION_CUT_DISTANCE {
                     (
                         &mut state.config.cut_distance,
                         c"SRCutDistance",
-                        0.1,
-                        1000.0,
+                        CUT_DISTANCE,
                     )
                 } else {
-                    (&mut state.config.cut_degrees, c"SRCutAngle", 1.0, 180.0)
+                    (&mut state.config.cut_degrees, c"SRCutAngle", CUT_DEGREES)
                 };
                 let cut = (value as f32 / 10.0).clamp(min, max);
                 if !persist_text(key, &format!("{cut:.1}")) {
@@ -1045,14 +1055,11 @@ impl Stage {
                             c"SRStageCaptureStart",
                             value.max(0),
                         ),
-                        OPTION_CAPTURE_COUNT => {
-                            let max = if state.config.stage == 3 { 32 } else { 16 };
-                            (
-                                &mut state.config.capture_count,
-                                c"SRStageCaptureCount",
-                                value.clamp(0, max),
-                            )
-                        }
+                        OPTION_CAPTURE_COUNT => (
+                            &mut state.config.capture_count,
+                            c"SRStageCaptureCount",
+                            value.clamp(0, capture_limit(state.config.stage) as i32),
+                        ),
                         _ => (
                             &mut state.config.capture_interval,
                             c"SRStageCaptureInterval",
@@ -1180,8 +1187,7 @@ impl Stage {
         }
         state.build = Raw(build.cast_mut());
         leaf!(p, set_engine(module, build, temporal(stage)));
-        let (mut counter, mut frequency) = (0i64, 0i64);
-        leaf!(p, now(&mut counter, &mut frequency));
+        let (counter, _) = leaf!(p, now());
         state.session = counter as u64 | 1;
         let swap =
             (stage == 1 || world_window(stage)) && (stage != 5 || leaf!(p, driver_enabled()));
@@ -1192,8 +1198,7 @@ impl Stage {
         // Stage 3: the main projection is jittered here, the first-person ones only through the shared rmNear slot.
         // Without that slot (geometry hooks refused) the weapon would shimmer against the world, so jitter stays off.
         state.sequence = JitterSequence::new();
-        state.main_state = default_jitter();
-        self.publish(state, default_jitter());
+        self.reset_jitter(state);
         state.no_world_mark = u64::MAX;
         state.jitter_enabled = temporal(stage) && leaf!(p, geometry_active());
         if temporal(stage) && !state.jitter_enabled {
@@ -1380,21 +1385,16 @@ impl Stage {
             // A partially disabled hook can still enter. Let it run stock and
             // keep its resources until the native removal can be retried.
             leaf!(p, close_stale());
-            self.publish(state, default_jitter());
-            state.main_state = default_jitter();
-            return false;
         }
-        if !leaf!(p, shutdown()) {
-            self.publish(state, default_jitter());
-            state.main_state = default_jitter();
+        let shut = disabled && leaf!(p, shutdown());
+        self.reset_jitter(state);
+        if !shut {
             return false;
         }
         state.motion_view = None;
         state.temporal_targets = None;
         state.native_depth_frame = None;
         state.timer.reset();
-        self.publish(state, default_jitter());
-        state.main_state = default_jitter();
         for frame in &mut state.burst.frames {
             frame.world = None;
             frame.presented = None;
@@ -1415,11 +1415,7 @@ impl Stage {
         let p = self.platform();
         let stage = state.config.stage;
         let target = admitted_target(p, this);
-        let mut reads = rsf_anomaly_sr_frame_reads::default();
-        leaf!(
-            p,
-            frame_facts(world_window(stage), temporal(stage), &mut reads)
-        );
+        let reads = leaf!(p, frame_facts(world_window(stage), temporal(stage)));
         let mut facts = reads.facts;
         facts.render_target = target;
         // An unreadable view or options word cannot admit a reduced world frame.
@@ -1463,17 +1459,9 @@ impl Stage {
         }
         // Stage 5: the render size the selected backend plans for this output at the selected quality. SRScale stays
         // the fallback while no backend plans (not started, refused, or planning for another output size).
-        let (mut width, mut height) = (0, 0);
         if stage == 5
-            && leaf!(
-                p,
-                driver_planned(
-                    facts.device_width,
-                    facts.device_height,
-                    &mut width,
-                    &mut height
-                )
-            )
+            && let Some([width, height]) =
+                leaf!(p, driver_planned(facts.device_width, facts.device_height))
             && let Some(plan) =
                 plan_for_render(facts.device_width, facts.device_height, width, height)
         {
@@ -1514,8 +1502,7 @@ impl Stage {
                 c.cut_distance,
                 c.cut_degrees,
             );
-        let (mut now, mut frequency) = (0i64, 0i64);
-        leaf!(p, now(&mut now, &mut frequency));
+        let (now, frequency) = leaf!(p, now());
         let mut seconds = if state.last_main_qpc != 0 && frequency != 0 {
             ((now - state.last_main_qpc) as f64 / frequency as f64) as f32
         } else {
@@ -1598,12 +1585,12 @@ impl Stage {
 
     fn loading(&self) -> bool {
         let p = self.platform();
-        let (mut registered, mut precache) = (0, 0);
-        // Both precache and the post-load key wait draw the loading screen over the world.
-        !leaf!(p, loading_registered(&mut registered))
-            || !leaf!(p, precache_frame(&mut precache))
-            || registered != 0
-            || precache != 0
+        // Both precache and the post-load key wait draw the loading screen over the world. An unreadable fact is
+        // a loading screen; the precache frame is read whenever the registration is readable.
+        let registered = leaf!(p, loading_registered());
+        registered.is_none()
+            || leaf!(p, precache_frame()).is_none_or(|precache| precache != 0)
+            || registered != Some(0)
     }
 
     fn capture_abandon(&self, state: &mut State) {
@@ -2039,8 +2026,7 @@ impl Stage {
         let textures = targets.view();
         let depth = leaf!(p, depth_texture());
         // The motion target the main view's G-buffer window wrote this frame, at render size.
-        let mut target = rsf_anomaly_sr_motion_target::default();
-        leaf!(p, motion_target(&mut target));
+        let target = leaf!(p, motion_target());
         let engine_frame = leaf!(p, engine_frame());
         let current = !target.texture.is_null()
             && target.written
@@ -2218,15 +2204,12 @@ impl Stage {
         leaf!(p, combine_end());
         let c = self.controller();
         if !was_refused && c.refused {
-            let reason = if c.refusal.is_null() {
-                "".into()
-            } else {
-                // The controller's refusal reasons are static strings.
-                unsafe { CStr::from_ptr(c.refusal) }.to_string_lossy()
-            };
             self.say(
                 state,
-                &format!("Anomaly SR stage refused further swaps: {reason}"),
+                &format!(
+                    "Anomaly SR stage refused further swaps: {}",
+                    refusal_text(c.refusal)
+                ),
             );
         }
     }
@@ -2268,8 +2251,7 @@ impl Stage {
         if state.config.stage == 5 {
             // The drained boundary: this frame's SR work is submitted and Present has not run. Start the pipeline,
             // follow a device or output change and apply the shared settings; the next H1 plans its render size.
-            let (mut width, mut height) = (0, 0);
-            leaf!(p, device_size(&mut width, &mut height));
+            let (width, height) = leaf!(p, device_size());
             leaf!(p, driver_boundary(width, height));
             // SR=0: the world window stays closed and the frame renders stock at output size.
             if !self.controller().refused {
@@ -2445,8 +2427,7 @@ impl Stage {
                 if loading { " loading-screen" } else { "" }
             )
         };
-        let (mut twin_bytes, mut twin_refs) = (0, 0);
-        leaf!(p, host_stats(&mut twin_bytes, &mut twin_refs));
+        let (twin_bytes, twin_refs) = leaf!(p, host_stats());
         let timer = state
             .timer
             .sample(p, leaf!(p, device()), leaf!(p, context()));
@@ -2523,8 +2504,7 @@ impl Stage {
         let refusal = if c.refusal.is_null() {
             "no".into()
         } else {
-            // The controller's refusal reasons are static strings.
-            unsafe { CStr::from_ptr(c.refusal) }.to_string_lossy()
+            refusal_text(c.refusal)
         };
         lines.push(format!(
             "Anomaly SR stage totals stage={stage} swapped={} restores={restores} round_trips={} twin_generation={} twin_drops={} twin_refs_at_drop={twin_refs} captures={} images={} capture_failed={} render={}x{} output={}x{} scale={:.3} twin_mib={:.1} refused={refusal}",

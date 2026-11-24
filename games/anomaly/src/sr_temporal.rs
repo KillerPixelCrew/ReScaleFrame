@@ -324,10 +324,6 @@ pub(crate) fn motion_decode_params() -> rsf_motion_decode_params {
     }
 }
 
-#[cfg(feature = "motion-binder-fixture")]
-pub(crate) extern "C" fn rsf_anomaly_sr_motion_decode_params(out: &mut rsf_motion_decode_params) {
-    *out = motion_decode_params();
-}
 
 impl Setup {
     unsafe fn new(options: &rsf_anomaly_sr_driver_config, log: rsf_game_log_fn, user: Raw) -> Self {
@@ -765,7 +761,7 @@ impl RenderState {
 }
 
 #[cfg(any(feature = "sr-fixtures", all(feature = "fg-fixture", not(test))))]
-extern "C" fn rsf_anomaly_sr_create() -> *mut Driver {
+fn rsf_anomaly_sr_create() -> *mut Driver {
     Box::into_raw(Box::new(new_driver()))
 }
 
@@ -783,7 +779,7 @@ fn new_driver() -> Driver {
     }
 }
 
-unsafe extern "C" fn rsf_anomaly_sr_configure(
+unsafe fn rsf_anomaly_sr_configure(
     driver: &Driver,
     options: &rsf_anomaly_sr_driver_config,
     log: rsf_game_log_fn,
@@ -805,7 +801,7 @@ unsafe extern "C" fn rsf_anomaly_sr_configure(
 }
 
 #[cfg(windows)]
-extern "C" fn rsf_anomaly_sr_session_id() -> u64 {
+fn rsf_anomaly_sr_session_id() -> u64 {
     let mut counter = 0;
     // Same session source as the native facade. Force a nonzero ID even if QPC fails.
     unsafe { windows_sys::Win32::System::Performance::QueryPerformanceCounter(&mut counter) };
@@ -813,7 +809,7 @@ extern "C" fn rsf_anomaly_sr_session_id() -> u64 {
 }
 
 #[cfg(windows)]
-unsafe extern "C" fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) -> bool {
+unsafe fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) -> bool {
     use crate::runtime_module::export;
 
     // The carrier keeps the borrowed Runtime module mapped for the adapter session.
@@ -864,7 +860,7 @@ unsafe extern "C" fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) 
     bound
 }
 
-extern "C" fn rsf_anomaly_sr_request(driver: &Driver, wanted: &Settings) {
+fn rsf_anomaly_sr_request(driver: &Driver, wanted: &Settings) {
     let mut published = driver.published();
     published.status.requested = wanted.admitted(
         published.status.requested,
@@ -873,17 +869,17 @@ extern "C" fn rsf_anomaly_sr_request(driver: &Driver, wanted: &Settings) {
     );
 }
 
-extern "C" fn rsf_anomaly_sr_enabled(driver: &Driver) -> bool {
+fn rsf_anomaly_sr_enabled(driver: &Driver) -> bool {
     driver.published().status.requested.enabled
 }
 
 #[cfg(feature = "sr-fixtures")]
-extern "C" fn rsf_anomaly_sr_running(driver: &Driver) -> bool {
+fn rsf_anomaly_sr_running(driver: &Driver) -> bool {
     driver.published().status.running
 }
 
 #[cfg(windows)]
-unsafe extern "C" fn rsf_anomaly_sr_output_format(driver: &Driver) -> u32 {
+unsafe fn rsf_anomaly_sr_output_format(driver: &Driver) -> u32 {
     // This borrowed texture is used under the Stage render guard before another table call.
     let render = unsafe { &*driver.render.get() };
     match render.api {
@@ -895,31 +891,19 @@ unsafe extern "C" fn rsf_anomaly_sr_output_format(driver: &Driver) -> u32 {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_plan(
-    driver: &Driver,
-    ow: u32,
-    oh: u32,
-    rw: *mut u32,
-    rh: *mut u32,
-) -> bool {
+// The render size the running pipeline plans for this output.
+fn rsf_anomaly_sr_plan(driver: &Driver, ow: u32, oh: u32) -> Option<[u32; 2]> {
     let status = driver.published().status;
     let pipeline = status.pipeline;
-    if !status.running
-        || pipeline.running == 0
-        || [pipeline.output_width, pipeline.output_height] != [ow, oh]
-        || plan_for_render(ow, oh, pipeline.render_width, pipeline.render_height).is_none()
-    {
-        return false;
-    }
-    unsafe {
-        rw.write(pipeline.render_width);
-        rh.write(pipeline.render_height);
-    }
-    true
+    let render = [pipeline.render_width, pipeline.render_height];
+    (status.running
+        && pipeline.running != 0
+        && [pipeline.output_width, pipeline.output_height] == [ow, oh]
+        && plan_for_render(ow, oh, render[0], render[1]).is_some())
+    .then_some(render)
 }
 
-unsafe extern "C" fn rsf_anomaly_sr_boundary(driver: &Driver, device: Raw, ow: u32, oh: u32) {
+unsafe fn rsf_anomaly_sr_boundary(driver: &Driver, device: Raw, ow: u32, oh: u32) {
     driver.boundary(unsafe { &mut *driver.render.get() }, device, [ow, oh]);
 }
 
@@ -953,7 +937,7 @@ impl Published {
     }
 }
 
-unsafe extern "C" fn rsf_anomaly_sr_evaluate(
+unsafe fn rsf_anomaly_sr_evaluate(
     driver: &Driver,
     context: Raw,
     inputs: &mut PassInputs,
@@ -1049,7 +1033,7 @@ unsafe extern "C" fn rsf_anomaly_sr_evaluate(
     true
 }
 
-unsafe extern "C" fn rsf_anomaly_sr_request_dump(driver: &Driver, prefix: *const c_char) -> bool {
+unsafe fn rsf_anomaly_sr_request_dump(driver: &Driver, prefix: *const c_char) -> bool {
     let render = unsafe { &*driver.render.get() };
     let Some(api) = render.api.filter(|_| !render.device.is_null()) else {
         return false;
@@ -1057,7 +1041,7 @@ unsafe extern "C" fn rsf_anomaly_sr_request_dump(driver: &Driver, prefix: *const
     unsafe { prefix.read() != 0 && (api.request_dump)(prefix) == OK }
 }
 
-extern "C" fn rsf_anomaly_sr_fallback(driver: &Driver, reason: u8, drawn: bool) {
+fn rsf_anomaly_sr_fallback(driver: &Driver, reason: u8, drawn: bool) {
     let mut published = driver.published();
     if let Some(reason) = REFUSALS.get(reason as usize) {
         published.count(*reason);
@@ -1082,17 +1066,17 @@ extern "C" fn rsf_anomaly_sr_fallback(driver: &Driver, reason: u8, drawn: bool) 
     }
 }
 
-extern "C" fn rsf_anomaly_sr_count_prepared(driver: &Driver, missing: bool) {
+fn rsf_anomaly_sr_count_prepared(driver: &Driver, missing: bool) {
     let mut published = driver.published();
     published.counters.prepared += 1;
     published.counters.motion_missing += u64::from(missing);
 }
 
-unsafe extern "C" fn rsf_anomaly_sr_stop(driver: &Driver) {
+unsafe fn rsf_anomaly_sr_stop(driver: &Driver) {
     driver.stop(unsafe { &mut *driver.render.get() });
 }
 
-extern "C" fn rsf_anomaly_sr_overlay_report(driver: &Driver, out: &mut rsf_overlay_sr_report) {
+fn rsf_anomaly_sr_overlay_report(driver: &Driver, out: &mut rsf_overlay_sr_report) {
     let published = driver.published();
     let status = &published.status;
     let active = status.last_evaluated;
@@ -1150,7 +1134,7 @@ extern "C" fn rsf_anomaly_sr_overlay_report(driver: &Driver, out: &mut rsf_overl
     *out = report;
 }
 
-extern "C" fn rsf_anomaly_sr_report(
+fn rsf_anomaly_sr_report(
     driver: &Driver,
     exposure_auto: bool,
     first_person_zero: bool,
@@ -1271,7 +1255,7 @@ extern "C" fn rsf_anomaly_sr_report(
 }
 
 #[cfg(test)]
-pub(super) extern "C" fn report_fixture(
+pub(super) fn report_fixture(
     exposure_auto: bool,
     first_person_zero: bool,
     log: rsf_game_log_fn,

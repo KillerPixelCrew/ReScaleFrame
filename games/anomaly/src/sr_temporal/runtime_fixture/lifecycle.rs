@@ -219,8 +219,7 @@ fn boundary(driver: &Driver, device: Raw, [w, h]: [u32; 2]) {
 }
 
 fn plan(driver: &Driver, [w, h]: [u32; 2]) -> Option<[u32; 2]> {
-    let (mut rw, mut rh) = (0, 0);
-    unsafe { rsf_anomaly_sr_plan(driver, w, h, &mut rw, &mut rh) }.then_some([rw, rh])
+    rsf_anomaly_sr_plan(driver, w, h)
 }
 
 fn request(driver: &Driver, enabled: bool, backend: u32, quality: u32, preset: u32) {

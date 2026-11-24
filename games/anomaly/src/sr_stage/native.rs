@@ -167,7 +167,7 @@ pub(crate) mod swap_host {
     };
 }
 
-pub(crate) unsafe extern "C" fn swap_read(
+pub(crate) unsafe fn swap_read(
     _: Ptr,
     address: *const c_void,
     output: Ptr,
@@ -176,7 +176,7 @@ pub(crate) unsafe extern "C" fn swap_read(
     unsafe { c::copy(output, address, size) }
 }
 
-pub(crate) unsafe extern "C" fn swap_write(
+pub(crate) unsafe fn swap_write(
     _: Ptr,
     address: Ptr,
     input: *const c_void,
@@ -185,7 +185,7 @@ pub(crate) unsafe extern "C" fn swap_write(
     unsafe { c::copy(address, input, size) }
 }
 
-pub(crate) unsafe extern "C" fn make_twins(
+pub(crate) unsafe fn make_twins(
     _: Ptr,
     request: *const rsf_anomaly_swap_request,
     out: *mut rsf_anomaly_swap_twins,
@@ -269,17 +269,17 @@ pub(crate) unsafe extern "C" fn make_twins(
     RSF_ANOMALY_SWAP_MAKE_CREATED
 }
 
-pub(crate) unsafe extern "C" fn drop_twins(_: Ptr) {
+pub(crate) unsafe fn drop_twins(_: Ptr) {
     // Reference counts after our own views are gone. The engine's surface_get() before its generic_temp copy takes
     // references it never releases (stock leaks them on its own targets too), so this is diagnostic only.
     rsf_anomaly_sr_stage_retire_twins(unsafe { resources().as_mut() }, rsf_anomaly_sr_twin_refs);
 }
 
-pub(crate) unsafe extern "C" fn set_viewport(_: Ptr, width: u32, height: u32) {
+pub(crate) unsafe fn set_viewport(_: Ptr, width: u32, height: u32) {
     unsafe { rsf_anomaly_sr_set_full_viewport(context(), width, height) };
 }
 
-pub(crate) unsafe extern "C" fn upload_projection(_: Ptr, matrix: *const c_void) -> bool {
+pub(crate) unsafe fn upload_projection(_: Ptr, matrix: *const c_void) -> bool {
     let function = SET_PROJECTION.load(Ordering::Acquire);
     let Some(sr) = sr().filter(|_| function != 0) else {
         return false;
@@ -293,7 +293,7 @@ pub(crate) unsafe extern "C" fn upload_projection(_: Ptr, matrix: *const c_void)
     }
 }
 
-pub(crate) unsafe extern "C" fn set_mip_bias(_: Ptr, value: f32) -> bool {
+pub(crate) unsafe fn set_mip_bias(_: Ptr, value: f32) -> bool {
     let function = SET_MIP_BIAS.load(Ordering::Acquire);
     let Some(sr) = sr().filter(|_| function != 0) else {
         return false;
@@ -345,7 +345,7 @@ pub(crate) mod position {
     }
 }
 
-pub(crate) unsafe extern "C" fn correct_position_constant(
+pub(crate) unsafe fn correct_position_constant(
     _: Ptr,
     constant: Ptr,
     x: f32,
@@ -355,20 +355,15 @@ pub(crate) unsafe extern "C" fn correct_position_constant(
 }
 
 // ---- the stage leaves ----------------------------------------------------------------------------------------------
-pub(crate) unsafe extern "C" fn render_target() -> Ptr {
+pub(crate) unsafe fn render_target() -> Ptr {
     sr().and_then(|sr| read::<usize>(sr.render_implementation_rva + RENDER_TARGET_OFFSET))
         .map_or(null_mut(), |target| target as Ptr)
 }
 
-pub(crate) unsafe extern "C" fn frame_facts(
-    world_window: bool,
-    temporal: bool,
-    reads: *mut rsf_anomaly_sr_frame_reads,
-) {
-    let reads = unsafe { &mut *reads };
-    *reads = rsf_anomaly_sr_frame_reads::default();
+pub(crate) fn frame_facts(world_window: bool, temporal: bool) -> rsf_anomaly_sr_frame_reads {
+    let mut reads = rsf_anomaly_sr_frame_reads::default();
     let Some((image, build)) = engine() else {
-        return;
+        return reads;
     };
     let (sr, native_profile) = (build.sr, build.native);
     let out = &mut reads.facts;
@@ -406,30 +401,34 @@ pub(crate) unsafe extern "C" fn frame_facts(
         out.device_full_transform = address(sr.device_full_transform_rva);
         out.sampler_bias = address(sr.sampler_cache_rva + SAMPLER_MIP_LOD_BIAS_OFFSET);
     }
+    reads
 }
 
-pub(crate) unsafe extern "C" fn loading_registered(registered: *mut u8) -> bool {
-    sr().is_some_and(|sr| read_into(sr.load_screen_registered_rva, registered))
+pub(crate) fn loading_registered() -> Option<u8> {
+    read(sr()?.load_screen_registered_rva)
 }
 
-pub(crate) unsafe extern "C" fn precache_frame(frame: *mut u32) -> bool {
-    sr().is_some_and(|sr| read_into(sr.device_precache_frame_rva, frame))
+pub(crate) fn precache_frame() -> Option<u32> {
+    read(sr()?.device_precache_frame_rva)
 }
 
-pub(crate) unsafe extern "C" fn engine_frame() -> u32 {
+pub(crate) unsafe fn engine_frame() -> u32 {
     engine()
         .and_then(|(_, build)| read::<u32>(build.native.device_frame_rva))
         .unwrap_or(0)
 }
 
-pub(crate) unsafe extern "C" fn device_size(width: *mut u32, height: *mut u32) {
-    if let Some((_, build)) = engine() {
-        read_into(build.native.device_width_rva, width);
-        read_into(build.native.device_height_rva, height);
-    }
+pub(crate) fn device_size() -> (u32, u32) {
+    let Some((_, build)) = engine() else {
+        return (0, 0);
+    };
+    (
+        read(build.native.device_width_rva).unwrap_or(0),
+        read(build.native.device_height_rva).unwrap_or(0),
+    )
 }
 
-pub(crate) unsafe extern "C" fn read_camera(out: *mut rsf_anomaly_sr_camera) -> bool {
+pub(crate) unsafe fn read_camera(out: *mut rsf_anomaly_sr_camera) -> bool {
     let out = unsafe { &mut *out };
     sr().is_some_and(|sr| {
         read_into(sr.device_view_rva, &mut out.view)
@@ -437,7 +436,7 @@ pub(crate) unsafe extern "C" fn read_camera(out: *mut rsf_anomaly_sr_camera) -> 
     })
 }
 
-pub(crate) unsafe extern "C" fn seam_surface(target: Ptr) -> Ptr {
+pub(crate) unsafe fn seam_surface(target: Ptr) -> Ptr {
     let copy = c::copy;
     let mut crt = 0usize;
     let mut surface = 0usize;
@@ -462,7 +461,7 @@ pub(crate) unsafe extern "C" fn seam_surface(target: Ptr) -> Ptr {
     null_mut()
 }
 
-pub(crate) unsafe extern "C" fn back_buffer() -> Ptr {
+pub(crate) unsafe fn back_buffer() -> Ptr {
     let base = sr()
         .and_then(|sr| read::<usize>(sr.hw_base_rt_rva))
         .unwrap_or(0);
@@ -472,37 +471,36 @@ pub(crate) unsafe extern "C" fn back_buffer() -> Ptr {
     unsafe { rsf_anomaly_sr_view_resource(base as Ptr) }
 }
 
-pub(crate) unsafe extern "C" fn stage_context() -> Ptr {
+pub(crate) unsafe fn stage_context() -> Ptr {
     context()
 }
 
-pub(crate) unsafe extern "C" fn stage_device() -> Ptr {
+pub(crate) unsafe fn stage_device() -> Ptr {
     device()
 }
 
-pub(crate) unsafe extern "C" fn now(counter: *mut i64, frequency: *mut i64) {
+pub(crate) fn now() -> (i64, i64) {
     let (mut value, mut rate) = (0i64, 0i64);
     unsafe {
         QueryPerformanceCounter(&mut value);
         QueryPerformanceFrequency(&mut rate);
-        counter.write(value);
-        frequency.write(rate);
     }
+    (value, rate)
 }
 
-pub(crate) unsafe extern "C" fn geometry_active() -> bool {
+pub(crate) unsafe fn geometry_active() -> bool {
     rsf_anomaly_geometry_active()
 }
 
-pub(crate) unsafe extern "C" fn build_sha256() -> *const c_char {
+pub(crate) unsafe fn build_sha256() -> *const c_char {
     engine().map_or(c"".as_ptr(), |(_, build)| build.native.sha256.as_ptr())
 }
 
-pub(crate) unsafe extern "C" fn close_stale() {
+pub(crate) unsafe fn close_stale() {
     swap_owner::close_stale(swap());
 }
 
-pub(crate) unsafe extern "C" fn prepare(
+pub(crate) unsafe fn prepare(
     facts: *const rsf_anomaly_sr_frame_facts,
     log: rsf_anomaly_sr_log,
     user: Ptr,
@@ -517,47 +515,47 @@ pub(crate) unsafe extern "C" fn prepare(
     prepared
 }
 
-pub(crate) unsafe extern "C" fn prepared() {
+pub(crate) unsafe fn prepared() {
     swap_owner::prepared(swap());
 }
 
-pub(crate) unsafe extern "C" fn swap_handle() -> Ptr {
+pub(crate) unsafe fn swap_handle() -> Ptr {
     swap().cast()
 }
 
-pub(crate) unsafe extern "C" fn combine_end() {
+pub(crate) unsafe fn combine_end() {
     swap_owner::combine_end(swap());
 }
 
-pub(crate) unsafe extern "C" fn frame_end() {
+pub(crate) unsafe fn frame_end() {
     swap_owner::frame_end(swap());
 }
 
-pub(crate) unsafe extern "C" fn rm_near() {
+pub(crate) unsafe fn rm_near() {
     swap_owner::rm_near(swap());
 }
 
-pub(crate) unsafe extern "C" fn sun_begin() -> bool {
+pub(crate) unsafe fn sun_begin() -> bool {
     swap_owner::sun_begin(swap())
 }
 
-pub(crate) unsafe extern "C" fn sun_end(suspended: bool) {
+pub(crate) unsafe fn sun_end(suspended: bool) {
     swap_owner::sun_end(swap(), suspended);
 }
 
-pub(crate) unsafe extern "C" fn position_setup(constant: Ptr) {
+pub(crate) unsafe fn position_setup(constant: Ptr) {
     swap_owner::position_constant(swap(), constant);
 }
 
-pub(crate) unsafe extern "C" fn shutdown() -> bool {
+pub(crate) unsafe fn shutdown() -> bool {
     swap_owner::shutdown(swap())
 }
 
-pub(crate) unsafe extern "C" fn set_swap_enabled(enabled: bool) {
+pub(crate) unsafe fn set_swap_enabled(enabled: bool) {
     swap_owner::set_enabled(swap(), enabled);
 }
 
-pub(crate) unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
+pub(crate) fn controller() -> rsf_anomaly_sr_controller {
     let handle = swap();
     let view = if handle.is_null() {
         rsf_anomaly_swap_view {
@@ -567,50 +565,49 @@ pub(crate) unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) 
     } else {
         unsafe { *swap_owner::view_of(handle) }
     };
-    unsafe {
-        out.write(rsf_anomaly_sr_controller {
-            window_open: view.open,
-            refused: !view.refusal.is_null(),
-            jitter_applied: view.jitter_applied,
-            mip_bias_applied: view.mip_bias_applied,
-            stage: view.stage,
-            render_width: view.render_width,
-            render_height: view.render_height,
-            window_mip_bias: view.window_mip_bias,
-            saved_mip_bias: view.saved_mip_bias,
-            twin_generation: view.counters.twin_generations,
-            refusal: view.refusal,
-        })
-    };
+    rsf_anomaly_sr_controller {
+        window_open: view.open,
+        refused: !view.refusal.is_null(),
+        jitter_applied: view.jitter_applied,
+        mip_bias_applied: view.mip_bias_applied,
+        stage: view.stage,
+        render_width: view.render_width,
+        render_height: view.render_height,
+        window_mip_bias: view.window_mip_bias,
+        saved_mip_bias: view.saved_mip_bias,
+        twin_generation: view.counters.twin_generations,
+        refusal: view.refusal,
+    }
 }
 
-pub(crate) unsafe extern "C" fn swap_counters(out: *mut rsf_anomaly_sr_swap_counters) {
+pub(crate) fn swap_counters() -> rsf_anomaly_sr_swap_counters {
     let handle = swap();
-    let counters = if handle.is_null() {
+    if handle.is_null() {
         rsf_anomaly_swap_counters::default()
     } else {
         unsafe { (*swap_owner::view_of(handle)).counters }
-    };
-    unsafe { out.write(counters) };
+    }
 }
 
-pub(crate) unsafe extern "C" fn host_stats(bytes: *mut u64, refs: *mut u64) {
+pub(crate) fn host_stats() -> (u64, u64) {
+    let (mut bytes, mut refs) = (0, 0);
     rsf_anomaly_sr_stage_resource_stats(
         unsafe { resources().as_ref() },
-        unsafe { &mut *bytes },
-        unsafe { &mut *refs },
+        &mut bytes,
+        &mut refs,
     );
+    (bytes, refs)
 }
 
-pub(crate) unsafe extern "C" fn host_reset() {
+pub(crate) unsafe fn host_reset() {
     rsf_anomaly_sr_stage_reset_pass(unsafe { resources().as_mut() });
 }
 
-pub(crate) unsafe extern "C" fn pixel_bytes(format: u32) -> u32 {
+pub(crate) unsafe fn pixel_bytes(format: u32) -> u32 {
     unsafe { c::pixel_bytes(format) }
 }
 
-pub(crate) unsafe extern "C" fn draw_pass(
+pub(crate) unsafe fn draw_pass(
     kind: u32,
     views: *const crate::sr_d3d11::DrawViews,
 ) -> bool {
@@ -620,37 +617,34 @@ pub(crate) unsafe extern "C" fn draw_pass(
     }) != 0
 }
 
-pub(crate) unsafe extern "C" fn temporal_ready() -> bool {
+pub(crate) unsafe fn temporal_ready() -> bool {
     let resources = unsafe { resources().as_ref() };
     let pass = rsf_anomaly_sr_stage_pass(resources);
     rsf_anomaly_sr_temporal_ready(unsafe { pass.as_ref() }) != 0
         && !rsf_anomaly_sr_stage_depth(resources).is_null()
 }
 
-pub(crate) unsafe extern "C" fn motion_target(out: *mut rsf_anomaly_sr_motion_target) -> bool {
+pub(crate) fn motion_target() -> rsf_anomaly_sr_motion_target {
     let target = crate::motion::stage::frame_target();
-    unsafe {
-        out.write(rsf_anomaly_sr_motion_target {
-            texture: target.texture,
-            written: target.written,
-            main: target.main,
-            frame: target.frame,
-            width: target.width,
-            height: target.height,
-        })
-    };
-    !target.texture.is_null()
+    rsf_anomaly_sr_motion_target {
+        texture: target.texture,
+        written: target.written,
+        main: target.main,
+        frame: target.frame,
+        width: target.width,
+        height: target.height,
+    }
 }
 
-pub(crate) unsafe extern "C" fn create_motion_view(device: Ptr, texture: Ptr) -> Ptr {
+pub(crate) unsafe fn create_motion_view(device: Ptr, texture: Ptr) -> Ptr {
     unsafe { c::create_view(device, texture) }
 }
 
-pub(crate) unsafe extern "C" fn depth_texture() -> Ptr {
+pub(crate) unsafe fn depth_texture() -> Ptr {
     rsf_anomaly_sr_stage_depth(unsafe { resources().as_ref() })
 }
 
-pub(crate) unsafe extern "C" fn verify_guards(
+pub(crate) unsafe fn verify_guards(
     module: Ptr,
     image_size: u32,
     build: *const c_void,
@@ -663,11 +657,11 @@ pub(crate) unsafe extern "C" fn verify_guards(
     sr_guard_failure(&image, build.sr, world_window, temporal)
 }
 
-pub(crate) unsafe extern "C" fn hooks_created() -> bool {
+pub(crate) unsafe fn hooks_created() -> bool {
     unsafe { c::hooks_created() }
 }
 
-pub(crate) unsafe extern "C" fn set_engine(module: Ptr, build: *const c_void, temporal: bool) {
+pub(crate) unsafe fn set_engine(module: Ptr, build: *const c_void, temporal: bool) {
     let image = module as usize;
     BUILD.store(build.cast_mut().cast(), Ordering::Release);
     IMAGE.store(image, Ordering::Release);
@@ -694,7 +688,7 @@ const DETOURS: [usize; crate::sys::RSF_ANOMALY_SR_DETOUR_COUNT as usize] = [
     SITE_SUN_CASCADES,
 ];
 
-pub(crate) unsafe extern "C" fn install_hooks() -> bool {
+pub(crate) unsafe fn install_hooks() -> bool {
     if unsafe { c::hooks_created() } {
         return unsafe { c::enable_hooks() };
     }
@@ -725,7 +719,7 @@ pub(crate) unsafe extern "C" fn install_hooks() -> bool {
 
 const POSITION_SLOT: u32 = 1; // RSF_ANOMALY_POSITION_SLOT (engine_slots.h)
 
-pub(crate) unsafe extern "C" fn install_position_slot() -> bool {
+pub(crate) unsafe fn install_position_slot() -> bool {
     let Some((image, build)) = engine() else {
         return false;
     };
@@ -745,7 +739,7 @@ pub(crate) unsafe extern "C" fn install_position_slot() -> bool {
     }
 }
 
-pub(crate) unsafe extern "C" fn disable_hooks() {
+pub(crate) unsafe fn disable_hooks() {
     unsafe {
         let _ = rsf_anomaly_slot_set(POSITION_SLOT, false);
         let _ = c::disable_hooks();
@@ -756,11 +750,11 @@ unsafe extern "C" fn rm_near_callback(_: Ptr) {
     STAGE.rm_near();
 }
 
-pub(crate) unsafe extern "C" fn set_rm_near(on: bool) {
+pub(crate) unsafe fn set_rm_near(on: bool) {
     rsf_anomaly_geometry_set_near(on.then_some(rm_near_callback as unsafe extern "C" fn(Ptr)));
 }
 
-pub(crate) unsafe extern "C" fn remove_hooks() -> bool {
+pub(crate) unsafe fn remove_hooks() -> bool {
     unsafe {
         rsf_anomaly_geometry_set_near(None);
         let restored = rsf_anomaly_slot_set(POSITION_SLOT, false);
@@ -769,7 +763,7 @@ pub(crate) unsafe extern "C" fn remove_hooks() -> bool {
     }
 }
 
-pub(crate) unsafe extern "C" fn apply_colour_transport(enabled: bool) {
+pub(crate) unsafe fn apply_colour_transport(enabled: bool) {
     rsf_anomaly_runtime_set_colour_transport(enabled);
 }
 
@@ -815,7 +809,7 @@ pub(crate) mod leaves {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_anomaly_sr_stage_configure_native(
+pub(crate) unsafe fn rsf_anomaly_sr_stage_configure_native(
     ini: *const u16,
     apply: bool,
     log: rsf_anomaly_sr_log,

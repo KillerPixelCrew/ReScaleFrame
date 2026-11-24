@@ -75,11 +75,7 @@ pub(crate) extern "C" fn render_target() -> *mut c_void {
     std::ptr::without_provenance_mut(fake(|f| f.render_target))
 }
 
-pub(crate) unsafe extern "C" fn frame_facts(
-    world: bool,
-    temporal: bool,
-    out: *mut rsf_anomaly_sr_frame_reads,
-) {
+pub(crate) fn frame_facts(world: bool, temporal: bool) -> rsf_anomaly_sr_frame_reads {
     let native_device = device();
     let reads = fake(|f| rsf_anomaly_sr_frame_reads {
         facts: rsf_anomaly_sr_frame_facts {
@@ -94,43 +90,37 @@ pub(crate) unsafe extern "C" fn frame_facts(
         view_read: !f.unreadable_view,
         options_read: !f.unreadable_options,
     });
-    unsafe { out.write(reads) };
     record(format!("facts world={world} temporal={temporal}"));
+    reads
 }
 
-pub(crate) unsafe extern "C" fn loading_registered(out: *mut u8) -> bool {
-    let (readable, registered) = fake(|f| (!f.unreadable_loading, f.registered));
-    unsafe { out.write(registered) };
-    readable
+pub(crate) fn loading_registered() -> Option<u8> {
+    fake(|f| (!f.unreadable_loading).then_some(f.registered))
 }
 
-pub(crate) unsafe extern "C" fn precache_frame(out: *mut u32) -> bool {
-    let (readable, frame) = fake(|f| {
+pub(crate) fn precache_frame() -> Option<u32> {
+    fake(|f| {
         f.precache_reads += 1;
-        (!f.unreadable_precache, f.precache)
-    });
-    unsafe { out.write(frame) };
-    readable
+        (!f.unreadable_precache).then_some(f.precache)
+    })
 }
-pub(crate) unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
+pub(crate) fn controller() -> rsf_anomaly_sr_controller {
     let (open, jittered, refused) = fake(|f| (f.window_open, f.jittered, f.refused));
-    unsafe {
-        out.write(rsf_anomaly_sr_controller {
-            window_open: open,
-            refused,
-            jitter_applied: jittered,
-            stage: 2,
-            render_width: 1280,
-            render_height: 720,
-            twin_generation: 3,
-            refusal: if refused {
-                c"layout".as_ptr()
-            } else {
-                std::ptr::null()
-            },
-            ..Default::default()
-        })
-    };
+    rsf_anomaly_sr_controller {
+        window_open: open,
+        refused,
+        jitter_applied: jittered,
+        stage: 2,
+        render_width: 1280,
+        render_height: 720,
+        twin_generation: 3,
+        refusal: if refused {
+            c"layout".as_ptr()
+        } else {
+            std::ptr::null()
+        },
+        ..Default::default()
+    }
 }
 pub(crate) unsafe extern "C" fn prepare(
     facts: *const rsf_anomaly_sr_frame_facts,
@@ -164,11 +154,8 @@ pub(crate) unsafe extern "C" fn read_camera(out: *mut rsf_anomaly_sr_camera) -> 
     record("camera");
     true
 }
-pub(crate) unsafe extern "C" fn now(counter: *mut i64, frequency: *mut i64) {
-    unsafe {
-        counter.write(1000);
-        frequency.write(10_000);
-    }
+pub(crate) fn now() -> (i64, i64) {
+    (1000, 10_000)
 }
 fn seam(run: &mut dyn FnMut(crate::sr_swap::SeamPass<'_>) -> bool) {
     record("controller seam");
@@ -228,10 +215,8 @@ pub(crate) extern "C" fn device() -> *mut c_void {
 pub(crate) extern "C" fn temporal_ready() -> bool {
     fake(|f| f.temporal_ready)
 }
-pub(crate) unsafe extern "C" fn motion_target(out: *mut rsf_anomaly_sr_motion_target) -> bool {
-    let target = fake(|f| f.motion);
-    unsafe { out.write(target) };
-    !target.texture.is_null()
+pub(crate) fn motion_target() -> rsf_anomaly_sr_motion_target {
+    fake(|f| f.motion)
 }
 pub(crate) extern "C" fn create_motion_view(_: *mut c_void, texture: *mut c_void) -> *mut c_void {
     texture
@@ -308,11 +293,8 @@ pub(crate) unsafe extern "C" fn driver_evaluate(
 pub(crate) extern "C" fn controller_frame_end() {
     record("controller frame_end");
 }
-pub(crate) unsafe extern "C" fn device_size(width: *mut u32, height: *mut u32) {
-    unsafe {
-        width.write(1920);
-        height.write(1080);
-    }
+pub(crate) fn device_size() -> (u32, u32) {
+    (1920, 1080)
 }
 pub(crate) extern "C" fn driver_boundary(width: u32, height: u32) {
     record(format!("boundary {width}x{height}"));
@@ -619,7 +601,7 @@ fn options_parse_like_the_native_reader() {
         ]
     });
     let ini = std::ptr::dangling::<c_void>();
-    let options = driver.read_options(ini);
+    let options = driver.ini(ini).options();
     assert_eq!(options.stage, 3);
     assert_eq!((options.scale, options.scale_defaulted), (0.5, false));
     assert!(!options.mip_bias && options.exposure_auto);
@@ -631,8 +613,8 @@ fn options_parse_like_the_native_reader() {
         (BACKEND_AUTO, 4)
     );
     fake(|f| f.ini = vec![("SRScale", "0.67x"), ("SRMipBias", "-5")]);
-    assert_eq!(driver.read_scale(ini), (DEFAULT_SCALE, true));
-    assert_eq!(driver.read_mip_bias(ini), (-2.0, true));
+    assert_eq!(driver.ini(ini).scale(), (DEFAULT_SCALE, true));
+    assert_eq!(driver.ini(ini).mip_bias(), (-2.0, true));
 }
 
 #[test]
@@ -1382,7 +1364,7 @@ mod win32 {
             assert!(unsafe { crate::ini::write_text(terminated.as_ptr(), key, value) });
         };
         let ini = terminated.as_ptr().cast();
-        let read = || stage.read_options(ini);
+        let read = || stage.ini(ini).options();
         let selected = || stage.configure_ini(&units, false, None, null_mut());
         assert!(!selected() && read().stage == 0 && default_config().stage == 0);
         set(w!("SRStage"), w!("1"));
@@ -1420,7 +1402,7 @@ mod win32 {
             (w!("nan"), 0.67, true),
         ] {
             set(w!("SRScale"), text);
-            assert_eq!(stage.read_scale(ini), (value, defaulted));
+            assert_eq!(stage.ini(ini).scale(), (value, defaulted));
             assert_eq!(read().scale, value);
         }
         assert_eq!(
@@ -1510,7 +1492,7 @@ mod win32 {
             (w!(""), 0.0, true),
         ] {
             set(w!("SRMipBias"), text);
-            assert_eq!(stage.read_mip_bias(ini), (value, enabled));
+            assert_eq!(stage.ini(ini).mip_bias(), (value, enabled));
             let options = read();
             assert_eq!(
                 (options.mip_bias_offset, options.mip_bias),
@@ -1674,14 +1656,18 @@ pub(crate) mod leaves {
     }
     pub(crate) fn sun_end(_: bool) {}
     pub(crate) fn position_setup(_: *mut c_void) {}
-    pub(crate) fn swap_counters(_: *mut rsf_anomaly_sr_swap_counters) {}
-    pub(crate) fn host_stats(_: *mut u64, _: *mut u64) {}
+    pub(crate) fn swap_counters() -> rsf_anomaly_sr_swap_counters {
+        rsf_anomaly_sr_swap_counters::default()
+    }
+    pub(crate) fn host_stats() -> (u64, u64) {
+        (0, 0)
+    }
     pub(crate) fn disable_hooks() {}
     pub(crate) fn driver_output_format() -> u32 {
         0
     }
-    pub(crate) fn driver_planned(_: u32, _: u32, _: *mut u32, _: *mut u32) -> bool {
-        false
+    pub(crate) fn driver_planned(_: u32, _: u32) -> Option<[u32; 2]> {
+        None
     }
     pub(crate) fn driver_request_dump(_: *const c_char) -> bool {
         false
