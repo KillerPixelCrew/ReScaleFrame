@@ -19,7 +19,6 @@ pub struct Pe32Plus<'a> {
     sections: &'a [u8],
 }
 
-#[allow(dead_code)] // Each consumer uses different metadata.
 impl<'a> Pe32Plus<'a> {
     pub fn parse(bytes: &'a [u8]) -> Option<Self> {
         if le::<2>(bytes, 0)? != *b"MZ" {

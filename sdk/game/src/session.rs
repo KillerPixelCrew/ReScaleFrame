@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Sized GameSDK records shared by native plugin carriers and exact-build detectors.
-use crate::ffi_util::has_capacity;
+use crate::ffi_util::{checked, has_capacity};
 use crate::{
     RSF_ERROR_ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT, RSF_GAME_ABI_VERSION, RSF_GAME_RECOGNIZED,
     RSF_GAME_UNKNOWN, RSF_OK, rsf_detection, rsf_game_hooks_api, rsf_game_host_services,
@@ -27,11 +27,7 @@ impl<'a> Probe<'a> {
     /// If the size is sufficient, the full probe and its non-null C strings must
     /// be readable and remain immutable through the returned borrow.
     pub unsafe fn from_raw(raw: *const rsf_game_probe) -> Option<Self> {
-        if raw.is_null() || unsafe { raw.cast::<u32>().read() } < size_of::<rsf_game_probe>() as u32
-        {
-            return None;
-        }
-        let raw = unsafe { &*raw };
+        let raw = unsafe { checked(raw) }?;
         if raw.executable_name_utf8.is_null() || raw.sha256_hex.is_null() {
             return None;
         }
