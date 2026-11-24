@@ -937,6 +937,37 @@ Code-quality pass over the Vulkan orchestrator files the simp-orch-vulkan passes
 - Tests: `vulkan_sr/owner_tests` (second half) checks registration through one helper and loses a dead callback; `vulkan_sr/xess/tests` drops the `frame_input` alias and merges consecutive state edits; `frame_capture_vk/tests` builds its legacy dump through one helper. Every assertion is kept. Left: the XeSS requirement calls, which pass their outputs from one call into the next.
 - Read and left: `vulkan_presentation` (the borrow and retirement admission is the lifetime fix; `attach`'s outer null check orders its results), `vulkan_fg_wsi` (public entries the game-sdk tests call; `rsf_core_vkfg_device_proc` returns lookup status, so it is not `vulkan_sr::lookup_device_proc`), and `vulkan_sr_session` with `linked.rs` and `routes.rs` (the C ABI the Godot integration links).
 
+### C++-reference pass: cppref-unity
+
+Method: `integrations/unity` and `games/unity-mono` compared module by module against the C++ on `main` (`package.cpp`, `bridge.cpp` twice, `vulkan_bridge.cpp`, `preview.cpp`, `plugin.cpp`, `runtime_host.cpp`, `mono_runtime.cpp`, `runtime_config.cpp`). Every addition was sorted into a defect fix from the U01-U05 findings (kept), a real FFI boundary (kept) or port overhead (removed). Checked with `cargo check` of `rsf-unity` (lib and `--tests`) and `rsf-unity-mono` (lib and `--tests`) and `cargo fmt`; nothing was built or run. The C leaves (`package.c`, `vulkan_bridge.c`) need the untracked Unity SDK headers and were edited without compiling.
+
+Lines (raw, C++ on `main`, Rust plus C leaves and headers before and after this pass, tests included):
+
+| Module | C++ | Before | After |
+| --- | ---: | ---: | ---: |
+| Mono plugin (U01) | 491 | 1,537 | 1,516 |
+| Package session and routing (U02) | 457 | 4,401 | 4,110 |
+| D3D12 bridge (U03) | 458 | 2,626 | 2,610 |
+| D3D11 bridge (U03) | 338 | 2,137 | 2,113 |
+| Vulkan bridge (U04) | 544 | 4,337 | 4,136 |
+| Editor preview (U05) | 148 | 408 | 408 |
+| Crate scaffolding | 0 | 83 | 82 |
+| Total | 2,436 | 15,529 | 14,975 |
+
+Removed as port overhead:
+
+- **Package (U02).** The unit `Leaves` struct whose methods only forwarded to `raw::*`, and the `leaves: &Leaves` parameter threaded through every package method: callers use `raw::*` directly (still the test fakes under `cfg(test)`). The `LOADED` flag and `loaded()` gate, left from the adopted platform table: `package.cpp` had no such gate and its exports worked before plugin load. The Win32 leaves between two pieces of Rust lost their C shapes (timestamp and `%LOCALAPPDATA%` out-parameters, 0/1 subclass word, raw path pointers). The `package.c` leaf that only called the header-only `rsf_dlss_preset_valid`: the package checks `RSF_DLSS_PRESET_MASK` in Rust, as the Mono plugin already did. Tests: the routing test of the removed load gate; the export test now expects the waiting-device `BUSY`, and the configure transcripts lose the fake preset call.
+- **D3D12 bridge (U03).** `rsf_unity_frame_admission` and `rsf_unity_source_submission` were C typedefs no C file reads; they are Rust structs, and the receipt compares with `PartialEq` instead of a field-by-field helper.
+- **D3D11 bridge (U03).** `repr(C)` and offset asserts on `DeviceHandles`/`CommandSlot`, which never cross C; the `Proof` alias and `waiter()`, which were `view()`; raw-pointer signatures on the graphics leaves only the owner calls.
+- **Vulkan bridge (U04).** The resolver's nine-slot interceptor table, its `bind` refusal of incomplete tables (the table is a constant built one line earlier), the route keys and the cached-original test helper: `resolve` matches the name as `vulkan_bridge.cpp`'s `intercept()` did, and the tests of that table go. Shared-device creation went Rust, then `rsf_uvk_foreign_create_device` (C), then `rsf_uvk_bridge_create_device` (Rust), only to hand back two guarded lookups as untyped pointers transmuted three times; the C leaf exports the lookups and Rust calls them. With that, `vulkan_state.h` is gone and the device, command-slot and image records are Rust structs. The GPU leaves take references and return the swap-chain extent instead of out-parameters, and `vulkan_foreign.h` loses five declarations of functions that are no longer C entries.
+- **Mono plugin (U01).** The test of `rsf_game_sys::call_header::validate`, which this crate only calls.
+
+Kept as real fixes (each is a U01-U05 finding): the checked close and drained proof of the Mono bridge, the Auto FG runtime root and the late-Mono attempt (`startup_policy.rs`), the overlay diagnostics rows, the fingerprint reuse and rooted-path resolution; the window subclass receipt and module reference (`windows.rs`), the fallible render plan, the single latency snapshot, Runtime-owned SR fallback and quality admission, the device-keyed Auto FG choice and the retained device, the camera-churn reaping with recording receipts (`package_views.rs`, `ProducerRing`); the leased D3D12 packets, acknowledgement of the pending generation after delivery, the per-view source receipts flushed at the window event, the shared packet-to-pass builder, the copy-compatible source formats, the old D3D11 surface kept until both timelines retire, and the `FenceStatus` removal state; the deferred shared-image replacement, the dispatch owner taken from the supplied device, the window receipt bound to the presenting queue and swapchain, the shared creation transaction (`device_creation.rs`), semaphore retention until a proven wait and the three-state admission; the Editor preview's stale-window check and the Runtime presenter.
+
+Kept as FFI: `render_bridge.c`, `bridge.c`, `package.c` and `vulkan_bridge.c` call Unity's C++ interface vtables and guard foreign exceptions; `bridge.def` and the `rsfu_*`, `rsf_unity_*` and Vulkan hook exports are what the managed code, Unity and the loader bind; the Mono embedding table; the callback-host and Runtime records.
+
+Left: the `Leaves`-free `raw` seam itself and the call-transcript tests it carries (about 1,500 lines in `package_state.rs`, each asserting shipped or fixed behaviour); the `rsf_unity_package_view_setup` record in `package_state.h` (a Rust struct would be the same size); the `rsf_unity_frames_*` lock wrappers in `bridge_state.rs`; the restated DXGI and D3D12 constants in `d3d11_pass.rs`, which keep the plan testable without the `windows` crate.
+
 ## Scope
 
 - **375 C++ implementation files**, including 168 under `tests/`. All have the `.cpp` suffix in this revision.
