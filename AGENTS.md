@@ -10,7 +10,7 @@ Use natural, concise language in documentation, code comments, issues, commits, 
 The orchestrator and shared runtime are general infrastructure. They must not contain game or
 engine integration policy. This boundary is mandatory for every adapter, including existing ones.
 
-- Keep executable detection, fingerprints, RVAs, expected patch bytes, native engine symbols and
+- Keep executable detection, site signatures, expected patch bytes, native engine symbols and
   layouts, engine startup, window-class selection, game settings translation, input conventions,
   and game-specific quality or lifecycle policy in `games/<id>/` or the relevant engine
   integration under `integrations/`. Frame timing, pacing and latency are not integration policy:
@@ -69,6 +69,22 @@ One implementation serves every game and every vendor.
   game. Latency or vendor policy found in an adapter or host is a Rule 1 violation: move it into the
   orchestrator and leave the integration with the calls that report its engine's events.
 
+## Rule 4: discover, do not pin
+
+An integration finds what it hooks in the game that is actually running. It must not depend on one
+executable build.
+
+- Locate functions, patch sites and globals by discovery: byte signatures with wildcards for
+  relocations and displacements, exported or managed names, strings, and operands decoded from the
+  code that references a global or a structure field. Resolve them at start-up.
+- Verify at the found site. A signature must match exactly once, and the expected bytes are still
+  checked there before a hook or patch is written, so a wrong match refuses and names the site.
+- A whole-file hash, build id or version string is evidence to log. It never gates detection,
+  start-up, packaging or deployment. No exact-build allow lists and no fixed address tables.
+- Structure offsets that no code reference reveals may stay as documented constants, validated by a
+  structural check where one exists.
+- When a site is not found, refuse that feature, say which site, and keep the game running.
+
 ## Research and tool setup
 
 ### Reference completeness and shader coverage
@@ -79,7 +95,7 @@ and valid output on native, reduced-resolution and failure paths. Unresolved req
 
 Repository skills use the open [Agent Skills format](https://agentskills.io/specification) under `.agents/skills/<name>/SKILL.md`. Keep one shared skill source with standard YAML metadata. Clients with different discovery paths can load the linked file explicitly; do not fork its instructions per agent.
 
-Every reverse-engineering result must explain the question, why the approach was chosen, how it was found, the evidence, and where and when the runtime uses it. Record relevant fingerprints, source revisions, units, frame/view identity, resource lifetime, failed approaches, and uncertainty. Keep `games/<id>/engine.json`, research notes, and the implementation tracker consistent.
+Every reverse-engineering result must explain the question, why the approach was chosen, how it was found, the evidence, and where and when the runtime uses it. Record the researched build's fingerprint, source revisions, units, frame/view identity, resource lifetime, failed approaches, and uncertainty. Keep `games/<id>/engine.json`, research notes, and the implementation tracker consistent.
 
 Every commit and PR includes its research or links to the relevant notes. For changes without a new experiment, give the rationale and checks performed. Never invent research or describe a source review as a runtime test. When evidence corrects an earlier conclusion, retain a concise account of what changed and why.
 
@@ -91,7 +107,7 @@ Check the environment before recommending installation. [docs/tooling.md](docs/t
 - The orchestrator owns plugin lifecycle, vendor SDKs, graphics interoperability, settings, and presentation. A game plugin owns its game detection, hooks, renderer preparation, input conventions, and output reinsertion.
 - Loading the orchestrator is distinct from activating a graphics pipeline. It selects/prepares the plugin first.
 - Keep public native interfaces as C ABI contracts. Do not pass STL containers, Rust types, ownership-ambiguous allocations, or exceptions across DLL boundaries.
-- A recognized executable fingerprint is not proof of working hooks or rendering support. Report capability and validation status honestly.
+- A recognized game is not proof of working hooks or rendering support. Report capability and validation status honestly.
 - Keep standalone use independent of WSGM. The initial complete AC7 goal includes SR, MFG, and latency integration.
 
 ## Delivery
@@ -207,12 +223,14 @@ has cost a run of the game to find that out. The jitter gate, the velocity blend
 separate-translucency halving were all settled this way after other approaches were not.
 
 The rule that makes it safe is the expected bytes. Every patch names what it expects to find and
-writes only where it finds it, so a game update moves the code and the patch refuses instead of
-corrupting an instruction. It is announced either way, because a patch that silently did nothing is
+writes only where it finds it. The site itself is found by signature (Rule 4), so a game update that
+moves the code is followed, and one that changes it makes the patch refuse instead of corrupting an
+instruction. It is announced either way, because a patch that silently did nothing is
 indistinguishable from one that worked until something downstream fails.
 
 Patch after decryption, next to the others in `apply_*_patch`, and record the site in
-`docs/research/ue418-hook-map.md` with its RVA, its bytes and the source it corresponds to. Name the
+`docs/research/ue418-hook-map.md` with its signature, its bytes, the RVA in the researched build as
+evidence, and the source it corresponds to. Name the
 function in the Ghidra project while the evidence is in front of you.
 
 ## Native ABI
