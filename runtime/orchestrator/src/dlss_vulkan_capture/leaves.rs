@@ -393,14 +393,23 @@ unsafe extern "C" fn submit(packet: *const Packet, commands: Handle, fence: u64)
 
 unsafe extern "C" fn present(packet: *const Packet, waits: u32) -> i32 {
     let packet = unsafe { &*packet };
-    let mut info = *present_info(packet);
-    if waits == 0 {
-        info.wait_semaphore_count = 0;
-        info.p_wait_semaphores = ptr::null();
-    }
+    let original = present_info(packet);
+    // A present that keeps its waits is the application's own, passed through unchanged; only one
+    // whose waits the copy fence consumed is a modified copy.
+    let completed;
+    let info = if waits == 0 {
+        completed = vk::PresentInfoKHR {
+            wait_semaphore_count: 0,
+            p_wait_semaphores: ptr::null(),
+            ..*original
+        };
+        &completed
+    } else {
+        original
+    };
     let next: vk::PFN_vkQueuePresentKHR = unsafe { std::mem::transmute(packet.native_present) };
     let queue = vk::Queue::from_raw(packet.queue as u64);
-    wsi_call(packet, &mut || unsafe { next(queue, &info) }.as_raw())
+    wsi_call(packet, &mut || unsafe { next(queue, info) }.as_raw())
 }
 
 unsafe extern "C" fn flush(handle: Handle) -> u32 {
