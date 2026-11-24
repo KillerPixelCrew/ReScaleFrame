@@ -32,7 +32,7 @@ fn world<T>(f: impl FnOnce(&mut World) -> T) -> T {
     WORLD.with(|world| f(&mut world.borrow_mut()))
 }
 
-unsafe extern "C" fn allocate(
+pub(super) unsafe fn allocate(
     _: Handle,
     _: *const Image,
     bytes: u64,
@@ -64,15 +64,15 @@ unsafe extern "C" fn allocate(
     })
 }
 
-unsafe extern "C" fn encode(_: Handle, commands: Handle, _: *const Image, _: *const Allocation) {
+pub(super) unsafe fn encode(_: Handle, commands: Handle, _: *const Image, _: *const Allocation) {
     world(|w| w.encoded.push(commands as usize));
 }
 
-unsafe extern "C" fn event_set(_: Handle, event: u64) -> i32 {
+pub(super) unsafe fn event_set(_: Handle, event: u64) -> i32 {
     world(|w| i32::from(w.events.get(&event).copied().unwrap_or(false)))
 }
 
-unsafe extern "C" fn map(_: Handle, memory: u64, _: u64, out: *mut *mut c_void) -> i32 {
+pub(super) unsafe fn map(_: Handle, memory: u64, _: u64, out: *mut *mut c_void) -> i32 {
     world(|w| {
         w.mapped.push(memory);
         match w.memory.get_mut(&memory) {
@@ -85,11 +85,11 @@ unsafe extern "C" fn map(_: Handle, memory: u64, _: u64, out: *mut *mut c_void) 
     })
 }
 
-unsafe extern "C" fn unmap(_: Handle, _: u64) {
+pub(super) unsafe fn unmap(_: Handle, _: u64) {
     world(|w| w.unmapped += 1);
 }
 
-unsafe extern "C" fn release(_: Handle, allocation: *const Allocation) {
+pub(super) unsafe fn release(_: Handle, allocation: *const Allocation) {
     let a = unsafe { *allocation };
     world(|w| {
         w.memory.remove(&a.memory);
@@ -97,15 +97,15 @@ unsafe extern "C" fn release(_: Handle, allocation: *const Allocation) {
     });
 }
 
-unsafe extern "C" fn wants(_: *const Record) -> i32 {
+pub(super) unsafe fn wants(_: *const Record) -> i32 {
     world(|w| i32::from(w.core))
 }
 
-unsafe extern "C" fn wants_frame(_: u64) -> i32 {
+pub(super) fn wants_frame(_: u64) -> i32 {
     world(|w| i32::from(w.core_frame))
 }
 
-unsafe extern "C" fn reserve(
+pub(super) unsafe fn reserve(
     record: *const Record,
     name: *const c_char,
     description: *const c_char,
@@ -115,11 +115,11 @@ unsafe extern "C" fn reserve(
     world(|w| unsafe { w.sink.reserve(record, name, description, view, scale) })
 }
 
-unsafe extern "C" fn failed(ticket: u64, name: *const c_char, result: i32) {
+pub(super) unsafe fn failed(ticket: u64, name: *const c_char, result: i32) {
     world(|w| unsafe { w.sink.failed(ticket, name, result) });
 }
 
-unsafe extern "C" fn pixels(
+pub(super) unsafe fn pixels(
     ticket: u64,
     name: *const c_char,
     pixels: *const Pixels,
@@ -129,22 +129,8 @@ unsafe extern "C" fn pixels(
     world(|w| unsafe { w.sink.pixels(ticket, name, pixels, api, native) })
 }
 
-static OPS: Platform = Platform {
-    allocate,
-    encode,
-    event_set,
-    map,
-    unmap,
-    release,
-    wants,
-    wants_frame,
-    reserve,
-    failed,
-    pixels,
-};
-
 fn owner(command_completion: bool, legacy: Legacy) -> Owner {
-    let owner = Owner::new(command_completion, std::ptr::null_mut(), &OPS, legacy);
+    let owner = Owner::new(command_completion, std::ptr::null_mut(), legacy);
     owner.lock().device = DEVICE;
     owner
 }

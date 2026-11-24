@@ -43,26 +43,13 @@ pub struct Allocation {
     pub event: u64,
 }
 
-#[repr(C)]
-pub struct Platform {
-    /// Creates the buffer, host-coherent memory and optional event. Partial
-    /// handles stay in `out` on failure; the owner releases them later.
-    pub allocate: unsafe extern "C" fn(Handle, *const Image, u64, u32, *mut Allocation) -> i32,
-    /// Records the image-to-buffer copy, its barriers and the optional event.
-    pub encode: unsafe extern "C" fn(Handle, Handle, *const Image, *const Allocation),
-    pub event_set: unsafe extern "C" fn(Handle, u64) -> i32,
-    pub map: unsafe extern "C" fn(Handle, u64, u64, *mut *mut c_void) -> i32,
-    pub unmap: unsafe extern "C" fn(Handle, u64),
-    pub release: unsafe extern "C" fn(Handle, *const Allocation),
-    pub wants: unsafe extern "C" fn(*const Record) -> i32,
-    pub wants_frame: unsafe extern "C" fn(u64) -> i32,
-    pub reserve: unsafe extern "C" fn(*const Record, *const c_char, *const c_char, u32, f32) -> u64,
-    pub failed: unsafe extern "C" fn(u64, *const c_char, i32),
-    pub pixels: unsafe extern "C" fn(u64, *const c_char, *const Pixels, u32, u32) -> i32,
-}
+// Production calls the Vulkan and input-dump leaves in `native`; unit tests call same-named fakes.
+#[cfg(not(test))]
+use native as leaf;
+#[cfg(test)]
+use tests as leaf;
 
 const _: () = {
-    assert!(size_of::<Platform>() == 11 * size_of::<Handle>());
     assert!(size_of::<Allocation>() == 24);
     assert!(size_of::<Pixels>() == 40);
 };
@@ -223,7 +210,6 @@ pub struct Owner {
     native: usize,
     #[cfg(windows)]
     dispatch: Option<Box<native::Dispatch>>,
-    ops: &'static Platform,
     state: Mutex<State>,
 }
 
@@ -233,18 +219,12 @@ enum Step {
 }
 
 impl Owner {
-    fn new(
-        command_completion: bool,
-        native: Handle,
-        ops: &'static Platform,
-        legacy: Legacy,
-    ) -> Self {
+    fn new(command_completion: bool, native: Handle, legacy: Legacy) -> Self {
         Self {
             command_completion,
             native: native as usize,
             #[cfg(windows)]
             dispatch: None,
-            ops,
             state: Mutex::new(State {
                 legacy,
                 provider: Provider::default(),
@@ -270,14 +250,14 @@ impl Owner {
 
     fn fail(&self, value: &Readback, result: i32) {
         if value.ticket != 0 {
-            unsafe { (self.ops.failed)(value.ticket, value.name.as_ptr(), result) };
+            unsafe { leaf::failed(value.ticket, value.name.as_ptr(), result) };
         }
     }
 
     fn release(&self, value: &Readback) {
         let a = value.allocation;
         if a.buffer != 0 || a.memory != 0 || a.event != 0 {
-            unsafe { (self.ops.release)(self.native(), &a) };
+            unsafe { leaf::release(self.native(), &a) };
         }
     }
 
@@ -286,7 +266,7 @@ impl Owner {
         if !self.command_completion {
             let _ = self.flush(state, true, 0);
         }
-        state.legacy.wants(frame) || unsafe { (self.ops.wants_frame)(frame) } != 0
+        state.legacy.wants(frame) || leaf::wants_frame(frame) != 0
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -343,7 +323,7 @@ impl Owner {
             group_complete: false,
             discarded: false,
         };
-        if core_source && unsafe { (self.ops.wants)(identity) } != 0 {
+        if core_source && unsafe { leaf::wants(identity) } != 0 {
             let Some(CaptureName { name, view, scale }) =
                 CaptureName::for_role(role, 0, NAME_CAPACITY)
             else {
@@ -351,9 +331,8 @@ impl Owner {
                 return false;
             };
             owned.name = name;
-            owned.ticket = unsafe {
-                (self.ops.reserve)(identity, owned.name.as_ptr(), role.as_ptr(), view, scale)
-            };
+            owned.ticket =
+                unsafe { leaf::reserve(identity, owned.name.as_ptr(), role.as_ptr(), view, scale) };
             *ticket = owned.ticket;
         }
         if !owned.legacy && owned.ticket == 0 {
@@ -372,7 +351,7 @@ impl Owner {
         state.pending.push(owned);
         let value = state.pending.last_mut().expect("just pushed");
         let code = unsafe {
-            (self.ops.allocate)(
+            leaf::allocate(
                 self.native(),
                 image,
                 value.bytes,
@@ -385,7 +364,7 @@ impl Owner {
             state.legacy.failure(&role, frame);
             return false;
         }
-        unsafe { (self.ops.encode)(self.native(), commands as Handle, image, &value.allocation) };
+        unsafe { leaf::encode(self.native(), commands as Handle, image, &value.allocation) };
         value.recorded = true;
         true
     }
@@ -477,7 +456,7 @@ impl Owner {
         // ungrouped copy carries its own execution event. A drain alone
         // cannot establish that the command buffer was submitted.
         if !value.group_complete
-            && unsafe { (self.ops.event_set)(self.native(), value.allocation.event) } == 0
+            && unsafe { leaf::event_set(self.native(), value.allocation.event) } == 0
         {
             *okay = false;
             self.fail(value, MAP_FAILED);
@@ -485,7 +464,7 @@ impl Owner {
         }
         let mut data: *mut c_void = std::ptr::null_mut();
         if unsafe {
-            (self.ops.map)(
+            leaf::map(
                 self.native(),
                 value.allocation.memory,
                 value.bytes,
@@ -510,7 +489,7 @@ impl Owner {
                 data,
             };
             *okay &= unsafe {
-                (self.ops.pixels)(
+                leaf::pixels(
                     value.ticket,
                     value.name.as_ptr(),
                     &pixels,
@@ -531,7 +510,7 @@ impl Owner {
                 provider,
             );
         }
-        unsafe { (self.ops.unmap)(self.native(), value.allocation.memory) };
+        unsafe { leaf::unmap(self.native(), value.allocation.memory) };
         Step::Retire
     }
 }
@@ -654,7 +633,6 @@ impl Owner {
         Self::new(
             command_completion,
             std::ptr::null_mut(),
-            &native::PLATFORM,
             Legacy::from_environment(),
         )
     }

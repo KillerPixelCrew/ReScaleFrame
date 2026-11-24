@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-use super::{Allocation, Handle, Image, Platform};
+// The capture owner's Vulkan leaves. Unit tests call fakes instead, so the leaves are unused there.
+#![cfg_attr(test, allow(dead_code))]
+use super::{Allocation, Handle, Image};
 use crate::dx12_vulkan_platform::lookup;
-use crate::input_dump::abi::*;
 use crate::sys::rsf_vk_get_proc;
 use ash::vk::{self, Handle as _};
 use std::{mem, ptr};
@@ -84,7 +85,9 @@ dispatch! {
     copy: PFN_vkCmdCopyImageToBuffer = c"vkCmdCopyImageToBuffer",
 }
 
-unsafe extern "C" fn allocate(
+// Creates the buffer, host-coherent memory and optional event. Partial handles stay in `out` on
+// failure; the owner releases them later.
+pub(super) unsafe fn allocate(
     native: Handle,
     _: *const Image,
     bytes: u64,
@@ -143,7 +146,8 @@ unsafe extern "C" fn allocate(
     result.as_raw()
 }
 
-unsafe extern "C" fn encode(
+// Records the image-to-buffer copy, its barriers and the optional event.
+pub(super) unsafe fn encode(
     native: Handle,
     commands: Handle,
     source: *const Image,
@@ -232,7 +236,7 @@ unsafe extern "C" fn encode(
     }
 }
 
-unsafe extern "C" fn event_set(native: Handle, event: u64) -> i32 {
+pub(super) unsafe fn event_set(native: Handle, event: u64) -> i32 {
     let vk = unsafe { &*native.cast::<Dispatch>() };
     i32::from(
         event != 0
@@ -242,7 +246,7 @@ unsafe extern "C" fn event_set(native: Handle, event: u64) -> i32 {
     )
 }
 
-unsafe extern "C" fn map(native: Handle, memory: u64, bytes: u64, data: *mut Handle) -> i32 {
+pub(super) unsafe fn map(native: Handle, memory: u64, bytes: u64, data: *mut Handle) -> i32 {
     let vk = unsafe { &*native.cast::<Dispatch>() };
     unsafe {
         (vk.map)(
@@ -257,12 +261,12 @@ unsafe extern "C" fn map(native: Handle, memory: u64, bytes: u64, data: *mut Han
     .as_raw()
 }
 
-unsafe extern "C" fn unmap(native: Handle, memory: u64) {
+pub(super) unsafe fn unmap(native: Handle, memory: u64) {
     let vk = unsafe { &*native.cast::<Dispatch>() };
     unsafe { (vk.unmap)(vk.device, vk::DeviceMemory::from_raw(memory)) };
 }
 
-unsafe extern "C" fn release(native: Handle, allocation: *const Allocation) {
+pub(super) unsafe fn release(native: Handle, allocation: *const Allocation) {
     let (vk, a) = unsafe { (&*native.cast::<Dispatch>(), &*allocation) };
     unsafe {
         if a.event != 0 {
@@ -281,16 +285,9 @@ unsafe extern "C" fn release(native: Handle, allocation: *const Allocation) {
     }
 }
 
-pub(super) static PLATFORM: Platform = Platform {
-    allocate,
-    encode,
-    event_set,
-    map,
-    unmap,
-    release,
-    wants: rsf_input_dump_wants,
-    wants_frame: rsf_input_dump_wants_frame,
-    reserve: rsf_input_dump_reserve,
-    failed: rsf_input_dump_failed,
-    pixels: rsf_input_dump_pixels,
+#[cfg(not(test))]
+pub(super) use crate::input_dump::abi::{
+    rsf_input_dump_failed as failed, rsf_input_dump_pixels as pixels,
+    rsf_input_dump_reserve as reserve, rsf_input_dump_wants as wants,
+    rsf_input_dump_wants_frame as wants_frame,
 };
