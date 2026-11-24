@@ -49,7 +49,11 @@ pub(super) unsafe fn release_device(device: *mut c_void) {
     drop(unsafe { ID3D12Device::from_raw(device) });
 }
 
-pub(super) unsafe fn acquire_device(
+/// Takes the INT8 lease for a D3D12 device, matching its adapter first (the D3D12 SR backend).
+///
+/// # Safety
+/// The caller keeps the module and device alive for the call.
+pub unsafe fn acquire_for_device(
     module: *mut c_void,
     device: *mut c_void,
     log: LogFn,

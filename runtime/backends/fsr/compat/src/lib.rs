@@ -13,6 +13,8 @@ pub mod sys {
 }
 #[cfg(windows)]
 mod dx12;
+#[cfg(windows)]
+pub use dx12::acquire_for_device;
 /// D3D12 helpers shared by the FSR4 Vulkan SR and FG bridges.
 #[cfg(windows)]
 pub mod dx12_bridge;
@@ -291,19 +293,6 @@ pub unsafe fn acquire_logged(
         }
     }
     lease
-}
-/// Takes the INT8 lease for a D3D12 device, matching its adapter first (the D3D12 SR backend).
-///
-/// # Safety
-/// The caller keeps the module and device alive for the call.
-#[cfg(windows)]
-pub unsafe fn acquire_for_device(
-    module: *mut c_void,
-    device: *mut c_void,
-    log: LogFn,
-    user: *mut c_void,
-) -> *const CompatLease {
-    unsafe { dx12::acquire_device(module, device, log, user) }
 }
 
 /// # Safety
