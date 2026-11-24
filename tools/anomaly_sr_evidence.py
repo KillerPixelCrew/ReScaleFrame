@@ -10,8 +10,12 @@ import importlib.util
 import pathlib
 import re
 import struct
-import capstone
-from capstone import x86
+
+try:  # only --verify disassembles; --measure-self-test runs without capstone (CI has none)
+    import capstone
+    from capstone import x86
+except ImportError:
+    capstone = x86 = None
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -1059,6 +1063,8 @@ if __name__ == '__main__':
         raise SystemExit(measure_self_test())
     if args.measure_jitter:
         raise SystemExit(0 if measure_burst(args.measure_jitter, args.region, args.final_region, args.tolerance, args.out)['ok'] else 1)
+    if capstone is None:
+        raise SystemExit('the executable checks need capstone: py -3 -m pip install capstone')
     image = Image()
     if args.verify:
         verify(image)
