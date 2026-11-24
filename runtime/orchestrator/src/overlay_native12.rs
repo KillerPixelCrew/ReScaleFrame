@@ -1,25 +1,40 @@
 // SPDX-License-Identifier: MIT
-// The production entry points live in `native`, which unit tests do not build.
+//! The native D3D12 panel (overlay_native12.cpp): the shared panel drawn with its own D3D12
+//! pipeline on the presenting queue, through a three-slot ring of command lists.
 #![cfg_attr(test, allow(dead_code))]
-use crate::com_ref;
+use crate::d3d11_d3d12::{create_texture12, transition_barrier};
 use crate::d3d12_fence::FenceState;
 use crate::overlay_geometry::{
     borrowed_draw_slice, draw_clip, patch_fits, valid_indices, valid_texture,
 };
+use crate::overlay_input::{
+    rsf_overlay_input_collect, rsf_overlay_input_install, rsf_overlay_input_set_visible,
+    rsf_overlay_input_uninstall, rsf_overlay_input_visible,
+};
 use crate::overlay_panel::{OpenPanel, PanelEntries, elapsed_seconds, open_panel};
+use crate::overlay_window::{NOT_INSTALLED, OK};
 use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
 use crate::sys::{
-    RSF_OVERLAY_ABI_VERSION, rsf_overlay, rsf_overlay_draw_data as DrawData, rsf_overlay_input,
+    RSF_OVERLAY_ABI_VERSION, RSF_OVERLAY_INPUT_ABI_VERSION, rsf_overlay,
+    rsf_overlay_draw_data as DrawData, rsf_overlay_input, rsf_overlay_input_options,
     rsf_overlay_vertex,
 };
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
+use rsf_shader_compiler::{Compiler, Request, blob_bytes, compile};
 use std::ffi::{CStr, c_char, c_void};
+use std::mem::ManuallyDrop;
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
-use std::ptr::{NonNull, null_mut};
+use std::ptr::{NonNull, copy_nonoverlapping, null_mut};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use windows::core::{IUnknown, Interface};
+use windows::Win32::Foundation::{HANDLE, RECT};
+use windows::Win32::Graphics::Direct3D::{
+    D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, Fxc::D3DCOMPILE_ENABLE_STRICTNESS,
+};
+use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::Graphics::Dxgi::{Common::*, IDXGISwapChain, IDXGISwapChain3};
+use windows::core::{BOOL, Interface, PCSTR};
 use windows_sys::Win32::{
     Foundation::WAIT_OBJECT_0,
     System::{
@@ -28,106 +43,7 @@ use windows_sys::Win32::{
     },
 };
 
-#[cfg(not(test))]
-pub(crate) mod native;
-
 pub(crate) type OverlayLog = Option<unsafe extern "C" fn(*mut c_void, *const c_char)>;
-
-#[repr(C)]
-struct Target {
-    width: u32,
-    height: u32,
-    format: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct DrawCall {
-    descriptor: u32,
-    first_index: u32,
-    index_count: u32,
-    vertex_offset: i32,
-    clip: [i32; 4],
-}
-
-#[repr(C)]
-struct Draw {
-    target: *mut c_void,
-    pipeline: *mut c_void,
-    vertices: *mut c_void,
-    indices: *mut c_void,
-    vertex_data: *const c_void,
-    index_data: *const c_void,
-    width: u32,
-    height: u32,
-    vertex_bytes: u32,
-    index_bytes: u32,
-}
-
-/// One Present slot: direct allocator, its closed graphics list, a shader-visible SRV heap of
-/// `TEXTURES` descriptors and a one-entry RTV heap. The owner holds each reference; leaves
-/// borrow the table for one call.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct FrameTable {
-    allocator: *mut c_void,
-    commands: *mut c_void,
-    srv: *mut c_void,
-    rtv: *mut c_void,
-}
-
-// Production binds `native::PLATFORM`; the unit tests bind fakes.
-#[derive(Clone, Copy)]
-struct Platform {
-    window: unsafe extern "C" fn(chain: *mut c_void) -> *mut c_void,
-    initialize: unsafe extern "C" fn(
-        device: *mut c_void,
-        queue: *mut c_void,
-        fence: *mut *mut c_void,
-    ) -> *mut c_void,
-    create_frame: unsafe extern "C" fn(panel: *mut c_void, frame: *mut FrameTable) -> u32,
-    install_input:
-        unsafe extern "C" fn(window: *mut c_void, log: OverlayLog, user: *mut c_void) -> u32,
-    stop_input: unsafe extern "C" fn() -> u32,
-    destroy: unsafe extern "C" fn(panel: *mut c_void),
-    visible: unsafe extern "C" fn() -> u32,
-    set_visible: unsafe extern "C" fn(visible: u32),
-    completed: unsafe extern "C" fn(fence: *mut c_void) -> u64,
-    arm: unsafe extern "C" fn(fence: *mut c_void, event: *mut c_void, value: u64) -> u32,
-    begin: unsafe extern "C" fn(
-        frame: *const FrameTable,
-        chain: *mut c_void,
-        target: *mut Target,
-    ) -> *mut c_void,
-    create_pipeline: unsafe extern "C" fn(panel: *mut c_void, format: u32) -> *mut c_void,
-    create_upload:
-        unsafe extern "C" fn(panel: *mut c_void, bytes: u64, capacity: *mut u64) -> *mut c_void,
-    collect_input: unsafe extern "C" fn(
-        input: *mut rsf_overlay_input,
-        width: u32,
-        height: u32,
-        elapsed: f32,
-    ) -> u32,
-    create_texture:
-        unsafe extern "C" fn(panel: *mut c_void, width: u32, height: u32) -> *mut c_void,
-    upload_texture: unsafe extern "C" fn(
-        panel: *mut c_void,
-        frame: *const FrameTable,
-        resource: *mut c_void,
-        update: *const rsf_overlay_texture_update,
-    ) -> *mut c_void,
-    record: unsafe extern "C" fn(
-        panel: *mut c_void,
-        frame: *const FrameTable,
-        binding: *const Draw,
-        textures: *const *mut c_void,
-        texture_count: u32,
-        calls: *const DrawCall,
-        call_count: u32,
-    ) -> u32,
-    execute: unsafe extern "C" fn(panel: *mut c_void, frame: *const FrameTable),
-    signal: unsafe extern "C" fn(panel: *mut c_void, fence: *mut c_void, value: u64) -> u32,
-}
 
 const SLOTS: usize = 3;
 const TEXTURES: usize = 64;
@@ -136,6 +52,12 @@ const STARTUP_MS: u64 = 8000;
 const STARTUP_FADE_MS: u64 = 1000;
 const FENCE_WAIT_MS: u32 = 5000;
 const RETRY_DELAY_MS: u64 = 1000;
+
+const _: () = {
+    assert!(size_of::<rsf_overlay_vertex>() == 20);
+    assert!(std::mem::offset_of!(rsf_overlay_vertex, u) == 8);
+    assert!(std::mem::offset_of!(rsf_overlay_vertex, color) == 16);
+};
 
 struct Ui {
     api: PanelEntries,
@@ -205,7 +127,7 @@ impl Ring {
 }
 
 struct Fence {
-    reference: IUnknown,
+    reference: ID3D12Fence,
     event: Option<OwnedHandle>,
     armed: Option<u64>,
 }
@@ -219,15 +141,12 @@ fn retire_fence_event(armed: &mut Option<u64>, signaled: bool, completed: u64) -
     armed.is_none()
 }
 
-// D3D12 fences and Win32 event handles can be moved between threads. PANEL serializes waits and signals.
-unsafe impl Send for Fence {}
-
 impl Fence {
-    fn completed(&self, platform: &Platform) -> u64 {
-        unsafe { (platform.completed)(self.reference.as_raw()) }
+    fn completed(&self) -> u64 {
+        unsafe { self.reference.GetCompletedValue() }
     }
 
-    fn wait_for_slot(&mut self, platform: &Platform, value: u64) -> bool {
+    fn wait_for_slot(&mut self, value: u64) -> bool {
         if self.armed.is_some() {
             return false;
         }
@@ -238,128 +157,456 @@ impl Fence {
         let Some(event) = &self.event else {
             return false;
         };
-        let event = event.as_raw_handle();
-        if unsafe { (platform.arm)(self.reference.as_raw(), event, value) } == 0 {
+        let event = HANDLE(event.as_raw_handle());
+        if unsafe { self.reference.SetEventOnCompletion(value, event) }.is_err() {
             return false;
         }
         self.armed = Some(value);
         // Keep the event with its fence after a timeout. A later GPU signal may still reach it.
-        self.finish_event(platform, FENCE_WAIT_MS)
-            && Ring::slot_ready(self.completed(platform), value)
+        self.finish_event(FENCE_WAIT_MS) && Ring::slot_ready(self.completed(), value)
     }
 
-    fn finish_event(&mut self, platform: &Platform, timeout: u32) -> bool {
+    fn finish_event(&mut self, timeout: u32) -> bool {
         if self.armed.is_none() {
             return true;
         }
         let Some(event) = &self.event else {
             return false;
         };
-        let event = event.as_raw_handle();
-        let signaled = unsafe { WaitForSingleObject(event, timeout) } == WAIT_OBJECT_0;
-        let completed = self.completed(platform);
+        let signaled =
+            unsafe { WaitForSingleObject(event.as_raw_handle(), timeout) } == WAIT_OBJECT_0;
+        let completed = self.completed();
         retire_fence_event(&mut self.armed, signaled, completed)
     }
 }
 
+/// The overlay device's pipeline inputs: shaders, root signature and the presenting queue.
+struct Gpu {
+    device: ID3D12Device,
+    queue: ID3D12CommandQueue,
+    root: ID3D12RootSignature,
+    vertex: Vec<u8>,
+    pixel: Vec<u8>,
+    stride: u32,
+}
+
+fn root_signature(device: &ID3D12Device) -> Option<ID3D12RootSignature> {
+    let range = D3D12_DESCRIPTOR_RANGE {
+        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+        NumDescriptors: 1,
+        ..Default::default()
+    };
+    let parameters = [
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Constants: D3D12_ROOT_CONSTANTS {
+                    Num32BitValues: 2,
+                    ..Default::default()
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
+        },
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &range,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+    ];
+    let sampler = D3D12_STATIC_SAMPLER_DESC {
+        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        MaxLOD: D3D12_FLOAT32_MAX,
+        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
+        MaxAnisotropy: 1,
+        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        ..Default::default()
+    };
+    let desc = D3D12_ROOT_SIGNATURE_DESC {
+        NumParameters: parameters.len() as u32,
+        pParameters: parameters.as_ptr(),
+        NumStaticSamplers: 1,
+        pStaticSamplers: &sampler,
+        Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
+    };
+    let mut blob = None;
+    unsafe { D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &mut blob, None) }
+        .ok()?;
+    unsafe { device.CreateRootSignature(0, blob_bytes(blob.as_ref()?)) }.ok()
+}
+
+impl Gpu {
+    fn create(device: &ID3D12Device, queue: &ID3D12CommandQueue) -> Option<(Self, ID3D12Fence)> {
+        let stride = unsafe {
+            device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+        };
+        let fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.ok()?;
+        let compiler = Compiler::system("d3dcompiler_47.dll")?;
+        let entry = compiler.entry()?;
+        let shader = |name, target| {
+            let output = unsafe {
+                compile(
+                    entry,
+                    Request {
+                        source: include_bytes!("overlay_native12/overlay.hlsl"),
+                        name: c"overlay",
+                        entry: name,
+                        target,
+                        flags: D3DCOMPILE_ENABLE_STRICTNESS,
+                    },
+                    &[],
+                    null_mut(),
+                )
+            };
+            if output.status < 0 { None } else { output.code }
+        };
+        let vertex = shader(c"vs", c"vs_5_0")?;
+        let pixel = shader(c"ps", c"ps_5_0")?;
+        let root = root_signature(device)?;
+        let gpu = Self {
+            device: device.clone(),
+            queue: queue.clone(),
+            root,
+            vertex,
+            pixel,
+            stride,
+        };
+        Some((gpu, fence))
+    }
+
+    fn pipeline(&self, format: DXGI_FORMAT) -> Option<ID3D12PipelineState> {
+        let layout = [
+            (c"POSITION", DXGI_FORMAT_R32G32_FLOAT, 0),
+            (c"TEXCOORD", DXGI_FORMAT_R32G32_FLOAT, 8),
+            (c"COLOR", DXGI_FORMAT_R8G8B8A8_UNORM, 16),
+        ]
+        .map(|(name, format, offset)| D3D12_INPUT_ELEMENT_DESC {
+            SemanticName: PCSTR(name.as_ptr().cast()),
+            Format: format,
+            AlignedByteOffset: offset,
+            InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+            ..Default::default()
+        });
+        let mut desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+            pRootSignature: ManuallyDrop::new(Some(unsafe {
+                ID3D12RootSignature::from_raw(self.root.as_raw())
+            })),
+            VS: D3D12_SHADER_BYTECODE {
+                pShaderBytecode: self.vertex.as_ptr().cast(),
+                BytecodeLength: self.vertex.len(),
+            },
+            PS: D3D12_SHADER_BYTECODE {
+                pShaderBytecode: self.pixel.as_ptr().cast(),
+                BytecodeLength: self.pixel.len(),
+            },
+            InputLayout: D3D12_INPUT_LAYOUT_DESC {
+                pInputElementDescs: layout.as_ptr(),
+                NumElements: layout.len() as u32,
+            },
+            PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+            NumRenderTargets: 1,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            SampleMask: u32::MAX,
+            ..Default::default()
+        };
+        desc.RTVFormats[0] = format;
+        desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        desc.RasterizerState.DepthClipEnable = BOOL(1);
+        desc.BlendState.RenderTarget[0] = D3D12_RENDER_TARGET_BLEND_DESC {
+            BlendEnable: BOOL(1),
+            SrcBlend: D3D12_BLEND_ONE,
+            DestBlend: D3D12_BLEND_INV_SRC_ALPHA,
+            BlendOp: D3D12_BLEND_OP_ADD,
+            SrcBlendAlpha: D3D12_BLEND_ONE,
+            DestBlendAlpha: D3D12_BLEND_INV_SRC_ALPHA,
+            BlendOpAlpha: D3D12_BLEND_OP_ADD,
+            RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
+            ..Default::default()
+        };
+        desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+        desc.DepthStencilState.FrontFace = D3D12_DEPTH_STENCILOP_DESC {
+            StencilFailOp: D3D12_STENCIL_OP_KEEP,
+            StencilDepthFailOp: D3D12_STENCIL_OP_KEEP,
+            StencilPassOp: D3D12_STENCIL_OP_KEEP,
+            StencilFunc: D3D12_COMPARISON_FUNC_ALWAYS,
+        };
+        desc.DepthStencilState.BackFace = desc.DepthStencilState.FrontFace;
+        unsafe { self.device.CreateGraphicsPipelineState(&desc) }.ok()
+    }
+
+    fn upload_buffer(&self, size: u64) -> Option<(ID3D12Resource, u64)> {
+        if size == 0 {
+            return None;
+        }
+        let capacity = size.checked_add(65535)? & !65535;
+        let heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_UPLOAD,
+            ..Default::default()
+        };
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Width: capacity,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            ..Default::default()
+        };
+        let mut buffer = None;
+        unsafe {
+            self.device.CreateCommittedResource(
+                &heap,
+                D3D12_HEAP_FLAG_NONE,
+                &desc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                None,
+                &mut buffer,
+            )
+        }
+        .ok()?;
+        Some((buffer?, capacity))
+    }
+
+    fn texture(&self, width: u32, height: u32) -> Option<ID3D12Resource> {
+        let raw = unsafe {
+            create_texture12(
+                self.device.as_raw(),
+                width,
+                height,
+                DXGI_FORMAT_R8G8B8A8_UNORM.0 as u32,
+                D3D12_RESOURCE_FLAG_NONE,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+            )
+        };
+        (!raw.is_null()).then(|| unsafe { ID3D12Resource::from_raw(raw) })
+    }
+
+    // Stages one atlas patch and records its copy into the slot's list.
+    unsafe fn upload_texture(
+        &self,
+        list: &ID3D12GraphicsCommandList,
+        destination: &ID3D12Resource,
+        patch: &rsf_overlay_texture_update,
+    ) -> Option<ID3D12Resource> {
+        let mut desc = unsafe { destination.GetDesc() };
+        desc.Width = u64::from(patch.width);
+        desc.Height = patch.height;
+        let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        let mut bytes = 0;
+        unsafe {
+            self.device.GetCopyableFootprints(
+                &desc,
+                0,
+                1,
+                0,
+                Some(&mut footprint),
+                None,
+                None,
+                Some(&mut bytes),
+            )
+        };
+        let (upload, _) = self.upload_buffer(bytes)?;
+        let row_bytes = patch.width as usize * 4;
+        with_mapping(&upload, |mapped| {
+            for row in 0..patch.height as usize {
+                unsafe {
+                    copy_nonoverlapping(
+                        patch.pixels.add(row * row_bytes),
+                        mapped.add(row * footprint.Footprint.RowPitch as usize),
+                        row_bytes,
+                    )
+                };
+            }
+        })?;
+        let source = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(unsafe {
+                ID3D12Resource::from_raw(upload.as_raw())
+            })),
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                PlacedFootprint: footprint,
+            },
+        };
+        let target = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(unsafe {
+                ID3D12Resource::from_raw(destination.as_raw())
+            })),
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                SubresourceIndex: 0,
+            },
+        };
+        let (copy, sample) = (
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        );
+        unsafe {
+            if patch.is_whole_texture == 0 {
+                list.ResourceBarrier(&[transition_barrier(destination, sample, copy)]);
+            }
+            list.CopyTextureRegion(&target, patch.x, patch.y, 0, &source, None);
+            list.ResourceBarrier(&[transition_barrier(destination, copy, sample)]);
+        }
+        Some(upload)
+    }
+}
+
+fn with_mapping(resource: &ID3D12Resource, write: impl FnOnce(*mut u8)) -> Option<()> {
+    let empty = D3D12_RANGE { Begin: 0, End: 0 };
+    let mut mapped = null_mut();
+    unsafe { resource.Map(0, Some(&empty), Some(&mut mapped)) }.ok()?;
+    write(mapped.cast());
+    unsafe { resource.Unmap(0, None) };
+    Some(())
+}
+
+/// One Present slot: direct allocator, its closed list, a shader-visible SRV heap of `TEXTURES`
+/// descriptors and a one-entry RTV heap.
+struct Frame {
+    allocator: ID3D12CommandAllocator,
+    commands: ID3D12GraphicsCommandList,
+    srv: ID3D12DescriptorHeap,
+    rtv: ID3D12DescriptorHeap,
+}
+
+impl Frame {
+    fn create(device: &ID3D12Device) -> Option<Self> {
+        let kind = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        let allocator: ID3D12CommandAllocator =
+            unsafe { device.CreateCommandAllocator(kind) }.ok()?;
+        let commands: ID3D12GraphicsCommandList =
+            unsafe { device.CreateCommandList(0, kind, &allocator, None::<&ID3D12PipelineState>) }
+                .ok()?;
+        unsafe { commands.Close() }.ok()?;
+        let mut desc = D3D12_DESCRIPTOR_HEAP_DESC {
+            Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+            NumDescriptors: TEXTURES as u32,
+            Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
+            NodeMask: 0,
+        };
+        let srv = unsafe { device.CreateDescriptorHeap(&desc) }.ok()?;
+        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        desc.NumDescriptors = 1;
+        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        let rtv = unsafe { device.CreateDescriptorHeap(&desc) }.ok()?;
+        Some(Self {
+            allocator,
+            commands,
+            srv,
+            rtv,
+        })
+    }
+
+    // Reopens the list and returns the chain's current back buffer with its extent and format.
+    fn begin(&self, chain: &IDXGISwapChain) -> Option<(ID3D12Resource, u32, u32, DXGI_FORMAT)> {
+        unsafe {
+            self.allocator.Reset().ok()?;
+            self.commands.Reset(&self.allocator, None).ok()?;
+        }
+        let chain = chain.cast::<IDXGISwapChain3>().ok()?;
+        let target: ID3D12Resource =
+            unsafe { chain.GetBuffer(chain.GetCurrentBackBufferIndex()) }.ok()?;
+        let desc = unsafe { target.GetDesc() };
+        if desc.Width == 0 || desc.Width > u64::from(u32::MAX) || desc.Height == 0 {
+            return None;
+        }
+        Some((target, desc.Width as u32, desc.Height, desc.Format))
+    }
+}
+
 struct Upload {
-    resource: IUnknown,
+    resource: ID3D12Resource,
     capacity: u64,
 }
 
-fn upload(
-    buffer: &mut Option<Upload>,
-    platform: &Platform,
-    native: *mut c_void,
-    bytes: u32,
-) -> Option<*mut c_void> {
+fn upload(buffer: &mut Option<Upload>, gpu: &Gpu, bytes: u32) -> Option<ID3D12Resource> {
     let bytes = u64::from(bytes);
     if let Some(buffer) = buffer.as_ref().filter(|buffer| buffer.capacity >= bytes) {
-        return Some(buffer.resource.as_raw());
+        return Some(buffer.resource.clone());
     }
-    let mut capacity = 0;
-    let resource =
-        unsafe { com_ref::owned((platform.create_upload)(native, bytes, &mut capacity)) }?;
-    if capacity < bytes {
-        return None;
-    }
-    let handle = resource.as_raw();
-    *buffer = Some(Upload { resource, capacity });
-    Some(handle)
+    let (resource, capacity) = gpu.upload_buffer(bytes)?;
+    *buffer = Some(Upload {
+        resource: resource.clone(),
+        capacity,
+    });
+    Some(resource)
 }
 
+/// The vertex and index uploads of one non-empty draw.
+struct Geometry {
+    vertices: ID3D12Resource,
+    indices: ID3D12Resource,
+    vertex_bytes: u32,
+    index_bytes: u32,
+}
+
+#[derive(Default)]
 struct DrawSlot {
-    pipeline: Option<IUnknown>,
+    pipeline: Option<ID3D12PipelineState>,
     vertices: Option<Upload>,
     indices: Option<Upload>,
 }
 
 impl DrawSlot {
-    const fn new() -> Self {
-        Self {
-            pipeline: None,
-            vertices: None,
-            indices: None,
-        }
-    }
-
-    fn bind_uploads(
-        &mut self,
-        platform: &Platform,
-        native: *mut c_void,
-        data: &DrawData,
-        binding: &mut Draw,
-    ) -> Option<()> {
+    // None refuses the frame; Some(None) is an empty draw.
+    fn bind_uploads(&mut self, gpu: &Gpu, data: &DrawData) -> Option<Option<Geometry>> {
         if data.vertex_count == 0 || data.index_count == 0 {
-            return Some(());
+            return Some(None);
         }
         if data.vertices.is_null() || data.indices.is_null() {
             return None;
         }
-        binding.vertex_bytes = data
+        let vertex_bytes = data
             .vertex_count
             .checked_mul(size_of::<rsf_overlay_vertex>() as u32)?;
-        binding.index_bytes = data.index_count.checked_mul(size_of::<u32>() as u32)?;
-        binding.vertices = upload(&mut self.vertices, platform, native, binding.vertex_bytes)?;
-        binding.indices = upload(&mut self.indices, platform, native, binding.index_bytes)?;
-        Some(())
+        let index_bytes = data.index_count.checked_mul(size_of::<u32>() as u32)?;
+        Some(Some(Geometry {
+            vertices: upload(&mut self.vertices, gpu, vertex_bytes)?,
+            indices: upload(&mut self.indices, gpu, index_bytes)?,
+            vertex_bytes,
+            index_bytes,
+        }))
     }
 }
 
+#[derive(Default)]
 struct Graphics {
-    pipeline: Option<(u32, IUnknown)>,
+    pipeline: Option<(DXGI_FORMAT, ID3D12PipelineState)>,
     slots: [DrawSlot; SLOTS],
 }
 
-// The pipeline and uploads are free-threaded D3D12 references under the panel lock.
-unsafe impl Send for Graphics {}
-
 impl Graphics {
-    const fn new() -> Self {
-        Self {
-            pipeline: None,
-            slots: [const { DrawSlot::new() }; SLOTS],
-        }
-    }
-
     fn bind_pipeline(
         &mut self,
-        platform: &Platform,
-        native: *mut c_void,
+        gpu: &Gpu,
         slot: usize,
-        format: u32,
-    ) -> Option<*mut c_void> {
+        format: DXGI_FORMAT,
+    ) -> Option<ID3D12PipelineState> {
         if self
             .pipeline
             .as_ref()
             .is_none_or(|(active, _)| *active != format)
         {
-            let pipeline = unsafe { com_ref::owned((platform.create_pipeline)(native, format)) }?;
-            self.pipeline = Some((format, pipeline));
+            self.pipeline = Some((format, gpu.pipeline(format)?));
         }
         let (_, pipeline) = self.pipeline.as_ref()?;
         self.slots[slot].pipeline = Some(pipeline.clone());
-        Some(pipeline.as_raw())
+        Some(pipeline.clone())
     }
 }
 
@@ -367,35 +614,43 @@ struct Texture {
     id: u64,
     width: u32,
     height: u32,
-    resource: IUnknown,
+    resource: ID3D12Resource,
 }
 
+// The target and geometry of one recorded panel draw.
+struct Draw<'a> {
+    target: &'a ID3D12Resource,
+    pipeline: &'a ID3D12PipelineState,
+    width: u32,
+    height: u32,
+    geometry: Option<Geometry>,
+}
+
+struct DrawCall {
+    descriptor: u32,
+    first_index: u32,
+    index_count: u32,
+    vertex_offset: i32,
+    clip: [i32; 4],
+}
+
+#[derive(Default)]
 struct Atlas {
     textures: Vec<Texture>,
-    retained: [Vec<IUnknown>; SLOTS],
+    // What each slot's list reads, kept until the ring proves that slot complete.
+    retained: [Vec<ID3D12Resource>; SLOTS],
 }
 
-// Only thread-safe D3D12 resource references enter the atlas. All changes,
-// including release of a completed slot, are serialized by PANEL.
-unsafe impl Send for Atlas {}
-
 impl Atlas {
-    const fn new() -> Self {
-        Self {
-            textures: Vec::new(),
-            retained: [const { Vec::new() }; SLOTS],
-        }
-    }
-
     fn position(&self, id: u64) -> Option<usize> {
         self.textures.iter().position(|entry| entry.id == id)
     }
 
     fn update(
         &mut self,
-        platform: &Platform,
-        native: *mut c_void,
-        lease: &Lease,
+        gpu: &Gpu,
+        frame: &Frame,
+        slot: usize,
         update: &rsf_overlay_texture_update,
     ) -> Option<()> {
         if !valid_texture(update) {
@@ -409,18 +664,11 @@ impl Atlas {
             {
                 return None;
             }
-            let resource = unsafe {
-                com_ref::owned((platform.create_texture)(
-                    native,
-                    update.width,
-                    update.height,
-                ))
-            }?;
             Some(Texture {
                 id: update.id,
                 width: update.width,
                 height: update.height,
-                resource,
+                resource: gpu.texture(update.width, update.height)?,
             })
         } else {
             None
@@ -432,16 +680,9 @@ impl Atlas {
         if !patch_fits(update, texture.width, texture.height) {
             return None;
         }
-        let upload = unsafe {
-            com_ref::owned((platform.upload_texture)(
-                native,
-                &lease.frame,
-                texture.resource.as_raw(),
-                update,
-            ))
-        }?;
-        self.retained[lease.slot].push(upload);
-        self.retained[lease.slot].push(texture.resource.clone());
+        let upload = unsafe { gpu.upload_texture(&frame.commands, &texture.resource, update) }?;
+        self.retained[slot].push(upload);
+        self.retained[slot].push(texture.resource.clone());
         if let Some(replacement) = replacement {
             match position {
                 Some(index) => self.textures[index] = replacement,
@@ -451,8 +692,8 @@ impl Atlas {
         Some(())
     }
 
-    unsafe fn draw_calls(&self, data: &DrawData, binding: &Draw) -> Option<Vec<DrawCall>> {
-        if binding.vertex_bytes == 0 || binding.index_bytes == 0 {
+    unsafe fn draw_calls(&self, data: &DrawData, draw: &Draw<'_>) -> Option<Vec<DrawCall>> {
+        if draw.geometry.is_none() {
             return Some(Vec::new());
         }
         let indices = unsafe { borrowed_draw_slice(data.indices, data.index_count) }?;
@@ -460,7 +701,7 @@ impl Atlas {
         let mut planned = Vec::new();
         planned.try_reserve_exact(calls.len()).ok()?;
         for call in calls {
-            let Some(clip) = draw_clip(call, binding.width, binding.height).ok()? else {
+            let Some(clip) = draw_clip(call, draw.width, draw.height).ok()? else {
                 continue;
             };
             if !valid_indices(call, indices, data.vertex_count) {
@@ -481,11 +722,11 @@ impl Atlas {
     // data borrows the live panel layout while this slot is recorded.
     unsafe fn record(
         &mut self,
-        platform: &Platform,
-        native: *mut c_void,
+        gpu: &Gpu,
         ui: &Ui,
-        lease: &Lease,
-        binding: &Draw,
+        frame: &Frame,
+        slot: usize,
+        draw: &Draw<'_>,
         data: &DrawData,
     ) -> Option<()> {
         let mut batch = [rsf_overlay_texture_update::default(); ATLAS_BATCH];
@@ -497,30 +738,16 @@ impl Atlas {
                 break;
             }
             for update in batch.get(..count as usize)? {
-                self.update(platform, native, lease, update)?;
+                self.update(gpu, frame, slot, update)?;
             }
         }
 
-        let calls = unsafe { self.draw_calls(data, binding) }?;
-        let mut bindings = [std::ptr::null_mut(); TEXTURES];
-        for (binding, texture) in bindings.iter_mut().zip(&self.textures) {
-            *binding = texture.resource.as_raw();
-            self.retained[lease.slot].push(texture.resource.clone());
+        let calls = unsafe { self.draw_calls(data, draw) }?;
+        self.retained[slot].extend(self.textures.iter().map(|texture| texture.resource.clone()));
+        if let Some(geometry) = &draw.geometry {
+            unsafe { self.record_draw(gpu, frame, draw, geometry, data, &calls) }?;
         }
-        let recorded = unsafe {
-            (platform.record)(
-                native,
-                &lease.frame,
-                binding,
-                bindings.as_ptr(),
-                self.textures.len() as u32,
-                calls.as_ptr(),
-                calls.len() as u32,
-            )
-        };
-        if recorded == 0 {
-            return None;
-        }
+        unsafe { frame.commands.Close() }.ok()?;
 
         let mut ids = [0; ATLAS_BATCH];
         loop {
@@ -537,86 +764,103 @@ impl Atlas {
             }
         }
     }
-}
 
-// One Present slot on the overlay device: direct allocator, its closed list, the shader-visible
-// SRV heap and the RTV heap. Fields release in declaration order, the reverse of creation.
-#[derive(Default)]
-struct Frame {
-    rtv: Option<IUnknown>,
-    srv: Option<IUnknown>,
-    commands: Option<IUnknown>,
-    allocator: Option<IUnknown>,
-}
-
-impl Frame {
-    // The leaf transfers every reference it acquired, including on refusal.
-    unsafe fn adopt(table: FrameTable) -> Self {
-        Self {
-            rtv: unsafe { com_ref::owned(table.rtv) },
-            srv: unsafe { com_ref::owned(table.srv) },
-            commands: unsafe { com_ref::owned(table.commands) },
-            allocator: unsafe { com_ref::owned(table.allocator) },
-        }
-    }
-
-    fn table(&self) -> Option<FrameTable> {
-        Some(FrameTable {
-            allocator: self.allocator.as_ref()?.as_raw(),
-            commands: self.commands.as_ref()?.as_raw(),
-            srv: self.srv.as_ref()?.as_raw(),
-            rtv: self.rtv.as_ref()?.as_raw(),
-        })
-    }
-}
-
-// The ring slot chosen for one Present and the borrowed table of its frame.
-struct Lease {
-    slot: usize,
-    frame: FrameTable,
-}
-
-struct Renderer {
-    handle: std::ptr::NonNull<c_void>,
-    destroy: unsafe extern "C" fn(*mut c_void),
-    frames: [Frame; SLOTS],
-}
-
-// Only the locked panel uses or releases the native renderer and its frames.
-unsafe impl Send for Renderer {}
-
-impl Renderer {
-    // A refusal keeps the complete and partial frames until teardown, after the startup fence.
-    fn create_frames(&mut self, platform: &Platform) -> Option<()> {
-        for frame in &mut self.frames {
-            let mut table = FrameTable {
-                allocator: null_mut(),
-                commands: null_mut(),
-                srv: null_mut(),
-                rtv: null_mut(),
+    unsafe fn record_draw(
+        &self,
+        gpu: &Gpu,
+        frame: &Frame,
+        draw: &Draw<'_>,
+        geometry: &Geometry,
+        data: &DrawData,
+        calls: &[DrawCall],
+    ) -> Option<()> {
+        let list = &frame.commands;
+        with_mapping(&geometry.vertices, |mapped| unsafe {
+            copy_nonoverlapping(data.vertices.cast(), mapped, geometry.vertex_bytes as usize)
+        })?;
+        with_mapping(&geometry.indices, |mapped| unsafe {
+            copy_nonoverlapping(data.indices.cast(), mapped, geometry.index_bytes as usize)
+        })?;
+        let mut cpu = unsafe { frame.srv.GetCPUDescriptorHandleForHeapStart() };
+        let view = D3D12_SHADER_RESOURCE_VIEW_DESC {
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+            Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture2D: D3D12_TEX2D_SRV {
+                    MipLevels: 1,
+                    ..Default::default()
+                },
+            },
+        };
+        for texture in &self.textures {
+            unsafe {
+                gpu.device
+                    .CreateShaderResourceView(&texture.resource, Some(&view), cpu)
             };
-            let created = unsafe { (platform.create_frame)(self.handle.as_ptr(), &mut table) };
-            *frame = unsafe { Frame::adopt(table) };
-            if created == 0 || frame.table().is_none() {
-                return None;
+            cpu.ptr += gpu.stride as usize;
+        }
+        let rtv = unsafe { frame.rtv.GetCPUDescriptorHandleForHeapStart() };
+        let gpu_start = unsafe { frame.srv.GetGPUDescriptorHandleForHeapStart() };
+        let scale = [2.0 / draw.width as f32, 2.0 / draw.height as f32];
+        let viewport = D3D12_VIEWPORT {
+            Width: draw.width as f32,
+            Height: draw.height as f32,
+            MaxDepth: 1.0,
+            ..Default::default()
+        };
+        let (present, render) = (
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+        );
+        unsafe {
+            list.ResourceBarrier(&[transition_barrier(draw.target, present, render)]);
+            gpu.device.CreateRenderTargetView(draw.target, None, rtv);
+            list.OMSetRenderTargets(1, Some(&rtv), false, None);
+            list.SetPipelineState(draw.pipeline);
+            list.SetGraphicsRootSignature(&gpu.root);
+            list.SetDescriptorHeaps(&[Some(frame.srv.clone())]);
+            list.SetGraphicsRoot32BitConstants(0, 2, scale.as_ptr().cast(), 0);
+            list.RSSetViewports(&[viewport]);
+            list.IASetVertexBuffers(
+                0,
+                Some(&[D3D12_VERTEX_BUFFER_VIEW {
+                    BufferLocation: geometry.vertices.GetGPUVirtualAddress(),
+                    SizeInBytes: geometry.vertex_bytes,
+                    StrideInBytes: size_of::<rsf_overlay_vertex>() as u32,
+                }]),
+            );
+            list.IASetIndexBuffer(Some(&D3D12_INDEX_BUFFER_VIEW {
+                BufferLocation: geometry.indices.GetGPUVirtualAddress(),
+                SizeInBytes: geometry.index_bytes,
+                Format: DXGI_FORMAT_R32_UINT,
+            }));
+            list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            for call in calls {
+                let [left, top, right, bottom] = call.clip;
+                list.RSSetScissorRects(&[RECT {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                }]);
+                list.SetGraphicsRootDescriptorTable(
+                    1,
+                    D3D12_GPU_DESCRIPTOR_HANDLE {
+                        ptr: gpu_start.ptr + u64::from(call.descriptor) * u64::from(gpu.stride),
+                    },
+                );
+                list.DrawIndexedInstanced(
+                    call.index_count,
+                    1,
+                    call.first_index,
+                    call.vertex_offset,
+                    0,
+                );
             }
+            list.ResourceBarrier(&[transition_barrier(draw.target, render, present)]);
         }
         Some(())
-    }
-
-    fn frame(&self, slot: usize) -> Option<FrameTable> {
-        self.frames.get(slot).and_then(Frame::table)
-    }
-}
-
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        // The frames end last slot first and before the device objects, where the native
-        // renderer's frame members were destroyed.
-        for frame in self.frames.iter_mut().rev() {
-            *frame = Frame::default();
-        }
-        unsafe { (self.destroy)(self.handle.as_ptr()) };
     }
 }
 
@@ -638,11 +882,13 @@ impl Retry {
 }
 
 struct Started {
-    // Release leased GPU resources before their renderer, and the UI before the fence.
+    // Fields release in declaration order: what the slots read, the UI, the slot lists and the
+    // device objects, then the fence.
     atlas: Atlas,
     graphics: Graphics,
     ui: Ui,
-    renderer: Renderer,
+    frames: Vec<Frame>,
+    gpu: Gpu,
     fence: Fence,
     owner: Owner,
     failed: bool,
@@ -655,6 +901,9 @@ struct Started {
     logger: OverlayLog,
     log_user: usize,
 }
+
+// The D3D12 references are free-threaded and the event handle may move; PANEL serializes all use.
+unsafe impl Send for Started {}
 
 struct Panel {
     started: Option<Started>,
@@ -669,53 +918,51 @@ static PANEL: Mutex<Panel> = Mutex::new(Panel {
 
 impl Started {
     fn initialize(
-        platform: &Platform,
-        device: *mut c_void,
-        queue: *mut c_void,
-        chain: *mut c_void,
+        device: &ID3D12Device,
+        queue: &ID3D12CommandQueue,
+        chain: &IDXGISwapChain,
         logger: OverlayLog,
         user: *mut c_void,
     ) -> Option<Self> {
-        let window = unsafe { (platform.window)(chain) };
+        let window = unsafe { chain.GetDesc() }.ok()?.OutputWindow.0;
         if window.is_null() {
             return None;
         }
         let mut ui = Ui::open()?;
-        let mut fence = null_mut();
-        let native = unsafe { (platform.initialize)(device, queue, &mut fence) };
-        let fence = unsafe { com_ref::owned(fence) };
-        let mut renderer = Renderer {
-            handle: NonNull::new(native)?,
-            destroy: platform.destroy,
-            frames: std::array::from_fn(|_| Frame::default()),
+        let (gpu, fence) = Gpu::create(device, queue)?;
+        let frames = (0..SLOTS)
+            .map(|_| Frame::create(&gpu.device))
+            .collect::<Option<Vec<_>>>()?;
+        let options = rsf_overlay_input_options {
+            struct_size: size_of::<rsf_overlay_input_options>() as u32,
+            abi_version: RSF_OVERLAY_INPUT_ABI_VERSION,
+            toggle_virtual_key: 0,
+            log: logger,
+            log_user: user,
         };
-        let reference = fence?;
-        // A refusal releases the fence, then the created frames and the renderer, as the native
-        // initialization failure did. Nothing has been submitted yet.
-        renderer.create_frames(platform)?;
-        if unsafe { (platform.install_input)(window, logger, user) } == 0 {
+        if unsafe { rsf_overlay_input_install(window, &options) } != OK {
             return None;
         }
         ui.publish();
-        let started = unsafe { GetTickCount64() };
         Some(Self {
-            atlas: Atlas::new(),
-            graphics: Graphics::new(),
+            atlas: Atlas::default(),
+            graphics: Graphics::default(),
             ui,
-            renderer,
+            frames,
+            gpu,
             fence: Fence {
-                reference,
+                reference: fence,
                 event: None,
                 armed: None,
             },
             owner: Owner {
-                device: device as usize,
-                queue: queue as usize,
+                device: device.as_raw() as usize,
+                queue: queue.as_raw() as usize,
             },
             failed: false,
             unsignalled: None,
             ring: Ring::default(),
-            started,
+            started: unsafe { GetTickCount64() },
             previous: 0,
             was_visible: false,
             trace_left: 0,
@@ -734,26 +981,19 @@ impl Started {
         }
     }
 
-    fn fail(&mut self, platform: &Platform) {
+    fn fail(&mut self) {
         self.failed = true;
         READY.store(false, Ordering::Release);
-        unsafe { (platform.set_visible)(0) };
+        rsf_overlay_input_set_visible(0);
         self.log(c"Native D3D12 overlay refused graphics work; see validation evidence.");
     }
 
-    fn retired(&mut self, platform: &Platform) -> bool {
-        let completed = self.fence.completed(platform);
+    fn retired(&mut self) -> bool {
+        let completed = self.fence.completed();
         if completed != u64::MAX {
             if let Some(value) = self.unsignalled {
                 // Signal on the retained original queue behind the already executed list.
-                if unsafe {
-                    (platform.signal)(
-                        self.renderer.handle.as_ptr(),
-                        self.fence.reference.as_raw(),
-                        value,
-                    )
-                } != 0
-                {
+                if unsafe { self.gpu.queue.Signal(&self.fence.reference, value) }.is_ok() {
                     self.ring.serial = value;
                     self.unsignalled = None;
                 }
@@ -763,7 +1003,126 @@ impl Started {
                 return false;
             }
         }
-        self.fence.finish_event(platform, 0) && unsafe { (platform.stop_input)() != 0 }
+        self.fence.finish_event(0) && matches!(rsf_overlay_input_uninstall(), OK | NOT_INSTALLED)
+    }
+
+    unsafe fn present(
+        &mut self,
+        chain: &IDXGISwapChain,
+        stats: *const rsf_overlay_stats,
+    ) -> Option<rsf_overlay_intent> {
+        let now = unsafe { GetTickCount64() };
+        let active_for = now.saturating_sub(self.started);
+        let visible = rsf_overlay_input_visible() != 0;
+        if !visible && unsafe { (*stats).show_performance_hud } == 0 && active_for >= STARTUP_MS {
+            return None;
+        }
+        // Every refusal after this point is a graphics failure.
+        let decided = unsafe { self.record_frame(chain, stats, now, active_for, visible) };
+        if decided.is_none() {
+            self.fail();
+        }
+        decided
+    }
+
+    unsafe fn record_frame(
+        &mut self,
+        chain: &IDXGISwapChain,
+        stats: *const rsf_overlay_stats,
+        now: u64,
+        active_for: u64,
+        visible: bool,
+    ) -> Option<rsf_overlay_intent> {
+        let completed = self.fence.completed();
+        if completed == u64::MAX {
+            return None;
+        }
+        let (slot, wait_for) = self.ring.select(completed);
+        // Only already-submitted overlay work can block slot reuse.
+        if wait_for != 0 && !self.fence.wait_for_slot(wait_for) {
+            return None;
+        }
+        // The fence proof above admits reuse of the slot's list and what it read.
+        let frame = &self.frames[slot];
+        self.atlas.retained[slot].clear();
+        self.graphics.slots[slot].pipeline = None;
+        let (target, width, height, format) = frame.begin(chain)?;
+        let pipeline = self.graphics.bind_pipeline(&self.gpu, slot, format)?;
+        if visible && !self.was_visible {
+            self.trace_left = 4;
+        }
+        self.was_visible = visible;
+        let trace = visible && self.trace_left != 0;
+        if trace {
+            self.trace_left -= 1;
+            self.log(c"Overlay12: input/layout begin");
+        }
+        let elapsed = elapsed_seconds(if self.previous == 0 {
+            0.0
+        } else {
+            now.saturating_sub(self.previous) as f64 / 1000.0
+        });
+        let mut decided = rsf_overlay_intent {
+            struct_size: size_of::<rsf_overlay_intent>() as u32,
+            ..Default::default()
+        };
+        let mut data = DrawData {
+            struct_size: size_of::<DrawData>() as u32,
+            ..Default::default()
+        };
+        let mut input = rsf_overlay_input {
+            struct_size: size_of::<rsf_overlay_input>() as u32,
+            ..Default::default()
+        };
+        if unsafe { rsf_overlay_input_collect(&mut input, width, height, elapsed) } != OK {
+            return None;
+        }
+        input.startup_hint_alpha =
+            STARTUP_MS.saturating_sub(active_for).min(STARTUP_FADE_MS) as f32 / 1000.0;
+        let ui = &self.ui;
+        if unsafe { (ui.api.frame)(ui.handle.as_ptr(), &input, stats, &mut data, &mut decided) }
+            != 0
+        {
+            return None;
+        }
+        self.previous = now;
+        if decided.close_requested != 0 {
+            rsf_overlay_input_set_visible(0);
+        }
+        if trace {
+            self.log(c"Overlay12: atlas uploads and draw recording");
+        }
+        let draw = Draw {
+            target: &target,
+            pipeline: &pipeline,
+            width,
+            height,
+            geometry: self.graphics.slots[slot].bind_uploads(&self.gpu, &data)?,
+        };
+        unsafe {
+            self.atlas
+                .record(&self.gpu, &self.ui, frame, slot, &draw, &data)
+        }?;
+        let value = self
+            .ring
+            .serial
+            .checked_add(1)
+            .filter(|value| *value != u64::MAX)?;
+        if trace {
+            self.log(c"Overlay12: queue submission begin");
+        }
+        let list = Some(frame.commands.cast::<ID3D12CommandList>().ok()?);
+        unsafe { self.gpu.queue.ExecuteCommandLists(&[list]) };
+        if unsafe { self.gpu.queue.Signal(&self.fence.reference, value) }.is_err() {
+            // Execute already happened. The failed owner stays alive until a signal proves retirement.
+            self.unsignalled = Some(value);
+            return None;
+        }
+        self.ring.submitted(slot, value);
+        if trace {
+            self.log(c"Overlay12: submission completed");
+        }
+        Some(decided)
     }
 }
 
@@ -775,10 +1134,10 @@ impl Panel {
         });
     }
 
-    fn retire_failed(&mut self, platform: &Platform, now: u64) {
+    fn retire_failed(&mut self, now: u64) {
         if let Some(started) = &mut self.started
             && started.failed
-            && started.retired(platform)
+            && started.retired()
         {
             let owner = started.owner;
             self.started = None;
@@ -787,26 +1146,24 @@ impl Panel {
     }
 }
 
-fn panel_visible(platform: &Platform) -> u32 {
+pub(crate) fn rsf_overlay_native12_visible() -> u32 {
     if READY.load(Ordering::Acquire) {
-        unsafe { (platform.visible)() }
+        rsf_overlay_input_visible()
     } else {
         0
     }
 }
 
-fn panel_toggle(platform: &Platform) {
+pub(crate) fn rsf_overlay_native12_toggle() {
     if let Ok(_panel) = PANEL.try_lock()
         && READY.load(Ordering::Acquire)
     {
-        let visible = unsafe { (platform.visible)() };
-        unsafe { (platform.set_visible)(u32::from(visible == 0)) };
+        rsf_overlay_input_set_visible(u32::from(rsf_overlay_input_visible() == 0));
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-unsafe fn panel_present(
-    platform: &Platform,
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_overlay_native12_present(
     device: *mut c_void,
     queue: *mut c_void,
     chain: *mut c_void,
@@ -815,23 +1172,25 @@ unsafe fn panel_present(
     logger: OverlayLog,
     user: *mut c_void,
 ) -> i32 {
-    if device.is_null()
-        || queue.is_null()
-        || chain.is_null()
-        || !unsafe { has_capacity(stats) }
-        || (!intent.is_null() && !unsafe { has_capacity(intent) })
-    {
+    let (Some(device), Some(queue), Some(chain)) = (
+        unsafe { ID3D12Device::from_raw_borrowed(&device) },
+        unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) },
+        unsafe { IDXGISwapChain::from_raw_borrowed(&chain) },
+    ) else {
+        return 0;
+    };
+    if !unsafe { has_capacity(stats) } || (!intent.is_null() && !unsafe { has_capacity(intent) }) {
         return 0;
     }
     let Ok(mut panel) = PANEL.try_lock() else {
         return 0;
     };
     let owner = Owner {
-        device: device as usize,
-        queue: queue as usize,
+        device: device.as_raw() as usize,
+        queue: queue.as_raw() as usize,
     };
     let now = unsafe { GetTickCount64() };
-    panel.retire_failed(platform, now);
+    panel.retire_failed(now);
     if panel.started.is_none() {
         if panel
             .retry
@@ -840,8 +1199,7 @@ unsafe fn panel_present(
         {
             return 0;
         }
-        let Some(started) = Started::initialize(platform, device, queue, chain, logger, user)
-        else {
+        let Some(started) = Started::initialize(device, queue, chain, logger, user) else {
             panel.defer_retry(owner, now);
             unsafe {
                 crate::graphics_d3d11::rsf_call_native_log(
@@ -865,678 +1223,21 @@ unsafe fn panel_present(
     if started.failed || started.owner != owner {
         return 0;
     }
-    if let Some(decided) = unsafe { started.present(platform, chain, stats) } {
+    if let Some(decided) = unsafe { started.present(chain, stats) } {
         if !intent.is_null() {
             unsafe { intent.write(decided) };
         }
         return 1;
     }
     if started.failed {
-        panel.retire_failed(platform, now);
+        panel.retire_failed(now);
     }
     0
-}
-
-impl Started {
-    unsafe fn present(
-        &mut self,
-        platform: &Platform,
-        chain: *mut c_void,
-        stats: *const rsf_overlay_stats,
-    ) -> Option<rsf_overlay_intent> {
-        let now = unsafe { GetTickCount64() };
-        let active_for = now.saturating_sub(self.started);
-        let visible = unsafe { (platform.visible)() } != 0;
-        if !visible && unsafe { (*stats).show_performance_hud } == 0 && active_for >= STARTUP_MS {
-            return None;
-        }
-        // Every refusal after this point is a graphics failure.
-        let decided =
-            unsafe { self.record_frame(platform, chain, stats, now, active_for, visible) };
-        if decided.is_none() {
-            self.fail(platform);
-        }
-        decided
-    }
-
-    unsafe fn record_frame(
-        &mut self,
-        platform: &Platform,
-        chain: *mut c_void,
-        stats: *const rsf_overlay_stats,
-        now: u64,
-        active_for: u64,
-        visible: bool,
-    ) -> Option<rsf_overlay_intent> {
-        let native = self.renderer.handle.as_ptr();
-        let completed = self.fence.completed(platform);
-        if completed == u64::MAX {
-            return None;
-        }
-        let (slot, wait_for) = self.ring.select(completed);
-        // Only already-submitted overlay work can block slot reuse.
-        if wait_for != 0 && !self.fence.wait_for_slot(platform, wait_for) {
-            return None;
-        }
-        // The slot's frame stays owned by the renderer. The fence proof above admits its reuse.
-        let table = self.renderer.frame(slot)?;
-        let lease = Lease { slot, frame: table };
-        self.atlas.retained[slot].clear();
-        self.graphics.slots[slot].pipeline = None;
-        let mut frame = Target {
-            width: 0,
-            height: 0,
-            format: 0,
-        };
-        let target = unsafe { com_ref::owned((platform.begin)(&lease.frame, chain, &mut frame)) }?;
-        let pipeline = self
-            .graphics
-            .bind_pipeline(platform, native, slot, frame.format)?;
-        if visible && !self.was_visible {
-            self.trace_left = 4;
-        }
-        self.was_visible = visible;
-        let trace = visible && self.trace_left != 0;
-        if trace {
-            self.trace_left -= 1;
-            self.log(c"Overlay12: input/layout begin");
-        }
-        let elapsed = elapsed_seconds(if self.previous == 0 {
-            0.0
-        } else {
-            now.saturating_sub(self.previous) as f64 / 1000.0
-        });
-        let hint_alpha = STARTUP_MS.saturating_sub(active_for).min(STARTUP_FADE_MS) as f32 / 1000.0;
-        let mut decided = rsf_overlay_intent {
-            struct_size: size_of::<rsf_overlay_intent>() as u32,
-            ..Default::default()
-        };
-        let mut data = DrawData {
-            struct_size: size_of::<DrawData>() as u32,
-            ..Default::default()
-        };
-        let mut input = rsf_overlay_input {
-            struct_size: size_of::<rsf_overlay_input>() as u32,
-            ..Default::default()
-        };
-        if unsafe { (platform.collect_input)(&mut input, frame.width, frame.height, elapsed) } == 0
-        {
-            return None;
-        }
-        input.startup_hint_alpha = hint_alpha;
-        let ui = &self.ui;
-        if unsafe { (ui.api.frame)(ui.handle.as_ptr(), &input, stats, &mut data, &mut decided) }
-            != 0
-        {
-            return None;
-        }
-        self.previous = now;
-        if decided.close_requested != 0 {
-            unsafe { (platform.set_visible)(0) };
-        }
-        if trace {
-            self.log(c"Overlay12: atlas uploads and draw recording");
-        }
-        let mut binding = Draw {
-            target: target.as_raw(),
-            pipeline,
-            vertices: std::ptr::null_mut(),
-            indices: std::ptr::null_mut(),
-            vertex_data: data.vertices.cast(),
-            index_data: data.indices.cast(),
-            width: frame.width,
-            height: frame.height,
-            vertex_bytes: 0,
-            index_bytes: 0,
-        };
-        self.graphics.slots[slot].bind_uploads(platform, native, &data, &mut binding)?;
-        unsafe {
-            self.atlas
-                .record(platform, native, &self.ui, &lease, &binding, &data)
-        }?;
-        let value = self
-            .ring
-            .serial
-            .checked_add(1)
-            .filter(|value| *value != u64::MAX)?;
-        if trace {
-            self.log(c"Overlay12: queue submission begin");
-        }
-        let fence = self.fence.reference.as_raw();
-        unsafe { (platform.execute)(native, &lease.frame) };
-        if unsafe { (platform.signal)(native, fence, value) } == 0 {
-            // Execute already happened. The failed owner stays alive until a signal proves retirement.
-            self.unsignalled = Some(value);
-            return None;
-        }
-        self.ring.submitted(slot, value);
-        if trace {
-            self.log(c"Overlay12: submission completed");
-        }
-        Some(decided)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::com_ref::test::{Fake, add_ref, fake, raw};
-    use std::ptr::{from_mut, null_mut, without_provenance_mut};
-
-    struct AtlasFixture {
-        textures: [Box<Fake>; 2],
-        upload: Box<Fake>,
-        created: usize,
-        uploaded: usize,
-        pending: bool,
-        free: bool,
-        refuse_upload: bool,
-        // The list marker of the frame each upload and record leaf received.
-        lists: Vec<usize>,
-    }
-
-    // A slot lease whose frame table carries slot + 1 as its list marker.
-    fn lease(slot: usize) -> Lease {
-        Lease {
-            slot,
-            frame: FrameTable {
-                allocator: null_mut(),
-                commands: without_provenance_mut(slot + 1),
-                srv: null_mut(),
-                rtv: null_mut(),
-            },
-        }
-    }
-
-    static PIXELS: [u8; 64] = [255; 64];
-    const UPDATE: rsf_overlay_texture_update = rsf_overlay_texture_update {
-        id: 5,
-        x: 0,
-        y: 0,
-        width: 4,
-        height: 4,
-        pixels: PIXELS.as_ptr(),
-        is_whole_texture: 1,
-    };
-
-    unsafe extern "C" fn updates(
-        ui: *mut rsf_overlay,
-        out: *mut rsf_overlay_texture_update,
-        _: u32,
-    ) -> u32 {
-        let fixture = unsafe { &mut *ui.cast::<AtlasFixture>() };
-        if std::mem::take(&mut fixture.pending) {
-            unsafe { out.write(UPDATE) };
-            1
-        } else {
-            0
-        }
-    }
-
-    unsafe extern "C" fn frees(ui: *mut rsf_overlay, out: *mut u64, _: u32) -> u32 {
-        let fixture = unsafe { &mut *ui.cast::<AtlasFixture>() };
-        if std::mem::take(&mut fixture.free) {
-            unsafe { out.write(UPDATE.id) };
-            1
-        } else {
-            0
-        }
-    }
-
-    unsafe extern "C" fn create(native: *mut c_void, _: u32, _: u32) -> *mut c_void {
-        let fixture = unsafe { &mut *native.cast::<AtlasFixture>() };
-        let texture = raw(&fixture.textures[fixture.created]);
-        fixture.created += 1;
-        unsafe { add_ref(texture.cast()) };
-        texture
-    }
-
-    unsafe extern "C" fn upload(
-        native: *mut c_void,
-        frame: *const FrameTable,
-        _: *mut c_void,
-        _: *const rsf_overlay_texture_update,
-    ) -> *mut c_void {
-        let fixture = unsafe { &mut *native.cast::<AtlasFixture>() };
-        fixture.uploaded += 1;
-        fixture.lists.push(unsafe { (*frame).commands }.addr());
-        if fixture.refuse_upload {
-            return null_mut();
-        }
-        let staging = raw(&fixture.upload);
-        unsafe { add_ref(staging.cast()) };
-        staging
-    }
-
-    unsafe extern "C" fn draw(
-        native: *mut c_void,
-        frame: *const FrameTable,
-        _: *const Draw,
-        bindings: *const *mut c_void,
-        count: u32,
-        calls: *const DrawCall,
-        call_count: u32,
-    ) -> u32 {
-        let fixture = unsafe { &mut *native.cast::<AtlasFixture>() };
-        fixture.lists.push(unsafe { (*frame).commands }.addr());
-        u32::from(
-            count == 1
-                && call_count == 1
-                && unsafe { (*calls).descriptor == 0 }
-                && unsafe { *bindings == raw(&fixture.textures[fixture.created - 1]) },
-        )
-    }
-
-    // These atlas and retirement fixtures replace only the leaves they drive.
-    macro_rules! unused {
-        ($(fn $name:ident($($arg:tt)*) $(-> $result:ty)?;)*) => {
-            $(unsafe extern "C" fn $name($($arg)*) $(-> $result)? {
-                unreachable!(concat!("fixture did not supply ", stringify!($name)))
-            })*
-        };
-    }
-
-    unused! {
-        fn unused_window(_: *mut c_void) -> *mut c_void;
-        fn unused_initialize(_: *mut c_void, _: *mut c_void, _: *mut *mut c_void) -> *mut c_void;
-        fn unused_create_frame(_: *mut c_void, _: *mut FrameTable) -> u32;
-        fn unused_install_input(_: *mut c_void, _: OverlayLog, _: *mut c_void) -> u32;
-        fn unused_stop_input() -> u32;
-        fn unused_destroy(_: *mut c_void);
-        fn unused_visible() -> u32;
-        fn unused_set_visible(_: u32);
-        fn unused_completed(_: *mut c_void) -> u64;
-        fn unused_arm(_: *mut c_void, _: *mut c_void, _: u64) -> u32;
-        fn unused_begin(_: *const FrameTable, _: *mut c_void, _: *mut Target) -> *mut c_void;
-        fn unused_create_pipeline(_: *mut c_void, _: u32) -> *mut c_void;
-        fn unused_create_upload(_: *mut c_void, _: u64, _: *mut u64) -> *mut c_void;
-        fn unused_collect_input(_: *mut rsf_overlay_input, _: u32, _: u32, _: f32) -> u32;
-        fn unused_execute(_: *mut c_void, _: *const FrameTable);
-        fn unused_signal(_: *mut c_void, _: *mut c_void, _: u64) -> u32;
-    }
-
-    const PLATFORM: Platform = Platform {
-        window: unused_window,
-        initialize: unused_initialize,
-        create_frame: unused_create_frame,
-        install_input: unused_install_input,
-        stop_input: unused_stop_input,
-        destroy: unused_destroy,
-        visible: unused_visible,
-        set_visible: unused_set_visible,
-        completed: unused_completed,
-        arm: unused_arm,
-        begin: unused_begin,
-        create_pipeline: unused_create_pipeline,
-        create_upload: unused_create_upload,
-        collect_input: unused_collect_input,
-        create_texture: create,
-        upload_texture: upload,
-        record: draw,
-        execute: unused_execute,
-        signal: unused_signal,
-    };
-
-    unsafe extern "C" fn destroy_ui(_: *mut rsf_overlay) {}
-
-    unsafe extern "C" fn unused_create(_: u32) -> *mut rsf_overlay {
-        unreachable!("the atlas fixture supplies its own panel")
-    }
-
-    unsafe extern "C" fn unused_frame(
-        _: *mut rsf_overlay,
-        _: *const rsf_overlay_input,
-        _: *const rsf_overlay_stats,
-        _: *mut DrawData,
-        _: *mut rsf_overlay_intent,
-    ) -> i32 {
-        unreachable!("the atlas fixture supplies draw data")
-    }
-
-    fn fake_ui(native: *mut c_void) -> Ui {
-        Ui {
-            api: PanelEntries {
-                create: unused_create,
-                destroy: destroy_ui,
-                frame: unused_frame,
-                texture_updates: updates,
-                textures_to_free: frees,
-            },
-            handle: NonNull::new(native.cast()).unwrap(),
-            module: None,
-        }
-    }
-
-    fn fixture() -> AtlasFixture {
-        AtlasFixture {
-            textures: [fake(), fake()],
-            upload: fake(),
-            created: 0,
-            uploaded: 0,
-            pending: true,
-            free: false,
-            refuse_upload: false,
-            lists: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn replacement_and_free_keep_each_slots_draw_and_upload_resources() {
-        let mut fixture = fixture();
-        let target_resource = fake();
-        let target = unsafe { com_ref::owned(raw(&target_resource)).unwrap() };
-        let vertices = [rsf_overlay_vertex::default()];
-        let indices = [0u32; 3];
-        let valid = crate::sys::rsf_overlay_draw_call {
-            index_count: 3,
-            clip_width: 4,
-            clip_height: 4,
-            texture_id: UPDATE.id,
-            ..Default::default()
-        };
-        let calls = [
-            crate::sys::rsf_overlay_draw_call {
-                index_count: 0,
-                texture_id: u64::MAX,
-                ..valid
-            },
-            crate::sys::rsf_overlay_draw_call {
-                clip_x: 4,
-                texture_id: u64::MAX,
-                ..valid
-            },
-            valid,
-        ];
-        let data = DrawData {
-            struct_size: size_of::<DrawData>() as u32,
-            vertices: vertices.as_ptr(),
-            vertex_count: 1,
-            indices: indices.as_ptr(),
-            index_count: 3,
-            calls: calls.as_ptr(),
-            call_count: calls.len() as u32,
-        };
-        let binding = Draw {
-            target: target.as_raw(),
-            pipeline: null_mut(),
-            vertices: null_mut(),
-            indices: null_mut(),
-            vertex_data: data.vertices.cast(),
-            index_data: data.indices.cast(),
-            width: 4,
-            height: 4,
-            vertex_bytes: size_of_val(&vertices) as u32,
-            index_bytes: size_of_val(&indices) as u32,
-        };
-        let mut atlas = Atlas::new();
-        let native = from_mut(&mut fixture).cast();
-        assert!(
-            unsafe {
-                atlas.record(
-                    &PLATFORM,
-                    native,
-                    &fake_ui(native),
-                    &lease(0),
-                    &binding,
-                    &data,
-                )
-            }
-            .is_some()
-        );
-        fixture.pending = true;
-        fixture.free = true;
-        let native = from_mut(&mut fixture).cast();
-        assert!(
-            unsafe {
-                atlas.record(
-                    &PLATFORM,
-                    native,
-                    &fake_ui(native),
-                    &lease(1),
-                    &binding,
-                    &data,
-                )
-            }
-            .is_some()
-        );
-        // Each slot's upload and draw recorded on that slot's own list.
-        assert_eq!(fixture.lists, [1, 1, 2, 2]);
-        assert!(atlas.textures.is_empty());
-        assert_eq!(fixture.textures[0].refs.get(), 3);
-        assert_eq!(fixture.textures[1].refs.get(), 3);
-        assert_eq!(fixture.upload.refs.get(), 3);
-
-        atlas.retained[0].clear();
-        assert_eq!(fixture.textures[0].refs.get(), 1);
-        assert_eq!(fixture.textures[1].refs.get(), 3);
-        assert_eq!(fixture.upload.refs.get(), 2);
-        atlas.retained[1].clear();
-        assert_eq!(fixture.textures[1].refs.get(), 1);
-        assert_eq!(fixture.upload.refs.get(), 1);
-    }
-
-    #[test]
-    fn invalid_patch_and_failed_replacement_leave_the_installed_atlas_intact() {
-        let mut fixture = fixture();
-        let native = from_mut(&mut fixture).cast();
-        let mut atlas = Atlas::new();
-        let slot = lease(0);
-        assert!(atlas.update(&PLATFORM, native, &slot, &UPDATE).is_some());
-        let mut patch = UPDATE;
-        patch.is_whole_texture = 0;
-        patch.x = u32::MAX;
-        assert!(atlas.update(&PLATFORM, native, &slot, &patch).is_none());
-        assert_eq!(fixture.uploaded, 1);
-        patch.x = 1;
-        patch.width = 3;
-        let native = from_mut(&mut fixture).cast();
-        assert!(atlas.update(&PLATFORM, native, &slot, &patch).is_some());
-        fixture.refuse_upload = true;
-        let native = from_mut(&mut fixture).cast();
-        assert!(atlas.update(&PLATFORM, native, &slot, &UPDATE).is_none());
-        assert_eq!(
-            atlas.textures[0].resource.as_raw(),
-            raw(&fixture.textures[0])
-        );
-        assert_eq!(fixture.textures[1].refs.get(), 1);
-    }
-
-    // Hands out the fakes in creation order, four per frame, and stops at refuse_at.
-    struct FrameFixture {
-        objects: [Box<Fake>; 4 * SLOTS],
-        created: usize,
-        refuse_at: usize,
-        refs_at_destroy: Option<Vec<u32>>,
-        signalled: Option<u64>,
-    }
-
-    impl FrameFixture {
-        fn refs(&self) -> Vec<u32> {
-            self.objects
-                .iter()
-                .map(|object| object.refs.get())
-                .collect()
-        }
-    }
-
-    unsafe extern "C" fn create_frame(native: *mut c_void, out: *mut FrameTable) -> u32 {
-        let fixture = unsafe { &mut *native.cast::<FrameFixture>() };
-        let mut parts = [null_mut(); 4];
-        for part in &mut parts {
-            if fixture.created == fixture.refuse_at {
-                break;
-            }
-            let object = raw(&fixture.objects[fixture.created]);
-            unsafe { add_ref(object.cast()) };
-            *part = object;
-            fixture.created += 1;
-        }
-        let [allocator, commands, srv, rtv] = parts;
-        unsafe {
-            out.write(FrameTable {
-                allocator,
-                commands,
-                srv,
-                rtv,
-            })
-        };
-        u32::from(parts.iter().all(|part| !part.is_null()))
-    }
-
-    unsafe extern "C" fn destroy_renderer(native: *mut c_void) {
-        let fixture = unsafe { &mut *native.cast::<FrameFixture>() };
-        fixture.refs_at_destroy = Some(fixture.refs());
-    }
-
-    fn frame_renderer(fixture: &mut FrameFixture) -> Renderer {
-        Renderer {
-            handle: NonNull::from(fixture).cast(),
-            destroy: destroy_renderer,
-            frames: std::array::from_fn(|_| Frame::default()),
-        }
-    }
-
-    const FRAME_PLATFORM: Platform = Platform {
-        create_frame,
-        ..PLATFORM
-    };
-
-    #[test]
-    fn frames_are_created_in_slot_order_and_released_before_the_renderer() {
-        let mut fixture = FrameFixture {
-            objects: std::array::from_fn(|_| fake()),
-            created: 0,
-            refuse_at: usize::MAX,
-            refs_at_destroy: None,
-            signalled: None,
-        };
-        let mut renderer = frame_renderer(&mut fixture);
-        assert!(renderer.create_frames(&FRAME_PLATFORM).is_some());
-        assert!(renderer.frames.iter().all(|frame| frame.table().is_some()));
-        let table = renderer.frame(1).unwrap();
-        assert_eq!(table.allocator, raw(&fixture.objects[4]));
-        assert_eq!(table.commands, raw(&fixture.objects[5]));
-        assert_eq!(table.srv, raw(&fixture.objects[6]));
-        assert_eq!(table.rtv, raw(&fixture.objects[7]));
-        assert!(renderer.frame(SLOTS).is_none());
-        assert_eq!(fixture.refs(), [2; 4 * SLOTS]);
-        drop(renderer);
-        assert_eq!(
-            fixture.refs_at_destroy.as_deref(),
-            Some(&[1; 4 * SLOTS][..])
-        );
-    }
-
-    #[test]
-    fn refused_frame_keeps_its_objects_and_earlier_frames_for_teardown() {
-        let mut fixture = FrameFixture {
-            objects: std::array::from_fn(|_| fake()),
-            created: 0,
-            // The third frame's SRV heap is refused after its allocator and list exist.
-            refuse_at: 10,
-            refs_at_destroy: None,
-            signalled: None,
-        };
-        let mut renderer = frame_renderer(&mut fixture);
-        assert!(renderer.create_frames(&FRAME_PLATFORM).is_none());
-        assert!(renderer.frame(1).is_some());
-        assert!(renderer.frame(2).is_none());
-        assert_eq!(fixture.refs(), [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1]);
-        drop(renderer);
-        assert_eq!(
-            fixture.refs_at_destroy.as_deref(),
-            Some(&[1; 4 * SLOTS][..])
-        );
-    }
-
-    #[test]
-    fn failed_owner_retires_on_its_original_queue_before_a_replacement_can_start() {
-        unsafe extern "C" fn pending(_: *mut c_void) -> u64 {
-            0
-        }
-        unsafe extern "C" fn completed(_: *mut c_void) -> u64 {
-            9
-        }
-        unsafe extern "C" fn signal(native: *mut c_void, _: *mut c_void, value: u64) -> u32 {
-            // The retained renderer handle identifies the fixture for the original queue.
-            unsafe { &mut *native.cast::<FrameFixture>() }.signalled = Some(value);
-            1
-        }
-        unsafe extern "C" fn stop_input() -> u32 {
-            1
-        }
-
-        let mut fixture = FrameFixture {
-            objects: std::array::from_fn(|_| fake()),
-            created: 0,
-            refuse_at: usize::MAX,
-            refs_at_destroy: None,
-            signalled: None,
-        };
-        let renderer = frame_renderer(&mut fixture);
-        let fence = fake();
-        let reference = unsafe {
-            add_ref(raw(&fence).cast());
-            com_ref::owned(raw(&fence)).unwrap()
-        };
-        let owner = Owner {
-            device: 1,
-            queue: 2,
-        };
-        let replacement = Owner {
-            device: 3,
-            queue: 4,
-        };
-        let mut panel = Panel {
-            started: Some(Started {
-                atlas: Atlas::new(),
-                graphics: Graphics::new(),
-                ui: fake_ui(renderer.handle.as_ptr()),
-                renderer,
-                fence: Fence {
-                    reference,
-                    event: None,
-                    armed: None,
-                },
-                owner,
-                failed: true,
-                unsignalled: Some(9),
-                ring: Ring::default(),
-                started: 0,
-                previous: 0,
-                was_visible: false,
-                trace_left: 0,
-                logger: None,
-                log_user: 0,
-            }),
-            retry: None,
-        };
-        let platform = Platform {
-            completed: pending,
-            signal,
-            stop_input,
-            ..FRAME_PLATFORM
-        };
-        panel.retire_failed(&platform, 42);
-        assert_eq!(fixture.signalled, Some(9));
-        assert!(panel.started.is_some());
-        panel.retire_failed(&platform, 43);
-        assert!(panel.started.is_some());
-        panel.retire_failed(
-            &Platform {
-                completed,
-                ..platform
-            },
-            44,
-        );
-        assert!(panel.started.is_none());
-        assert!(fixture.refs_at_destroy.is_some());
-        assert_eq!(fence.refs.get(), 1);
-        let retry = panel.retry.unwrap();
-        assert!(retry.allows(replacement, 44));
-        assert!(!retry.allows(owner, 44));
-        assert!(retry.allows(owner, 44 + RETRY_DELAY_MS));
-    }
 
     #[test]
     fn full_ring_waits_its_oldest_submitted_fence() {
@@ -1566,5 +1267,23 @@ mod tests {
         armed = Some(9);
         assert!(retire_fence_event(&mut armed, false, u64::MAX));
         assert_eq!(armed, None);
+    }
+
+    #[test]
+    fn a_retired_owner_waits_out_its_retry_delay_while_another_may_start() {
+        let owner = Owner {
+            device: 1,
+            queue: 2,
+        };
+        let retry = Retry { owner, after: 44 };
+        assert!(retry.allows(
+            Owner {
+                device: 3,
+                queue: 4
+            },
+            43
+        ));
+        assert!(!retry.allows(owner, 43));
+        assert!(retry.allows(owner, 44));
     }
 }

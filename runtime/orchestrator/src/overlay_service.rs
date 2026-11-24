@@ -15,9 +15,7 @@ use crate::overlay_host::native::rsf_overlay_host_present;
 use crate::overlay_input::{rsf_overlay_input_set_visible, rsf_overlay_input_visible};
 use crate::overlay_input_route::rsf_overlay_input_counters_get;
 #[cfg(not(test))]
-use crate::overlay_wrapped12::native::{
-    rsf_overlay_d3d12_frame_for_window, rsf_overlay_d3d12_stop,
-};
+use crate::overlay_wrapped12::{rsf_overlay_d3d12_frame_for_window, rsf_overlay_d3d12_stop};
 use crate::sharpening_policy;
 use crate::streamline_sr::preset_valid;
 use crate::sync::lock;

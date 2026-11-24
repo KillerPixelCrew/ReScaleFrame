@@ -203,60 +203,6 @@ pub(crate) unsafe extern "C" fn rsf_overlay_host_start(
     unsafe { rsf_core_overlay_host_start(chain, log, user) }
 }
 
-pub(crate) unsafe extern "C" fn rsf_overlay_host_start_device(
-    device: Handle,
-    window: Handle,
-    log: Log,
-    user: Handle,
-) -> i32 {
-    unsafe { rsf_core_overlay_host_start_device(device, window, log, user) }
-}
-
-pub(crate) unsafe extern "C" fn rsf_overlay_host_admit_target(
-    show_hud: u32,
-    visible: *mut u32,
-    hint: *mut f32,
-) -> i32 {
-    if visible.is_null() || hint.is_null() || !STARTED.load(Ordering::Acquire) {
-        return 0;
-    }
-    let Some(admission) = try_hold().and_then(|host| host.admit_target(show_hud != 0)) else {
-        return 0;
-    };
-    unsafe {
-        visible.write(u32::from(admission.visible));
-        hint.write(admission.hint);
-    }
-    1
-}
-
-pub(crate) unsafe extern "C" fn rsf_overlay_host_draw_admitted_target(
-    context: Handle,
-    target: Handle,
-    width: u32,
-    height: u32,
-    stats: *const rsf_overlay_stats,
-    intent: *mut rsf_overlay_intent,
-    visible: u32,
-    hint: f32,
-) -> i32 {
-    let admission = DrawAdmission {
-        visible: visible != 0,
-        hint,
-    };
-    unsafe {
-        rsf_core_overlay_host_draw_target(
-            context,
-            target,
-            width,
-            height,
-            stats,
-            intent,
-            Some(admission),
-        )
-    }
-}
-
 #[unsafe(no_mangle)]
 extern "C" fn rsf_overlay_host_visible() -> u32 {
     rsf_core_overlay_host_visible()
@@ -290,8 +236,4 @@ pub(crate) unsafe extern "C" fn rsf_overlay_host_present(
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_overlay_host_stop() {
     rsf_core_overlay_host_stop();
-}
-
-pub(crate) extern "C" fn rsf_overlay_host_stop_device(device: Handle) {
-    rsf_core_overlay_host_stop_device(device);
 }

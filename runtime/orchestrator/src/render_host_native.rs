@@ -166,9 +166,9 @@ pub(super) use crate::fg12::{
     rsf_core_fg12_submitted as fg_submitted, rsf_core_fg12_window as fg_window,
 };
 pub(super) use crate::input_dump::abi::rsf_input_dump_cancel as input_dump_cancel;
-pub(super) use crate::overlay_native12::native::rsf_overlay_native12_present as overlay_present;
+pub(super) use crate::overlay_native12::rsf_overlay_native12_present as overlay_present;
 pub(super) use crate::overlay_settings::rsf_overlay_fill_fg_stats as overlay_fill_fg;
-pub(super) use crate::overlay_wrapped12::native::{
+pub(super) use crate::overlay_wrapped12::{
     rsf_overlay_d3d12_frame as overlay_frame, rsf_overlay_d3d12_stop as overlay_stop,
 };
 pub(super) use crate::plugin_session::{

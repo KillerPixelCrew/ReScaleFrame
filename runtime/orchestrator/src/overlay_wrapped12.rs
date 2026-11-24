@@ -1,118 +1,183 @@
 // SPDX-License-Identifier: MIT
-// The production entry points live in `native`, which unit tests do not build.
+//! The D3D11-on-12 panel (overlay_d3d12.cpp): the shared D3D11 overlay host draws into a D3D12
+//! back buffer through a D3D11-on-12 device created on the presenting queue.
 #![cfg_attr(test, allow(dead_code))]
-use crate::com_ref;
+use crate::overlay_host::{
+    rsf_core_overlay_host_admit, rsf_core_overlay_host_draw_target,
+    rsf_core_overlay_host_start_device, rsf_core_overlay_host_stop_device,
+};
 use crate::overlay_native12::OverlayLog;
+use crate::sdk_module::SdkModule;
 use crate::sr_session::has_capacity;
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats};
-use rsf_game_sys::backend_result::NOT_SUPPORTED;
 use std::ffi::{CStr, c_void};
-use std::sync::Mutex;
-use windows::core::{IUnknown, Interface};
-#[cfg(not(test))]
-pub(super) mod native;
-
-/// Successful device and target calls transfer one reference per pointer.
-#[repr(C)]
-struct Interop {
-    device: *mut c_void,
-    context: *mut c_void,
-    interop: *mut c_void,
-}
-
-#[repr(C)]
-struct WrappedTarget {
-    backbuffer: *mut c_void,
-    wrapped: *mut c_void,
-    view: *mut c_void,
-    width: u32,
-    height: u32,
-}
-
-// Production binds `native::PLATFORM`; the unit tests bind fakes.
-#[derive(Clone, Copy)]
-struct Platform {
-    create: unsafe extern "C" fn(device: *mut c_void, queue: *mut c_void, out: *mut Interop) -> i32,
-    window: unsafe extern "C" fn(chain: *mut c_void, window: *mut *mut c_void) -> u32,
-    start: unsafe extern "C" fn(
-        device: *mut c_void,
-        window: *mut c_void,
-        log: OverlayLog,
-        user: *mut c_void,
-    ) -> i32,
-    admit: unsafe extern "C" fn(show_hud: u32, visible: *mut u32, hint: *mut f32) -> i32,
-    target: unsafe extern "C" fn(
-        device: *mut c_void,
-        interop: *mut c_void,
-        chain: *mut c_void,
-        out: *mut WrappedTarget,
-    ) -> u32,
-    acquire: unsafe extern "C" fn(interop: *mut c_void, wrapped: *mut c_void),
-    draw: unsafe extern "C" fn(
-        context: *mut c_void,
-        view: *mut c_void,
-        width: u32,
-        height: u32,
-        stats: *const rsf_overlay_stats,
-        intent: *mut rsf_overlay_intent,
-        visible: u32,
-        hint: f32,
-    ) -> i32,
-    release: unsafe extern "C" fn(interop: *mut c_void, wrapped: *mut c_void),
-    flush: unsafe extern "C" fn(context: *mut c_void),
-    stop: unsafe extern "C" fn(device: *mut c_void),
-}
+use std::mem::{ManuallyDrop, transmute};
+use std::ptr::{null, null_mut};
+use std::sync::{Mutex, OnceLock};
+use windows::Win32::Graphics::{
+    Direct3D::D3D_FEATURE_LEVEL,
+    Direct3D11::{
+        D3D11_BIND_RENDER_TARGET, D3D11_CREATE_DEVICE_BGRA_SUPPORT, ID3D11Device,
+        ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Resource,
+    },
+    Direct3D11on12::{D3D11_RESOURCE_FLAGS, ID3D11On12Device},
+    Direct3D12::{
+        D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES,
+        ID3D12CommandQueue, ID3D12Device, ID3D12Resource,
+    },
+    Dxgi::{IDXGISwapChain, IDXGISwapChain3},
+};
+use windows::core::{HRESULT, Interface};
+use windows_sys::Win32::{
+    System::{
+        LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
+        SystemInformation::GetSystemDirectoryW,
+    },
+    UI::WindowsAndMessaging::IsWindow,
+};
 
 type Handle = *mut c_void;
 
+type CreateOn12 = unsafe extern "system" fn(
+    Handle,
+    u32,
+    *const D3D_FEATURE_LEVEL,
+    u32,
+    *const Handle,
+    u32,
+    u32,
+    *mut Option<ID3D11Device>,
+    *mut Option<ID3D11DeviceContext>,
+    *mut D3D_FEATURE_LEVEL,
+) -> HRESULT;
+
+struct SystemEntry {
+    _module: SdkModule,
+    create: CreateOn12,
+}
+
+// The System32 DLL stays loaded for the process and the typed entry is immutable.
+unsafe impl Send for SystemEntry {}
+unsafe impl Sync for SystemEntry {}
+
+impl SystemEntry {
+    // Resolved only when this optional path is used: local D3D11 wrappers may expose device
+    // creation without the D3D11-on-12 entry.
+    fn open() -> Option<Self> {
+        let mut path = vec![0; 260];
+        let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
+        if length == 0 || length >= path.len() {
+            return None;
+        }
+        path.truncate(length);
+        path.extend("\\d3d11.dll".encode_utf16().chain([0]));
+        let module = SdkModule::adopt_system(unsafe {
+            LoadLibraryExW(path.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32)
+        })?;
+        let create = module.symbol(c"D3D11On12CreateDevice")?;
+        let create =
+            unsafe { transmute::<unsafe extern "system" fn() -> isize, CreateOn12>(create) };
+        Some(Self {
+            _module: module,
+            create,
+        })
+    }
+}
+
 struct Binding {
-    interop: IUnknown,
-    context: IUnknown,
-    device: IUnknown,
-    owner: IUnknown,
-    queue: IUnknown,
+    interop: ID3D11On12Device,
+    context: ID3D11DeviceContext,
+    device: ID3D11Device,
+    owner: ID3D12Device,
+    queue: ID3D12CommandQueue,
     started: bool,
 }
 
-// These COM handles move between calls. The owner serializes immediate-context
-// work and teardown, and the D3D12 queue remains the one supplied at creation.
+// These COM references move between calls. The owner lock serializes immediate-context work and
+// teardown, and the D3D12 queue remains the one supplied at creation.
 unsafe impl Send for Binding {}
 
 impl Binding {
-    fn matches(&self, device: Handle, queue: Handle) -> bool {
-        self.owner.as_raw() == device && self.queue.as_raw() == queue
+    fn create(
+        create: CreateOn12,
+        owner: &ID3D12Device,
+        queue: &ID3D12CommandQueue,
+    ) -> Option<Self> {
+        let mut device = None;
+        let mut context = None;
+        let queues = [queue.as_raw()];
+        let result = unsafe {
+            create(
+                owner.as_raw(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT.0,
+                null(),
+                0,
+                queues.as_ptr(),
+                queues.len() as u32,
+                0,
+                &mut device,
+                &mut context,
+                null_mut(),
+            )
+        };
+        let (true, Some(device), Some(context)) = (result.is_ok(), device, context) else {
+            return None;
+        };
+        Some(Self {
+            interop: device.cast().ok()?,
+            context,
+            device,
+            owner: owner.clone(),
+            queue: queue.clone(),
+            started: false,
+        })
     }
-}
 
-struct Wrapped<'a> {
-    platform: &'a Platform,
-    binding: &'a Binding,
-    view: Option<IUnknown>,
-    resource: Option<IUnknown>,
-    _backbuffer: IUnknown,
-}
-
-impl Drop for Wrapped<'_> {
-    fn drop(&mut self) {
+    // The wrapped target and its view over `backbuffer`, which is in `state` at this Present.
+    fn wrap(
+        &self,
+        backbuffer: &ID3D12Resource,
+        state: D3D12_RESOURCE_STATES,
+    ) -> Option<(ID3D11Resource, ID3D11RenderTargetView, u32, u32)> {
+        let flags = D3D11_RESOURCE_FLAGS {
+            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+            ..Default::default()
+        };
+        let mut wrapped: Option<ID3D11Resource> = None;
         unsafe {
-            (self.platform.release)(
-                self.binding.interop.as_raw(),
-                self.resource.as_ref().unwrap().as_raw(),
-            );
-            // Release D3D11 references first. Flush also retires their deferred
-            // destruction, so they do not hold a backbuffer across ResizeBuffers.
-            self.view = None;
-            self.resource = None;
-            (self.platform.flush)(self.binding.context.as_raw());
+            self.interop
+                .CreateWrappedResource(backbuffer, &flags, state, state, &mut wrapped)
         }
+        .ok()?;
+        let wrapped = wrapped?;
+        let mut view = None;
+        unsafe {
+            self.device
+                .CreateRenderTargetView(&wrapped, None, Some(&mut view))
+        }
+        .ok()?;
+        let desc = unsafe { backbuffer.GetDesc() };
+        let width = u32::try_from(desc.Width).ok()?;
+        if width == 0 || desc.Height == 0 {
+            return None;
+        }
+        Some((wrapped, view?, width, desc.Height))
     }
+}
+
+// What the panel draws into: the chain's current buffer, or one supplied with its window.
+enum Target<'a> {
+    Chain(&'a IDXGISwapChain),
+    Buffer {
+        backbuffer: &'a ID3D12Resource,
+        window: Handle,
+    },
 }
 
 struct Frame<'a> {
-    device: Handle,
-    queue: Handle,
-    chain: Handle,
-    input_window: Handle,
+    device: &'a ID3D12Device,
+    queue: &'a ID3D12CommandQueue,
+    target: Target<'a>,
     stats: &'a rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
     logger: OverlayLog,
@@ -130,6 +195,7 @@ impl Frame<'_> {
 #[derive(Default)]
 struct State {
     binding: Option<Binding>,
+    // A refused start is final until stop: retrying each frame would reload the panel library.
     failed: bool,
 }
 
@@ -145,50 +211,48 @@ impl State {
         0
     }
 
-    fn render(&mut self, platform: &Platform, frame: &Frame<'_>) -> i32 {
+    fn render(&mut self, frame: &Frame<'_>) -> i32 {
+        static ENTRY: OnceLock<Option<SystemEntry>> = OnceLock::new();
         if self.failed {
             return 0;
         }
         if self.binding.is_none() {
-            let mut native: Interop = unsafe { std::mem::zeroed() };
-            let result = unsafe { (platform.create)(frame.device, frame.queue, &mut native) };
-            if result == NOT_SUPPORTED {
+            let Some(entry) = ENTRY.get_or_init(SystemEntry::open) else {
                 return self.refuse(
                     frame,
                     c"Shared overlay unavailable: system D3D11-on-12 entry point not available.",
                 );
-            }
-            let (0, Some(device), Some(context), Some(interop)) = (
-                result,
-                unsafe { com_ref::owned(native.device) },
-                unsafe { com_ref::owned(native.context) },
-                unsafe { com_ref::owned(native.interop) },
-            ) else {
+            };
+            let Some(binding) = Binding::create(entry.create, frame.device, frame.queue) else {
                 return self.refuse(
                     frame,
                     c"Shared overlay unavailable: the D3D11-on-12 device could not be created.",
                 );
             };
-            self.binding = Some(Binding {
-                interop,
-                context,
-                device,
-                owner: unsafe { com_ref::retain(frame.device) },
-                queue: unsafe { com_ref::retain(frame.queue) },
-                started: false,
-            });
+            self.binding = Some(binding);
         }
         let binding = self.binding.as_mut().unwrap();
-        if !binding.matches(frame.device, frame.queue) {
+        if binding.owner.as_raw() != frame.device.as_raw()
+            || binding.queue.as_raw() != frame.queue.as_raw()
+        {
             return 0;
         }
         if !binding.started {
-            let mut window = frame.input_window;
-            if window.is_null() && unsafe { (platform.window)(frame.chain, &mut window) } == 0 {
-                return 0;
-            }
+            let window = match frame.target {
+                Target::Chain(chain) => match unsafe { chain.GetDesc() } {
+                    Ok(desc) => desc.OutputWindow.0,
+                    Err(_) => return 0,
+                },
+                Target::Buffer { window, .. } => window,
+            };
+            let user = frame.user;
             if unsafe {
-                (platform.start)(binding.device.as_raw(), window, frame.logger, frame.user)
+                rsf_core_overlay_host_start_device(
+                    binding.device.as_raw(),
+                    window,
+                    frame.logger,
+                    user,
+                )
             } == 0
             {
                 return self.refuse(
@@ -199,58 +263,57 @@ impl State {
             binding.started = true;
             frame.log(c"Shared overlay attached to D3D12 queue and window; Insert opens presets.");
         }
-        let (mut visible, mut hint) = (0, 0.0);
-        if unsafe { (platform.admit)(frame.stats.show_performance_hud, &mut visible, &mut hint) }
-            == 0
-        {
-            return 0;
-        }
-        let mut native: WrappedTarget = unsafe { std::mem::zeroed() };
-        if unsafe {
-            (platform.target)(
-                binding.device.as_raw(),
-                binding.interop.as_raw(),
-                frame.chain,
-                &mut native,
-            )
-        } == 0
-        {
-            return 0;
-        }
-        let (Some(backbuffer), Some(resource), Some(view)) = (
-            unsafe { com_ref::owned(native.backbuffer) },
-            unsafe { com_ref::owned(native.wrapped) },
-            unsafe { com_ref::owned(native.view) },
-        ) else {
+        // Hidden, no HUD and past the startup hint: skip the wrap, view, acquire, release and flush.
+        let Some(admission) = rsf_core_overlay_host_admit(frame.stats.show_performance_hud != 0)
+        else {
             return 0;
         };
-        unsafe { (platform.acquire)(binding.interop.as_raw(), resource.as_raw()) };
-        let wrapped = Wrapped {
-            platform,
-            binding,
-            view: Some(view),
-            resource: Some(resource),
-            _backbuffer: backbuffer,
+        let (backbuffer, state) = match frame.target {
+            Target::Chain(chain) => {
+                let Ok(chain) = chain.cast::<IDXGISwapChain3>() else {
+                    return 0;
+                };
+                let Ok(backbuffer) = (unsafe {
+                    chain.GetBuffer::<ID3D12Resource>(chain.GetCurrentBackBufferIndex())
+                }) else {
+                    return 0;
+                };
+                (backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET)
+            }
+            // This is the supplied resource, even if the chain has advanced its index.
+            Target::Buffer { backbuffer, .. } => (backbuffer.clone(), D3D12_RESOURCE_STATE_PRESENT),
         };
-        unsafe {
-            (platform.draw)(
+        let Some((wrapped, view, width, height)) = binding.wrap(&backbuffer, state) else {
+            return 0;
+        };
+        let acquired =
+            ManuallyDrop::new([Some(unsafe { ID3D11Resource::from_raw(wrapped.as_raw()) })]);
+        unsafe { binding.interop.AcquireWrappedResources(&acquired[..]) };
+        let drawn = unsafe {
+            rsf_core_overlay_host_draw_target(
                 binding.context.as_raw(),
-                wrapped.view.as_ref().unwrap().as_raw(),
-                native.width,
-                native.height,
+                view.as_raw(),
+                width,
+                height,
                 frame.stats,
                 frame.intent,
-                visible,
-                hint,
+                Some(admission),
             )
-        }
+        };
+        unsafe { binding.interop.ReleaseWrappedResources(&acquired[..]) };
+        // Release the D3D11 references first. Flush also retires their deferred destruction, so
+        // they do not hold the back buffer across ResizeBuffers.
+        drop(view);
+        drop(wrapped);
+        unsafe { binding.context.Flush() };
+        drawn
     }
 
-    fn stop(&mut self, platform: &Platform) {
+    fn stop(&mut self) {
         if let Some(binding) = &self.binding
             && binding.started
         {
-            unsafe { (platform.stop)(binding.device.as_raw()) };
+            rsf_core_overlay_host_stop_device(binding.device.as_raw());
         }
         *self = Self::default();
     }
@@ -258,209 +321,79 @@ impl State {
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn render_frame(
-    platform: &Platform,
     device: Handle,
     queue: Handle,
-    chain: Handle,
-    input_window: Handle,
+    target: Option<Target<'_>>,
+    window_owned: bool,
     stats: *const rsf_overlay_stats,
     intent: *mut rsf_overlay_intent,
     logger: OverlayLog,
     user: Handle,
 ) -> i32 {
-    if device.is_null()
-        || queue.is_null()
-        || chain.is_null()
-        || !unsafe { has_capacity(stats) }
-        || (!intent.is_null() && !unsafe { has_capacity(intent) })
-    {
+    let (Some(device), Some(queue), Some(target)) = (
+        unsafe { ID3D12Device::from_raw_borrowed(&device) },
+        unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) },
+        target,
+    ) else {
+        return 0;
+    };
+    if !unsafe { has_capacity(stats) } || (!intent.is_null() && !unsafe { has_capacity(intent) }) {
         return 0;
     }
     let Ok(mut owner) = OWNER.try_lock() else {
         return 0;
     };
-    let drawn = owner.render(
-        platform,
-        &Frame {
-            device,
-            queue,
-            chain,
-            input_window,
-            stats: unsafe { &*stats },
-            intent,
-            logger,
-            user,
-        },
-    );
-    if !input_window.is_null() && owner.failed {
+    let drawn = owner.render(&Frame {
+        device,
+        queue,
+        target,
+        stats: unsafe { &*stats },
+        intent,
+        logger,
+        user,
+    });
+    if window_owned && owner.failed {
         -1
     } else {
         drawn
     }
 }
 
-fn stop(platform: &Platform) {
-    OWNER.lock().unwrap().stop(platform);
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_frame(
+    device: Handle,
+    queue: Handle,
+    chain: Handle,
+    stats: *const rsf_overlay_stats,
+    intent: *mut rsf_overlay_intent,
+    log: OverlayLog,
+    user: Handle,
+) -> i32 {
+    // The chain is borrowed for this call only.
+    let target = unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }.map(Target::Chain);
+    unsafe { render_frame(device, queue, target, false, stats, intent, log, user) }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::RefCell;
-    use std::ptr;
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn rsf_overlay_d3d12_frame_for_window(
+    device: Handle,
+    queue: Handle,
+    backbuffer: Handle,
+    window: Handle,
+    stats: *const rsf_overlay_stats,
+    intent: *mut rsf_overlay_intent,
+    log: OverlayLog,
+    user: Handle,
+) -> i32 {
+    if unsafe { IsWindow(window) } == 0 {
+        return -1;
+    }
+    let target = unsafe { ID3D12Resource::from_raw_borrowed(&backbuffer) }
+        .map(|backbuffer| Target::Buffer { backbuffer, window });
+    unsafe { render_frame(device, queue, target, true, stats, intent, log, user) }
+}
 
-    #[repr(C)]
-    struct Vtable {
-        query: unsafe extern "system" fn(Handle, Handle, *mut Handle) -> i32,
-        add_ref: unsafe extern "system" fn(Handle) -> u32,
-        release: unsafe extern "system" fn(Handle) -> u32,
-    }
-
-    unsafe extern "system" fn query(_: Handle, _: Handle, _: *mut Handle) -> i32 {
-        -1
-    }
-    unsafe extern "system" fn reference(_: Handle) -> u32 {
-        1
-    }
-    static VTABLE: Vtable = Vtable {
-        query,
-        add_ref: reference,
-        release: reference,
-    };
-
-    thread_local! {
-        static CALLS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
-    }
-
-    fn call(name: &'static str) {
-        CALLS.with_borrow_mut(|calls| calls.push(name));
-    }
-
-    unsafe extern "C" fn create(device: Handle, _: Handle, out: *mut Interop) -> i32 {
-        call("create");
-        unsafe {
-            out.write(Interop {
-                device,
-                context: device,
-                interop: device,
-            })
-        };
-        0
-    }
-    unsafe extern "C" fn window(chain: Handle, out: *mut Handle) -> u32 {
-        unsafe { out.write(chain) };
-        1
-    }
-    unsafe extern "C" fn start(_: Handle, _: Handle, _: OverlayLog, _: Handle) -> i32 {
-        call("start");
-        1
-    }
-    unsafe extern "C" fn admit(_: u32, visible: *mut u32, hint: *mut f32) -> i32 {
-        call("admit");
-        unsafe {
-            visible.write(1);
-            hint.write(0.25);
-        }
-        1
-    }
-    unsafe extern "C" fn deny(_: u32, _: *mut u32, _: *mut f32) -> i32 {
-        call("deny");
-        0
-    }
-    unsafe extern "C" fn target(
-        device: Handle,
-        _: Handle,
-        _: Handle,
-        out: *mut WrappedTarget,
-    ) -> u32 {
-        call("target");
-        unsafe {
-            out.write(WrappedTarget {
-                backbuffer: device,
-                wrapped: device,
-                view: device,
-                width: 64,
-                height: 32,
-            })
-        };
-        1
-    }
-    unsafe extern "C" fn acquire(_: Handle, _: Handle) {
-        call("acquire");
-    }
-    unsafe extern "C" fn draw(
-        _: Handle,
-        _: Handle,
-        _: u32,
-        _: u32,
-        _: *const rsf_overlay_stats,
-        _: *mut rsf_overlay_intent,
-        visible: u32,
-        hint: f32,
-    ) -> i32 {
-        assert_eq!((visible, hint), (1, 0.25));
-        call("draw");
-        0
-    }
-    unsafe extern "C" fn release(_: Handle, _: Handle) {
-        call("release");
-    }
-    unsafe extern "C" fn flush(_: Handle) {
-        call("flush");
-    }
-    unsafe extern "C" fn stop(_: Handle) {
-        call("stop");
-    }
-
-    #[test]
-    fn refused_draw_releases_the_backbuffer_and_foreign_queue_cannot_wrap() {
-        let platform = Platform {
-            create,
-            window,
-            start,
-            admit,
-            target,
-            acquire,
-            draw,
-            release,
-            flush,
-            stop,
-        };
-        let mut device_vtable = &VTABLE;
-        let mut queue_vtable = &VTABLE;
-        let device = (&raw mut device_vtable).cast();
-        let queue = (&raw mut queue_vtable).cast();
-        let stats = rsf_overlay_stats::default();
-        let mut frame = Frame {
-            device,
-            queue,
-            chain: device,
-            input_window: ptr::null_mut(),
-            stats: &stats,
-            intent: ptr::null_mut(),
-            logger: None,
-            user: ptr::null_mut(),
-        };
-        let mut owner = State::default();
-        owner.stop(&platform);
-        assert_eq!(owner.render(&platform, &frame), 0);
-        let hidden = Platform {
-            admit: deny,
-            ..platform
-        };
-        assert_eq!(owner.render(&hidden, &frame), 0);
-        frame.queue = device;
-        assert_eq!(owner.render(&platform, &frame), 0);
-        owner.stop(&platform);
-        assert!(owner.binding.is_none());
-        CALLS.with_borrow(|calls| {
-            assert_eq!(
-                calls,
-                &[
-                    "create", "start", "admit", "target", "acquire", "draw", "release", "flush",
-                    "deny", "stop"
-                ]
-            )
-        });
-    }
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_overlay_d3d12_stop() {
+    OWNER.lock().unwrap().stop();
 }

@@ -67,7 +67,7 @@ const TRACE_FRAMES: u32 = 4;
 const STARTUP_HINT_MS: u64 = 8000;
 const STARTUP_FADE_MS: u64 = 1000;
 #[derive(Clone, Copy)]
-struct DrawAdmission {
+pub(crate) struct DrawAdmission {
     visible: bool,
     hint: f32,
 }
@@ -790,7 +790,7 @@ unsafe fn rsf_core_overlay_host_start(chain: Handle, log: Log, user: Handle) -> 
     result
 }
 
-unsafe fn rsf_core_overlay_host_start_device(
+pub(crate) unsafe fn rsf_core_overlay_host_start_device(
     device: Handle,
     window: Handle,
     log: Log,
@@ -803,7 +803,7 @@ unsafe fn rsf_core_overlay_host_start_device(
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe fn rsf_core_overlay_host_draw_target(
+pub(crate) unsafe fn rsf_core_overlay_host_draw_target(
     context: Handle,
     target: Handle,
     width: u32,
@@ -826,6 +826,14 @@ unsafe fn rsf_core_overlay_host_draw_target(
     let result = host.draw_target(context, target, width, height, stats, intent, admission);
     publish(&host);
     result
+}
+
+/* The wrapped D3D12 path asks before it wraps a back buffer. */
+pub(crate) fn rsf_core_overlay_host_admit(show_hud: bool) -> Option<DrawAdmission> {
+    if !STARTED.load(Ordering::Acquire) {
+        return None;
+    }
+    try_hold().and_then(|host| host.admit_target(show_hud))
 }
 
 fn rsf_core_overlay_host_visible() -> u32 {
@@ -861,7 +869,7 @@ fn rsf_core_overlay_host_stop() {
     publish(&host);
 }
 
-fn rsf_core_overlay_host_stop_device(device: Handle) {
+pub(crate) fn rsf_core_overlay_host_stop_device(device: Handle) {
     let mut host = hold();
     host.stop_device(device);
     publish(&host);

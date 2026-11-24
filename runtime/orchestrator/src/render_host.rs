@@ -1677,13 +1677,13 @@ unsafe extern "C" fn rsf_render_host_create(setup: *const Setup, services: *mut 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn rsf_render_overlay_visible() -> u32 {
-    crate::overlay_native12::native::rsf_overlay_native12_visible()
+    crate::overlay_native12::rsf_overlay_native12_visible()
 }
 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn rsf_render_overlay_toggle() {
-    crate::overlay_native12::native::rsf_overlay_native12_toggle();
+    crate::overlay_native12::rsf_overlay_native12_toggle();
 }
 
 #[unsafe(no_mangle)]
