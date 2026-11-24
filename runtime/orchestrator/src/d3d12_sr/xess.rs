@@ -67,37 +67,17 @@ const QUALITIES: [i32; 6] = [
 
 fn zero_mask(device: Raw, [width, height]: Extent) -> Result<ID3D12Resource, i32> {
     let device = unsafe { ID3D12Device::from_raw_borrowed(&device) }.ok_or(INVALID_ARGUMENT)?;
-    let heap = D3D12_HEAP_PROPERTIES {
-        Type: D3D12_HEAP_TYPE_DEFAULT,
-        ..Default::default()
-    };
-    let desc = D3D12_RESOURCE_DESC {
-        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: width.into(),
-        Height: height,
-        DepthOrArraySize: 1,
-        MipLevels: 1,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Format: DXGI_FORMAT_R8_UNORM,
-        ..Default::default()
-    };
-    let mut texture = None;
+    let desc = crate::d3d12_host::texture_desc(width, height, DXGI_FORMAT_R8_UNORM);
     // Committed resources are zero-filled unless created with CREATE_NOT_ZEROED.
-    unsafe {
-        device.CreateCommittedResource(
-            &heap,
-            D3D12_HEAP_FLAG_NONE,
-            &desc,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            None,
-            &mut texture,
-        )
-    }
-    .map_err(|_| INIT_FAILED)?;
-    texture.ok_or(INIT_FAILED)
+    let texture = crate::d3d12_host::committed_resource(
+        device,
+        D3D12_HEAP_TYPE_DEFAULT,
+        &desc,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+    );
+    (!texture.is_null())
+        .then(|| unsafe { ID3D12Resource::from_raw(texture) })
+        .ok_or(INIT_FAILED)
 }
 
 pub(super) struct Owner {

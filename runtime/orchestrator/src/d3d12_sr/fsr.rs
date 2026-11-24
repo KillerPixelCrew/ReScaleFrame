@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::ffx_version;
-use std::ffi::{CStr, CString};
+use rsf_graphics::dump_options::Log;
+use std::ffi::CStr;
 use std::ptr::NonNull;
 
 use super::ffx_abi::*;
@@ -206,24 +207,21 @@ impl Owner {
             let name = unsafe { CStr::from_ptr(best.name) };
             return Ok(Version::new(best.id, name.to_bytes()));
         }
-        if let Some(log) = desc.log {
-            if let Ok(message) = CString::new(format!(
+        let log = Log::new(desc.log, desc.log_user);
+        if log.callback.is_some() {
+            log.say(&format!(
                 "FSR{} unavailable: runtime exposes no matching provider on this device ({count} available)",
                 self.major
-            )) {
-                unsafe { log(desc.log_user, message.as_ptr()) };
-            }
-            const PREFIX: &[u8] = b"FSR available provider: ";
+            ));
             for version in versions {
                 let name = if version.name.is_null() {
                     c"unnamed"
                 } else {
                     unsafe { CStr::from_ptr(version.name) }
                 };
-                let mut message = [0; 192];
-                copy_bytes(&mut message[..PREFIX.len()], PREFIX);
-                copy_bytes(&mut message[PREFIX.len()..191], name.to_bytes());
-                unsafe { log(desc.log_user, message.as_ptr()) };
+                let mut message = format!("FSR available provider: {}", name.to_string_lossy());
+                message.truncate(message.floor_char_boundary(191));
+                log.say(&message);
             }
         }
         Err(NOT_SUPPORTED)

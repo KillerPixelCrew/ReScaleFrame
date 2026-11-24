@@ -2,7 +2,7 @@
 use crate::d3d11_d3d12::transition_barrier;
 use crate::d3d11_output_platform::rsf_d3d11_output_srv_format;
 use crate::d3d11_sharpening::{Frame, rsf_sharpen11_active, rsf_sharpen11_pack};
-use crate::d3d12_host::device_of;
+use crate::d3d12_host::{committed_resource, device_of, texture_desc};
 use crate::sharpening_policy::{FILTERS, effective_mode};
 use crate::sys::rsf_sharpening_options as Options;
 use rsf_shader_compiler::{Compiler, Request, blob_bytes, compile};
@@ -147,37 +147,16 @@ fn create_heap(device: &ID3D12Device) -> Option<ID3D12DescriptorHeap> {
 }
 
 fn create_scratch(device: &ID3D12Device, output: &D3D12_RESOURCE_DESC) -> Option<ID3D12Resource> {
-    let properties = D3D12_HEAP_PROPERTIES {
-        Type: D3D12_HEAP_TYPE_DEFAULT,
-        ..Default::default()
-    };
-    let desc = D3D12_RESOURCE_DESC {
-        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: output.Width,
-        Height: output.Height,
-        DepthOrArraySize: 1,
-        MipLevels: 1,
-        Format: output.Format,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-        ..Default::default()
-    };
-    let mut scratch = None;
-    unsafe {
-        device.CreateCommittedResource(
-            &properties,
-            D3D12_HEAP_FLAG_NONE,
-            &desc,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            None,
-            &mut scratch,
-        )
-    }
-    .ok()?;
-    scratch
+    // shader_readable bounded the output width to u32.
+    let mut desc = texture_desc(output.Width as u32, output.Height, output.Format);
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    let scratch = committed_resource(
+        device,
+        D3D12_HEAP_TYPE_DEFAULT,
+        &desc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+    );
+    (!scratch.is_null()).then(|| unsafe { ID3D12Resource::from_raw(scratch) })
 }
 
 fn scratch_key(desc: &D3D12_RESOURCE_DESC) -> (u64, u32, DXGI_FORMAT) {
