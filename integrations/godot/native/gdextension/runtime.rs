@@ -166,7 +166,8 @@ unsafe extern "C" fn capture(
         argument: 0,
         expected: 0,
     };
-    crate::runtime::rsf_godot_extension_capture();
+    // `ReScaleFrameRuntime.request_frame_dump`, on the render thread.
+    unsafe { rsf_input_dump_request() };
 }
 
 unsafe extern "C" fn no_arguments(_: *mut c_void, valid: *mut GdBool) -> GdInt {

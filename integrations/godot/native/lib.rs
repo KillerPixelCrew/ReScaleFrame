@@ -173,16 +173,16 @@ unsafe extern "C" fn rsfg_present(chain: *mut c_void) {
 
 use vulkan::creation::typed;
 
-unsafe extern "C" fn rsf_godot_vk_creation_resolver(
+fn vk_creation_resolver(
     underlying: Option<VkProc>,
-    xess: u32,
+    xess: bool,
     log: rsf_game_log_fn,
     log_user: *mut c_void,
 ) -> Option<VkProc> {
     CONTROL
         .vulkan
         .creation()
-        .begin(underlying, xess != 0, log, log_user)
+        .begin(underlying, xess, log, log_user)
         .then_some(vk_instance_proc as VkProc)
 }
 

@@ -3,7 +3,7 @@
 
 use crate::platform::{Settings, Setup};
 use crate::sys::*;
-use crate::vulkan::native::{rsf_godot_vk_capture_present, rsf_godot_vk_render_begin};
+use crate::vulkan::native::{vk_capture_present, vk_render_begin};
 use rsf_game_sys::{RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_PRESENT, rsf_game_render_pass};
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -70,7 +70,7 @@ unsafe extern "C" fn rsfg_render(
 #[unsafe(no_mangle)]
 extern "C" fn rsfg_render_begin(frame: u64) {
     if crate::CONTROL.vulkan.booted() {
-        rsf_godot_vk_render_begin(frame, 0);
+        vk_render_begin(frame, false);
     } else if crate::CONTROL.booted() {
         crate::CONTROL.d3d12.render_begin(&crate::CONTROL, frame);
     }
@@ -97,7 +97,7 @@ unsafe extern "C" fn rsfg_vk_execution(pass: *const rsf_game_render_pass, begin:
         return 0;
     };
     if pass.role == RSF_GAME_RENDER_FRAME {
-        rsf_godot_vk_render_begin(pass.source_frame_id, 1);
+        vk_render_begin(pass.source_frame_id, true);
         return 1;
     }
     let admitted: i32 = crate::CONTROL.window.execution(pass, begin).into();
@@ -133,12 +133,12 @@ unsafe extern "C" fn rsfg_vk_native_present(
         info,
     };
     if CAPTURE_NATIVE_PRESENT.get() {
-        rsf_godot_vk_capture_present(info, 0, 1);
+        vk_capture_present(info, 0, true);
     }
     let result =
         unsafe { rsf_slvk_without_dlssg(Some(present_call), std::ptr::from_mut(&mut call).cast()) };
     if CAPTURE_NATIVE_PRESENT.get() {
-        rsf_godot_vk_capture_present(info, result, 0);
+        vk_capture_present(info, result, false);
     }
     result
 }
@@ -179,7 +179,3 @@ extern "C" fn rsfg_shutdown() -> i32 {
     result
 }
 
-/// `ReScaleFrameRuntime.request_frame_dump`, on the render thread.
-pub(crate) fn rsf_godot_extension_capture() {
-    unsafe { rsf_input_dump_request() };
-}

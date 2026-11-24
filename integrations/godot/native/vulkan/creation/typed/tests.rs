@@ -326,12 +326,12 @@ pub(super) unsafe fn rsf_latencyvk_device_destroyed(device: *mut c_void) {
 #[test]
 fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
     assert!(
-        unsafe { crate::rsf_godot_vk_creation_resolver(None, 1, None, ptr::null_mut()) }.is_none()
+        crate::vk_creation_resolver(None, true, None, ptr::null_mut()).is_none()
     );
-    let begin = |xess| unsafe {
-        crate::rsf_godot_vk_creation_resolver(Some(mock_proc), xess, None, ptr::null_mut()).unwrap()
+    let begin = |xess| {
+        crate::vk_creation_resolver(Some(mock_proc), xess, None, ptr::null_mut()).unwrap()
     };
-    let gipa = begin(1);
+    let gipa = begin(true);
     assert!(unsafe { gipa(ptr::null_mut(), ptr::null()) }.is_none());
     let create = unsafe {
         std::mem::transmute::<VkFunction, vk::PFN_vkCreateInstance>(
@@ -443,7 +443,7 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
             calls.interop = false;
             calls.next_result = Some(refused);
         });
-        assert!(run(begin(1), &info).0 == vk::Result::SUCCESS);
+        assert!(run(begin(true), &info).0 == vk::Result::SUCCESS);
         CALLS.with_borrow_mut(|calls| {
             assert_eq!(calls.devices.len(), 2);
             assert_eq!(calls.devices[1].request, (&raw const info).addr());
@@ -451,7 +451,7 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
         });
     }
     CALLS.with_borrow_mut(|calls| calls.refuse_xess = true);
-    assert!(run(begin(1), &info).0 == vk::Result::SUCCESS);
+    assert!(run(begin(true), &info).0 == vk::Result::SUCCESS);
     assert!(!crate::CONTROL.vulkan.creation().xess_ready());
     CALLS.with_borrow_mut(|calls| {
         assert_eq!(
@@ -461,7 +461,7 @@ fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
         calls.latency = true;
         calls.next_result = Some(vk::Result::ERROR_EXTENSION_NOT_PRESENT);
     });
-    assert!(run(begin(0), &info).0 == vk::Result::SUCCESS);
+    assert!(run(begin(false), &info).0 == vk::Result::SUCCESS);
     CALLS.with_borrow(|calls| {
         assert_ne!(calls.latency_clone, info.p_next.addr());
         assert!(

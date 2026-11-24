@@ -6,7 +6,7 @@
 use crate::platform::*;
 use crate::sys::*;
 use crate::vulkan::handle;
-use crate::{CONTROL, rsf_godot_vk_creation_resolver};
+use crate::{CONTROL, vk_creation_resolver};
 use ash::vk;
 use rsf_game_sys::backend_result;
 use rsf_game_sys::ffi_util::{ascii_wide, wide};
@@ -178,14 +178,12 @@ impl Platform {
             system_resolver()
         };
         let resolver = if rsfg_vulkan_supported() != 0 {
-            unsafe {
-                rsf_godot_vk_creation_resolver(
-                    base,
-                    u32::from(xess_result == backend_result::OK),
-                    setup.log,
-                    setup.log_user,
-                )
-            }
+            vk_creation_resolver(
+                base,
+                xess_result == backend_result::OK,
+                setup.log,
+                setup.log_user,
+            )
         } else {
             base
         };
@@ -369,14 +367,14 @@ unsafe extern "C" fn rsfg_boot_vulkan(setup: *const Setup) -> i32 {
     result
 }
 
-pub(crate) extern "C" fn rsf_godot_vk_render_begin(frame: u64, explicit: u32) {
-    if explicit == 0 {
+pub(crate) fn vk_render_begin(frame: u64, explicit: bool) {
+    if !explicit {
         unsafe { rsf_latencyvk_render(frame) };
     }
     let _guard = guard();
     let mut state = state();
     state.frame = frame;
-    state.explicit = explicit != 0;
+    state.explicit = explicit;
 }
 
 #[unsafe(no_mangle)]
@@ -545,14 +543,10 @@ fn capture_present(owner: *mut rsf_fgvk, info: *const c_void, result: i32, begin
     }
 }
 
-pub(crate) extern "C" fn rsf_godot_vk_capture_present(
-    info: *const c_void,
-    result: i32,
-    begin: u32,
-) {
+pub(crate) fn vk_capture_present(info: *const c_void, result: i32, begin: bool) {
     // A nested SDK WSI call is already inside the provider-owned Present.
     if let Ok(_guard) = GUARD.try_lock() {
-        capture_present(ptr::null_mut(), info, result, begin != 0);
+        capture_present(ptr::null_mut(), info, result, begin);
     }
 }
 
