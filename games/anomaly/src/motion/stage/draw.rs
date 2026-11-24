@@ -438,7 +438,7 @@ impl Stage {
                 HARDWARE_SKINNED | SINGLE_BONE | SOFTWARE_SKINNED
             ) {
             let distance = world()
-                .zip(history.sample.or_else(|| camera()))
+                .zip(history.sample.or_else(camera))
                 .map_or(f64::NAN, |(w, camera)| {
                     rsf_anomaly_motion_camera_distance(&camera.view, &engine_matrix(&w))
                 });

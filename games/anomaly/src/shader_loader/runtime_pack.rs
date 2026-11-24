@@ -38,43 +38,6 @@ pub(crate) struct RuntimePack {
     modules: Modules,
 }
 
-// The SEH-guarded engine includer and copy leaves (motion_stage_platform.c). The engine lends its includer as the
-// vtable pointer `table`. Unit tests never open an engine pack, so their stand-ins refuse.
-#[cfg(not(test))]
-mod engine {
-    use std::ffi::{c_char, c_void};
-    unsafe extern "C" {
-        #[link_name = "rsf_anomaly_motion_native_include_open"]
-        pub(super) fn open(
-            table: *mut c_void,
-            name: *const c_char,
-            data: *mut *const c_void,
-            size: *mut u32,
-        ) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_include_copy"]
-        pub(super) fn copy(out: *mut c_void, input: *const c_void, size: usize) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_include_close"]
-        pub(super) fn close(table: *mut c_void, data: *const c_void);
-    }
-}
-
-#[cfg(test)]
-mod engine {
-    use std::ffi::{c_char, c_void};
-    pub(super) unsafe fn open(
-        _: *mut c_void,
-        _: *const c_char,
-        _: *mut *const c_void,
-        _: *mut u32,
-    ) -> bool {
-        false
-    }
-    pub(super) unsafe fn copy(_: *mut c_void, _: *const c_void, _: usize) -> bool {
-        false
-    }
-    pub(super) unsafe fn close(_: *mut c_void, _: *const c_void) {}
-}
-
 struct OpenInclude {
     table: *mut c_void,
     data: *const c_void,
@@ -498,4 +461,41 @@ unsafe fn prepare_bytecode(
         user: std::ptr::from_mut(&mut pack.includes).cast(),
     };
     unsafe { (pack.session.api.prepare.unwrap())(pack.session.handle.as_ptr(), &request, output) }
+}
+
+// The SEH-guarded engine includer and copy leaves (motion_stage_platform.c). The engine lends its includer as the
+// vtable pointer `table`. Unit tests never open an engine pack, so their stand-ins refuse.
+#[cfg(not(test))]
+mod engine {
+    use std::ffi::{c_char, c_void};
+    unsafe extern "C" {
+        #[link_name = "rsf_anomaly_motion_native_include_open"]
+        pub(super) fn open(
+            table: *mut c_void,
+            name: *const c_char,
+            data: *mut *const c_void,
+            size: *mut u32,
+        ) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_include_copy"]
+        pub(super) fn copy(out: *mut c_void, input: *const c_void, size: usize) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_include_close"]
+        pub(super) fn close(table: *mut c_void, data: *const c_void);
+    }
+}
+
+#[cfg(test)]
+mod engine {
+    use std::ffi::{c_char, c_void};
+    pub(super) unsafe fn open(
+        _: *mut c_void,
+        _: *const c_char,
+        _: *mut *const c_void,
+        _: *mut u32,
+    ) -> bool {
+        false
+    }
+    pub(super) unsafe fn copy(_: *mut c_void, _: *const c_void, _: usize) -> bool {
+        false
+    }
+    pub(super) unsafe fn close(_: *mut c_void, _: *const c_void) {}
 }

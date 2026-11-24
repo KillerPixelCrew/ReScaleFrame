@@ -61,102 +61,6 @@ use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerf
 
 type Ptr = *mut c_void;
 
-// The C leaves: sr_stage_platform.c (guarded copy, SEH engine calls, the stage hook set and the position-binder
-// replacement), engine_slots.c, native_geometry_platform.c and the Graphics leaves. Unit tests never reach this
-// production module, so they link stand-ins.
-#[cfg(not(test))]
-mod c {
-    use super::Ptr;
-    use std::ffi::c_void;
-
-    unsafe extern "C" {
-        #[link_name = "rsf_anomaly_sr_native_copy"]
-        pub(super) fn copy(output: Ptr, input: *const c_void, size: usize) -> bool;
-        #[link_name = "rsf_anomaly_sr_native_set_projection"]
-        pub(super) fn set_projection(function: Ptr, xforms: Ptr, matrix: *const c_void) -> bool;
-        #[link_name = "rsf_anomaly_sr_native_set_mip_bias"]
-        pub(super) fn set_mip_bias(function: Ptr, cache: Ptr, bias: f32) -> bool;
-        #[link_name = "rsf_anomaly_sr_native_constant_buffer"]
-        pub(super) fn constant_buffer(
-            function: Ptr,
-            constants: Ptr,
-            constant: usize,
-            stage: u32,
-        ) -> usize;
-        #[link_name = "rsf_anomaly_sr_native_install_hooks"]
-        pub(super) fn install_hooks(image: Ptr, size: u32, sites: Ptr, count: usize) -> bool;
-        #[link_name = "rsf_anomaly_sr_native_hooks_created"]
-        pub(super) fn hooks_created() -> bool;
-        #[link_name = "rsf_anomaly_sr_native_enable_hooks"]
-        pub(super) fn enable_hooks() -> bool;
-        #[link_name = "rsf_anomaly_sr_native_disable_hooks"]
-        pub(super) fn disable_hooks() -> bool;
-        /// The cl_pos_decompress_params::setup vtable replacement; only its address is taken.
-        #[link_name = "rsf_anomaly_sr_position_setup_detour"]
-        pub(super) fn position_setup(this: Ptr, constant: Ptr);
-        #[link_name = "rsf_anomaly_compare_slot"]
-        pub(super) fn compare_slot(
-            address: Ptr,
-            expected: Ptr,
-            value: Ptr,
-            previous: *mut Ptr,
-        ) -> bool;
-        #[link_name = "rsf_anomaly_geometry_current_view"]
-        pub(super) fn current_view(module: *const c_void, build: usize) -> u8;
-        #[link_name = "rsf_texture_pixel_bytes"]
-        pub(super) fn pixel_bytes(format: u32) -> u32;
-        /// An owned default shader view, or null.
-        #[link_name = "rsf_d3d11_create_shader_view"]
-        pub(super) fn create_view(device: Ptr, texture: Ptr) -> Ptr;
-    }
-}
-
-#[cfg(test)]
-mod c {
-    use super::Ptr;
-    use std::ffi::c_void;
-
-    pub(super) unsafe extern "C" fn copy(_: Ptr, _: *const c_void, _: usize) -> bool {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn set_projection(_: Ptr, _: Ptr, _: *const c_void) -> bool {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn set_mip_bias(_: Ptr, _: Ptr, _: f32) -> bool {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn constant_buffer(_: Ptr, _: Ptr, _: usize, _: u32) -> usize {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn install_hooks(_: Ptr, _: u32, _: Ptr, _: usize) -> bool {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn hooks_created() -> bool {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn enable_hooks() -> bool {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn disable_hooks() -> bool {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe extern "C" fn position_setup(_: Ptr, _: Ptr) {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe extern "C" fn compare_slot(_: Ptr, _: Ptr, _: Ptr, _: *mut Ptr) -> bool {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn current_view(_: *const c_void, _: usize) -> u8 {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn pixel_bytes(_: u32) -> u32 {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn create_view(_: Ptr, _: Ptr) -> Ptr {
-        unreachable!("C leaf in a unit test")
-    }
-}
-
 const _: () = {
     // The seam reads the generic0 CRT the world window swaps.
     assert!(WORLD_TARGETS[0].offset == 0x3a8);
@@ -933,4 +837,100 @@ extern "C" fn rsf_anomaly_sr_stage_install_build(image: Ptr, build: usize) -> bo
 #[cfg(feature = "native-entry")]
 pub(crate) fn rsf_anomaly_sr_depth_rva(build: usize) -> u32 {
     SR.get(build).map_or(0, |profile| profile.hw_base_zb_rva)
+}
+
+// The C leaves: sr_stage_platform.c (guarded copy, SEH engine calls, the stage hook set and the position-binder
+// replacement), engine_slots.c, native_geometry_platform.c and the Graphics leaves. Unit tests never reach this
+// production module, so they link stand-ins.
+#[cfg(not(test))]
+mod c {
+    use super::Ptr;
+    use std::ffi::c_void;
+
+    unsafe extern "C" {
+        #[link_name = "rsf_anomaly_sr_native_copy"]
+        pub(super) fn copy(output: Ptr, input: *const c_void, size: usize) -> bool;
+        #[link_name = "rsf_anomaly_sr_native_set_projection"]
+        pub(super) fn set_projection(function: Ptr, xforms: Ptr, matrix: *const c_void) -> bool;
+        #[link_name = "rsf_anomaly_sr_native_set_mip_bias"]
+        pub(super) fn set_mip_bias(function: Ptr, cache: Ptr, bias: f32) -> bool;
+        #[link_name = "rsf_anomaly_sr_native_constant_buffer"]
+        pub(super) fn constant_buffer(
+            function: Ptr,
+            constants: Ptr,
+            constant: usize,
+            stage: u32,
+        ) -> usize;
+        #[link_name = "rsf_anomaly_sr_native_install_hooks"]
+        pub(super) fn install_hooks(image: Ptr, size: u32, sites: Ptr, count: usize) -> bool;
+        #[link_name = "rsf_anomaly_sr_native_hooks_created"]
+        pub(super) fn hooks_created() -> bool;
+        #[link_name = "rsf_anomaly_sr_native_enable_hooks"]
+        pub(super) fn enable_hooks() -> bool;
+        #[link_name = "rsf_anomaly_sr_native_disable_hooks"]
+        pub(super) fn disable_hooks() -> bool;
+        /// The cl_pos_decompress_params::setup vtable replacement; only its address is taken.
+        #[link_name = "rsf_anomaly_sr_position_setup_detour"]
+        pub(super) fn position_setup(this: Ptr, constant: Ptr);
+        #[link_name = "rsf_anomaly_compare_slot"]
+        pub(super) fn compare_slot(
+            address: Ptr,
+            expected: Ptr,
+            value: Ptr,
+            previous: *mut Ptr,
+        ) -> bool;
+        #[link_name = "rsf_anomaly_geometry_current_view"]
+        pub(super) fn current_view(module: *const c_void, build: usize) -> u8;
+        #[link_name = "rsf_texture_pixel_bytes"]
+        pub(super) fn pixel_bytes(format: u32) -> u32;
+        /// An owned default shader view, or null.
+        #[link_name = "rsf_d3d11_create_shader_view"]
+        pub(super) fn create_view(device: Ptr, texture: Ptr) -> Ptr;
+    }
+}
+
+#[cfg(test)]
+mod c {
+    use super::Ptr;
+    use std::ffi::c_void;
+
+    pub(super) unsafe extern "C" fn copy(_: Ptr, _: *const c_void, _: usize) -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn set_projection(_: Ptr, _: Ptr, _: *const c_void) -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn set_mip_bias(_: Ptr, _: Ptr, _: f32) -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn constant_buffer(_: Ptr, _: Ptr, _: usize, _: u32) -> usize {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn install_hooks(_: Ptr, _: u32, _: Ptr, _: usize) -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn hooks_created() -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn enable_hooks() -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn disable_hooks() -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe extern "C" fn position_setup(_: Ptr, _: Ptr) {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe extern "C" fn compare_slot(_: Ptr, _: Ptr, _: Ptr, _: *mut Ptr) -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn current_view(_: *const c_void, _: usize) -> u8 {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn pixel_bytes(_: u32) -> u32 {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn create_view(_: Ptr, _: Ptr) -> Ptr {
+        unreachable!("C leaf in a unit test")
+    }
 }
