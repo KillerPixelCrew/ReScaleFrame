@@ -19,8 +19,8 @@ use crate::control::Control;
 use crate::platform::{Platform, Settings, Sharpening, SrCreate, SrEvaluate, SrFrame};
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
-    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW, backend_result,
-    rsf_game_render_pass,
+    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW, RSF_SCREEN_FLIGHT,
+    RSF_SCREEN_MENU, RSF_SCREEN_UNKNOWN, backend_result, rsf_game_render_pass,
 };
 use std::ffi::{c_int, c_void};
 use std::sync::{Mutex, MutexGuard};
@@ -29,9 +29,6 @@ const SR_NONE: u32 = 0;
 const SR_SPATIAL: u32 = 6;
 const SR_AUTO: u32 = 7;
 const FG_BACKEND_AUTO: u32 = 7;
-const SCREEN_UNKNOWN: u32 = 0;
-const SCREEN_MENU: u32 = 1;
-const SCREEN_FLIGHT: u32 = 4;
 /// `rsf_sr12_evaluate` command slots 0..2.
 const SLOTS: u32 = 3;
 /// Refused passes whose inputs are logged.
@@ -141,10 +138,10 @@ pub(crate) struct D3d12 {
 
 /// FG runs only in requested gameplay on the flight screen; every other pass is a menu pass.
 fn screen(settings: &Settings, screen: u32) -> u32 {
-    if settings.gameplay != 0 && screen == SCREEN_FLIGHT {
-        SCREEN_FLIGHT
+    if settings.gameplay != 0 && screen == RSF_SCREEN_FLIGHT {
+        RSF_SCREEN_FLIGHT
     } else {
-        SCREEN_MENU
+        RSF_SCREEN_MENU
     }
 }
 
@@ -504,7 +501,7 @@ impl D3d12 {
             pass.session_id = session;
             pass.source_frame_id = current;
             pass.native_frame = current;
-            pass.screen = SCREEN_UNKNOWN;
+            pass.screen = RSF_SCREEN_UNKNOWN;
             pass
         };
         pass.role = RSF_GAME_RENDER_WINDOW;

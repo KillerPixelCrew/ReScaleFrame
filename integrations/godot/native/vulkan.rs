@@ -26,7 +26,6 @@ const FG_FSR3: u32 = 3;
 const FG_FSR4: u32 = 4;
 const FG_XESS: u32 = 5;
 const FG_BACKEND_AUTO: u32 = 7;
-const SCREEN_FLIGHT: u32 = 4;
 /// The first registered window message; the PCL ping message is one when Streamline bound it.
 const REGISTERED_MESSAGE: u32 = 0xc000;
 /// A Vulkan handle from the pointer-sized word the leaf records carry.
@@ -426,8 +425,11 @@ impl Vulkan {
         record: impl FnOnce() -> i32,
     ) -> i32 {
         let settings = self.state().settings;
-        let enabled =
-            u32::from(settings.fg_mode != 0 && settings.gameplay != 0 && screen == SCREEN_FLIGHT);
+        let enabled = u32::from(
+            settings.fg_mode != 0
+                && settings.gameplay != 0
+                && screen == rsf_game_sys::RSF_SCREEN_FLIGHT,
+        );
         let options_result = if presenter {
             options(enabled, settings.generated_frames)
         } else {

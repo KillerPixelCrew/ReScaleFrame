@@ -23,7 +23,7 @@ fn pass(role: u32, frame: u64) -> rsf_game_render_pass {
     pass.session_id = 42;
     pass.source_frame_id = frame;
     pass.native_frame = frame;
-    pass.screen = SCREEN_FLIGHT;
+    pass.screen = RSF_SCREEN_FLIGHT;
     pass.color_input = ptr::without_provenance_mut(0x40);
     pass.camera.render_width = 1280;
     pass.camera.render_height = 720;
@@ -77,7 +77,7 @@ fn the_first_pass_binds_creates_the_auto_provider_and_evaluates_slot_zero() {
         [("bind", 0), ("create", 1), ("wait", 0), ("evaluate", 0)]
     );
     let request = fake::EVALUATE.get().expect("evaluated");
-    assert_eq!(request.screen, SCREEN_FLIGHT);
+    assert_eq!(request.screen, RSF_SCREEN_FLIGHT);
     assert_eq!(request.sharpening, fake::sharpening_defaults());
     let value = status(&control);
     assert_eq!(
@@ -353,10 +353,10 @@ fn the_fg_provider_is_requested_only_from_an_owner_on_another_backend() {
 #[test]
 fn only_gameplay_flight_passes_keep_the_flight_screen() {
     let mut settings = default_settings();
-    assert_eq!(screen(&settings, SCREEN_FLIGHT), SCREEN_FLIGHT);
-    assert_eq!(screen(&settings, SCREEN_UNKNOWN), SCREEN_MENU);
+    assert_eq!(screen(&settings, RSF_SCREEN_FLIGHT), RSF_SCREEN_FLIGHT);
+    assert_eq!(screen(&settings, RSF_SCREEN_UNKNOWN), RSF_SCREEN_MENU);
     settings.gameplay = 0;
-    assert_eq!(screen(&settings, SCREEN_FLIGHT), SCREEN_MENU);
+    assert_eq!(screen(&settings, RSF_SCREEN_FLIGHT), RSF_SCREEN_MENU);
 }
 
 #[test]
@@ -390,14 +390,14 @@ fn present_reuses_the_rendered_identity_or_reports_a_miss() {
     control.d3d12.present(&control, chain);
     assert_eq!(
         fake::WINDOW.get(),
-        Some((1, 42, RSF_GAME_RENDER_WINDOW, SCREEN_FLIGHT, CHAIN, 0))
+        Some((1, 42, RSF_GAME_RENDER_WINDOW, RSF_SCREEN_FLIGHT, CHAIN, 0))
     );
     assert_eq!(status(&control).active_sr, 1);
     control.d3d12.render_begin(&control, 2);
     control.d3d12.present(&control, chain);
     assert_eq!(
         fake::WINDOW.get(),
-        Some((2, 42, RSF_GAME_RENDER_WINDOW, SCREEN_UNKNOWN, CHAIN, 0))
+        Some((2, 42, RSF_GAME_RENDER_WINDOW, RSF_SCREEN_UNKNOWN, CHAIN, 0))
     );
     assert_eq!(status(&control).active_sr, 0);
 }

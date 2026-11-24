@@ -46,8 +46,6 @@ use std::sync::atomic::{
 };
 use std::sync::{Mutex, MutexGuard};
 
-/// RSF_SCREEN_MENU and RSF_SCREEN_FLIGHT, cast macros; package.c asserts them. The stored
-/// gameplay flag picks the screen class of every SR pass.
 /// rsfu_initialize's results, part of the managed contract (ReScaleFrameRuntime.Apply).
 mod code {
     pub(super) const FAILED: i32 = 0;

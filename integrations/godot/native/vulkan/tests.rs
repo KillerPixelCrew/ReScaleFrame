@@ -2,6 +2,7 @@
 use super::*;
 use crate::platform::fake::setup;
 use crate::platform::{VkAdapter, fake};
+use rsf_game_sys::RSF_SCREEN_FLIGHT;
 use std::ptr;
 
 const WINDOW: usize = 0x1234;
@@ -374,9 +375,9 @@ fn fg_runs_only_in_requested_gameplay_on_the_flight_screen() {
             backend_result::OK
         );
     };
-    run(SCREEN_FLIGHT, 0);
+    run(RSF_SCREEN_FLIGHT, 0);
     assert_eq!(vulkan.configure(&settings(|s| s.fg_mode = 1)), 1);
-    run(SCREEN_FLIGHT, 1);
+    run(RSF_SCREEN_FLIGHT, 1);
     run(0, 0);
     assert_eq!(
         vulkan.configure(&settings(|s| {
@@ -385,7 +386,7 @@ fn fg_runs_only_in_requested_gameplay_on_the_flight_screen() {
         })),
         1
     );
-    run(SCREEN_FLIGHT, 0);
+    run(RSF_SCREEN_FLIGHT, 0);
     fake::VK_PRESENTER_MAX.set(None);
 }
 
@@ -425,7 +426,7 @@ fn fg_result_belongs_to_this_pass_even_when_the_presenter_is_missing() {
     let vulkan = booted();
     let run = || {
         vulkan.fg_pass(
-            SCREEN_FLIGHT,
+            RSF_SCREEN_FLIGHT,
             true,
             |_, _| backend_result::OK,
             || backend_result::OK,
@@ -433,12 +434,12 @@ fn fg_result_belongs_to_this_pass_even_when_the_presenter_is_missing() {
     };
     assert_eq!(run(), backend_result::OK);
     assert_eq!(
-        vulkan.fg_pass(SCREEN_FLIGHT, false, |_, _| panic!(), || panic!()),
+        vulkan.fg_pass(RSF_SCREEN_FLIGHT, false, |_, _| panic!(), || panic!()),
         backend_result::NOT_READY
     );
     assert_eq!(status(&vulkan).fg_result, backend_result::NOT_READY);
     assert_eq!(
-        vulkan.fg_pass(SCREEN_FLIGHT, true, |_, _| -5, || panic!()),
+        vulkan.fg_pass(RSF_SCREEN_FLIGHT, true, |_, _| -5, || panic!()),
         -5
     );
     let value = status(&vulkan);

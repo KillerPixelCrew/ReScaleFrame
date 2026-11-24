@@ -16,11 +16,9 @@
 use crate::sys::{
     RSF_UNITY_PACKET_INPUTS_ONLY, RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_RESET, rsf_unity_packet,
 };
-use rsf_game_sys::{RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_SR, rsf_game_render_pass};
-
-/// RSF_SCREEN_FLIGHT, a cast macro bindgen does not evaluate. The package's SR pass replaces it
-/// from its gameplay setting (package_state.rs).
-const SCREEN_FLIGHT: u32 = 4;
+use rsf_game_sys::{
+    RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_SR, RSF_SCREEN_FLIGHT, rsf_game_render_pass,
+};
 
 /// One SR pass for the packet's view, frame and camera, without native resources or route. A
 /// probe packet carries camera constants only, so its camera is not valid for reconstruction.
@@ -36,7 +34,8 @@ pub(crate) fn base_pass(packet: &rsf_unity_packet) -> rsf_game_render_pass {
     pass.native_frame = packet.frame_id;
     pass.source_frame_id = packet.frame_id;
     pass.resource_generation = packet.generation;
-    pass.screen = SCREEN_FLIGHT;
+    // The package's SR pass replaces it from its gameplay setting (package_state.rs).
+    pass.screen = RSF_SCREEN_FLIGHT;
     pass.flags = packet.flags & RSF_UNITY_PACKET_RESET;
     pass.camera = packet.camera;
     pass.camera_valid = u32::from(packet.flags & RSF_UNITY_PACKET_PROBE == 0);
@@ -358,7 +357,7 @@ mod tests {
         );
         assert_eq!((pass.native_frame, pass.source_frame_id), (42, 42));
         assert_eq!(pass.resource_generation, 3);
-        assert_eq!(pass.screen, SCREEN_FLIGHT);
+        assert_eq!(pass.screen, RSF_SCREEN_FLIGHT);
         // Only the reset flag carries over.
         assert_eq!(pass.flags, RSF_UNITY_PACKET_RESET);
         assert_eq!(pass.camera_valid, 1);
