@@ -2,7 +2,8 @@
 use crate::diagnostic_output::Output;
 use crate::sys::rsf_backend_log_fn as Log;
 use std::ffi::{c_char, c_void};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use crate::sync::lock;
+use std::sync::{Mutex, MutexGuard};
 
 #[derive(Clone, Copy)]
 struct Sink {
@@ -16,7 +17,7 @@ struct Sink {
 static SINKS: Mutex<[Option<Sink>; 2]> = Mutex::new([None; 2]);
 
 fn sinks() -> MutexGuard<'static, [Option<Sink>; 2]> {
-    SINKS.lock().unwrap_or_else(PoisonError::into_inner)
+    lock(&SINKS)
 }
 
 pub(crate) fn set(slot: u32, owner: usize, log: Log, user: *mut c_void, verbose: bool) {
