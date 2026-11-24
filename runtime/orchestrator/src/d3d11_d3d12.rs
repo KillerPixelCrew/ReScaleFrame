@@ -213,6 +213,28 @@ pub(crate) unsafe extern "C" fn execute(queue: Handle, list: Handle) {
     unsafe { queue.ExecuteCommandLists(&lists[..]) };
 }
 
+/// A whole-resource transition barrier. It borrows the caller's live reference.
+pub(crate) fn transition_barrier(
+    resource: &ID3D12Resource,
+    from: D3D12_RESOURCE_STATES,
+    to: D3D12_RESOURCE_STATES,
+) -> D3D12_RESOURCE_BARRIER {
+    D3D12_RESOURCE_BARRIER {
+        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        Anonymous: D3D12_RESOURCE_BARRIER_0 {
+            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                pResource: ManuallyDrop::new(Some(unsafe {
+                    ID3D12Resource::from_raw(resource.as_raw())
+                })),
+                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                StateBefore: from,
+                StateAfter: to,
+            }),
+        },
+    }
+}
+
 pub(crate) unsafe extern "C" fn transition(
     list: Handle,
     resource: Handle,
@@ -222,21 +244,13 @@ pub(crate) unsafe extern "C" fn transition(
     if before == after {
         return;
     }
-    let barrier = D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                pResource: ManuallyDrop::new(Some(unsafe { ID3D12Resource::from_raw(resource) })),
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                StateBefore: D3D12_RESOURCE_STATES(before as i32),
-                StateAfter: D3D12_RESOURCE_STATES(after as i32),
-            }),
-        },
-    };
+    let barrier = transition_barrier(
+        unsafe { borrow::<ID3D12Resource>(&resource) },
+        D3D12_RESOURCE_STATES(before as i32),
+        D3D12_RESOURCE_STATES(after as i32),
+    );
     unsafe { borrow::<ID3D12GraphicsCommandList>(&list).ResourceBarrier(&[barrier]) };
 }
-
 pub(crate) unsafe extern "C" fn copy_transitioned(
     list: Handle,
     destination: Handle,

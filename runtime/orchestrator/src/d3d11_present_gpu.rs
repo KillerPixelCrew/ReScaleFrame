@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! D3D12 platform leaves with the same raw output and HRESULT contracts used by
 //! the fake platform and the C++ state capsule.
+use crate::d3d11_d3d12::transition_barrier;
 use super::{E_FAIL, S_OK};
 use crate::com_ref;
 use crate::d3d11_present_abi::Raw;
 use rsf_game_sys::backend_result::FEATURE_FAILED;
-use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11DeviceContext4};
@@ -260,18 +260,11 @@ unsafe fn transition(
         return;
     }
     // The active facade lease owns the texture. The descriptor borrows it.
-    let barrier = D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                pResource: ManuallyDrop::new(Some(unsafe { ID3D12Resource::from_raw(resource) })),
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                StateBefore: before,
-                StateAfter: after,
-            }),
-        },
-    };
+    let barrier = transition_barrier(
+        unsafe { borrow::<ID3D12Resource>(&resource) },
+        before,
+        after,
+    );
     unsafe { list.ResourceBarrier(&[barrier]) };
 }
 

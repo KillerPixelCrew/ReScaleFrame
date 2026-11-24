@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::d3d11_d3d12::transition_barrier;
 use super::*;
 use ::windows::Win32::{
     Foundation::{HANDLE, HWND},
@@ -197,28 +198,6 @@ pub(super) unsafe fn create_slot(device: *mut c_void, output: *mut Slot) -> bool
     true
 }
 
-fn barrier(
-    resource: &ID3D12Resource,
-    from: D3D12_RESOURCE_STATES,
-    to: D3D12_RESOURCE_STATES,
-) -> D3D12_RESOURCE_BARRIER {
-    D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                // The union borrows the caller's live reference.
-                pResource: ManuallyDrop::new(Some(unsafe {
-                    ID3D12Resource::from_raw(resource.as_raw())
-                })),
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                StateBefore: from,
-                StateAfter: to,
-            }),
-        },
-    }
-}
-
 pub(super) unsafe fn record(
     slot: *const Slot,
     buffer: *mut c_void,
@@ -250,8 +229,8 @@ pub(super) unsafe fn record(
     };
     unsafe {
         list.ResourceBarrier(&[
-            barrier(source, state, D3D12_RESOURCE_STATE_COPY_SOURCE),
-            barrier(
+            transition_barrier(source, state, D3D12_RESOURCE_STATE_COPY_SOURCE),
+            transition_barrier(
                 destination,
                 D3D12_RESOURCE_STATE_PRESENT,
                 D3D12_RESOURCE_STATE_COPY_DEST,
@@ -259,12 +238,12 @@ pub(super) unsafe fn record(
         ]);
         list.CopyResource(destination, source);
         list.ResourceBarrier(&[
-            barrier(
+            transition_barrier(
                 destination,
                 D3D12_RESOURCE_STATE_COPY_DEST,
                 D3D12_RESOURCE_STATE_PRESENT,
             ),
-            barrier(source, D3D12_RESOURCE_STATE_COPY_SOURCE, state),
+            transition_barrier(source, D3D12_RESOURCE_STATE_COPY_SOURCE, state),
         ]);
     }
     if unsafe { list.Close() }.is_ok() {

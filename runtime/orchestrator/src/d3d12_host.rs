@@ -88,7 +88,7 @@ fn transition(
     after: D3D12_RESOURCE_STATES,
 ) {
     if before != after {
-        let barrier = crate::d3d12_sharpening::transition(resource, before, after);
+        let barrier = crate::d3d11_d3d12::transition_barrier(resource, before, after);
         unsafe { list.ResourceBarrier(&[barrier]) };
     }
 }

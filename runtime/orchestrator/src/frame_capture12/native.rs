@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::d3d11_d3d12::transition_barrier;
 use super::{Handle, Layout};
 use std::mem::ManuallyDrop;
 use std::ptr;
@@ -128,18 +129,7 @@ fn transition(
     if from == to {
         return;
     }
-    let barrier = D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                pResource: resource_field(resource),
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                StateBefore: from,
-                StateAfter: to,
-            }),
-        },
-    };
+    let barrier = transition_barrier(resource, from, to);
     unsafe { commands.ResourceBarrier(&[barrier]) };
 }
 

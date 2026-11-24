@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::d3d11_d3d12::transition_barrier;
 use crate::d3d11_output_platform::rsf_d3d11_output_srv_format;
 use crate::d3d11_sharpening::{Frame, rsf_sharpen11_active, rsf_sharpen11_pack};
 use crate::sharpening_policy::{FILTERS, effective_mode};
@@ -188,28 +189,6 @@ fn scratch_key(desc: &D3D12_RESOURCE_DESC) -> (u64, u32, DXGI_FORMAT) {
     (desc.Width, desc.Height, desc.Format)
 }
 
-pub(super) fn transition(
-    resource: &ID3D12Resource,
-    from: D3D12_RESOURCE_STATES,
-    to: D3D12_RESOURCE_STATES,
-) -> D3D12_RESOURCE_BARRIER {
-    D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                // The barrier borrows the caller's live reference.
-                pResource: ManuallyDrop::new(Some(unsafe {
-                    ID3D12Resource::from_raw(resource.as_raw())
-                })),
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                StateBefore: from,
-                StateAfter: to,
-            }),
-        },
-    }
-}
-
 fn write_descriptors(
     device: &ID3D12Device,
     heap: &ID3D12DescriptorHeap,
@@ -370,7 +349,7 @@ impl Sharpen12 {
         let copy_src = D3D12_RESOURCE_STATE_COPY_SOURCE;
         let copy_dst = D3D12_RESOURCE_STATE_COPY_DEST;
         unsafe {
-            commands.ResourceBarrier(&[transition(output, uav, read)]);
+            commands.ResourceBarrier(&[transition_barrier(output, uav, read)]);
             commands.SetDescriptorHeaps(std::slice::from_ref(&slot.heap));
             commands.SetComputeRootSignature(root);
             commands.SetComputeRootDescriptorTable(0, heap.GetGPUDescriptorHandleForHeapStart());
@@ -387,13 +366,13 @@ impl Sharpen12 {
                 1,
             );
             commands.ResourceBarrier(&[
-                transition(scratch, uav, copy_src),
-                transition(output, read, copy_dst),
+                transition_barrier(scratch, uav, copy_src),
+                transition_barrier(output, read, copy_dst),
             ]);
             commands.CopyResource(output, scratch);
             commands.ResourceBarrier(&[
-                transition(output, copy_dst, uav),
-                transition(scratch, copy_src, uav),
+                transition_barrier(output, copy_dst, uav),
+                transition_barrier(scratch, copy_src, uav),
             ]);
         }
         self.dispatches = self.dispatches.wrapping_add(1);

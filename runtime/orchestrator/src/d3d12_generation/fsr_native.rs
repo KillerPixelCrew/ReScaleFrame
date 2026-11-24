@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
+use crate::d3d11_d3d12::transition_barrier;
 use super::*;
 use crate::d3d12_generation::fsr_abi::*;
 use crate::d3d12_sr::{ffx_abi::*, ffx_resource};
 use std::cell::UnsafeCell;
-use std::mem::ManuallyDrop;
 use windows::{
     Win32::Graphics::{
         Direct3D12::*,
@@ -295,19 +295,7 @@ pub(super) unsafe extern "C" fn copy(
     let transition = |texture: &ID3D12Resource, before, after| {
         if before != after {
             // The callback lends the resource through command recording.
-            let borrow = unsafe { ID3D12Resource::from_raw(texture.as_raw()) };
-            let barrier = D3D12_RESOURCE_BARRIER {
-                Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-                Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-                Anonymous: D3D12_RESOURCE_BARRIER_0 {
-                    Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                        pResource: ManuallyDrop::new(Some(borrow)),
-                        Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                        StateBefore: before,
-                        StateAfter: after,
-                    }),
-                },
-            };
+            let barrier = transition_barrier(texture, before, after);
             unsafe { command.ResourceBarrier(&[barrier]) };
         }
     };

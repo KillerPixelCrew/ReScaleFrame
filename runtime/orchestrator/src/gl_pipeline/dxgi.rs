@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Typed COM operations on the pipeline's leased graphics interfaces.
+use crate::d3d11_d3d12::transition_barrier;
 use super::Handle;
-use std::mem::ManuallyDrop;
 use std::ptr::null_mut;
 use windows::Win32::{
     Foundation::HWND,
@@ -151,18 +151,11 @@ pub(super) unsafe extern "C" fn rsf_core_gl_transition(
     to: u32,
 ) {
     // This descriptor borrows the owning transaction's resource reference.
-    let barrier = D3D12_RESOURCE_BARRIER {
-        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                pResource: ManuallyDrop::new(Some(unsafe { ID3D12Resource::from_raw(resource) })),
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                StateBefore: D3D12_RESOURCE_STATES(from as i32),
-                StateAfter: D3D12_RESOURCE_STATES(to as i32),
-            }),
-        },
-    };
+    let barrier = transition_barrier(
+        unsafe { borrow::<ID3D12Resource>(&resource) },
+        D3D12_RESOURCE_STATES(from as i32),
+        D3D12_RESOURCE_STATES(to as i32),
+    );
     unsafe { borrow::<ID3D12GraphicsCommandList>(&list).ResourceBarrier(&[barrier]) };
 }
 
