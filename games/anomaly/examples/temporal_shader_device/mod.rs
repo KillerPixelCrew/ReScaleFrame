@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Executes the locally compiled stock and patched FXC bytecode in D3D11.
 
-use rsf_shader_compiler::{Compiler, Request, compile};
+use rsf_shader_compiler::{Request, compile_system_checked};
 use std::{env, ffi::CStr, fs, path::Path, ptr, slice};
 use windows::Win32::Graphics::Direct3D::{Fxc::*, *};
 use windows::Win32::Graphics::Direct3D11::*;
@@ -166,7 +166,6 @@ fn signature(
 struct Gpu {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
-    compiler: Compiler,
     kind: &'static str,
 }
 
@@ -192,43 +191,22 @@ impl Gpu {
             level.0 >= D3D_FEATURE_LEVEL_11_0.0,
             "feature level 11 required",
         )?;
-        let compiler =
-            Compiler::system("d3dcompiler_47.dll").ok_or("system D3DCompiler unavailable")?;
         Ok(Self {
             device,
             context,
-            compiler,
             kind,
         })
     }
 
     fn compile(&self, source: &str, target: &CStr) -> Fixture<Vec<u8>> {
-        let entry = self.compiler.entry().ok_or("D3DCompile unavailable")?;
-        let result = unsafe {
-            compile(
-                entry,
-                Request {
-                    source: source.as_bytes(),
-                    name: c"first-party-fixture",
-                    entry: c"main",
-                    target,
-                    flags: D3DCOMPILE_ENABLE_STRICTNESS,
-                },
-                &[],
-                ptr::null_mut(),
-            )
-        };
-        if result.status >= 0 {
-            return result
-                .code
-                .ok_or_else(|| "fixture compile produced no bytecode".into());
-        }
-        let error = result.errors.as_deref().unwrap_or_default();
-        Err(format!(
-            "fixture compile HRESULT={:#x}: {}",
-            result.status,
-            String::from_utf8_lossy(error)
-        ))
+        compile_system_checked(Request {
+            source: source.as_bytes(),
+            name: c"first-party-fixture",
+            entry: c"main",
+            target,
+            flags: D3DCOMPILE_ENABLE_STRICTNESS,
+        })
+        .map_err(|reason| format!("fixture {reason}"))
     }
 
     fn errors(&self) -> Fixture<()> {

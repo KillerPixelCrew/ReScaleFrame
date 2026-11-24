@@ -18,7 +18,6 @@ pub(super) type Object = *mut c_void;
 type Symbol = unsafe extern "system" fn() -> isize;
 type GetInterface = unsafe extern "system" fn(Object, *const GUID, *mut Object) -> HRESULT;
 const SLOT_QUERY_INTERFACE: usize = 0;
-const SLOT_RELEASE: usize = 2;
 const SLOT_CREATE_DEVICE: usize = 3;
 const SLOT_CHAIN_GET_DEVICE: usize = 7;
 const SLOT_CHAIN_GET_BUFFER: usize = 9;
@@ -63,11 +62,7 @@ pub(super) unsafe fn slot(object: Object, index: usize) -> usize {
     unsafe { *table.add(index) }
 }
 
-pub(super) unsafe extern "C" fn release(object: Object) {
-    let call: unsafe extern "system" fn(Object) -> u32 =
-        unsafe { transmute(slot(object, SLOT_RELEASE)) };
-    unsafe { call(object) };
-}
+pub(super) use crate::com::release;
 
 pub(super) type CreateDevice =
     unsafe extern "system" fn(Object, *const GUID, *mut Object, Object) -> HRESULT;

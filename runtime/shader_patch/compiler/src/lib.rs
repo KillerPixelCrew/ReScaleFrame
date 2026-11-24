@@ -114,8 +114,33 @@ pub unsafe fn compile(
 /// Compiles through System32 `d3dcompiler_47.dll` and returns the bytecode; `None` when the
 /// compiler is missing or refuses the source.
 pub fn compile_system(request: Request<'_>) -> Option<Vec<u8>> {
-    let module = Compiler::system("d3dcompiler_47.dll")?;
-    let entry = module.entry()?;
+    compile_system_checked(request).ok()
+}
+
+/// [`compile_system`] with the reason for a refusal: the missing compiler or export, or the
+/// failing HRESULT and the compiler's log.
+pub fn compile_system_checked(request: Request<'_>) -> Result<Vec<u8>, String> {
+    let module = Compiler::system("d3dcompiler_47.dll").ok_or("d3dcompiler_47 is not available")?;
+    let entry = module.entry().ok_or("D3DCompile is not available")?;
     let output = unsafe { compile(entry, request, &[], ptr::null_mut()) };
-    if output.status < 0 { None } else { output.code }
+    match output.code {
+        Some(code) if output.status >= 0 => Ok(code),
+        _ => {
+            // E_FAIL when the compiler reported success without bytecode.
+            let status = if output.status < 0 {
+                output.status as u32
+            } else {
+                0x8000_4005
+            };
+            let errors = output.errors.unwrap_or_default();
+            let end = errors
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(errors.len());
+            Err(format!(
+                "compile failed 0x{status:08x} {}",
+                String::from_utf8_lossy(&errors[..end])
+            ))
+        }
+    }
 }

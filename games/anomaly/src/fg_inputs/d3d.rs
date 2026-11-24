@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! D3D11 allocations and recording for the SR-off FG input owner.
 use super::*;
-use rsf_shader_compiler::{Compiler, Request, compile};
+use rsf_shader_compiler::{Request, compile_system_checked};
 use std::ffi::CString;
 use windows::Win32::Graphics::Direct3D::D3D11_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::*;
@@ -23,9 +23,7 @@ impl Drop for SavedState<'_> {
     }
 }
 
-pub(super) unsafe extern "C" fn release(raw: Raw) {
-    drop(unsafe { IUnknown::from_raw(raw) });
-}
+pub(super) use crate::com::release;
 
 fn owned<T: Interface>(value: Option<T>) -> Raw {
     value.map_or(ptr::null_mut(), Interface::into_raw)
@@ -71,48 +69,21 @@ pub(super) unsafe extern "C" fn same_device(texture: Raw, device: Raw) -> u32 {
 }
 
 fn shader_code(log: Log, user: Raw) -> Option<Vec<u8>> {
-    let emit = |message: &std::ffi::CStr| {
-        if let Some(log) = log {
+    compile_system_checked(Request {
+        source: include_bytes!("../../shaders/fg/rsf_fg_inputs.hlsl"),
+        name: c"rsf_fg_inputs.hlsl",
+        entry: c"rsf_fg_inputs_cs",
+        target: c"cs_5_0",
+        flags: 1 << 11, // D3DCOMPILE_ENABLE_STRICTNESS
+    })
+    .inspect_err(|reason| {
+        let message = format!("shader rsf_fg_inputs.hlsl (rsf_fg_inputs_cs): {reason}");
+        if let (Some(log), Ok(message)) = (log, CString::new(message)) {
             unsafe { log(user, message.as_ptr()) };
         }
-    };
-    let Some(compiler) = Compiler::system("d3dcompiler_47.dll") else {
-        emit(c"shader rsf_fg_inputs.hlsl: d3dcompiler_47 is not available");
-        return None;
-    };
-    let entry = compiler.entry()?;
-    let result = unsafe {
-        compile(
-            entry,
-            Request {
-                source: include_bytes!("../../shaders/fg/rsf_fg_inputs.hlsl"),
-                name: c"rsf_fg_inputs.hlsl",
-                entry: c"rsf_fg_inputs_cs",
-                target: c"cs_5_0",
-                flags: 1 << 11, // D3DCOMPILE_ENABLE_STRICTNESS
-            },
-            &[],
-            ptr::null_mut(),
-        )
-    };
-    if result.status < 0 {
-        let errors = result.errors.as_deref().unwrap_or_default();
-        let end = errors
-            .iter()
-            .position(|&byte| byte == 0)
-            .unwrap_or(errors.len());
-        if let Ok(message) = CString::new(format!(
-            "shader rsf_fg_inputs.hlsl (rsf_fg_inputs_cs): compile failed 0x{:08x} {}",
-            result.status as u32,
-            String::from_utf8_lossy(&errors[..end])
-        )) {
-            emit(&message);
-        }
-        return None;
-    }
-    result.code
+    })
+    .ok()
 }
-
 pub(super) unsafe extern "C" fn shader(raw: Raw, log: Log, user: Raw) -> Raw {
     let Some(code) = shader_code(log, user) else {
         return ptr::null_mut();

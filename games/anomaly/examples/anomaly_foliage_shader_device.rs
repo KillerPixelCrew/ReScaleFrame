@@ -2,7 +2,7 @@
 //! Runs local FXC-built foliage variants through D3D11 stream output and MRTs.
 #[cfg(windows)]
 mod fixture {
-    use rsf_shader_compiler::{Compiler, Request, compile};
+    use rsf_shader_compiler::{Request, compile_system_checked};
     use std::ffi::{CStr, CString};
     use std::fmt::Write;
     use std::path::Path;
@@ -27,34 +27,15 @@ mod fixture {
         std::fs::read(path).map_err(|error| format!("read DXBC {}: {error}", path.display()).into())
     }
 
-    fn compile_fixture(compiler: &Compiler, source: &str, profile: &CStr) -> Result<Vec<u8>> {
-        let entry = compiler.entry().ok_or("D3DCompile export missing")?;
-        let compiled = unsafe {
-            compile(
-                entry,
-                Request {
-                    source: source.as_bytes(),
-                    name: c"first-party-fixture",
-                    entry: c"main",
-                    target: profile,
-                    flags: 1 << 11, // D3DCOMPILE_ENABLE_STRICTNESS
-                },
-                &[],
-                null_mut(),
-            )
-        };
-        if compiled.status >= 0
-            && let Some(code) = compiled.code
-        {
-            return Ok(code);
-        }
-        Err(format!(
-            "D3DCompile fixture {:#010x}: {}",
-            compiled.status as u32,
-            String::from_utf8_lossy(compiled.errors.as_deref().unwrap_or_default())
-                .trim_end_matches('\0')
-        )
-        .into())
+    fn compile_fixture(source: &str, profile: &CStr) -> Result<Vec<u8>> {
+        compile_system_checked(Request {
+            source: source.as_bytes(),
+            name: c"first-party-fixture",
+            entry: c"main",
+            target: profile,
+            flags: 1 << 11, // D3DCOMPILE_ENABLE_STRICTNESS
+        })
+        .map_err(|reason| format!("D3DCompile fixture: {reason}").into())
     }
 
     struct Constant {
@@ -380,7 +361,6 @@ mod fixture {
     struct Gpu {
         device: ID3D11Device,
         context: ID3D11DeviceContext,
-        compiler: Compiler,
     }
 
     impl Gpu {
@@ -413,12 +393,7 @@ mod fixture {
                     "adapter={adapter_name} vendor={} device={}",
                     adapter.VendorId, adapter.DeviceId
                 );
-                return Ok(Self {
-                    device,
-                    context,
-                    compiler: Compiler::system("d3dcompiler_47.dll")
-                        .ok_or("missing d3dcompiler_47.dll")?,
-                });
+                return Ok(Self { device, context });
             }
             Err("D3D11CreateDevice: hardware and WARP refused".into())
         }
@@ -522,7 +497,7 @@ mod fixture {
                 )?;
             }
             code.push_str("s.Append(o);}");
-            let blob = compile_fixture(&self.compiler, code, c"gs_5_0")?;
+            let blob = compile_fixture(code, c"gs_5_0")?;
             let declaration = [10, 12, 13].map(|index| D3D11_SO_DECLARATION_ENTRY {
                 SemanticName: PCSTR(c"TEXCOORD".as_ptr().cast()),
                 SemanticIndex: index,
@@ -698,7 +673,7 @@ mod fixture {
                     "{}struct R {{float4 p:SV_Target0;float4 v:SV_Target1;}};R main(T i){{R o;o.p=i.{};o.v=float4(i.{},0,0,0);return o;}}",
                     signature.declaration, signature.previous, signature.valid
                 );
-                compile_fixture(&self.compiler, &code, c"ps_5_0")?
+                compile_fixture(&code, c"ps_5_0")?
             } else {
                 read(pixel_path)?
             };

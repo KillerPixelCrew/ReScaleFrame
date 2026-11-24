@@ -5,7 +5,7 @@ use crate::motion::{PixelInputs, rsf_anomaly_motion_pack_pixel};
 use crate::sr_fixture_device::Device;
 use crate::sr_fixture_readback::rsf_anomaly_sr_fixture_readback;
 use crate::sr_swap::{engine_mul, jitter_projection};
-use rsf_shader_compiler::{Compiler, Request, compile};
+use rsf_shader_compiler::{Request, compile_system_checked};
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use windows::Win32::Graphics::Direct3D::*;
@@ -58,34 +58,15 @@ fn created<T>(status: windows::core::Result<()>, output: Option<T>, name: &str) 
     output.ok_or_else(|| format!("{name}: no interface returned"))
 }
 
-fn compile_shader(compiler: &Compiler, entry: &CStr, target: &CStr) -> Result<Vec<u8>> {
-    let address = compiler.entry().ok_or("D3DCompile unavailable")?;
-    let output = unsafe {
-        compile(
-            address,
-            Request {
-                source: SOURCE.as_bytes(),
-                name: c"rsf_sr_jitter_fixture.hlsl",
-                entry,
-                target,
-                flags: (1 << 11) | (1 << 15), // strictness and optimization level 3
-            },
-            &[],
-            std::ptr::null_mut(),
-        )
-    };
-    if output.status >= 0
-        && let Some(code) = output.code
-    {
-        return Ok(code);
-    }
-    let details = output.errors.as_deref().map(String::from_utf8_lossy);
-    Err(format!(
-        "compile {} failed (0x{:08x}): {}",
-        entry.to_string_lossy(),
-        output.status as u32,
-        details.as_deref().unwrap_or("no log"),
-    ))
+fn compile_shader(entry: &CStr, target: &CStr) -> Result<Vec<u8>> {
+    compile_system_checked(Request {
+        source: SOURCE.as_bytes(),
+        name: c"rsf_sr_jitter_fixture.hlsl",
+        entry,
+        target,
+        flags: (1 << 11) | (1 << 15), // strictness and optimization level 3
+    })
+    .map_err(|reason| format!("{}: {reason}", entry.to_string_lossy()))
 }
 
 struct Fixture {
@@ -103,10 +84,8 @@ struct Fixture {
 
 impl Fixture {
     fn create(device: &ID3D11Device) -> Result<Self> {
-        let compiler =
-            Compiler::system("d3dcompiler_47.dll").ok_or("d3dcompiler_47 unavailable")?;
-        let vs_code = compile_shader(&compiler, c"vs_main", c"vs_5_0")?;
-        let ps_code = compile_shader(&compiler, c"ps_main", c"ps_5_0")?;
+        let vs_code = compile_shader(c"vs_main", c"vs_5_0")?;
+        let ps_code = compile_shader(c"ps_main", c"ps_5_0")?;
         let (mut vs, mut ps, mut layout) = (None, None, None);
         let vs = created(
             unsafe {

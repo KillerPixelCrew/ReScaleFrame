@@ -9,7 +9,7 @@ use crate::sr_tonemap::roundtrip_fixture::{
     rsf_anomaly_sr_upscale_numerics,
 };
 use crate::sr_tonemap::rsf_anomaly_tonemap_forward as tonemap;
-use rsf_shader_compiler::{Compiler, Request, compile};
+use rsf_shader_compiler::{Request, compile_system_checked};
 use std::ffi::{CStr, c_char, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
@@ -356,25 +356,15 @@ float ps(float4 p : SV_Position) : SV_Depth { uint2 q = uint2(p.xy); uint v = q.
 ";
 
 fn fill_depth(d: &Device, dsv: &ID3D11DepthStencilView, size: [u32; 2]) {
-    let compiler = Compiler::system("d3dcompiler_47.dll").expect("depth fill compiler");
-    let address = compiler.entry().expect("depth fill compiler entry");
     let shader = |entry, target| {
-        let output = unsafe {
-            compile(
-                address,
-                Request {
-                    source: FILL.as_bytes(),
-                    name: c"fill_depth",
-                    entry,
-                    target,
-                    flags: 1 << 11,
-                },
-                &[],
-                null_mut(),
-            )
-        };
-        assert!(output.status >= 0);
-        output.code.expect("depth fill shader")
+        compile_system_checked(Request {
+            source: FILL.as_bytes(),
+            name: c"fill_depth",
+            entry,
+            target,
+            flags: 1 << 11,
+        })
+        .expect("depth fill shader")
     };
     let (mut vs, mut ps, mut state) = (None, None, None);
     let desc = D3D11_DEPTH_STENCIL_DESC {

@@ -2,9 +2,9 @@
 //! Device probe for a motion VS/PS pair interrupted by a stock tessellation chain.
 #[cfg(windows)]
 mod probe {
-    use rsf_shader_compiler::{Compiler, Request, compile};
+    use rsf_shader_compiler::{Request, compile_system_checked};
     use std::ffi::CStr;
-    use std::ptr::{null_mut, read_unaligned};
+    use std::ptr::read_unaligned;
     use windows::Win32::Graphics::Direct3D::{
         D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0,
         D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
@@ -64,33 +64,15 @@ mod probe {
         None
     }
 
-    fn bytecode(compiler: &Compiler, entry: &CStr, target: &CStr) -> Result<Vec<u8>, String> {
-        let result = unsafe {
-            compile(
-                compiler.entry().ok_or("D3DCompile export missing")?,
-                Request {
-                    source: SOURCE,
-                    name: c"rsf_tess_probe",
-                    entry,
-                    target,
-                    flags: 0,
-                },
-                &[],
-                null_mut(),
-            )
-        };
-        if result.status >= 0
-            && let Some(code) = result.code
-        {
-            return Ok(code);
-        }
-        let errors = String::from_utf8_lossy(result.errors.as_deref().unwrap_or_default());
-        Err(format!(
-            "compile {} ({:#010x}): {}",
-            entry.to_string_lossy(),
-            result.status as u32,
-            errors.trim_end_matches('\0')
-        ))
+    fn bytecode(entry: &CStr, target: &CStr) -> Result<Vec<u8>, String> {
+        compile_system_checked(Request {
+            source: SOURCE,
+            name: c"rsf_tess_probe",
+            entry,
+            target,
+            flags: 0,
+        })
+        .map_err(|reason| format!("{}: {reason}", entry.to_string_lossy()))
     }
 
     #[derive(Default)]
@@ -141,13 +123,11 @@ mod probe {
     }
 
     fn draw(
-        compiler: &Compiler,
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
         tessellated: bool,
     ) -> Result<Probe, Box<dyn std::error::Error>> {
         let vs = bytecode(
-            compiler,
             if tessellated {
                 c"vs_main"
             } else {
@@ -155,9 +135,9 @@ mod probe {
             },
             c"vs_5_0",
         )?;
-        let hs = bytecode(compiler, c"hs_main", c"hs_5_0")?;
-        let ds = bytecode(compiler, c"ds_main", c"ds_5_0")?;
-        let ps = bytecode(compiler, c"ps_main", c"ps_5_0")?;
+        let hs = bytecode(c"hs_main", c"hs_5_0")?;
+        let ds = bytecode(c"ds_main", c"ds_5_0")?;
+        let ps = bytecode(c"ps_main", c"ps_5_0")?;
         let (mut vertex, mut hull, mut domain, mut pixel) = (None, None, None, None);
         let no_linkage = None::<&ID3D11ClassLinkage>;
         unsafe {
@@ -259,13 +239,9 @@ mod probe {
                 continue;
             };
             any = true;
-            let Some(compiler) = Compiler::system("d3dcompiler_47.dll") else {
-                eprintln!("FAIL: d3dcompiler_47.dll unavailable");
-                return 1;
-            };
             let (direct, tess) = match (
-                draw(&compiler, &device, &context, false),
-                draw(&compiler, &device, &context, true),
+                draw(&device, &context, false),
+                draw(&device, &context, true),
             ) {
                 (Ok(direct), Ok(tess)) => (direct, tess),
                 (Err(error), _) | (_, Err(error)) => {
