@@ -37,13 +37,13 @@ use crate::sys::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 use crate::wide::copy_nul as wide_copy;
 #[cfg(not(test))]
 use crate::{d3d12_observer::Observer, dlss_native12::Registration};
+use rsf_game_sys::ffi_util::{checked, has_capacity};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RESET,
     RSF_GAME_RENDER_WINDOW, rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services,
     rsf_game_latency_event as LatencyEvent, rsf_game_log_fn, rsf_game_render_feedback as Feedback,
     rsf_game_render_pass as Pass,
 };
-use rsf_game_sys::ffi_util::{checked, has_capacity};
 use rsf_game_sys::{
     RSF_RENDER_HOST_ABI_VERSION as HOST_ABI_VERSION,
     RSF_RENDER_HOST_ENGINE_PRESENTATION as ENGINE_PRESENTATION, rsf_render_host_setup as Setup,

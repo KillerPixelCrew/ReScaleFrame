@@ -31,6 +31,7 @@ use crate::sys::{
 use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_SPATIAL, RSF_SR_XESS};
 use crate::sys::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 use crate::wide::copy_nul as wide_copy;
+use rsf_game_sys::ffi_util::{checked, has_capacity};
 use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION as HOST_ABI_VERSION, RSF_CALLBACK_HOST_ABI_VERSION_V2,
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE,
@@ -40,7 +41,6 @@ use rsf_game_sys::{
     rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services,
     rsf_game_render_config as Config, rsf_game_render_pass as Pass,
 };
-use rsf_game_sys::ffi_util::{checked, has_capacity};
 use rsf_game_sys::{
     RSF_PLUGIN_SESSION_ABI_VERSION as SESSION_ABI_VERSION,
     rsf_plugin_session_options as SessionOptions,

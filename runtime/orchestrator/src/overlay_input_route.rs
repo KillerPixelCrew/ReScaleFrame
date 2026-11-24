@@ -2,13 +2,12 @@
 // The message leaves of the overlay input owner.
 use crate::overlay_cursor_hooks::rsf_core_overlay_cursor_ready;
 use crate::overlay_input::{
-    close_touch, deliver_contact, pointer_contact, record_button,
-    record_mouse_position, record_raw_mouse, touch_contacts,
+    close_touch, deliver_contact, pointer_contact, record_button, record_mouse_position,
+    record_raw_mouse, touch_contacts,
 };
 use crate::overlay_pointer;
 use crate::overlay_visibility::{
-    self, rsf_core_overlay_toggle_key, rsf_core_overlay_visibility_set,
-    rsf_core_overlay_visible,
+    self, rsf_core_overlay_toggle_key, rsf_core_overlay_visibility_set, rsf_core_overlay_visible,
 };
 use crate::overlay_window::{clear_holds, hold, release, rsf_core_overlay_input_window};
 use crate::sr_session::has_capacity;

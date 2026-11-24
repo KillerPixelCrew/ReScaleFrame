@@ -649,7 +649,10 @@ unsafe fn write_texture(
     raw: bool,
 ) -> ImageResult {
     let opened = unsafe { native::open_texture(context, source) };
-    let surface = opened.as_ref().map(|(_, surface)| *surface).unwrap_or_default();
+    let surface = opened
+        .as_ref()
+        .map(|(_, surface)| *surface)
+        .unwrap_or_default();
     let view = preview_view(work.view, surface.format, false);
     let encoding = match (&opened, prefix(&work.prefix)) {
         (None, _) => Encoding::INVALID,

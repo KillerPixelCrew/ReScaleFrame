@@ -3179,7 +3179,9 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_marker(
             }
             lease
                 .entry(|api| api.marker)
-                .map_or(host, |(call, session)| call(session, marker, id, controller))
+                .map_or(host, |(call, session)| {
+                    call(session, marker, id, controller)
+                })
         })
     }
 }
@@ -3214,9 +3216,11 @@ pub(crate) unsafe extern "C" fn rsf_d3d11_present_input(id: u64, kinds: u32, mes
             if result != OK || HOST_PACED.load(Ordering::SeqCst) || kinds == 0 {
                 return result;
             }
-            lease.entry(|api| api.marker).map_or(result, |(call, session)| {
-                call(session, LATENCY_INPUT_SAMPLE, id, u32::from(kinds & 4 != 0))
-            })
+            lease
+                .entry(|api| api.marker)
+                .map_or(result, |(call, session)| {
+                    call(session, LATENCY_INPUT_SAMPLE, id, u32::from(kinds & 4 != 0))
+                })
         })
     }
 }

@@ -891,7 +891,8 @@ impl Started {
             return None;
         }
         // Every refusal after this point is a graphics failure.
-        let decided = unsafe { self.record_frame(platform, chain, stats, now, active_for, visible) };
+        let decided =
+            unsafe { self.record_frame(platform, chain, stats, now, active_for, visible) };
         if decided.is_none() {
             self.fail(platform);
         }
@@ -927,8 +928,7 @@ impl Started {
             height: 0,
             format: 0,
         };
-        let target =
-            unsafe { com_ref::owned((platform.begin)(&lease.frame, chain, &mut frame)) }?;
+        let target = unsafe { com_ref::owned((platform.begin)(&lease.frame, chain, &mut frame)) }?;
         let pipeline = self
             .graphics
             .bind_pipeline(platform, native, slot, frame.format)?;

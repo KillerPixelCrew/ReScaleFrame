@@ -88,7 +88,8 @@ impl Device {
             }
         }
         if self.constants.is_none() {
-            self.constants = Some(constant_buffer(device, CONSTANT_WORDS as u32 * 4, false)?.into());
+            self.constants =
+                Some(constant_buffer(device, CONSTANT_WORDS as u32 * 4, false)?.into());
         }
         let key = ScratchKey {
             width: output.width,

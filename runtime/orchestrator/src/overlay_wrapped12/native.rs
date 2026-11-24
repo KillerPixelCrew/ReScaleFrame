@@ -65,7 +65,8 @@ impl SystemEntry {
             LoadLibraryExW(path.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32)
         })?;
         let create = module.symbol(c"D3D11On12CreateDevice")?;
-        let create = unsafe { transmute::<unsafe extern "system" fn() -> isize, CreateOn12>(create) };
+        let create =
+            unsafe { transmute::<unsafe extern "system" fn() -> isize, CreateOn12>(create) };
         Some(Self {
             _module: module,
             create,
