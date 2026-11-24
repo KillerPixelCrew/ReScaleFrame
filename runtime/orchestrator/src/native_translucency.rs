@@ -4,20 +4,17 @@ use crate::com_ref::{self, vtable};
 use crate::d3d11_output::{SavedBindings, texture_desc};
 use crate::d3d11_output_platform::{
     rsf_d3d11_output_child_device, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_srv,
-    rsf_d3d11_output_create_texture, rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
-    rsf_d3d11_output_unbind_targets,
+    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_output_unbind_targets,
 };
 use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
+use crate::d3d11_device_identity::identity as device_identity;
 use crate::native_regions::{
-    MaskTarget, Region, SourceView, compile_compute, create_constants, crop, device_identity,
+    MaskTarget, Region, SourceView, compile_compute, create_constants, crop, output_texture,
     update_constants,
 };
 use crate::sync::lock;
 use crate::sys::rsf_native_translucency_masks as Masks;
-use crate::sys::{
-    RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_USAGE_DEFAULT,
-    rsf_d3d11_texture_desc,
-};
+use crate::sys::{RSF_D3D11_FORMAT_R32_FLOAT, rsf_d3d11_texture_desc};
 use rsf_game_sys::{
     RSF_GAME_RENDER_CLOUD_DEPTH, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,
     RSF_GAME_RENDER_TRANSLUCENCY, RSF_GAME_RENDER_TRANSLUCENCY_LAYER, rsf_game_render_pass as Pass,
@@ -144,7 +141,6 @@ enum Opening {
 // Pass order and producer identity, free of COM so the contracts are testable.
 #[derive(Default)]
 struct Ledger {
-    generation: u64,
     frame: Option<Frame>,
     pending: Option<CloudTag>,
 }
@@ -176,7 +172,6 @@ impl Ledger {
         {
             return Opening::Repeated;
         }
-        self.generation = self.generation.wrapping_add(1);
         let adopt_clouds = self
             .pending
             .take()
@@ -410,26 +405,6 @@ fn for_device(owner: &mut Option<Owner>, device: Device) -> &mut Owner {
     })
 }
 
-unsafe fn texture(
-    device: Object,
-    extent: [u32; 2],
-    format: u32,
-    bind_flags: u32,
-) -> Option<IUnknown> {
-    let desc = rsf_d3d11_texture_desc {
-        width: extent[0],
-        height: extent[1],
-        mips: 1,
-        layers: 1,
-        format,
-        samples: 1,
-        usage: RSF_D3D11_USAGE_DEFAULT,
-        bind_flags,
-        ..Default::default()
-    };
-    unsafe { com_ref::owned(rsf_d3d11_output_create_texture(device, &desc)) }
-}
-
 impl Kernel {
     unsafe fn new(device: Object) -> Option<Self> {
         Some(Self {
@@ -449,7 +424,7 @@ impl Kernel {
 
 impl Targets {
     unsafe fn new(device: Object, extent: [u32; 2], format: u32) -> Option<Self> {
-        let opaque = unsafe { texture(device, extent, format, RSF_D3D11_BIND_SHADER_RESOURCE) }?;
+        let opaque = unsafe { output_texture(device, extent, format, false) }?;
         let opaque_view = unsafe {
             com_ref::owned(rsf_d3d11_output_create_srv(device, opaque.as_raw(), format))
         }?;
@@ -622,14 +597,9 @@ impl Owner {
             .is_none_or(|layer| layer.format != format)
         {
             self.layer = None;
-            let Some(texture) = (unsafe {
-                texture(
-                    self.device.as_raw(),
-                    extent,
-                    format,
-                    RSF_D3D11_BIND_SHADER_RESOURCE,
-                )
-            }) else {
+            let Some(texture) =
+                (unsafe { output_texture(self.device.as_raw(), extent, format, false) })
+            else {
                 return;
             };
             self.layer = Some(Layer { format, texture });
@@ -652,11 +622,11 @@ impl Owner {
         if slot.as_ref().is_none_or(|stored| stored.extent != extent) {
             *slot = None;
             let Some(texture) = (unsafe {
-                texture(
+                output_texture(
                     self.device.as_raw(),
                     extent,
                     RSF_D3D11_FORMAT_R32_FLOAT,
-                    RSF_D3D11_BIND_SHADER_RESOURCE,
+                    false,
                 )
             }) else {
                 return;
@@ -821,12 +791,10 @@ pub(super) unsafe extern "C" fn rsf_native_translucency_take(
     };
     // Borrowed: valid until the next translucency scope or release.
     let out = unsafe { &mut *out };
-    out.color_before_transparency = masks.color_before_transparency;
-    out.transparency_layer = masks.transparency_layer;
-    out.reactive = masks.reactive;
-    out.coverage = masks.coverage;
-    out.bias = masks.bias;
-    out.motion_depth = masks.motion_depth;
+    *out = Masks {
+        struct_size: out.struct_size,
+        ..masks
+    };
     1
 }
 
@@ -901,14 +869,11 @@ mod tests {
     fn repeated_open_keeps_the_first_snapshot_until_sr_closes_the_frame() {
         let mut ledger = Ledger::default();
         masks_ready(&mut ledger, key(3));
-        let generation = ledger.generation;
         assert_eq!(ledger.open(key(3)), Opening::Repeated);
-        assert_eq!(ledger.generation, generation);
         assert!(ledger.take(key(3)).is_some());
         // After SR, the same identity is a new frame of an adapter that does
-        // not advance its frame number. It starts a new generation.
+        // not advance its frame number.
         assert!(matches!(ledger.open(key(3)), Opening::Opened { .. }));
-        assert_eq!(ledger.generation, generation + 1);
         assert_eq!(ledger.take(key(3)), None);
     }
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::{self, vtable};
+use crate::d3d11_device_identity::identity;
 use crate::d3d11_output::{GraphicsCache, texture_desc};
 use crate::d3d11_output_platform::{
     rsf_d3d11_output_child_device, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_srv,
@@ -415,14 +416,6 @@ struct Dispatch {
     groups: [u32; 2],
 }
 
-pub(super) unsafe fn device_identity(device: Object) -> Option<IUnknown> {
-    let mut identity = NONE;
-    let status = unsafe {
-        (vtable::<IUnknown>(&device).QueryInterface)(device, &IUnknown::IID, &mut identity)
-    };
-    unsafe { com_ref::from_result(status, identity) }
-}
-
 pub(super) unsafe fn create_constants(device: Object, size: usize) -> Option<IUnknown> {
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: size as u32,
@@ -584,7 +577,7 @@ unsafe fn readable_copy(
     Some(cached.insert(texture).as_raw())
 }
 
-unsafe fn output_texture(
+pub(super) unsafe fn output_texture(
     device: Object,
     extent: [u32; 2],
     format: u32,
@@ -730,10 +723,6 @@ fn for_device(cache: &mut Option<Resources>, device: IUnknown) -> &mut Resources
         temporal: TemporalMask::default(),
         device,
     })
-}
-
-unsafe fn identity(device: Object) -> Option<IUnknown> {
-    unsafe { device_identity(device) }
 }
 
 unsafe fn child_device(child: Object) -> Option<IUnknown> {
