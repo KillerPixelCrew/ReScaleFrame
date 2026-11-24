@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use super::super::{address, fail, load, null, null_mut, require};
-use super::{Status, create_object, create_proc, release};
+use super::super::{export, fail, load, null, null_mut, require};
+use super::{Create, Status, create_object, release};
 use rsf_test_support::wide_os;
 use std::ffi::OsStr;
 use std::fs;
@@ -371,18 +371,12 @@ pub(super) fn startup_test(mode: &str, source: &Path, runtime: &Path, adapter: &
         observed().is_empty(),
         "DllMain never starts configured modules or a background worker",
     );
-    let can_unload = unsafe {
-        std::mem::transmute::<unsafe extern "system" fn() -> isize, Status>(address(
-            carrier,
-            c"DllCanUnloadNow",
-        ))
-    };
-    unsafe { can_unload() };
+    unsafe { export::<Status>(carrier, c"DllCanUnloadNow")() };
     require(
         observed().is_empty(),
         "non-create export never starts modules",
     );
-    let create = create_proc(carrier);
+    let create = export::<Create>(carrier, c"DirectInput8Create");
     let create_address = format!("{:x}", create as usize);
     environment(
         w!("RSF_THIN_FIXTURE_REENTER"),

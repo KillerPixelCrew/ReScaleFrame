@@ -53,6 +53,16 @@ fn address(module: HMODULE, name: &CStr) -> unsafe extern "system" fn() -> isize
     named(module, name).unwrap_or_else(|| fail(&format!("resolve {}", name.to_string_lossy())))
 }
 
+/// A resolved export as the function-pointer type `F` it really has.
+fn cast<F: Copy>(proc: unsafe extern "system" fn() -> isize) -> F {
+    const { assert!(size_of::<F>() == size_of::<usize>()) };
+    unsafe { std::mem::transmute_copy(&proc) }
+}
+
+fn export<F: Copy>(module: HMODULE, name: &CStr) -> F {
+    cast(address(module, name))
+}
+
 fn fail(message: &str) -> ! {
     eprintln!("FAIL: {message} (Win32={})", unsafe { GetLastError() });
     std::process::exit(1);

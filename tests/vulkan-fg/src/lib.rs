@@ -25,24 +25,15 @@ mod wsi;
 #[cfg(feature = "wsi-dispatch")]
 mod wsi_abi;
 
-#[cfg(any(
-    feature = "xess-device",
-    feature = "xess-sr",
-    feature = "xess-input-range"
-))]
-#[cfg(feature = "xess-device")]
-mod xess_interop;
-
-#[cfg(feature = "xess-device")]
-mod xess_present;
-
 #[cfg(feature = "xess-input-range")]
 mod xess_input_range;
-#[cfg(feature = "xess-sr")]
-mod xess_sr;
-
+#[cfg(feature = "xess-device")]
+mod xess_interop;
+#[cfg(feature = "xess-device")]
+mod xess_present;
 #[cfg(feature = "xess-device")]
 mod xess_present_gpu;
-
+#[cfg(feature = "xess-sr")]
+mod xess_sr;
 #[cfg(feature = "xess-sr")]
 mod xess_sr_gpu;

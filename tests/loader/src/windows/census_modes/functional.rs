@@ -446,14 +446,8 @@ pub(super) unsafe fn rsf_test_census_functional(
         expect!(checks, unsafe { install(&options) } == -3);
         let mut facts = rsf_test_census_functional_facts::default();
         expect!(checks, unsafe { probe(&mut facts) } == 0);
-        let mut sample = rsf_census_counters {
-            struct_size: size_of::<rsf_census_counters>() as u32,
-            abi_version: RSF_CENSUS_ABI_VERSION,
-            ..Default::default()
-        };
         for _ in 0..400 {
-            unsafe { get(&mut sample) };
-            if sample.static_findings > 0 {
+            if checks.counters(get).static_findings > 0 {
                 break;
             }
             unsafe { Sleep(50) };

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 mod scenario;
 
-use super::{address, fail, load, named, null_mut, ordinal, require, system_path};
+use super::{export, fail, load, named, null_mut, ordinal, require, system_path};
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString, c_void};
 use std::path::Path;
@@ -25,10 +25,6 @@ const IID_NULL: GUID = GUID::from_u128(0);
 type Create =
     unsafe extern "system" fn(HMODULE, u32, *const GUID, *mut *mut c_void, *mut c_void) -> HRESULT;
 type Status = unsafe extern "system" fn() -> HRESULT;
-
-fn create_proc(carrier: HMODULE) -> Create {
-    unsafe { std::mem::transmute::<_, Create>(address(carrier, c"DirectInput8Create")) }
-}
 
 unsafe fn create_object(create: Create, output: *mut *mut c_void) {
     require(
@@ -224,8 +220,8 @@ fn forward_test(path: &Path) {
             "ordinal aliases same export",
         );
     }
-    let create = create_proc(carrier);
-    let real_create = create_proc(genuine);
+    let create = export::<Create>(carrier, c"DirectInput8Create");
+    let real_create = export::<Create>(genuine, c"DirectInput8Create");
     let mut output = null_mut();
     let mut real_output = null_mut();
     unsafe {
@@ -250,32 +246,18 @@ fn forward_test(path: &Path) {
         unsafe extern "system" fn(*const GUID, *const GUID, *mut *mut c_void) -> HRESULT;
     type Format = unsafe extern "system" fn() -> *const c_void;
     unsafe {
-        let status = std::mem::transmute::<unsafe extern "system" fn() -> isize, Status>(address(
-            carrier,
-            c"DllCanUnloadNow",
-        ));
-        let real_status = std::mem::transmute::<unsafe extern "system" fn() -> isize, Status>(
-            address(genuine, c"DllCanUnloadNow"),
-        );
+        let status = export::<Status>(carrier, c"DllCanUnloadNow");
+        let real_status = export::<Status>(genuine, c"DllCanUnloadNow");
         require(status() == real_status(), "DllCanUnloadNow system HRESULT");
-        let class = std::mem::transmute::<unsafe extern "system" fn() -> isize, ClassObject>(
-            address(carrier, c"DllGetClassObject"),
-        );
-        let real_class = std::mem::transmute::<unsafe extern "system" fn() -> isize, ClassObject>(
-            address(genuine, c"DllGetClassObject"),
-        );
+        let class = export::<ClassObject>(carrier, c"DllGetClassObject");
+        let real_class = export::<ClassObject>(genuine, c"DllGetClassObject");
         require(
             class(&IID_NULL, &IID_NULL, &mut output)
                 == real_class(&IID_NULL, &IID_NULL, &mut real_output),
             "DllGetClassObject system HRESULT",
         );
-        let format = std::mem::transmute::<unsafe extern "system" fn() -> isize, Format>(address(
-            carrier,
-            c"GetdfDIJoystick",
-        ));
-        let real_format = std::mem::transmute::<unsafe extern "system" fn() -> isize, Format>(
-            address(genuine, c"GetdfDIJoystick"),
-        );
+        let format = export::<Format>(carrier, c"GetdfDIJoystick");
+        let real_format = export::<Format>(genuine, c"GetdfDIJoystick");
         require(
             format() == real_format(),
             "joystick data format pointer owned by genuine DLL",

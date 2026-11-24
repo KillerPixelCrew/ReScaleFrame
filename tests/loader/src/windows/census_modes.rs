@@ -415,46 +415,6 @@ fn payload_mode(
     i32::from(checks.0 != 0)
 }
 
-unsafe fn rsf_test_census_vulkan(
-    dir: *const c_char,
-    install: Install,
-    flush: CensusOp,
-    shutdown: CensusOp,
-    probe: NativeProbe,
-) -> i32 {
-    payload_mode(
-        unsafe { CStr::from_ptr(dir) },
-        install,
-        flush,
-        shutdown,
-        probe,
-        "vulkan_streamline",
-        |checks, path, rows| {
-            let summary = checks.summary(path);
-            vk_records(checks, rows, &summary);
-            sl_records(checks, rows, &summary);
-        },
-    )
-}
-
-unsafe fn rsf_test_census_ffx(
-    dir: *const c_char,
-    install: Install,
-    flush: CensusOp,
-    shutdown: CensusOp,
-    probe: NativeProbe,
-) -> i32 {
-    payload_mode(
-        unsafe { CStr::from_ptr(dir) },
-        install,
-        flush,
-        shutdown,
-        probe,
-        "fidelityfx_api",
-        |checks, _, rows| ffx_records(checks, rows),
-    )
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_test_census_main(
     argc: i32,
@@ -499,10 +459,28 @@ unsafe extern "C" fn rsf_test_census_main(
                 shutdown,
                 native.jitter.unwrap(),
             ),
-            b"vulkan" => {
-                rsf_test_census_vulkan(dir, install, flush, shutdown, native.vulkan.unwrap())
-            }
-            b"ffx" => rsf_test_census_ffx(dir, install, flush, shutdown, native.ffx.unwrap()),
+            b"vulkan" => payload_mode(
+                CStr::from_ptr(dir),
+                install,
+                flush,
+                shutdown,
+                native.vulkan.unwrap(),
+                "vulkan_streamline",
+                |checks, path, rows| {
+                    let summary = checks.summary(path);
+                    vk_records(checks, rows, &summary);
+                    sl_records(checks, rows, &summary);
+                },
+            ),
+            b"ffx" => payload_mode(
+                CStr::from_ptr(dir),
+                install,
+                flush,
+                shutdown,
+                native.ffx.unwrap(),
+                "fidelityfx_api",
+                |checks, _, rows| ffx_records(checks, rows),
+            ),
             b"dllmain" => rsf_test_census_dllmain(dir, native.dispatch_twice.unwrap()),
             b"creation" => rsf_test_census_creation(dir, install, shutdown),
             _ => 2,
@@ -672,12 +650,8 @@ unsafe fn rsf_test_census_dllmain(dir: *const c_char, dispatch: DispatchTwice) -
             first["args"]["layout_check"] == "ok",
             "first dispatch layout is accepted",
         );
-        let module = std::env::current_exe().ok().and_then(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        });
         checks.check(
-            module
+            exe_name()
                 .as_deref()
                 .is_some_and(|module| first["module"] == module),
             "first dispatch belongs to the fixture executable",
