@@ -57,23 +57,33 @@ thread_local! {
     static LINES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// The fake rsf_dlss_pipeline_start_backend the driver binds (rsf_anomaly_sr_bind_table).
+pub(super) unsafe extern "C" fn start_backend(
+    device: Raw,
+    setup: *const rsf_dlss_pipeline_setup,
+    backend: u32,
+) -> i32 {
+    let setup = unsafe { *setup };
+    FAKE.with_borrow_mut(|f| {
+        f.starts += 1;
+        f.setup = setup;
+        if f.start_result != OK {
+            return f.start_result;
+        }
+        f.device = device.addr();
+        f.running = true;
+        f.backend = backend;
+        f.quality = setup.quality;
+        f.output = [setup.output_width, setup.output_height];
+        f.plan();
+        OK
+    })
+}
+
 fn table() -> rsf_d3d11_sr_api {
-    unsafe extern "C" fn start(device: Raw, setup: *const rsf_dlss_pipeline_setup) -> i32 {
-        let setup = unsafe { *setup };
-        FAKE.with_borrow_mut(|f| {
-            f.starts += 1;
-            f.setup = setup;
-            if f.start_result != OK {
-                return f.start_result;
-            }
-            f.device = device.addr();
-            f.running = true;
-            f.backend = DLSS;
-            f.quality = setup.quality;
-            f.output = [setup.output_width, setup.output_height];
-            f.plan();
-            OK
-        })
+    // The table's own start is required by the ABI; the driver starts through start_backend.
+    unsafe extern "C" fn start(_: Raw, _: *const rsf_dlss_pipeline_setup) -> i32 {
+        NOT_SUPPORTED
     }
     unsafe extern "C" fn evaluate(_: Raw, pass: *const rsf_game_render_pass) -> i32 {
         let pass = unsafe { &*pass };

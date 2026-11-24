@@ -49,8 +49,23 @@ unsafe fn rsf_anomaly_sr_bind_table(
     table: &rsf_d3d11_sr_api,
     session: u64,
 ) -> bool {
+    // The synthetic Runtime admits the requested provider (DLSS for Auto) and starts it in the fake.
+    unsafe extern "C" fn admit(request: *mut Admission) -> i32 {
+        let request = unsafe { &mut *request };
+        request.offered_backends = request.backend_choices;
+        request.selected_backend = if request.requested_backend == AUTO {
+            DLSS
+        } else {
+            request.requested_backend
+        };
+        OK
+    }
     let render = unsafe { &mut *driver.render.get() };
-    let result = validate_api(*table).map(|api| (api, Startup::Legacy));
+    let startup = Startup {
+        start: lifecycle::start_backend,
+        admit,
+    };
+    let result = validate_api(*table).map(|api| (api, startup));
     let bound = driver.bind(render, result, session);
     if let Err(reason) = result {
         render.say(&format!("Anomaly SR stage 5: {}", reason.to_string_lossy()));

@@ -97,12 +97,10 @@ fn copy_text(out: &mut [c_char], text: &str) {
     out[count] = 0;
 }
 
-type LegacyStart = unsafe extern "C" fn(Raw, *const rsf_dlss_pipeline_setup) -> i32;
 type Select = unsafe extern "C" fn(u32, *mut u32, *mut u32) -> i32;
 
 #[derive(Clone, Copy)]
 struct RuntimeApi {
-    start: LegacyStart,
     evaluate: unsafe extern "C" fn(Raw, *const rsf_game_render_pass) -> i32,
     stop: unsafe extern "C" fn() -> i32,
     status: unsafe extern "C" fn(*mut rsf_dlss_pipeline_status) -> i32,
@@ -117,11 +115,12 @@ struct RuntimeApi {
 
 impl RuntimeApi {
     fn admit(table: rsf_d3d11_sr_api) -> Option<Self> {
-        // Required by the Runtime ABI even though this adapter has no caller.
+        // Required by the Runtime ABI even though this adapter has no caller (the adapter starts the
+        // selected provider through rsf_dlss_pipeline_start_backend).
+        table.start?;
         table.reset?;
         table.set_sharpening?;
         Some(Self {
-            start: table.start?,
             evaluate: table.evaluate?,
             stop: table.stop?,
             status: table.status?,
@@ -413,26 +412,12 @@ pub(crate) fn admit(
 
 type StartBackend = unsafe extern "C" fn(Raw, *const rsf_dlss_pipeline_setup, u32) -> i32;
 
-#[derive(Clone, Copy, Default)]
-enum Startup {
-    #[default]
-    Legacy,
-    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
-    Runtime { start: StartBackend, admit: Admit },
-}
-
-unsafe fn start_selected(
-    startup: Startup,
-    legacy_start: LegacyStart,
-    device: Raw,
-    setup: &rsf_dlss_pipeline_setup,
-    requested: u32,
-) -> (i32, u32) {
-    match startup {
-        Startup::Runtime { start, .. } => (unsafe { start(device, setup, requested) }, requested),
-        // The synthetic Runtime fixture also drives the service table's DLSS-first route.
-        Startup::Legacy => (unsafe { legacy_start(device, setup) }, DLSS),
-    }
+/// The Runtime's admission service and its selected-provider start.
+#[derive(Clone, Copy)]
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+struct Startup {
+    start: StartBackend,
+    admit: Admit,
 }
 
 #[derive(Default)]
@@ -440,7 +425,7 @@ struct RenderState {
     setup: Option<Setup>,
     colour_transport: bool,
     api: Option<RuntimeApi>,
-    startup: Startup,
+    startup: Option<Startup>,
     backend_request: Option<(u32, Option<u32>)>,
     device: Raw, // identity only: the running Runtime owns its device reference
     failed_start: Option<StartRequest>,
@@ -489,7 +474,7 @@ impl Driver {
             return false; // the bound table still owns a live device
         }
         render.api = result.ok().map(|(api, _)| api);
-        render.startup = result.map_or(Startup::Legacy, |(_, startup)| startup);
+        render.startup = result.ok().map(|(_, startup)| startup);
         render.backend_request = None;
         render.session = session;
         render.failed_start = None;
@@ -503,9 +488,8 @@ impl Driver {
     }
 
     fn resolve_backend(render: &RenderState, device: Raw, requested: u32) -> Option<u32> {
-        let Startup::Runtime { admit: service, .. } = render.startup else {
-            // The native fixture binds a legacy table without a Runtime module.
-            return Some(if requested == AUTO { DLSS } else { requested });
+        let Some(Startup { admit: service, .. }) = render.startup else {
+            return None;
         };
         let setup = render.setup.as_ref()?;
         let result = admit(
@@ -551,15 +535,11 @@ impl Driver {
             backend_name(wanted.backend), wanted.quality, wanted.preset
         ));
         // The device is borrowed from the engine, and the setup strings span the call.
-        let (result, backend) = unsafe {
-            start_selected(
-                render.startup,
-                api.start,
-                request.device,
-                &setup,
-                wanted.backend,
-            )
+        let Some(Startup { start, .. }) = render.startup else {
+            return;
         };
+        let backend = wanted.backend;
+        let result = unsafe { start(request.device, &setup, backend) };
         let mut published = self.published();
         published.status.start_result = result;
         if result != OK {
@@ -856,7 +836,7 @@ unsafe extern "C" fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) 
         let (Some(start), Some(admit)) = (start_backend, admission) else {
             return Err(c"Runtime SR admission or selected-provider startup export missing");
         };
-        Ok((api, Startup::Runtime { start, admit }))
+        Ok((api, Startup { start, admit }))
     });
     // Configuration and binding run on the serialized render side.
     let render = unsafe { &mut *driver.render.get() };
@@ -1311,14 +1291,6 @@ pub(super) extern "C" fn report_fixture(
 mod settings_tests {
     use super::*;
 
-    unsafe extern "C" fn legacy(_: Raw, _: *const rsf_dlss_pipeline_setup) -> i32 {
-        NOT_SUPPORTED
-    }
-
-    unsafe extern "C" fn no_provider(_: *mut Admission) -> i32 {
-        NOT_SUPPORTED
-    }
-
     fn fixture_api() -> RuntimeApi {
         unsafe extern "C" fn evaluate(_: Raw, _: *const rsf_game_render_pass) -> i32 {
             NOT_SUPPORTED
@@ -1345,7 +1317,6 @@ mod settings_tests {
             NOT_SUPPORTED
         }
         RuntimeApi {
-            start: legacy,
             evaluate,
             stop,
             status,
@@ -1356,24 +1327,6 @@ mod settings_tests {
             output_texture: texture,
             request_dump: dump,
         }
-    }
-
-    #[test]
-    fn provider_start_opens_requested_alternate_without_legacy_start() {
-        unsafe extern "C" fn start_backend(
-            _: Raw,
-            _: *const rsf_dlss_pipeline_setup,
-            backend: u32,
-        ) -> i32 {
-            if backend == XESS { OK } else { NOT_SUPPORTED }
-        }
-        let setup = rsf_dlss_pipeline_setup::default();
-        let startup = Startup::Runtime {
-            start: start_backend,
-            admit: no_provider,
-        };
-        let receipt = unsafe { start_selected(startup, legacy, null_mut(), &setup, XESS) };
-        assert_eq!(receipt, (OK, XESS));
     }
 
     #[test]
@@ -1412,7 +1365,7 @@ mod settings_tests {
             render,
             Ok((
                 api,
-                Startup::Runtime {
+                Startup {
                     start,
                     admit: admission
                 }
