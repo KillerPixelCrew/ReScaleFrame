@@ -1508,7 +1508,7 @@ unsafe fn latency_window_bind(binding: *const Window) -> i32 {
     bind_window(binding.session_id, binding.window_key)
 }
 
-fn bind_window(session_id: u64, window_key: u64) -> i32 {
+pub(crate) fn bind_window(session_id: u64, window_key: u64) -> i32 {
     if session_id == 0 || window_key == 0 {
         return INVALID;
     }

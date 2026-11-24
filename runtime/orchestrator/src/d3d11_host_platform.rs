@@ -111,7 +111,7 @@ pub(super) unsafe extern "C" fn fg_latency_event(_: Raw, event: *const rsf_obser
 }
 
 pub(super) fn latency_window_bind(session_id: u64, window: Raw) {
-    let _ = crate::native_fg_cpu::platform::bind_latency_window(session_id, window.addr() as u64);
+    let _ = crate::native_fg_cpu::bind_window(session_id, window.addr() as u64);
 }
 
 unsafe extern "C" fn forward_fg(_: Raw, event: *const rsf_game_cpu_event) {

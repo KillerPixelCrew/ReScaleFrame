@@ -162,11 +162,6 @@ pub(crate) unsafe extern "C" fn rsf_native_latency_window_bind(binding: *const W
     unsafe { latency_window_bind(binding) }
 }
 
-#[cfg(not(test))]
-pub(crate) fn bind_latency_window(session_id: u64, window_key: u64) -> i32 {
-    bind_window(session_id, window_key)
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_input_routes_get(out: *mut Routes) -> i32 {
     unsafe { rsf_core_native_input_routes_get(out) }
