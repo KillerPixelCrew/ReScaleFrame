@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Bounded diagnostics over copied CPU frame and provider facts.
 use super::{
-    AntiLag, Facts, Frame, LEDGER, OK, Pass, Platform, Reservation, Source, antilag, lock, win32,
+    AntiLag, Facts, Frame, LEDGER, OK, Pass, Reservation, Source, antilag, leaf, lock, win32,
 };
 use crate::native_cpu::counters;
 use crate::native_fg::{now_qpc, requested, sink};
@@ -186,7 +186,7 @@ pub(crate) fn report_timing(cpu: &Facts, owner: &Frame, screen: u32, wait: u64, 
     }
 }
 
-pub(super) fn report_latency_window(p: &Platform) {
+pub(super) fn report_latency_window() {
     let totals = counters();
     let (reported, anti, previous_anti) = {
         let mut ledger = lock(&LEDGER);
@@ -196,7 +196,7 @@ pub(super) fn report_latency_window(p: &Platform) {
         } else if totals.frames - reported.frames < 120 {
             return;
         }
-        let anti = antilag(p).map(AntiLag::state).unwrap_or_default();
+        let anti = antilag().map(AntiLag::state).unwrap_or_default();
         let previous_anti = ledger.diagnostics.reported_anti;
         ledger.diagnostics.reported = totals;
         ledger.diagnostics.reported_anti = (anti.updates, anti.refused);
@@ -414,15 +414,9 @@ pub(crate) fn stage(
     log.say(&row);
 }
 
-pub(super) unsafe fn report_stage(
-    name: *const c_char,
-    source: u64,
-    native: u64,
-    result: i32,
-    p: &Platform,
-) {
+pub(super) unsafe fn report_stage(name: *const c_char, source: u64, native: u64, result: i32) {
     if !name.is_null() {
         let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
-        stage(call!(p, generation), &name, source, native, result, None);
+        stage(call!(generation), &name, source, native, result, None);
     }
 }

@@ -1093,12 +1093,15 @@ pub(crate) unsafe extern "C" fn rsf_streamline_host_abort(host: *mut Host, id: u
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_reset_sources(host: *mut Host) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_reset_sources(host: *mut Host) -> i32 {
     unsafe { rsf_core_slhost_reset_sources(host) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_retire_through(host: *mut Host, id: u64) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_retire_through(
+    host: *mut Host,
+    id: u64,
+) -> i32 {
     unsafe { rsf_core_slhost_retire_through(host, id) }
 }
 
@@ -1143,7 +1146,7 @@ pub(crate) unsafe extern "C" fn rsf_streamline_host_present_common(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_streamline_host_presented(host: *mut Host, id: u64) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_streamline_host_presented(host: *mut Host, id: u64) -> i32 {
     unsafe { rsf_core_slhost_presented(host, id) }
 }
 

@@ -10,7 +10,7 @@ use crate::native_cpu::{
 };
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
-use std::sync::{Condvar, Mutex, OnceLock, mpsc};
+use std::sync::{Condvar, Mutex, mpsc};
 use std::time::Duration;
 use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::GetCurrentThreadId};
 
@@ -47,7 +47,6 @@ static STATE: Mutex<State> = Mutex::new(State {
     markers: Vec::new(),
 });
 static CHANGED: Condvar = Condvar::new();
-static PLATFORM: OnceLock<Platform> = OnceLock::new();
 
 fn verify(value: bool) {
     FAILURES.fetch_add(u32::from(!value), Relaxed);
@@ -82,7 +81,7 @@ fn fact(source_frame_id: u64, stage: u32) -> Event {
 }
 
 unsafe extern "C" fn sink(_: *mut c_void, event: *const Event) {
-    unsafe { fg_cpu(event, platform()) };
+    unsafe { fg_cpu(event) };
 }
 
 fn dispatch(event: *const Event) -> bool {
@@ -125,7 +124,7 @@ fn bind(window_key: u64) -> i32 {
         session_id: SESSION,
         window_key,
     };
-    unsafe { latency_window_bind(&binding, platform()) }
+    unsafe { latency_window_bind(&binding) }
 }
 
 fn receipt(receipt_id: u64, window_key: u64) -> bool {
@@ -193,43 +192,44 @@ fn routes() -> rsf_native_input_routes {
     out
 }
 
-extern "C" fn has_owner() -> i32 {
+pub(super) extern "C" fn has_owner() -> i32 {
     1
 }
-extern "C" fn generation() -> u64 {
+pub(super) extern "C" fn generation() -> u64 {
     GENERATION.load(Relaxed)
 }
-extern "C" fn backend() -> u32 {
+pub(super) extern "C" fn backend() -> u32 {
     RSF_FG_BACKEND_XESS
 }
-extern "C" fn device() -> *mut c_void {
-    ptr::from_ref(platform()).cast_mut().cast()
+pub(super) extern "C" fn device() -> *mut c_void {
+    // Any stable address stands in for the D3D12 device.
+    ptr::from_ref(&GENERATION).cast_mut().cast()
 }
-extern "C" fn vendor(_: *mut c_void) -> u32 {
+pub(super) extern "C" fn vendor(_: *mut c_void) -> u32 {
     0x8086
 }
-extern "C" fn host() -> *mut c_void {
+pub(super) extern "C" fn host() -> *mut c_void {
     if RETIRE_HOST.load(Relaxed) {
         device()
     } else {
         null_mut()
     }
 }
-extern "C" fn host_retire(_: *mut c_void, _: u64) -> i32 {
+pub(super) extern "C" fn host_retire(_: *mut c_void, _: u64) -> i32 {
     RETIRE_CALLS.fetch_add(1, Relaxed);
     0
 }
-unsafe extern "C" fn status(out: *mut rsf_d3d11_present_status) -> i32 {
+pub(super) unsafe extern "C" fn status(out: *mut rsf_d3d11_present_status) -> i32 {
     let out = unsafe { &mut *out };
     out.backend = RSF_FG_BACKEND_XESS;
     out.state.pacing_owner = XELL;
     out.state.low_latency_available = 1;
     0
 }
-extern "C" fn acquire(_: u64) -> i32 {
+pub(super) extern "C" fn acquire(_: u64) -> i32 {
     0
 }
-extern "C" fn pace(source: u64, owner: u32, expected: u64) -> i32 {
+pub(super) extern "C" fn pace(source: u64, owner: u32, expected: u64) -> i32 {
     verify(owner == XELL && expected == generation());
     PACE_CALLS.fetch_add(1, Relaxed);
     let mut state = STATE.lock().unwrap();
@@ -245,7 +245,7 @@ extern "C" fn pace(source: u64, owner: u32, expected: u64) -> i32 {
     }
     0
 }
-extern "C" fn marker(expected: u64, source: u64, kind: u32, controller: u32) -> i32 {
+pub(super) extern "C" fn marker(expected: u64, source: u64, kind: u32, controller: u32) -> i32 {
     if FAIL_MARKER.load(Relaxed) {
         verify(kind == SIM_START);
         return -9;
@@ -257,7 +257,7 @@ extern "C" fn marker(expected: u64, source: u64, kind: u32, controller: u32) -> 
     }
     0
 }
-extern "C" fn route_receipt(expected: u64, source: u64, kind: u32, message: u32) -> i32 {
+pub(super) extern "C" fn route_receipt(expected: u64, source: u64, kind: u32, message: u32) -> i32 {
     verify(expected == generation() && source == 2 && kind == RSF_GAME_INPUT_MOUSE && message == 0);
     RECEIPT_CALLS.fetch_add(1, Relaxed);
     if REBIND.load(Relaxed) {
@@ -265,11 +265,11 @@ extern "C" fn route_receipt(expected: u64, source: u64, kind: u32, message: u32)
     }
     0
 }
-extern "C" fn abort(_: u64) -> i32 {
+pub(super) extern "C" fn abort(_: u64) -> i32 {
     ABORT_CALLS.fetch_add(1, Relaxed);
     0
 }
-extern "C" fn wait_completion(timeout_ms: u32, pump_sent_messages: u32) -> i32 {
+pub(super) extern "C" fn wait_completion(timeout_ms: u32, pump_sent_messages: u32) -> i32 {
     if pump_sent_messages == 0 {
         STATE.lock().unwrap().waiting_for_predecessor = true;
         CHANGED.notify_all();
@@ -277,7 +277,7 @@ extern "C" fn wait_completion(timeout_ms: u32, pump_sent_messages: u32) -> i32 {
     std::thread::sleep(Duration::from_millis(u64::from(timeout_ms)));
     1
 }
-extern "C" fn owned_window_thread(key: u64) -> u32 {
+pub(super) extern "C" fn owned_window_thread(key: u64) -> u32 {
     if matches!(key, PRIMARY_WINDOW | REPLACEMENT_WINDOW) {
         unsafe { GetCurrentThreadId() }
     } else {
@@ -285,27 +285,25 @@ extern "C" fn owned_window_thread(key: u64) -> u32 {
     }
 }
 
-fn platform() -> &'static Platform {
-    PLATFORM.get_or_init(|| Platform {
-        has_owner,
-        generation,
-        backend,
-        device,
-        adapter_vendor: vendor,
-        host,
-        host_retire,
-        status,
-        acquire,
-        pace,
-        marker,
-        receipt: route_receipt,
-        abort,
-        fixture_wait_completion: Some(wait_completion),
-        fixture_owned_window_thread: Some(owned_window_thread),
-        ..NATIVE_PLATFORM
-    })
-}
+/// The leaves the CPU owner calls in the fixture-leaves archive: recording doubles for the
+/// presentation bridge, and the production Streamline host and Anti-Lag leaves.
+pub(super) mod leaf {
+    pub(in crate::native_fg_cpu) use super::super::platform::leaf::{
+        allows_fg, create_antilag, host_abort, host_presented, host_reflex, host_reset,
+        host_status, host_token, input,
+    };
+    pub(in crate::native_fg_cpu) use super::{
+        abort, acquire, backend, device, generation, has_owner, host, host_retire, marker, pace,
+        route_receipt as receipt, status, vendor as adapter_vendor,
+    };
 
+    pub(in crate::native_fg_cpu) const FIXTURE_OWNED_WINDOW_THREAD: Option<
+        unsafe extern "C" fn(u64) -> u32,
+    > = Some(super::owned_window_thread);
+    pub(in crate::native_fg_cpu) const FIXTURE_WAIT_COMPLETION: Option<
+        unsafe extern "C" fn(u32, u32) -> i32,
+    > = Some(super::wait_completion);
+}
 fn sample_native_thread() {
     let (duplicate, handle) = mpsc::channel();
     let (release, done) = mpsc::channel();

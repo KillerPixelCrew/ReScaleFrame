@@ -31,35 +31,6 @@ use std::mem::zeroed;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
 
-pub(crate) struct Platform {
-    has_owner: unsafe extern "C" fn() -> i32,
-    generation: unsafe extern "C" fn() -> u64,
-    backend: unsafe extern "C" fn() -> u32,
-    status: unsafe extern "C" fn(*mut rsf_d3d11_present_status) -> i32,
-    device: unsafe extern "C" fn() -> *mut c_void,
-    adapter_vendor: unsafe extern "C" fn(device: *mut c_void) -> u32,
-    host: unsafe extern "C" fn() -> *mut c_void,
-    host_status:
-        unsafe extern "C" fn(host: *mut c_void, status: *mut rsf_streamline_latency_status) -> i32,
-    host_reflex: unsafe extern "C" fn(host: *mut c_void, mode: u32, interval: u32) -> i32,
-    host_token: unsafe extern "C" fn(host: *mut c_void, source: u64) -> *mut c_void,
-    host_presented: unsafe extern "C" fn(host: *mut c_void, source: u64) -> i32,
-    host_abort: unsafe extern "C" fn(host: *mut c_void, source: u64) -> i32,
-    host_retire: unsafe extern "C" fn(host: *mut c_void, through: u64) -> i32,
-    host_reset: unsafe extern "C" fn(host: *mut c_void) -> i32,
-    acquire: unsafe extern "C" fn(source: u64) -> i32,
-    pace: unsafe extern "C" fn(source: u64, pacer: u32, generation: u64) -> i32,
-    marker: unsafe extern "C" fn(generation: u64, source: u64, marker: u32, controller: u32) -> i32,
-    input: unsafe extern "C" fn(source: u64, kind: u32, message: u32) -> i32,
-    receipt: unsafe extern "C" fn(generation: u64, source: u64, kind: u32, message: u32) -> i32,
-    abort: unsafe extern "C" fn(source: u64) -> i32,
-    create_antilag: unsafe extern "C" fn() -> *mut c_void,
-    fixture_owned_window_thread: Option<unsafe extern "C" fn(window_key: u64) -> u32>,
-    fixture_wait_completion:
-        Option<unsafe extern "C" fn(timeout_ms: u32, pump_sent_messages: u32) -> i32>,
-    allows_fg: unsafe extern "C" fn(*const rsf_frame_record) -> i32,
-}
-
 type Event = rsf_game_cpu_event;
 type Pass = rsf_game_render_pass;
 type Reservation = rsf_native_cpu_reservation;
@@ -80,32 +51,37 @@ const SUBMIT_END: u32 = 3;
 const PRESENT_START: u32 = 4;
 const PRESENT_END: u32 = 5;
 macro_rules! call {
-    ($p:expr, $f:ident $(, $a:expr)* $(,)?) => {{
+    ($f:ident $(, $a:expr)* $(,)?) => {{
         #[allow(unused_unsafe)]
-        let value = unsafe { ($p.$f)($($a),*) };
+        let value = unsafe { leaf::$f($($a),*) };
         value
     }};
 }
 
 mod diagnostics;
-#[cfg(feature = "test-fixtures")]
+#[cfg(feature = "fixture-leaves")]
 mod fixture;
 mod hitch;
 pub(super) mod platform;
-pub(crate) use platform::NATIVE_PLATFORM;
+// Production calls the leaves in platform.rs; the fixture-leaves archive calls the FG CPU fixture's
+// doubles with the same names.
+#[cfg(feature = "fixture-leaves")]
+use fixture::leaf;
+#[cfg(not(feature = "fixture-leaves"))]
+use platform::leaf;
 mod win32;
 use diagnostics::{Diagnostics, audit, failure, report_latency_window};
 pub(crate) use diagnostics::{Failure, report_timing, sr_failure, stage, trace};
 
-fn wait_completion(p: &Platform, timeout: u32, pump: u32) -> i32 {
-    p.fixture_wait_completion.map_or_else(
+fn wait_completion(timeout: u32, pump: u32) -> i32 {
+    leaf::FIXTURE_WAIT_COMPLETION.map_or_else(
         || win32::wait_completion(timeout, pump),
         |wait| unsafe { wait(timeout, pump) },
     )
 }
 
-fn owned_window_thread(p: &Platform, key: u64) -> u32 {
-    p.fixture_owned_window_thread.map_or_else(
+fn owned_window_thread(key: u64) -> u32 {
+    leaf::FIXTURE_OWNED_WINDOW_THREAD.map_or_else(
         || win32::owned_window_thread(key),
         |thread| unsafe { thread(key) },
     )
@@ -353,16 +329,16 @@ pub(crate) fn complete(source: u64) {
     win32::signal_completion();
 }
 
-pub(crate) fn progress(p: &Platform, source: u64) -> (bool, bool) {
-    let host = call!(p, host);
+pub(crate) fn progress(source: u64) -> (bool, bool) {
+    let host = call!(host);
     if host.is_null() {
         (
             source != 0 && COMPLETED.load(Ordering::Acquire) < source,
             false,
         )
     } else {
-        let live = !call!(p, host_token, host, source).is_null();
-        (live, live && call!(p, host_presented, host, source) != 0)
+        let live = !call!(host_token, host, source).is_null();
+        (live, live && call!(host_presented, host, source) != 0)
     }
 }
 
@@ -382,12 +358,12 @@ pub(super) fn retire_unsubmitted(session: u64, id: u64, abort_token: impl Fn(u64
     }
 }
 
-fn frame_acquire(p: &Platform, source: Source) -> i32 {
+fn frame_acquire(source: Source) -> i32 {
     if source.id == 0 {
         return INVALID;
     }
-    let result = call!(p, acquire, source.id);
-    let host = call!(p, host);
+    let result = call!(acquire, source.id);
+    let host = call!(host);
     if result != NOT_READY || host.is_null() {
         return result;
     }
@@ -400,7 +376,7 @@ fn frame_acquire(p: &Platform, source: Source) -> i32 {
         })
         .min_by_key(|f| f.id);
     if let Some(oldest) = oldest
-        && call!(p, host_abort, host, oldest.id) == OK
+        && call!(host_abort, host, oldest.id) == OK
     {
         if let Some(frame) = lock(&LEDGER).exact(oldest.source()) {
             frame.failed = true;
@@ -411,7 +387,7 @@ fn frame_acquire(p: &Platform, source: Source) -> i32 {
             oldest.id,
             NOT_READY,
         );
-        return call!(p, acquire, source.id);
+        return call!(acquire, source.id);
     }
     result
 }
@@ -434,27 +410,27 @@ fn settle_marker(source: Source, marker: u32, marked: bool, marker_failed: bool)
     }
 }
 
-fn deliver_marker(p: &Platform, frame: Frame, marker: u32) -> (i32, bool) {
-    let (result, marked) = frame_marker(p, frame, marker);
+fn deliver_marker(frame: Frame, marker: u32) -> (i32, bool) {
+    let (result, marked) = frame_marker(frame, marker);
     settle_marker(frame.source(), marker, marked, result != OK);
     (result, marked)
 }
 
-fn simulation_marker(p: &Platform, source: Source, marker: u32, label: &str) {
+fn simulation_marker(source: Source, marker: u32, label: &str) {
     let frame = lock(&LEDGER)
         .exact(source)
         .and_then(|frame| claim_marker(frame, marker));
     if let Some(frame) = frame {
-        trace(label, source.id, deliver_marker(p, frame, marker).0);
+        trace(label, source.id, deliver_marker(frame, marker).0);
     }
 }
 
-fn frame_marker(p: &Platform, frame: Frame, marker: u32) -> (i32, bool) {
+fn frame_marker(frame: Frame, marker: u32) -> (i32, bool) {
     if rendered_source() {
         return (OK, true);
     }
     let generation = frame.provider_generation;
-    if frame.failed || frame.pacing_in_flight() || generation != call!(p, generation) {
+    if frame.failed || frame.pacing_in_flight() || generation != call!(generation) {
         return (NOT_READY, false);
     }
     let Some(facts) = frame.source().facts() else {
@@ -471,7 +447,7 @@ fn frame_marker(p: &Platform, frame: Frame, marker: u32) -> (i32, bool) {
     }
     match mark_frame(Some(frame.session), frame.id, marker) {
         1 => {
-            let result = call!(p, marker, generation, frame.id, marker, 0);
+            let result = call!(marker, generation, frame.id, marker, 0);
             (result, result == OK)
         }
         0 => (OK, false),
@@ -481,7 +457,7 @@ fn frame_marker(p: &Platform, frame: Frame, marker: u32) -> (i32, bool) {
 
 // Drain only sent messages while joining an ordered Present. Posted input
 // remains queued for the engine's actual input callback after pacing.
-fn join_previous_present(p: &Platform, previous: u64) -> u64 {
+fn join_previous_present(previous: u64) -> u64 {
     if previous == 0 || COMPLETED.load(Ordering::Acquire) >= previous {
         return 0;
     }
@@ -506,7 +482,7 @@ fn join_previous_present(p: &Platform, previous: u64) -> u64 {
             );
             break;
         }
-        if wait_completion(p, (deadline - now) as u32, 1) == 0 {
+        if wait_completion((deadline - now) as u32, 1) == 0 {
             return 0;
         }
     }
@@ -527,29 +503,29 @@ static PACER: Mutex<Pacer> = Mutex::new(Pacer {
 });
 static REFLEX_CONFIGURATION: Mutex<Option<(usize, u32, u32)>> = Mutex::new(None);
 
-fn antilag(p: &Platform) -> Option<&'static AntiLag> {
+fn antilag() -> Option<&'static AntiLag> {
     static CONTEXT: OnceLock<Option<&'static AntiLag>> = OnceLock::new();
-    *CONTEXT.get_or_init(|| unsafe { call!(p, create_antilag).cast::<AntiLag>().as_ref() })
+    *CONTEXT.get_or_init(|| unsafe { call!(create_antilag).cast::<AntiLag>().as_ref() })
 }
 
 fn fsr(backend: u32) -> bool {
     matches!(backend, RSF_FG_BACKEND_FSR3 | RSF_FG_BACKEND_FSR4)
 }
 
-fn provider_status(p: &Platform) -> Option<rsf_d3d11_present_status> {
+fn provider_status() -> Option<rsf_d3d11_present_status> {
     let mut status: rsf_d3d11_present_status = unsafe { zeroed() };
     status.struct_size = size_of::<rsf_d3d11_present_status>() as u32;
     status.version = RSF_PRESENT_STATUS_VERSION;
-    (call!(p, status, &mut status) == OK).then_some(status)
+    (call!(status, &mut status) == OK).then_some(status)
 }
 
-fn host_status(p: &Platform, host: Handle) -> Option<rsf_streamline_latency_status> {
+fn host_status(host: Handle) -> Option<rsf_streamline_latency_status> {
     if host.is_null() {
         return None;
     }
     let mut status: rsf_streamline_latency_status = unsafe { zeroed() };
     status.struct_size = size_of::<rsf_streamline_latency_status>() as u32;
-    (call!(p, host_status, host, &mut status) == OK).then_some(status)
+    (call!(host_status, host, &mut status) == OK).then_some(status)
 }
 
 struct Selection {
@@ -558,8 +534,8 @@ struct Selection {
     anti_paced: bool,
 }
 
-fn select_pacer(p: &Platform, id: u64, mode: u32, limit: u32) -> Selection {
-    let device = call!(p, device);
+fn select_pacer(id: u64, mode: u32, limit: u32) -> Selection {
+    let device = call!(device);
     if device.is_null() {
         lock(&PACER).owner = RSF_PACING_NONE;
         return Selection {
@@ -568,26 +544,26 @@ fn select_pacer(p: &Platform, id: u64, mode: u32, limit: u32) -> Selection {
             anti_paced: false,
         };
     }
-    let snapshot = provider_status(p);
+    let snapshot = provider_status();
     let state = snapshot
         .as_ref()
         .map_or_else(|| unsafe { zeroed() }, |s| s.state);
-    let backend = snapshot.map_or_else(|| call!(p, backend), |s| s.backend);
+    let backend = snapshot.map_or_else(|| call!(backend), |s| s.backend);
     let api = if GRAPHICS_API.load(Ordering::Relaxed) == 12 || fsr(backend) {
         12
     } else {
         11
     };
-    let host = call!(p, host);
-    let reflex_available = host_status(p, host)
+    let host = call!(host);
+    let reflex_available = host_status(host)
         .is_some_and(|s| s.low_latency_available != 0 && s.profile != RSF_SL_PROFILE_PCL);
     let anti = {
         let mut pacer = lock(&PACER);
         if pacer.device != device as usize {
             pacer.device = device as usize;
-            pacer.vendor = call!(p, adapter_vendor, device);
+            pacer.vendor = call!(adapter_vendor, device);
         }
-        antilag(p).filter(|anti| anti.bind(api, device, pacer.vendor))
+        antilag().filter(|anti| anti.bind(api, device, pacer.vendor))
     };
     let chosen = pacing_owner(
         state.pacing_owner,
@@ -633,7 +609,7 @@ fn select_pacer(p: &Platform, id: u64, mode: u32, limit: u32) -> Selection {
             (host as usize, RSF_REFLEX_OFF, 0)
         };
         if *configured != Some(wanted) {
-            *configured = (call!(p, host_reflex, host, wanted.1, wanted.2) == OK).then_some(wanted);
+            *configured = (call!(host_reflex, host, wanted.1, wanted.2) == OK).then_some(wanted);
         }
     } else {
         *configured = None;
@@ -645,20 +621,20 @@ fn select_pacer(p: &Platform, id: u64, mode: u32, limit: u32) -> Selection {
     }
 }
 
-pub(crate) fn pacing_status(p: &Platform, status: &mut Status) {
+pub(crate) fn pacing_status(status: &mut Status) {
     let owner = lock(&PACER).owner;
     let update = match owner {
         RSF_PACING_NONE => Some((0, RSF_REFLEX_OFF, 0)),
-        RSF_PACING_REFLEX => host_status(p, call!(p, host))
+        RSF_PACING_REFLEX => host_status(call!(host))
             .map(|s| (s.low_latency_available, s.reflex_mode, s.sleep_calls)),
-        RSF_PACING_XELL => provider_status(p).map(|s| {
+        RSF_PACING_XELL => provider_status().map(|s| {
             (
                 s.state.low_latency_available,
                 s.state.effective_reflex,
                 s.state.latency_paced_frames,
             )
         }),
-        RSF_PACING_ANTILAG2 => antilag(p)
+        RSF_PACING_ANTILAG2 => antilag()
             .map(AntiLag::state)
             .filter(|s| s.available != 0)
             .map(|s| {
@@ -682,7 +658,7 @@ pub(crate) fn pacing_status(p: &Platform, status: &mut Status) {
     }
 }
 
-fn pace_frame(p: &Platform, source: Source, prospective: Option<Reservation>) {
+fn pace_frame(source: Source, prospective: Option<Reservation>) {
     let Some(claimed) = lock(&LEDGER).claim_pace(source) else {
         return;
     };
@@ -706,7 +682,7 @@ fn pace_frame(p: &Platform, source: Source, prospective: Option<Reservation>) {
                 _ => {
                     // Cancellation is recorded by the dispatcher independently
                     // of this callback. The callback owns this token until it returns.
-                    if wait_completion(p, 1, 0) == 0 {
+                    if wait_completion(1, 0) == 0 {
                         std::thread::sleep(std::time::Duration::from_millis(1));
                     }
                 }
@@ -719,7 +695,7 @@ fn pace_frame(p: &Platform, source: Source, prospective: Option<Reservation>) {
                 frame.join_ticks = ticks;
                 frame.pacing = Attempt::Done;
             }
-            call!(p, abort, source.id);
+            call!(abort, source.id);
             trace(
                 "reserved source predecessor Present unavailable",
                 source.id,
@@ -737,8 +713,8 @@ fn pace_frame(p: &Platform, source: Source, prospective: Option<Reservation>) {
             return;
         }
         ticks
-    } else if !threaded && !call!(p, host).is_null() {
-        join_previous_present(p, claimed.previous)
+    } else if !threaded && !call!(host).is_null() {
+        join_previous_present(claimed.previous)
     } else {
         0
     };
@@ -746,8 +722,8 @@ fn pace_frame(p: &Platform, source: Source, prospective: Option<Reservation>) {
     let started = now_qpc();
     let options = requested();
     let generation = claimed.provider_generation;
-    let selection = (generation == call!(p, generation))
-        .then(|| select_pacer(p, source.id, options.reflex_mode, options.frame_limit_us));
+    let selection = (generation == call!(generation))
+        .then(|| select_pacer(source.id, options.reflex_mode, options.frame_limit_us));
     let actual_pacer = selection.as_ref().is_some_and(|s| {
         matches!(s.owner, RSF_PACING_REFLEX | RSF_PACING_XELL)
             || (s.owner == RSF_PACING_ANTILAG2 && s.anti_paced)
@@ -757,9 +733,7 @@ fn pace_frame(p: &Platform, source: Source, prospective: Option<Reservation>) {
     let result = selection
         .as_ref()
         .filter(|s| !s.denied)
-        .map_or(NOT_READY, |s| {
-            call!(p, pace, source.id, s.owner, generation)
-        });
+        .map_or(NOT_READY, |s| call!(pace, source.id, s.owner, generation));
     let finished = now_qpc();
     let mut withdrawn = false;
     if let Some(frame) = lock(&LEDGER).exact(source) {
@@ -778,7 +752,7 @@ fn pace_frame(p: &Platform, source: Source, prospective: Option<Reservation>) {
     }
     trace("sleep at engine pacing boundary", source.id, result);
     if prospective.is_some() && (withdrawn || result != OK) {
-        call!(p, abort, source.id);
+        call!(abort, source.id);
     }
     let denied = selection.as_ref().is_some_and(|s| s.denied);
     let detail = selection.map_or(RSF_PACING_NONE, |s| s.owner) | (u32::from(denied) << 16);
@@ -814,7 +788,7 @@ fn pace_frame(p: &Platform, source: Source, prospective: Option<Reservation>) {
     }
 }
 
-fn withdraw_reserved(p: &Platform, session: u64) {
+fn withdraw_reserved(session: u64) {
     let mut withdrawn = [0; CAPACITY];
     for (out, frame) in withdrawn.iter_mut().zip(&mut lock(&LEDGER).frames) {
         if frame.prospective
@@ -834,18 +808,18 @@ fn withdraw_reserved(p: &Platform, session: u64) {
         }
     }
     for id in withdrawn.into_iter().filter(|id| *id != 0) {
-        call!(p, abort, id);
+        call!(abort, id);
     }
 }
 
-fn reserve(p: &Platform, source: Source) {
+fn reserve(source: Source) {
     let Some(reservation) = source
         .reservation()
         .filter(|r| r.state == RSF_NATIVE_CPU_RESERVATION_OPEN)
     else {
         return;
     };
-    let generation = call!(p, generation);
+    let generation = call!(generation);
     {
         let mut ledger = lock(&LEDGER);
         let frame = ledger.slot(source.id);
@@ -866,30 +840,26 @@ fn reserve(p: &Platform, source: Source) {
             ..Frame::default()
         };
     }
-    let acquired = frame_acquire(p, source);
+    let acquired = frame_acquire(source);
     let cancelled = lock(&LEDGER).exact(source).is_some_and(|frame| {
         frame.failed |= acquired != OK;
         frame.failed
     });
     if cancelled {
-        call!(p, abort, source.id);
+        call!(abort, source.id);
     } else {
-        pace_frame(p, source, Some(reservation));
+        pace_frame(source, Some(reservation));
     }
 }
 
-fn begin(p: &Platform, event: &Event, source: Source) {
+fn begin(event: &Event, source: Source) {
     let joined_at = now_qpc();
-    let generation = call!(p, generation);
+    let generation = call!(generation);
     let reserved = lock(&LEDGER)
         .exact(source)
         .is_some_and(|frame| frame.prospective);
-    let result = if reserved {
-        OK
-    } else {
-        frame_acquire(p, source)
-    };
-    if let Some(latency) = host_status(p, call!(p, host)) {
+    let result = if reserved { OK } else { frame_acquire(source) };
+    if let Some(latency) = host_status(call!(host)) {
         rsf_native_cpu_ping_message(latency.pcl_message_id);
     }
     let ready = now_qpc();
@@ -912,7 +882,7 @@ fn begin(p: &Platform, event: &Event, source: Source) {
         });
         drop(ledger);
         if !adopted {
-            call!(p, abort, source.id);
+            call!(abort, source.id);
         }
         if let Some((began, ready)) = pacing {
             record_pacing(Some(source.session), source.id, began, ready);
@@ -940,7 +910,7 @@ fn begin(p: &Platform, event: &Event, source: Source) {
     }
 }
 
-fn end(p: &Platform, event: &Event, source: Source) {
+fn end(event: &Event, source: Source) {
     let required = if rendered_source() {
         (1 << RSF_GAME_CPU_FRAME_BEGIN) | (1 << RSF_GAME_CPU_SIMULATION_END)
     } else {
@@ -962,14 +932,14 @@ fn end(p: &Platform, event: &Event, source: Source) {
         aborted
     };
     if aborted {
-        call!(p, abort, source.id);
+        call!(abort, source.id);
         complete(source.id);
     }
     audit(source);
-    report_latency_window(p);
+    report_latency_window();
 }
 
-fn route_receipt(p: &Platform, receipt: &rsf_game_cpu_receipt_event) {
+fn route_receipt(receipt: &rsf_game_cpu_receipt_event) {
     let event = &receipt.header;
     if event.stage != RSF_GAME_CPU_INPUT_EVENT
         || event.source_frame_id != 0
@@ -977,14 +947,14 @@ fn route_receipt(p: &Platform, receipt: &rsf_game_cpu_receipt_event) {
     {
         return;
     }
-    let generation = call!(p, generation);
+    let generation = call!(generation);
     let (selected, binding) = {
         let mut ledger = lock(&LEDGER);
         let binding = ledger.binding;
         let thread = if binding.key == 0 {
             0
         } else {
-            owned_window_thread(p, binding.key)
+            owned_window_thread(binding.key)
         };
         let target = binding.session == event.session_id
             && thread != 0
@@ -1049,7 +1019,6 @@ fn route_receipt(p: &Platform, receipt: &rsf_game_cpu_receipt_event) {
     // The provider operation verifies the generation and uses its existing
     // token. Attribute the result only to the binding that selected it.
     let result = call!(
-        p,
         receipt,
         generation,
         selected,
@@ -1066,19 +1035,19 @@ fn route_receipt(p: &Platform, receipt: &rsf_game_cpu_receipt_event) {
     }
 }
 
-unsafe fn fg_cpu(event: *const Event, p: &Platform) {
+unsafe fn fg_cpu(event: *const Event) {
     if event.is_null() || unsafe { event.cast::<u32>().read() } < size_of::<Event>() as u32 {
         return;
     }
     let event_ref = unsafe { &*event };
     if event_ref.event_version == RSF_GAME_CPU_EVENT_VERSION_RECEIPT {
         if event_ref.struct_size >= size_of::<rsf_game_cpu_receipt_event>() as u32 {
-            route_receipt(p, unsafe { &*event.cast() });
+            route_receipt(unsafe { &*event.cast() });
         }
         return;
     }
     let stage = event_ref.stage;
-    if !observed_boundary(event_ref) || call!(p, has_owner) == 0 {
+    if !observed_boundary(event_ref) || call!(has_owner) == 0 {
         return;
     }
     let source = Source::from_event(event_ref);
@@ -1092,24 +1061,24 @@ unsafe fn fg_cpu(event: *const Event, p: &Platform) {
                 | RSF_GAME_CPU_FRAME_END
         )
     {
-        withdraw_reserved(p, source.session);
+        withdraw_reserved(source.session);
     }
     if (RSF_GAME_CPU_SOURCE_RESERVE..=RSF_GAME_CPU_SOURCE_ABORT).contains(&stage) {
         if !rendered && stage == RSF_GAME_CPU_SOURCE_RESERVE {
-            reserve(p, source);
+            reserve(source);
         }
         return;
     }
     match stage {
-        RSF_GAME_CPU_FRAME_BEGIN => begin(p, event_ref, source),
-        RSF_GAME_CPU_FRAME_END => end(p, event_ref, source),
-        _ if !rendered => dispatch_boundary(p, event_ref, source),
+        RSF_GAME_CPU_FRAME_BEGIN => begin(event_ref, source),
+        RSF_GAME_CPU_FRAME_END => end(event_ref, source),
+        _ if !rendered => dispatch_boundary(event_ref, source),
         _ => {}
     }
 }
 
-fn dispatch_boundary(p: &Platform, event: &Event, source: Source) {
-    let generation = call!(p, generation);
+fn dispatch_boundary(event: &Event, source: Source) {
+    let generation = call!(generation);
     let Some(frame) = lock(&LEDGER).exact(source).map(|frame| {
         if frame.prospective {
             frame.failed |= frame.provider_generation != generation;
@@ -1131,15 +1100,15 @@ fn dispatch_boundary(p: &Platform, event: &Event, source: Source) {
     };
     // A reservation already ran the pacer before its actual poll.
     if pacing_boundary(event) && (bound.is_none() || event.stage == RSF_GAME_CPU_PACING) {
-        pace_frame(p, source, None);
+        pace_frame(source, None);
         return;
     }
     match event.stage {
         RSF_GAME_CPU_SIMULATION_BEGIN if bound.is_none_or(|r| r.poll_begin_qpc != 0) => {
-            simulation_marker(p, source, SIM_START, "actual simulation begin");
+            simulation_marker(source, SIM_START, "actual simulation begin");
         }
         RSF_GAME_CPU_SIMULATION_END => {
-            simulation_marker(p, source, SIM_END, "simulation end");
+            simulation_marker(source, SIM_END, "simulation end");
         }
         RSF_GAME_CPU_INPUT_EVENT
             if !frame.marker_failed
@@ -1152,15 +1121,15 @@ fn dispatch_boundary(p: &Platform, event: &Event, source: Source) {
             trace(
                 "input received",
                 source.id,
-                call!(p, input, source.id, event.input_kind, event.message_id),
+                call!(input, source.id, event.input_kind, event.message_id),
             );
         }
         _ => {}
     }
 }
 
-fn start_render_marker(p: &Platform, id: u64) {
-    let generation = call!(p, generation);
+fn start_render_marker(id: u64) {
+    let generation = call!(generation);
     let frame = {
         let mut ledger = lock(&LEDGER);
         let Some(frame) = ledger.frame(id) else {
@@ -1250,7 +1219,7 @@ fn start_render_marker(p: &Platform, id: u64) {
         );
         return;
     }
-    let (result, marked) = deliver_marker(p, frame, SUBMIT_START);
+    let (result, marked) = deliver_marker(frame, SUBMIT_START);
     trace("actual graphics submit begin", id, result);
     if !marked || result != OK {
         failure(
@@ -1265,7 +1234,7 @@ fn start_render_marker(p: &Platform, id: u64) {
     }
 }
 
-fn end_render_marker(p: &Platform, id: u64, stage: &str) {
+fn end_render_marker(id: u64, stage: &str) {
     let frame = {
         let mut ledger = lock(&LEDGER);
         let Some(frame) = ledger.frame(id) else {
@@ -1288,18 +1257,18 @@ fn end_render_marker(p: &Platform, id: u64, stage: &str) {
         settle_marker(frame.source(), SUBMIT_END, false, false);
         return;
     }
-    let (result, _) = deliver_marker(p, frame, SUBMIT_END);
+    let (result, _) = deliver_marker(frame, SUBMIT_END);
     trace(stage, id, result);
 }
 
-pub(crate) fn latency_present(p: &Platform, id: u64, chain: Handle, begin: bool) {
+pub(crate) fn latency_present(id: u64, chain: Handle, begin: bool) {
     if id == 0 {
         return;
     }
     if begin {
         let threaded = THREADED.load(Ordering::Relaxed);
         if !threaded {
-            end_render_marker(p, id, "render submission end before present");
+            end_render_marker(id, "render submission end before present");
         }
         let frame = {
             let mut ledger = lock(&LEDGER);
@@ -1345,10 +1314,10 @@ pub(crate) fn latency_present(p: &Platform, id: u64, chain: Handle, begin: bool)
             settle_marker(frame.source(), PRESENT_START, false, false);
             return;
         }
-        if !rendered && let Some(anti) = antilag(p) {
-            anti.end_render(id, chain, u32::from(fsr(call!(p, backend))));
+        if !rendered && let Some(anti) = antilag() {
+            anti.end_render(id, chain, u32::from(fsr(call!(backend))));
         }
-        let (result, _) = deliver_marker(p, frame, PRESENT_START);
+        let (result, _) = deliver_marker(frame, PRESENT_START);
         trace("present begin", id, result);
     } else {
         let frame = lock(&LEDGER).frame(id).and_then(|frame| {
@@ -1358,7 +1327,7 @@ pub(crate) fn latency_present(p: &Platform, id: u64, chain: Handle, begin: bool)
             claim_marker(frame, PRESENT_END)
         });
         if let Some(frame) = frame {
-            let (result, _) = deliver_marker(p, frame, PRESENT_END);
+            let (result, _) = deliver_marker(frame, PRESENT_END);
             trace("present end", id, result);
         }
         complete(id);
@@ -1369,13 +1338,13 @@ fn has_pass_size(pass: *const Pass) -> bool {
     !pass.is_null() && unsafe { pass.cast::<u32>().read() } >= size_of::<Pass>() as u32
 }
 
-unsafe fn fg_frame(pass: *const Pass, begin: u32, p: &Platform) {
+unsafe fn fg_frame(pass: *const Pass, begin: u32) {
     if !has_pass_size(pass) {
         return;
     }
     let pass = unsafe { &*pass };
     let source = Source::from_pass(pass);
-    if pass.role != RSF_GAME_RENDER_FRAME || source.id == 0 || call!(p, has_owner) == 0 {
+    if pass.role != RSF_GAME_RENDER_FRAME || source.id == 0 || call!(has_owner) == 0 {
         return;
     }
     {
@@ -1384,12 +1353,7 @@ unsafe fn fg_frame(pass: *const Pass, begin: u32, p: &Platform) {
             return;
         }
         if begin != 0 && rendered_source() {
-            ledger.rendered_begin(
-                pass,
-                call!(p, generation),
-                now_qpc(),
-                win32::qpc_frequency(),
-            );
+            ledger.rendered_begin(pass, call!(generation), now_qpc(), win32::qpc_frequency());
         } else if let Some(frame) = ledger.exact(source) {
             if begin != 0 {
                 frame.rhi_begins += 1;
@@ -1404,9 +1368,9 @@ unsafe fn fg_frame(pass: *const Pass, begin: u32, p: &Platform) {
         RHI_SOURCE.set(source);
         return;
     }
-    end_render_marker(p, source.id, "full RHI frame end");
-    if progress(p, source.id).0 {
-        call!(p, abort, source.id);
+    end_render_marker(source.id, "full RHI frame end");
+    if progress(source.id).0 {
+        call!(abort, source.id);
     }
     complete(source.id);
     if RHI_SOURCE.get() == source {
@@ -1415,7 +1379,7 @@ unsafe fn fg_frame(pass: *const Pass, begin: u32, p: &Platform) {
     audit(source);
 }
 
-fn watch(p: &Platform, pass: &Pass, begin: bool) {
+fn watch(pass: &Pass, begin: bool) {
     if !begin {
         hitch::close(Source::from_pass(pass), pass.submission_id);
         return;
@@ -1432,22 +1396,22 @@ fn watch(p: &Platform, pass: &Pass, begin: bool) {
     let mut record: rsf_frame_record = unsafe { zeroed() };
     record.struct_size = size_of::<rsf_frame_record>() as u32;
     record.screen = screen;
-    if now.saturating_sub(since) >= 3000 && call!(p, allows_fg, &record) != 0 {
+    if now.saturating_sub(since) >= 3000 && call!(allows_fg, &record) != 0 {
         hitch::open(Source::from_pass(pass), pass.submission_id, now_qpc());
     }
 }
 
-unsafe fn fg_submission(pass: *const Pass, begin: u32, p: &Platform) {
+unsafe fn fg_submission(pass: *const Pass, begin: u32) {
     if !has_pass_size(pass) {
         return;
     }
     let pass = unsafe { &*pass };
     let source = Source::from_pass(pass);
     let required = RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION;
-    if source.id == 0 || pass.flags & required != required || call!(p, has_owner) == 0 {
+    if source.id == 0 || pass.flags & required != required || call!(has_owner) == 0 {
         return;
     }
-    watch(p, pass, begin != 0);
+    watch(pass, begin != 0);
     let now = now_qpc();
     let mut dropped = [0; CAPACITY];
     let start = {
@@ -1486,10 +1450,10 @@ unsafe fn fg_submission(pass: *const Pass, begin: u32, p: &Platform) {
         start
     };
     for id in dropped.into_iter().filter(|id| *id != 0) {
-        call!(p, abort, id);
+        call!(abort, id);
     }
     if start {
-        start_render_marker(p, source.id);
+        start_render_marker(source.id);
     }
 }
 
@@ -1503,20 +1467,20 @@ extern "C" fn rsf_core_native_latency_graphics(api: u32) {
     }
 }
 
-fn latency_render(id: u64, begin: u32, p: &Platform) {
+fn latency_render(id: u64, begin: u32) {
     if begin != 0 {
-        start_render_marker(p, id);
+        start_render_marker(id);
     } else {
-        end_render_marker(p, id, "render submission end");
+        end_render_marker(id, "render submission end");
     }
 }
 
-fn observe_latency_present(id: u64, chain: Handle, begin: u32, p: &Platform) {
-    latency_present(p, id, chain, begin != 0);
+fn observe_latency_present(id: u64, chain: Handle, begin: u32) {
+    latency_present(id, chain, begin != 0);
     if begin == 0 && id != 0 {
-        let host = call!(p, host);
+        let host = call!(host);
         if !host.is_null() {
-            call!(p, host_abort, host, id);
+            call!(host_abort, host, id);
         }
     }
 }
@@ -1529,7 +1493,7 @@ fn empty_routes() -> Routes {
     }
 }
 
-unsafe fn latency_window_bind(binding: *const Window, p: &Platform) -> i32 {
+unsafe fn latency_window_bind(binding: *const Window) -> i32 {
     if !unsafe { has_capacity(binding) } {
         return INVALID;
     }
@@ -1540,14 +1504,14 @@ unsafe fn latency_window_bind(binding: *const Window, p: &Platform) -> i32 {
     if binding.version != 1 {
         return ABI_MISMATCH;
     }
-    bind_window(binding.session_id, binding.window_key, p)
+    bind_window(binding.session_id, binding.window_key)
 }
 
-fn bind_window(session_id: u64, window_key: u64, p: &Platform) -> i32 {
+fn bind_window(session_id: u64, window_key: u64) -> i32 {
     if session_id == 0 || window_key == 0 {
         return INVALID;
     }
-    let thread = owned_window_thread(p, window_key);
+    let thread = owned_window_thread(window_key);
     if thread == 0 {
         return INVALID;
     }
@@ -1599,7 +1563,7 @@ fn registered_ping(message: u32) -> bool {
     (0xc000..=0xffff).contains(&message)
 }
 
-unsafe fn latency_status_get(out: *mut LatencyStatus, p: &Platform) -> i32 {
+unsafe fn latency_status_get(out: *mut LatencyStatus) -> i32 {
     if !unsafe { has_capacity(out) } || unsafe { (*out).version } != 1 {
         return 0;
     }
@@ -1608,12 +1572,12 @@ unsafe fn latency_status_get(out: *mut LatencyStatus, p: &Platform) -> i32 {
     out_value.version = 1;
     if !rendered_source() {
         let mut status: Status = unsafe { zeroed() };
-        pacing_status(p, &mut status);
+        pacing_status(&mut status);
         out_value.owner = status.pacing_owner;
         out_value.available = status.low_latency_available;
         out_value.effective_mode = status.effective_reflex;
         out_value.paced_frames = status.latency_paced_frames;
-        if let Some(sdk) = host_status(p, call!(p, host)) {
+        if let Some(sdk) = host_status(call!(host)) {
             out_value.pcl_available = u32::from(registered_ping(sdk.pcl_message_id));
             out_value.report_available = sdk.latency_report_available;
             out_value.marker_calls = sdk.marker_calls;
@@ -1626,24 +1590,24 @@ unsafe fn latency_status_get(out: *mut LatencyStatus, p: &Platform) -> i32 {
     1
 }
 
-fn latency_ping(window: Handle, p: &Platform) -> i32 {
+fn latency_ping(window: Handle) -> i32 {
     i32::from(
         !window.is_null()
-            && host_status(p, call!(p, host)).is_some_and(|sdk| {
+            && host_status(call!(host)).is_some_and(|sdk| {
                 registered_ping(sdk.pcl_message_id)
                     && win32::post_ping(window, sdk.pcl_message_id) != 0
             }),
     )
 }
 
-fn latency_retire(session: u64, through: u64, p: &Platform) {
+fn latency_retire(session: u64, through: u64) {
     // The caller reports older sources with no submitted GPU work.
     if through == 0 || !owns_session(session) {
         return;
     }
-    let host = call!(p, host);
+    let host = call!(host);
     if !host.is_null() {
-        call!(p, host_retire, host, through);
+        call!(host_retire, host, through);
     }
     for frame in &mut lock(&LEDGER).frames {
         if frame.session == session
@@ -1657,18 +1621,18 @@ fn latency_retire(session: u64, through: u64, p: &Platform) {
     complete(through);
 }
 
-fn latency_end_session(session: u64, p: &Platform) {
+fn latency_end_session(session: u64) {
     // All producers and leased graphics work have drained. The CPU dispatcher
     // owns admission and can refuse shutdown of a different session.
     if rsf_native_cpu_release_session(session) == 0 {
         return;
     }
     hitch::end_session(session);
-    let host = call!(p, host);
+    let host = call!(host);
     if !host.is_null() {
-        call!(p, host_retire, host, u64::MAX);
-        call!(p, host_reset, host);
-        call!(p, host_reflex, host, RSF_REFLEX_OFF, 0);
+        call!(host_retire, host, u64::MAX);
+        call!(host_reset, host);
+        call!(host_reflex, host, RSF_REFLEX_OFF, 0);
     }
     {
         let mut ledger = lock(&LEDGER);
@@ -1676,7 +1640,7 @@ fn latency_end_session(session: u64, p: &Platform) {
         *ledger = Ledger::new();
         ledger.binding.epoch = epoch;
     }
-    if let Some(anti) = antilag(p) {
+    if let Some(anti) = antilag() {
         anti.reset_sources();
     }
     lock(&PACER).owner = RSF_PACING_NONE;

@@ -3,13 +3,12 @@ use super::*;
 
 pub(super) fn run() -> i32 {
     sample_native_thread();
-    let platform = platform();
     rsf_core_native_fg_reflex_ordering_set(1);
     assert!(send(fact(1, RSF_GAME_CPU_FRAME_BEGIN)));
     assert!(send(fact(1, RSF_GAME_CPU_INPUT_SAMPLE)));
     assert!(send(fact(1, RSF_GAME_CPU_SIMULATION_BEGIN)));
     assert!(send(fact(1, RSF_GAME_CPU_SIMULATION_END)));
-    latency_render(1, 1, platform);
+    latency_render(1, 1);
     assert!(send(fact(1, RSF_GAME_CPU_FRAME_END)));
 
     assert!(send(fact(2, RSF_GAME_CPU_FRAME_BEGIN)));
@@ -19,11 +18,11 @@ pub(super) fn run() -> i32 {
         assert!(wait_for_sleep());
         assert!(snapshot(2).paced == 0);
         let duplicate = fact(2, RSF_GAME_CPU_INPUT_SAMPLE);
-        unsafe { fg_cpu(&duplicate, platform) };
+        unsafe { fg_cpu(&duplicate) };
         assert!(pace_calls() == 2);
-        latency_render(1, 0, platform);
-        observe_latency_present(1, null_mut(), 1, platform);
-        observe_latency_present(1, null_mut(), 0, platform);
+        latency_render(1, 0);
+        observe_latency_present(1, null_mut(), 1);
+        observe_latency_present(1, null_mut(), 0);
         assert!(next.join().unwrap());
     });
     assert!(
@@ -97,8 +96,8 @@ pub(super) fn run() -> i32 {
     assert!(send(fact(5, RSF_GAME_CPU_SIMULATION_BEGIN)));
     assert!(send(fact(5, RSF_GAME_CPU_SIMULATION_END)));
     let before_missing_submit = marker_count();
-    observe_latency_present(5, null_mut(), 1, platform);
-    observe_latency_present(5, null_mut(), 0, platform);
+    observe_latency_present(5, null_mut(), 1);
+    observe_latency_present(5, null_mut(), 0);
     assert!(marker_count() == before_missing_submit);
     assert!(send(fact(5, RSF_GAME_CPU_FRAME_END)));
 
@@ -109,9 +108,9 @@ pub(super) fn run() -> i32 {
     assert!(send(fact(6, RSF_GAME_CPU_INPUT_SAMPLE)));
     assert!(send(fact(6, RSF_GAME_CPU_SIMULATION_BEGIN)));
     assert!(send(fact(6, RSF_GAME_CPU_SIMULATION_END)));
-    latency_render(6, 1, platform);
-    observe_latency_present(6, null_mut(), 1, platform);
-    observe_latency_present(6, null_mut(), 0, platform);
+    latency_render(6, 1);
+    observe_latency_present(6, null_mut(), 1);
+    observe_latency_present(6, null_mut(), 0);
     let mut refused: rsf_native_cpu_frame = unsafe { std::mem::zeroed() };
     refused.struct_size = size_of_val(&refused) as u32;
     assert!(
@@ -121,9 +120,9 @@ pub(super) fn run() -> i32 {
     assert!(send(fact(6, RSF_GAME_CPU_FRAME_END)));
     FAIL_MARKER.store(false, Relaxed);
 
-    latency_end_session(SESSION + 1, platform);
+    latency_end_session(SESSION + 1);
     assert!(snapshot(3).failed != 0 && rsf_native_latency_has_claim(1) != 0);
-    latency_end_session(SESSION, platform);
+    latency_end_session(SESSION);
     assert!(rsf_native_latency_has_claim(1) == 0);
     let mut retired = request_frame(3);
     assert_eq!(
@@ -144,20 +143,20 @@ pub(super) fn run() -> i32 {
     pass.session_id = SESSION;
     pass.source_frame_id = 1;
     pass.native_frame = 1;
-    unsafe { fg_frame(&pass, 1, platform) };
+    unsafe { fg_frame(&pass, 1) };
 
     // A previous integration must not retire the current SESSION's SDK tokens or advance its completion.
     RETIRE_HOST.store(true, Relaxed);
     assert!(snapshot(1).completed == 0);
-    latency_retire(SESSION + 1, 1, platform);
-    latency_retire(SESSION, 0, platform);
+    latency_retire(SESSION + 1, 1);
+    latency_retire(SESSION, 0);
     assert!(snapshot(1).completed == 0 && RETIRE_CALLS.load(Relaxed) == 0);
     RETIRE_HOST.store(false, Relaxed);
 
-    latency_render(1, 1, platform);
-    observe_latency_present(1, null_mut(), 1, platform);
-    observe_latency_present(1, null_mut(), 0, platform);
-    unsafe { fg_frame(&pass, 0, platform) };
+    latency_render(1, 1);
+    observe_latency_present(1, null_mut(), 1);
+    observe_latency_present(1, null_mut(), 0);
+    unsafe { fg_frame(&pass, 0) };
     assert!(send(fact(1, RSF_GAME_CPU_FRAME_END)));
     assert!(snapshot(1).paced == 0 && snapshot(1).failed == 0 && snapshot(1).completed != 0);
     assert!(
@@ -165,7 +164,7 @@ pub(super) fn run() -> i32 {
             && marker_count() == previous_markers
             && rsf_native_latency_has_claim(1) == 0
     );
-    latency_end_session(SESSION, platform);
+    latency_end_session(SESSION);
     assert_eq!(FAILURES.load(Relaxed), 0);
     0
 }

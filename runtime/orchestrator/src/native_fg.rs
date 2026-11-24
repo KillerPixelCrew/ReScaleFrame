@@ -195,10 +195,6 @@ fn trace(name: &CStr, source: u64, result: i32) {
     cpu_owner::trace(&name.to_string_lossy(), source, result);
 }
 
-fn cpu_platform() -> &'static cpu_owner::Platform {
-    &cpu_owner::NATIVE_PLATFORM
-}
-
 // The game's screen class decides, through the one rule every generation consumer applies.
 fn generates_on(screen: u32) -> bool {
     let mut record: rsf_frame_record = empty();
@@ -773,7 +769,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_status_get(status: *mut NativeStat
         out.vendor.low_latency_available = 0;
     }
     if owner && !rendered {
-        cpu_owner::pacing_status(cpu_platform(), &mut out.vendor);
+        cpu_owner::pacing_status(&mut out.vendor);
     }
     if rendered {
         out.vendor.effective_reflex = RSF_REFLEX_OFF;
@@ -1823,7 +1819,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent
         };
         PRESENTING.set((presenting, session));
         cpu_owner::present_observed(presenting, session);
-        cpu_owner::latency_present(cpu_platform(), presenting, event.swapchain, true);
+        cpu_owner::latency_present(presenting, event.swapchain, true);
     } else {
         let (presenting, session) = PRESENTING.get();
         let generation = call!(present_generation);
@@ -1836,7 +1832,7 @@ pub(super) unsafe extern "C" fn rsf_native_fg_present(event: *const PresentEvent
                 event.result,
             );
         }
-        cpu_owner::latency_present(cpu_platform(), presenting, event.swapchain, false);
+        cpu_owner::latency_present(presenting, event.swapchain, false);
         PRESENTING.set((0, 0));
     }
 }
@@ -1856,7 +1852,7 @@ pub(crate) unsafe extern "C" fn rsf_native_fg_window_end(pass: *const Pass) {
     if !owner {
         return;
     }
-    let (live, presented) = cpu_owner::progress(cpu_platform(), source);
+    let (live, presented) = cpu_owner::progress(source);
     // The window ended without presenting a live source: its token cannot carry a later frame.
     if live && !presented {
         call!(present_abort, source);
