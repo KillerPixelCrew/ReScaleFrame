@@ -136,7 +136,7 @@ pub(super) unsafe fn admit_setup(
 }
 
 /// The bridge code for a refused setup, as the state fixture's direct create reports it.
-#[cfg(feature = "test-fixtures")]
+#[cfg(feature = "fixture-leaves")]
 pub(super) fn private_setup_result(error: i32) -> i32 {
     match error {
         ABI_MISMATCH => RSF_FSR4_BRIDGE_ABI_MISMATCH,

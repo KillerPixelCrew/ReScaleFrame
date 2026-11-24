@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-use crate::dx12_vulkan_interop::Platform;
+// The D3D12-Vulkan importer's Vulkan leaves. The fixture-leaves archive calls the FSR4 SR state
+// fixture's doubles instead, so they are unused there.
+#![cfg_attr(all(feature = "fixture-leaves", not(test)), allow(dead_code))]
 use crate::sys::{rsf_srvk_setup as Setup, rsf_vk_function, rsf_vk_get_proc};
 use ash::vk::{self, Handle as _};
 use std::ffi::{CStr, c_void};
@@ -97,7 +99,7 @@ pub(super) unsafe extern "C" fn adapter_luid(setup: *const Setup, out: *mut u64)
     }
 }
 
-unsafe extern "C" fn open(setup: *const Setup, out: *mut Handle) -> i32 {
+pub(crate) unsafe extern "C" fn open(setup: *const Setup, out: *mut Handle) -> i32 {
     let Some(dispatch) = Dispatch::load(unsafe { &*setup }) else {
         return vk::Result::ERROR_EXTENSION_NOT_PRESENT.as_raw();
     };
@@ -109,11 +111,11 @@ unsafe extern "C" fn open(setup: *const Setup, out: *mut Handle) -> i32 {
     0
 }
 
-unsafe extern "C" fn close(opaque: Handle) {
+pub(crate) unsafe extern "C" fn close(opaque: Handle) {
     drop(unsafe { Box::from_raw(opaque.cast::<Dispatch>()) });
 }
 
-unsafe extern "C" fn timeline_importable(opaque: Handle) -> u32 {
+pub(crate) unsafe extern "C" fn timeline_importable(opaque: Handle) -> u32 {
     let vk = unsafe { &*opaque.cast::<Dispatch>() };
     let mut ty = vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
     let mut query = vk::PhysicalDeviceExternalSemaphoreInfo::default().handle_type(FENCE_HANDLE);
@@ -127,7 +129,7 @@ unsafe extern "C" fn timeline_importable(opaque: Handle) -> u32 {
     )
 }
 
-unsafe extern "C" fn create_timeline(opaque: Handle, out: *mut u64) -> i32 {
+pub(crate) unsafe extern "C" fn create_timeline(opaque: Handle, out: *mut u64) -> i32 {
     let vk = unsafe { &*opaque.cast::<Dispatch>() };
     let mut ty = vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
     let info = vk::SemaphoreCreateInfo::default().push_next(&mut ty);
@@ -139,7 +141,11 @@ unsafe extern "C" fn create_timeline(opaque: Handle, out: *mut u64) -> i32 {
     result.as_raw()
 }
 
-unsafe extern "C" fn import_timeline(opaque: Handle, timeline: u64, handle: Handle) -> i32 {
+pub(crate) unsafe extern "C" fn import_timeline(
+    opaque: Handle,
+    timeline: u64,
+    handle: Handle,
+) -> i32 {
     let vk = unsafe { &*opaque.cast::<Dispatch>() };
     let info = vk::ImportSemaphoreWin32HandleInfoKHR::default()
         .semaphore(vk::Semaphore::from_raw(timeline))
@@ -148,7 +154,7 @@ unsafe extern "C" fn import_timeline(opaque: Handle, timeline: u64, handle: Hand
     unsafe { (vk.import_semaphore)(vk.device, &info).as_raw() }
 }
 
-unsafe extern "C" fn destroy_timeline(opaque: Handle, timeline: u64) {
+pub(crate) unsafe extern "C" fn destroy_timeline(opaque: Handle, timeline: u64) {
     let vk = unsafe { &*opaque.cast::<Dispatch>() };
     unsafe { (vk.destroy_semaphore)(vk.device, vk::Semaphore::from_raw(timeline), ptr::null()) };
 }
@@ -159,7 +165,7 @@ fn usage(extra: u32) -> vk::ImageUsageFlags {
         | vk::ImageUsageFlags::from_raw(extra)
 }
 
-unsafe extern "C" fn image_properties(
+pub(crate) unsafe extern "C" fn image_properties(
     opaque: Handle,
     format: u32,
     extra_usage: u32,
@@ -195,7 +201,7 @@ unsafe extern "C" fn image_properties(
     result.as_raw()
 }
 
-unsafe extern "C" fn create_image(
+pub(crate) unsafe extern "C" fn create_image(
     opaque: Handle,
     format: u32,
     width: u32,
@@ -227,7 +233,7 @@ unsafe extern "C" fn create_image(
     result.as_raw()
 }
 
-unsafe extern "C" fn image_requirements(
+pub(crate) unsafe extern "C" fn image_requirements(
     opaque: Handle,
     image: u64,
     bytes: *mut u64,
@@ -242,7 +248,11 @@ unsafe extern "C" fn image_requirements(
     }
 }
 
-unsafe extern "C" fn handle_memory_types(opaque: Handle, handle: Handle, out: *mut u32) -> i32 {
+pub(crate) unsafe extern "C" fn handle_memory_types(
+    opaque: Handle,
+    handle: Handle,
+    out: *mut u32,
+) -> i32 {
     let vk = unsafe { &*opaque.cast::<Dispatch>() };
     let mut props = vk::MemoryWin32HandlePropertiesKHR::default();
     let result =
@@ -253,7 +263,7 @@ unsafe extern "C" fn handle_memory_types(opaque: Handle, handle: Handle, out: *m
     result.as_raw()
 }
 
-unsafe extern "C" fn device_local_types(opaque: Handle) -> u32 {
+pub(crate) unsafe extern "C" fn device_local_types(opaque: Handle) -> u32 {
     let vk = unsafe { &*opaque.cast::<Dispatch>() };
     let mut memory = vk::PhysicalDeviceMemoryProperties::default();
     unsafe { (vk.memory_properties)(vk.physical, &mut memory) };
@@ -273,7 +283,7 @@ pub(super) fn device_local_mask(memory: &vk::PhysicalDeviceMemoryProperties) -> 
         .fold(0, |mask, (index, _)| mask | (1 << index))
 }
 
-unsafe extern "C" fn allocate_memory(
+pub(crate) unsafe extern "C" fn allocate_memory(
     opaque: Handle,
     image: u64,
     handle: Handle,
@@ -301,7 +311,7 @@ unsafe extern "C" fn allocate_memory(
     result.as_raw()
 }
 
-unsafe extern "C" fn bind_image(opaque: Handle, image: u64, memory: u64) -> i32 {
+pub(crate) unsafe extern "C" fn bind_image(opaque: Handle, image: u64, memory: u64) -> i32 {
     let vk = unsafe { &*opaque.cast::<Dispatch>() };
     unsafe {
         (vk.bind_image)(
@@ -314,31 +324,12 @@ unsafe extern "C" fn bind_image(opaque: Handle, image: u64, memory: u64) -> i32 
     }
 }
 
-unsafe extern "C" fn destroy_image(opaque: Handle, image: u64) {
+pub(crate) unsafe extern "C" fn destroy_image(opaque: Handle, image: u64) {
     let vk = unsafe { &*opaque.cast::<Dispatch>() };
     unsafe { (vk.destroy_image)(vk.device, vk::Image::from_raw(image), ptr::null()) };
 }
 
-unsafe extern "C" fn free_memory(opaque: Handle, memory: u64) {
+pub(crate) unsafe extern "C" fn free_memory(opaque: Handle, memory: u64) {
     let vk = unsafe { &*opaque.cast::<Dispatch>() };
     unsafe { (vk.free_memory)(vk.device, vk::DeviceMemory::from_raw(memory), ptr::null()) };
 }
-
-pub(super) static PLATFORM: Platform = Platform {
-    adapter_luid,
-    open,
-    close,
-    timeline_importable,
-    create_timeline,
-    import_timeline,
-    destroy_timeline,
-    image_properties,
-    create_image,
-    image_requirements,
-    handle_memory_types,
-    device_local_types,
-    allocate_memory,
-    bind_image,
-    destroy_image,
-    free_memory,
-};

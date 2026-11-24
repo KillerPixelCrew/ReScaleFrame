@@ -22,51 +22,12 @@ const IMAGE_SLOTS: usize = 24;
 
 type Handle = *mut c_void;
 type Callbacks = rsf_dx12vk_interop_callbacks;
-/// The Vulkan leaves of the importer: `dx12_vulkan_platform::PLATFORM` in production, fakes in
-/// the FSR4 SR state fixture.
-#[derive(Clone, Copy)]
-pub(crate) struct Platform {
-    pub(crate) adapter_luid: unsafe extern "C" fn(*const rsf_srvk_setup, *mut u64) -> i32,
-    pub(crate) open: unsafe extern "C" fn(*const rsf_srvk_setup, *mut *mut c_void) -> i32,
-    pub(crate) close: unsafe extern "C" fn(*mut c_void),
-    pub(crate) timeline_importable: unsafe extern "C" fn(*mut c_void) -> u32,
-    pub(crate) create_timeline: unsafe extern "C" fn(*mut c_void, *mut u64) -> i32,
-    pub(crate) import_timeline: unsafe extern "C" fn(*mut c_void, u64, *mut c_void) -> i32,
-    pub(crate) destroy_timeline: unsafe extern "C" fn(*mut c_void, u64),
-    pub(crate) image_properties: unsafe extern "C" fn(
-        *mut c_void,
-        format: u32,
-        extra_usage: u32,
-        importable: *mut u32,
-        max_width: *mut u32,
-        max_height: *mut u32,
-    ) -> i32,
-    pub(crate) create_image: unsafe extern "C" fn(
-        *mut c_void,
-        format: u32,
-        width: u32,
-        height: u32,
-        extra_usage: u32,
-        *mut u64,
-    ) -> i32,
-    pub(crate) image_requirements:
-        unsafe extern "C" fn(*mut c_void, image: u64, bytes: *mut u64, types: *mut u32),
-    pub(crate) handle_memory_types:
-        unsafe extern "C" fn(*mut c_void, handle: *mut c_void, *mut u32) -> i32,
-    pub(crate) device_local_types: unsafe extern "C" fn(*mut c_void) -> u32,
-    pub(crate) allocate_memory: unsafe extern "C" fn(
-        *mut c_void,
-        image: u64,
-        handle: *mut c_void,
-        bytes: u64,
-        type_: u32,
-        *mut u64,
-    ) -> i32,
-    pub(crate) bind_image: unsafe extern "C" fn(*mut c_void, image: u64, memory: u64) -> i32,
-    pub(crate) destroy_image: unsafe extern "C" fn(*mut c_void, u64),
-    pub(crate) free_memory: unsafe extern "C" fn(*mut c_void, u64),
-}
-
+// The importer's Vulkan leaves: dx12_vulkan_platform in production and in unit tests, the FSR4 SR
+// state fixture's doubles in the fixture-leaves archive.
+#[cfg(any(test, not(feature = "fixture-leaves")))]
+use crate::dx12_vulkan_platform as leaf;
+#[cfg(all(feature = "fixture-leaves", not(test)))]
+use crate::vulkan_fsr4_sr::state_fixture::interop as leaf;
 pub(super) type FenceFactory = unsafe extern "C" fn(Handle, *mut Handle) -> i32;
 pub(super) type ImageRelease = unsafe extern "C" fn(Handle);
 #[derive(Clone, Copy)]
@@ -101,7 +62,6 @@ struct Image {
 }
 
 pub(super) struct Owner {
-    platform: Platform,
     native: Handle,
     release_image: ImageRelease,
     legacy: Option<LegacyImageFactory>,
@@ -111,27 +71,22 @@ pub(super) struct Owner {
 
 impl Owner {
     pub(super) fn device_luid(&self, setup: &rsf_srvk_setup) -> Result<u64, i32> {
-        Self::adapter_luid(&self.platform, setup)
+        Self::adapter_luid(setup)
     }
 
-    pub(super) fn adapter_luid(platform: &Platform, setup: &rsf_srvk_setup) -> Result<u64, i32> {
+    pub(super) fn adapter_luid(setup: &rsf_srvk_setup) -> Result<u64, i32> {
         let mut luid = 0;
-        checked(unsafe { (platform.adapter_luid)(setup, &mut luid) })?;
+        checked(unsafe { leaf::adapter_luid(setup, &mut luid) })?;
         Ok(luid)
     }
 
-    pub(super) fn open(
-        platform: Platform,
-        setup: &rsf_srvk_setup,
-        release_image: ImageRelease,
-    ) -> Result<Self, i32> {
+    pub(super) fn open(setup: &rsf_srvk_setup, release_image: ImageRelease) -> Result<Self, i32> {
         let mut native = ptr::null_mut();
-        checked(unsafe { (platform.open)(setup, &mut native) })?;
+        checked(unsafe { leaf::open(setup, &mut native) })?;
         if native.is_null() {
             return Err(INITIALIZATION_FAILED);
         }
         Ok(Self {
-            platform,
             native,
             release_image,
             legacy: None,
@@ -180,10 +135,10 @@ impl Owner {
     fn release(&self, image: &Image) {
         unsafe {
             if image.image != 0 {
-                (self.platform.destroy_image)(self.native, image.image);
+                leaf::destroy_image(self.native, image.image);
             }
             if image.memory != 0 {
-                (self.platform.free_memory)(self.native, image.memory);
+                leaf::free_memory(self.native, image.memory);
             }
             if !image.dx12.is_null() {
                 (self.release_image)(image.dx12);
@@ -220,11 +175,10 @@ impl Owner {
         user: Handle,
         create: FenceFactory,
     ) -> Result<(), i32> {
-        let platform = &self.platform;
-        if unsafe { (platform.timeline_importable)(self.native) } == 0 {
+        if unsafe { leaf::timeline_importable(self.native) } == 0 {
             return Err(INVALID_EXTERNAL_HANDLE);
         }
-        checked(unsafe { (platform.create_timeline)(self.native, &mut self.timeline) })?;
+        checked(unsafe { leaf::create_timeline(self.native, &mut self.timeline) })?;
         if self.timeline == 0 {
             return Err(INITIALIZATION_FAILED);
         }
@@ -234,7 +188,7 @@ impl Owner {
         checked(result)?;
         let handle = handle.ok_or(INVALID_EXTERNAL_HANDLE)?;
         checked(unsafe {
-            (platform.import_timeline)(self.native, self.timeline, handle.as_raw_handle())
+            leaf::import_timeline(self.native, self.timeline, handle.as_raw_handle())
         })
     }
 
@@ -246,10 +200,9 @@ impl Owner {
         image: &mut Image,
         create: impl FnOnce(*mut Handle, *mut Handle) -> i32,
     ) -> Result<(), i32> {
-        let platform = &self.platform;
         let (mut importable, mut max_width, mut max_height) = (0, 0, 0);
         checked(unsafe {
-            (platform.image_properties)(
+            leaf::image_properties(
                 self.native,
                 format,
                 extra_usage,
@@ -271,7 +224,7 @@ impl Owner {
             return Err(INVALID_EXTERNAL_HANDLE);
         }
         checked(unsafe {
-            (platform.create_image)(
+            leaf::create_image(
                 self.native,
                 format,
                 width,
@@ -283,20 +236,18 @@ impl Owner {
         if image.image == 0 {
             return Err(INITIALIZATION_FAILED);
         }
-        let (mut bytes, mut image_types, mut handle_types) = (0, 0, 0);
-        unsafe {
-            (platform.image_requirements)(self.native, image.image, &mut bytes, &mut image_types)
-        };
+        let (mut bytes, mut image_types, mut handle_types) = (0u64, 0u32, 0u32);
+        unsafe { leaf::image_requirements(self.native, image.image, &mut bytes, &mut image_types) };
         checked(unsafe {
-            (platform.handle_memory_types)(self.native, handle.as_raw_handle(), &mut handle_types)
+            leaf::handle_memory_types(self.native, handle.as_raw_handle(), &mut handle_types)
         })?;
         let memory_types =
-            image_types & handle_types & unsafe { (platform.device_local_types)(self.native) };
+            image_types & handle_types & unsafe { leaf::device_local_types(self.native) };
         if memory_types == 0 {
             return Err(INCOMPATIBLE_DRIVER);
         }
         checked(unsafe {
-            (platform.allocate_memory)(
+            leaf::allocate_memory(
                 self.native,
                 image.image,
                 handle.as_raw_handle(),
@@ -308,7 +259,7 @@ impl Owner {
         if image.memory == 0 {
             return Err(INITIALIZATION_FAILED);
         }
-        checked(unsafe { (platform.bind_image)(self.native, image.image, image.memory) })?;
+        checked(unsafe { leaf::bind_image(self.native, image.image, image.memory) })?;
         Ok(())
     }
 }
@@ -320,9 +271,9 @@ impl Drop for Owner {
         }
         unsafe {
             if self.timeline != 0 {
-                (self.platform.destroy_timeline)(self.native, self.timeline);
+                leaf::destroy_timeline(self.native, self.timeline);
             }
-            (self.platform.close)(self.native);
+            leaf::close(self.native);
         }
     }
 }
@@ -364,15 +315,14 @@ pub(super) unsafe extern "C" fn rsf_dx12vk_interop_create(
     {
         return ABI_MISMATCH;
     }
-    let platform = crate::dx12_vulkan_platform::PLATFORM;
-    let luid = match Owner::adapter_luid(&platform, setup) {
+    let luid = match Owner::adapter_luid(setup) {
         Ok(luid) => luid,
         Err(error) => return error,
     };
     if luid != callbacks.adapter_luid {
         return INVALID_EXTERNAL_HANDLE;
     }
-    let mut owner = match Owner::open(platform, setup, release_image) {
+    let mut owner = match Owner::open(setup, release_image) {
         Ok(owner) => owner,
         Err(error) => return error,
     };

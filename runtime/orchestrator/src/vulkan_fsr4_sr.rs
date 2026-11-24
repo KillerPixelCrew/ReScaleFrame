@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
-use crate::dx12_vulkan_interop::{Owner as Interop, Platform as InteropPlatform, checked};
+use crate::dx12_vulkan_interop::{Owner as Interop, checked};
 use crate::frame_capture_vk::sr_capture_inputs;
 use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
@@ -14,7 +14,7 @@ use crate::vulkan_sr::{
 use crate::vulkan_sr_split::{Provider, SplitLease};
 use ash::vk;
 use rsf_game_sys::{RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_SR, RSF_FRAME_FLAG_RESET};
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::ptr;
 
 use crate::sys::{
@@ -23,179 +23,139 @@ use crate::sys::{
     rsf_fsr4_bridge_frame as BridgeFrame, rsf_fsr4_bridge_info as Info,
 };
 
+#[cfg(not(feature = "fixture-leaves"))]
 #[path = "vulkan_fsr4_sr/graphics.rs"]
 mod graphics;
-#[cfg(feature = "test-fixtures")]
-mod state_fixture;
-use rsf_fsr4_compat::vulkan_bridge as bridge;
-use rsf_game_sys::backend_result::FEATURE_FAILED;
+#[cfg(feature = "fixture-leaves")]
+pub(crate) mod state_fixture;
 
-/// The leaves the owner calls: the Vulkan graphics capsule (graphics.rs), the DX12 bridge in
-/// rsf-fsr4-compat and the host split callback. [`NATIVE`] is the production table; the state
-/// fixture substitutes fakes for every entry.
-struct Platform {
-    interop: &'static InteropPlatform,
-    open: Option<unsafe extern "C" fn(*const Setup, *mut Handle) -> i32>,
-    close: Option<unsafe extern "C" fn(Handle)>,
-    bridge_create: Option<unsafe extern "C" fn(*const BridgeCreate, *mut Handle) -> i32>,
-    bridge_plan: Option<unsafe extern "C" fn(Handle, u32, *mut u32, *mut u32) -> i32>,
-    bridge_info: Option<unsafe extern "C" fn(*const c_void, *mut Info) -> i32>,
-    create_fence: Option<unsafe extern "C" fn(Handle, *mut Handle) -> i32>,
-    create_image:
-        Option<unsafe extern "C" fn(Handle, u32, u32, u32, u32, *mut Handle, *mut Handle) -> i32>,
-    release_image: Option<unsafe extern "C" fn(Handle)>,
-    capture_initialize: Option<unsafe extern "C" fn(Handle, *const Setup, u64) -> i32>,
-    capture_begin: Option<unsafe extern "C" fn(*const Record)>,
-    capture_record: Option<
-        unsafe extern "C" fn(Handle, Handle, *const Image, *const Record, *const c_char, u32),
-    >,
-    capture_parameters: Option<unsafe extern "C" fn(*const Frame, u32)>,
-    capture_flush: Option<unsafe extern "C" fn(Handle) -> i32>,
-    transition: Option<unsafe extern "C" fn(Handle, Handle, *const Barrier)>,
-    copy: Option<unsafe extern "C" fn(Handle, Handle, u64, u64, u32, u32)>,
-    split: Option<
-        unsafe extern "C" fn(*const Handoff, Handle, u64, u64, u64, u64, *mut Handle) -> i32,
-    >,
-    bridge_sharpness: Option<unsafe extern "C" fn(Handle, f32) -> i32>,
-    bridge_evaluate: Option<unsafe extern "C" fn(Handle, *const BridgeFrame) -> i32>,
-    sharpen: Option<unsafe extern "C" fn(Handle, *const Setup, Handle, *const Frame, u64)>,
-    retire: Option<unsafe extern "C" fn(Handle, Handle)>,
-    clear_sharpen: Option<unsafe extern "C" fn(Handle)>,
-    wait: Option<unsafe extern "C" fn(Handle, u64, u64, u64) -> i32>,
-    idle: Option<unsafe extern "C" fn(Handle) -> i32>,
-    bridge_prepare_destroy: Option<unsafe extern "C" fn(Handle) -> i32>,
-    bridge_destroy: Option<unsafe extern "C" fn(Handle) -> i32>,
-}
+// The leaves the owner calls: the Vulkan graphics capsule (graphics.rs), the DX12 bridge in
+// rsf-fsr4-compat and the host split callback; the state fixture's doubles in the fixture-leaves
+// archive.
+#[cfg(not(feature = "fixture-leaves"))]
+mod leaf {
+    use super::*;
+    use rsf_fsr4_compat::vulkan_bridge as bridge;
+    use rsf_game_sys::backend_result::FEATURE_FAILED;
 
-const _: () = assert!(size_of::<Info>() == size_of::<rsf_srvk_fsr4_provider_info>());
+    /// Runs a call that reaches foreign C++ code, the FidelityFX SDK through the bridge's C-unwind
+    /// entry pointers or a host callback; a C++ exception becomes FEATURE_FAILED.
+    pub(super) fn guarded(call: impl FnMut() -> i32) -> i32 {
+        rsf_streamline_vk::sdk_api::guarded_or(FEATURE_FAILED, call)
+    }
 
-/// Runs a call that reaches foreign C++ code, the FidelityFX SDK through the bridge's C-unwind
-/// entry pointers or a host callback; a C++ exception becomes FEATURE_FAILED.
-fn guarded(call: impl FnMut() -> i32) -> i32 {
-    rsf_streamline_vk::sdk_api::guarded_or(FEATURE_FAILED, call)
-}
+    pub(super) unsafe extern "C" fn bridge_create(
+        setup: *const BridgeCreate,
+        out: *mut Handle,
+    ) -> i32 {
+        guarded(|| unsafe { bridge::create_public(setup, out.cast()) })
+    }
 
-unsafe extern "C" fn bridge_create(setup: *const BridgeCreate, out: *mut Handle) -> i32 {
-    guarded(|| unsafe { bridge::create_public(setup, out.cast()) })
-}
+    pub(super) unsafe extern "C" fn bridge_plan(
+        bridge: Handle,
+        quality: u32,
+        w: *mut u32,
+        h: *mut u32,
+    ) -> i32 {
+        guarded(|| unsafe { bridge::plan(bridge.cast(), quality, w, h) })
+    }
 
-unsafe extern "C" fn bridge_plan(bridge: Handle, quality: u32, w: *mut u32, h: *mut u32) -> i32 {
-    guarded(|| unsafe { bridge::plan(bridge.cast(), quality, w, h) })
-}
+    pub(super) unsafe extern "C" fn bridge_info(bridge: *const c_void, info: *mut Info) -> i32 {
+        unsafe { bridge::info(bridge.cast(), info) }
+    }
 
-unsafe extern "C" fn bridge_info(bridge: *const c_void, info: *mut Info) -> i32 {
-    unsafe { bridge::info(bridge.cast(), info) }
-}
+    pub(super) unsafe extern "C" fn create_fence(bridge: Handle, handle: *mut Handle) -> i32 {
+        guarded(|| unsafe { bridge::create_fence(bridge.cast(), handle) })
+    }
 
-unsafe extern "C" fn create_fence(bridge: Handle, handle: *mut Handle) -> i32 {
-    guarded(|| unsafe { bridge::create_fence(bridge.cast(), handle) })
-}
+    /// The resource output is written on every path, including a contained exception.
+    pub(super) unsafe extern "C" fn create_image(
+        bridge: Handle,
+        width: u32,
+        height: u32,
+        format: u32,
+        writable: u32,
+        handle: *mut Handle,
+        resource: *mut Handle,
+    ) -> i32 {
+        let mut image = ptr::null_mut();
+        let result = guarded(|| unsafe {
+            bridge::create_image(
+                bridge.cast(),
+                width,
+                height,
+                format,
+                writable,
+                handle,
+                &mut image,
+            )
+        });
+        unsafe { resource.write(image) };
+        result
+    }
 
-/// The resource output is written on every path, including a contained exception.
-unsafe extern "C" fn create_image(
-    bridge: Handle,
-    width: u32,
-    height: u32,
-    format: u32,
-    writable: u32,
-    handle: *mut Handle,
-    resource: *mut Handle,
-) -> i32 {
-    let mut image = ptr::null_mut();
-    let result = guarded(|| unsafe {
-        bridge::create_image(
-            bridge.cast(),
-            width,
-            height,
-            format,
-            writable,
-            handle,
-            &mut image,
-        )
-    });
-    unsafe { resource.write(image) };
-    result
-}
+    pub(super) unsafe extern "C" fn release_image(resource: Handle) {
+        unsafe { rsf_fsr4_compat::dx12_bridge::release_image(resource) };
+    }
 
-unsafe extern "C" fn release_image(resource: Handle) {
-    unsafe { rsf_fsr4_compat::dx12_bridge::release_image(resource) };
-}
+    pub(super) unsafe extern "C" fn split(
+        handoff: *const Handoff,
+        commands: Handle,
+        timeline: u64,
+        previous: u64,
+        ready: u64,
+        done: u64,
+        continuation: *mut Handle,
+    ) -> i32 {
+        let handoff = unsafe { &*handoff };
+        let Some(record) = handoff.split_record else {
+            return FEATURE_FAILED;
+        };
+        // The host callback, called with the C-unwind ABI so the guard can contain an exception.
+        type Split = unsafe extern "C" fn(Handle, Handle, u64, u64, u64, u64, *mut Handle) -> i32;
+        type SplitUnwind =
+            unsafe extern "C-unwind" fn(Handle, Handle, u64, u64, u64, u64, *mut Handle) -> i32;
+        let record = unsafe { std::mem::transmute::<Split, SplitUnwind>(record) };
+        guarded(|| unsafe {
+            record(
+                handoff.user,
+                commands,
+                timeline,
+                previous,
+                ready,
+                done,
+                continuation,
+            )
+        })
+    }
 
-unsafe extern "C" fn split(
-    handoff: *const Handoff,
-    commands: Handle,
-    timeline: u64,
-    previous: u64,
-    ready: u64,
-    done: u64,
-    continuation: *mut Handle,
-) -> i32 {
-    let handoff = unsafe { &*handoff };
-    let Some(record) = handoff.split_record else {
-        return FEATURE_FAILED;
+    pub(super) unsafe extern "C" fn bridge_sharpness(bridge: Handle, amount: f32) -> i32 {
+        unsafe { bridge::sharpness(bridge.cast(), amount) }
+    }
+
+    pub(super) unsafe extern "C" fn bridge_evaluate(
+        bridge: Handle,
+        frame: *const BridgeFrame,
+    ) -> i32 {
+        guarded(|| unsafe { bridge::evaluate(bridge.cast(), frame) })
+    }
+
+    pub(super) unsafe extern "C" fn bridge_prepare_destroy(bridge: Handle) -> i32 {
+        guarded(|| unsafe { bridge::prepare_destroy(bridge.cast()) })
+    }
+
+    pub(super) unsafe extern "C" fn bridge_destroy(bridge: Handle) -> i32 {
+        guarded(|| unsafe { bridge::destroy(bridge.cast()) })
+    }
+
+    pub(super) use super::graphics::{
+        capture_begin, capture_flush, capture_initialize, capture_parameters, capture_record,
+        clear_sharpen, close, copy, idle, open, retire, sharpen, transition, wait,
     };
-    // The host callback, called with the C-unwind ABI so the guard can contain an exception.
-    type Split = unsafe extern "C" fn(Handle, Handle, u64, u64, u64, u64, *mut Handle) -> i32;
-    type SplitUnwind =
-        unsafe extern "C-unwind" fn(Handle, Handle, u64, u64, u64, u64, *mut Handle) -> i32;
-    let record = unsafe { std::mem::transmute::<Split, SplitUnwind>(record) };
-    guarded(|| unsafe {
-        record(
-            handoff.user,
-            commands,
-            timeline,
-            previous,
-            ready,
-            done,
-            continuation,
-        )
-    })
 }
-
-unsafe extern "C" fn bridge_sharpness(bridge: Handle, amount: f32) -> i32 {
-    unsafe { bridge::sharpness(bridge.cast(), amount) }
-}
-
-unsafe extern "C" fn bridge_evaluate(bridge: Handle, frame: *const BridgeFrame) -> i32 {
-    guarded(|| unsafe { bridge::evaluate(bridge.cast(), frame) })
-}
-
-unsafe extern "C" fn bridge_prepare_destroy(bridge: Handle) -> i32 {
-    guarded(|| unsafe { bridge::prepare_destroy(bridge.cast()) })
-}
-
-unsafe extern "C" fn bridge_destroy(bridge: Handle) -> i32 {
-    guarded(|| unsafe { bridge::destroy(bridge.cast()) })
-}
-
-static NATIVE: Platform = Platform {
-    interop: &crate::dx12_vulkan_platform::PLATFORM,
-    open: Some(graphics::open),
-    close: Some(graphics::close),
-    bridge_create: Some(bridge_create),
-    bridge_plan: Some(bridge_plan),
-    bridge_info: Some(bridge_info),
-    create_fence: Some(create_fence),
-    create_image: Some(create_image),
-    release_image: Some(release_image),
-    capture_initialize: Some(graphics::capture_initialize),
-    capture_begin: Some(graphics::capture_begin),
-    capture_record: Some(graphics::capture_record),
-    capture_parameters: Some(graphics::capture_parameters),
-    capture_flush: Some(graphics::capture_flush),
-    transition: Some(graphics::transition),
-    copy: Some(graphics::copy),
-    split: Some(split),
-    bridge_sharpness: Some(bridge_sharpness),
-    bridge_evaluate: Some(bridge_evaluate),
-    sharpen: Some(graphics::sharpen),
-    retire: Some(graphics::retire),
-    clear_sharpen: Some(graphics::clear_sharpen),
-    wait: Some(graphics::wait),
-    idle: Some(graphics::idle),
-    bridge_prepare_destroy: Some(bridge_prepare_destroy),
-    bridge_destroy: Some(bridge_destroy),
-};
+#[cfg(feature = "fixture-leaves")]
+use state_fixture as leaf;
+const _: () = assert!(size_of::<Info>() == size_of::<rsf_srvk_fsr4_provider_info>());
 
 type Handle = *mut c_void;
 type Setup = rsf_srvk_setup;
@@ -244,13 +204,12 @@ pub(super) mod directory {
 }
 
 struct Graphics {
-    ops: &'static Platform,
     handle: Handle,
 }
 
 impl Drop for Graphics {
     fn drop(&mut self) {
-        unsafe { (self.ops.close.unwrap())(self.handle) };
+        unsafe { leaf::close(self.handle) };
     }
 }
 
@@ -278,20 +237,15 @@ struct Owner {
 }
 
 impl Owner {
-    fn ops(&self) -> &'static Platform {
-        self.graphics.ops
-    }
-
     fn output(&self) -> [u32; 2] {
         [self.setup.output_width, self.setup.output_height]
     }
 
     fn info(&self, info: *mut Info) -> i32 {
-        unsafe { (self.ops().bridge_info.unwrap())(self.bridge, info) }
+        unsafe { leaf::bridge_info(self.bridge, info) }
     }
 
     fn initialize(&mut self, luid: u64, directory: &[u16]) -> Result<(), i32> {
-        let ops = self.ops();
         let output = self.output();
         let request = BridgeCreate {
             struct_size: size_of::<BridgeCreate>() as u32,
@@ -307,11 +261,9 @@ impl Owner {
             motion_jittered: self.setup.motion_jittered,
             reserved: 0,
         };
-        checked(unsafe { (ops.bridge_create.unwrap())(&request, &mut self.bridge) })?;
+        checked(unsafe { leaf::bridge_create(&request, &mut self.bridge) })?;
         let [width, height] = &mut self.render;
-        checked(unsafe {
-            (ops.bridge_plan.unwrap())(self.bridge, self.setup.quality, width, height)
-        })?;
+        checked(unsafe { leaf::bridge_plan(self.bridge, self.setup.quality, width, height) })?;
         let mut info = Info {
             struct_size: size_of::<Info>() as u32,
             abi_version: RSF_FSR4_BRIDGE_ABI_VERSION,
@@ -322,15 +274,11 @@ impl Owner {
         };
         checked(self.info(&mut info))?;
         checked(unsafe {
-            (ops.capture_initialize.unwrap())(
-                self.graphics.handle,
-                &self.setup,
-                info.provider_version,
-            )
+            leaf::capture_initialize(self.graphics.handle, &self.setup, info.provider_version)
         })?;
 
         let interop = self.interop.as_mut().unwrap();
-        interop.import_timeline(self.bridge, ops.create_fence.unwrap())?;
+        interop.import_timeline(self.bridge, leaf::create_fence)?;
         let mut import = |format, extent: [u32; 2], writable| {
             let extra_usage = if writable {
                 SAMPLED_USAGE | STORAGE_USAGE
@@ -338,7 +286,7 @@ impl Owner {
                 0
             };
             interop.add_image(format, extent, extra_usage, |handle, resource| unsafe {
-                (ops.create_image.unwrap())(
+                leaf::create_image(
                     self.bridge,
                     extent[0],
                     extent[1],
@@ -389,12 +337,12 @@ impl Owner {
     }
 
     fn transition(&self, commands: Handle, barrier: &Barrier) {
-        unsafe { (self.ops().transition.unwrap())(self.graphics.handle, commands, barrier) };
+        unsafe { leaf::transition(self.graphics.handle, commands, barrier) };
     }
 
     fn copy(&self, commands: Handle, source: u64, target: u64, [width, height]: [u32; 2]) {
         unsafe {
-            (self.ops().copy.unwrap())(
+            leaf::copy(
                 self.graphics.handle,
                 commands,
                 source,
@@ -407,7 +355,7 @@ impl Owner {
 
     fn capture(&self, commands: Handle, image: &Image, record: &Record, role: &CStr, reset: u32) {
         unsafe {
-            (self.ops().capture_record.unwrap())(
+            leaf::capture_record(
                 self.graphics.handle,
                 commands,
                 image,
@@ -426,7 +374,7 @@ impl Owner {
         images: &[SharedImage; 4],
         reset: u32,
     ) {
-        unsafe { (self.ops().capture_begin.unwrap())(record) };
+        unsafe { leaf::capture_begin(record) };
         for (image, role) in sr_capture_inputs(frame) {
             self.capture(commands, image, record, role, reset);
         }
@@ -498,10 +446,10 @@ impl Owner {
             layout: GENERAL,
             copy_source: 1,
         };
-        unsafe { (self.ops().capture_parameters.unwrap())(frame, reset) };
+        unsafe { leaf::capture_parameters(frame, reset) };
         self.capture(commands, &captured, record, c"sr-output-linear", reset);
         unsafe {
-            (self.ops().sharpen.unwrap())(
+            leaf::sharpen(
                 self.graphics.handle,
                 &self.setup,
                 commands,
@@ -540,7 +488,6 @@ impl Owner {
         if self.lease.pending() {
             return Err(NOT_READY);
         }
-        let ops = self.ops();
         let reset = u32::from(
             !self.history.valid
                 || self.history.last_frame.checked_add(1) != Some(record.frame_id)
@@ -553,7 +500,7 @@ impl Owner {
         self.lease.begin(commands);
         *continuation = ptr::null_mut();
         let result = unsafe {
-            (ops.split.unwrap())(
+            leaf::split(
                 &self.handoff,
                 commands,
                 timeline,
@@ -615,11 +562,11 @@ impl Owner {
         } else {
             0.0
         };
-        unsafe { (ops.bridge_sharpness.unwrap())(self.bridge, strength) };
+        unsafe { leaf::bridge_sharpness(self.bridge, strength) };
         // The bridge orders its done signal after the producer's ready value
         // even when the SDK refuses the dispatch. The host can record fallback
         // on this continuation, with no copy from the failed provider output.
-        checked(unsafe { (ops.bridge_evaluate.unwrap())(self.bridge, &dispatch) })?;
+        checked(unsafe { leaf::bridge_evaluate(self.bridge, &dispatch) })?;
         self.history.valid = true;
         self.record_output(*continuation, frame, record, images[3], dispatch.reset);
         Ok(())
@@ -629,11 +576,10 @@ impl Owner {
         if self.terminal || self.lease.pending() {
             return Err(NOT_READY);
         }
-        let ops = self.ops();
         let graphics = self.graphics.handle;
         if self.history.done != 0 {
             checked(unsafe {
-                (ops.wait.unwrap())(
+                leaf::wait(
                     graphics,
                     self.interop.as_ref().unwrap().timeline(),
                     self.history.done,
@@ -643,32 +589,27 @@ impl Owner {
         }
         // DX12 done protects the shared payload. Vulkan idle additionally
         // covers the continuation, including copies, captures and sharpening.
-        checked(unsafe { (ops.idle.unwrap())(graphics) })?;
+        checked(unsafe { leaf::idle(graphics) })?;
         // Once SDK teardown starts, keep the imports for retries but close
         // admission. A capture or SDK failure can leave the context half retired.
         self.images = None;
         if !self.bridge.is_null() {
-            checked(unsafe { (ops.bridge_prepare_destroy.unwrap())(self.bridge) })?;
+            checked(unsafe { leaf::bridge_prepare_destroy(self.bridge) })?;
         }
-        if unsafe { (ops.capture_flush.unwrap())(graphics) } == 0 {
+        if unsafe { leaf::capture_flush(graphics) } == 0 {
             return Err(UNKNOWN);
         }
 
         self.history.done = 0;
-        unsafe { (ops.clear_sharpen.unwrap())(graphics) };
+        unsafe { leaf::clear_sharpen(graphics) };
         drop(self.interop.take());
-        checked(unsafe { (ops.bridge_destroy.unwrap())(self.bridge) })
+        checked(unsafe { leaf::bridge_destroy(self.bridge) })
     }
 }
 
-/// Admits the caller's setup and handoff records, then creates the owner over `ops`.
-#[cfg(feature = "test-fixtures")]
-unsafe fn create(
-    ops: &'static Platform,
-    setup: *const Setup,
-    handoff: *const Handoff,
-    output: *mut *mut Owner,
-) -> i32 {
+/// Admits the caller's setup and handoff records, then creates the owner.
+#[cfg(feature = "fixture-leaves")]
+unsafe fn create(setup: *const Setup, handoff: *const Handoff, output: *mut *mut Owner) -> i32 {
     if output.is_null() {
         return INVALID;
     }
@@ -678,15 +619,13 @@ unsafe fn create(
         Ok(args) => args,
         Err(error) => return private_setup_result(error),
     };
-    unsafe { create_admitted(ops, setup, handoff, output) }
+    unsafe { create_admitted(setup, handoff, output) }
 }
 
 /// The split dispatcher's provider (vulkan_sr_split.rs), which has admitted and copied the setup
 /// and handoff records.
 pub(crate) static PROVIDER: Provider = Provider {
-    create: |setup, handoff, owner| unsafe {
-        create_admitted(&NATIVE, *setup, *handoff, owner.cast())
-    },
+    create: |setup, handoff, owner| unsafe { create_admitted(*setup, *handoff, owner.cast()) },
     plan: |owner, width, height| unsafe { rsf_fsr4vk_plan(owner.cast(), width, height) },
     evaluate: |owner, commands, frame, next| unsafe {
         rsf_fsr4vk_evaluate(owner.cast(), commands, frame, next)
@@ -697,12 +636,7 @@ pub(crate) static PROVIDER: Provider = Provider {
     info: |owner, info| unsafe { public_info(owner.cast(), &mut *info) },
 };
 
-unsafe fn create_admitted(
-    ops: &'static Platform,
-    mut setup: Setup,
-    handoff: Handoff,
-    output: *mut *mut Owner,
-) -> i32 {
+unsafe fn create_admitted(mut setup: Setup, handoff: Handoff, output: *mut *mut Owner) -> i32 {
     let wide = match directory::encode(unsafe { CStr::from_ptr(setup.runtime_directory_utf8) }) {
         Ok(wide) => wide,
         Err(directory::Error::Invalid) => return INVALID,
@@ -710,16 +644,12 @@ unsafe fn create_admitted(
     };
     setup.runtime_directory_utf8 = ptr::null();
     let mut graphics = ptr::null_mut();
-    let result = unsafe { (ops.open.unwrap())(&setup, &mut graphics) };
+    let result = unsafe { leaf::open(&setup, &mut graphics) };
     if result != 0 {
         return result;
     }
-    let graphics = Graphics {
-        ops,
-        handle: graphics,
-    };
-    let interop_ops = *ops.interop;
-    let interop = match Interop::open(interop_ops, &setup, ops.release_image.unwrap()) {
+    let graphics = Graphics { handle: graphics };
+    let interop = match Interop::open(&setup, leaf::release_image) {
         Ok(interop) => interop,
         Err(error) => return error,
     };
@@ -849,7 +779,7 @@ unsafe fn rsf_fsr4vk_destroy(owner: *mut Owner) -> i32 {
 
 unsafe fn rsf_fsr4vk_retire_commands(owner: *mut Owner, commands: Handle) {
     if let Some(owner) = unsafe { owner.as_ref() } {
-        unsafe { (owner.ops().retire.unwrap())(owner.graphics.handle, commands) };
+        unsafe { leaf::retire(owner.graphics.handle, commands) };
     }
 }
 
@@ -860,4 +790,33 @@ unsafe fn rsf_fsr4vk_submitted(owner: *mut Owner, commands: Handle) -> i32 {
         return 0;
     }
     INVALID
+}
+
+/// The public bridge entry's refusals, called by the FSR4 SR Vulkan ctest with that entry.
+#[cfg(feature = "test-fixtures")]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fixture_fsr4sr_public_abi(
+    create: unsafe extern "C" fn(*const BridgeCreate, *mut Handle) -> i32,
+) -> i32 {
+    let mut output = ptr::without_provenance_mut(1);
+    let mut setup = BridgeCreate {
+        struct_size: size_of::<BridgeCreate>() as u32 - 1,
+        abi_version: RSF_FSR4_BRIDGE_ABI_VERSION,
+        ..unsafe { std::mem::zeroed() }
+    };
+    if unsafe { create(&setup, &mut output) } != INVALID || !output.is_null() {
+        return 1;
+    }
+    setup.struct_size += 1;
+    setup.abi_version += 1;
+    if unsafe { create(&setup, &mut output) } != ABI_MISMATCH || !output.is_null() {
+        return 2;
+    }
+    let relative: Vec<u16> = "relative".encode_utf16().chain([0]).collect();
+    setup.abi_version = RSF_FSR4_BRIDGE_ABI_VERSION;
+    setup.runtime_directory = relative.as_ptr();
+    if unsafe { create(&setup, &mut output) } != INVALID || !output.is_null() {
+        return 3;
+    }
+    0
 }

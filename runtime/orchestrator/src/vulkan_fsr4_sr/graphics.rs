@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-use super::{Barrier, Frame, Handle, Image, Record, Setup, guarded};
+use super::leaf::guarded;
+use super::{Barrier, Frame, Handle, Image, Record, Setup};
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_flush, rsf_core_capture_vk_provider,
     rsf_core_capture_vk_record, rsf_core_capture_vk_retire,

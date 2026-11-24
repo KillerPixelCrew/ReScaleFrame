@@ -166,7 +166,7 @@ mod fg_scene;
 mod fg_session;
 #[cfg(windows)]
 mod fg_status;
-#[cfg(all(windows, feature = "test-fixtures"))]
+#[cfg(all(windows, feature = "fixture-leaves"))]
 #[macro_use]
 mod fixture_checks;
 #[cfg(windows)]

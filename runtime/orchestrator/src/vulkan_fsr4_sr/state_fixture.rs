@@ -67,12 +67,6 @@ thread_local! {
 fn with<T>(f: impl FnOnce(&mut Calls) -> T) -> T {
     CALLS.with(|c| f(&mut c.borrow_mut()))
 }
-macro_rules! entry {
-    (|$($name:tt : $ty:ty),*| $(-> $ret:ty)? { $($body:tt)* }) => {{
-        unsafe extern "C" fn callback($($name: $ty),*) $(-> $ret)? { $($body)* }
-        callback
-    }};
-}
 macro_rules! leaf {
     (|$($name:tt : $ty:ty),*| $(-> $ret:ty)? { $($body:tt)* }) => {{
         unsafe extern "C" fn callback($($name: $ty),*) $(-> $ret)? { $($body)* }
@@ -80,7 +74,7 @@ macro_rules! leaf {
     }};
 }
 
-unsafe extern "C" fn open(setup: *const Setup, owner: *mut Handle) -> i32 {
+pub(crate) unsafe extern "C" fn open(setup: *const Setup, owner: *mut Handle) -> i32 {
     with(|c| check!(c, unsafe { (*setup).device } == DEVICE));
     unsafe { owner.write(DEVICE) };
     0
@@ -100,35 +94,52 @@ fn extent(index: usize) -> (u32, u32) {
     if index == 3 { OUTPUT } else { RENDER }
 }
 
-static INTEROP: InteropPlatform = InteropPlatform {
-    adapter_luid: entry!(|_: *const Setup, out: *mut u64| -> i32 {
+// The importer leaves dx12_vulkan_interop calls in the fixture-leaves archive. Unit tests keep the
+// real importer leaves, so these are unused there.
+#[cfg_attr(test, allow(dead_code, unused_imports))]
+pub(crate) mod interop {
+    use super::*;
+
+    pub(crate) use super::open;
+
+    pub(crate) unsafe extern "C" fn adapter_luid(_: *const Setup, out: *mut u64) -> i32 {
         unsafe { out.write(ADAPTER) };
         0
-    }),
-    open,
-    close: entry!(|_: Handle| { with(|c| c.retirement.push(Step::Importer)) }),
-    timeline_importable: entry!(|_: Handle| -> u32 { 1 }),
-    create_timeline: entry!(|_: Handle, out: *mut u64| -> i32 {
+    }
+
+    pub(crate) unsafe extern "C" fn close(_: Handle) {
+        with(|c| c.retirement.push(Step::Importer))
+    }
+
+    pub(crate) unsafe extern "C" fn timeline_importable(_: Handle) -> u32 {
+        1
+    }
+
+    pub(crate) unsafe extern "C" fn create_timeline(_: Handle, out: *mut u64) -> i32 {
         unsafe { out.write(TIMELINE) };
         0
-    }),
-    import_timeline: entry!(|_: Handle, value: u64, handle: Handle| -> i32 {
+    }
+
+    pub(crate) unsafe extern "C" fn import_timeline(_: Handle, value: u64, handle: Handle) -> i32 {
         with(|c| check!(c, value == TIMELINE && !handle.is_null()));
         0
-    }),
-    destroy_timeline: entry!(|_: Handle, value: u64| {
+    }
+
+    pub(crate) unsafe extern "C" fn destroy_timeline(_: Handle, value: u64) {
         with(|c| {
             check!(c, value == TIMELINE);
             c.retirement.push(Step::Timeline);
         });
-    }),
-    image_properties: entry!(|_: Handle,
-                              format: u32,
-                              usage: u32,
-                              allowed: *mut u32,
-                              width: *mut u32,
-                              height: *mut u32|
-     -> i32 {
+    }
+
+    pub(crate) unsafe extern "C" fn image_properties(
+        _: Handle,
+        format: u32,
+        usage: u32,
+        allowed: *mut u32,
+        width: *mut u32,
+        height: *mut u32,
+    ) -> i32 {
         with(|c| {
             check!(c, FORMATS.get(c.queries) == Some(&format));
             check!(
@@ -148,14 +159,16 @@ static INTEROP: InteropPlatform = InteropPlatform {
             height.write(OUTPUT.1);
         };
         0
-    }),
-    create_image: entry!(|_: Handle,
-                          format: u32,
-                          width: u32,
-                          height: u32,
-                          usage: u32,
-                          out: *mut u64|
-     -> i32 {
+    }
+
+    pub(crate) unsafe extern "C" fn create_image(
+        _: Handle,
+        format: u32,
+        width: u32,
+        height: u32,
+        usage: u32,
+        out: *mut u64,
+    ) -> i32 {
         let index = with(|c| {
             let index = c.images;
             c.images += 1;
@@ -174,296 +187,361 @@ static INTEROP: InteropPlatform = InteropPlatform {
         });
         unsafe { out.write(100 + index as u64) };
         0
-    }),
-    image_requirements: entry!(|_: Handle, _: u64, bytes: *mut u64, types: *mut u32| {
+    }
+
+    pub(crate) unsafe extern "C" fn image_requirements(
+        _: Handle,
+        _: u64,
+        bytes: *mut u64,
+        types: *mut u32,
+    ) {
         unsafe {
             bytes.write(256);
             types.write(0b1101);
         }
-    }),
-    handle_memory_types: entry!(|_: Handle, _: Handle, out: *mut u32| -> i32 {
+    }
+
+    pub(crate) unsafe extern "C" fn handle_memory_types(
+        _: Handle,
+        _: Handle,
+        out: *mut u32,
+    ) -> i32 {
         unsafe { out.write(0b0110) };
         0
-    }),
-    device_local_types: entry!(|_: Handle| -> u32 { 0b1100 }),
-    allocate_memory: entry!(|_: Handle,
-                             image: u64,
-                             _: Handle,
-                             bytes: u64,
-                             kind: u32,
-                             out: *mut u64|
-     -> i32 {
+    }
+
+    pub(crate) unsafe extern "C" fn device_local_types(_: Handle) -> u32 {
+        0b1100
+    }
+
+    pub(crate) unsafe extern "C" fn allocate_memory(
+        _: Handle,
+        image: u64,
+        _: Handle,
+        bytes: u64,
+        kind: u32,
+        out: *mut u64,
+    ) -> i32 {
         with(|c| check!(c, bytes == 256 && kind == 2));
         unsafe { out.write(image + 100) };
         0
-    }),
-    bind_image: entry!(|_: Handle, image: u64, memory: u64| -> i32 {
+    }
+
+    pub(crate) unsafe extern "C" fn bind_image(_: Handle, image: u64, memory: u64) -> i32 {
         with(|c| {
             check!(c, memory == image + 100);
             if image == c.bind_error_at { UNKNOWN } else { 0 }
         })
-    }),
-    destroy_image: entry!(|_: Handle, _: u64| { with(|c| c.retirement.push(Step::Image)) }),
-    free_memory: entry!(|_: Handle, _: u64| { with(|c| c.retirement.push(Step::Memory)) }),
-};
+    }
 
-const PLATFORM: Platform = Platform {
-    interop: &INTEROP,
-    open: Some(open),
-    close: leaf!(|_: Handle| { with(|c| c.retirement.push(Step::Graphics)) }),
-    bridge_create: leaf!(|setup: *const BridgeCreate, out: *mut Handle| -> i32 {
-        let setup = unsafe { &*setup };
-        with(|c| {
-            check!(
-                c,
-                setup.struct_size as usize == size_of::<BridgeCreate>()
-                    && setup.abi_version == RSF_FSR4_BRIDGE_ABI_VERSION
-            );
-            check!(
-                c,
-                setup.adapter_luid == ADAPTER
-                    && setup.depth_inverted == 1
-                    && setup.motion_jittered == 1
-            );
-            check!(
-                c,
-                (setup.render_width, setup.render_height) == OUTPUT
-                    && (setup.output_width, setup.output_height) == OUTPUT
-            );
-            let expected: Vec<_> = "C:\\signedé".encode_utf16().chain([0]).collect();
-            check!(
-                c,
-                unsafe { std::slice::from_raw_parts(setup.runtime_directory, expected.len()) }
-                    == expected
-            );
-        });
-        unsafe { out.write(BRIDGE) };
-        0
-    }),
-    bridge_plan: leaf!(
-        |owner: Handle, quality: u32, width: *mut u32, height: *mut u32| -> i32 {
-            with(|c| check!(c, owner == BRIDGE && quality == 2));
-            unsafe {
-                width.write(RENDER.0);
-                height.write(RENDER.1);
-            };
-            0
-        }
-    ),
-    bridge_info: leaf!(|owner: *const c_void, out: *mut Info| -> i32 {
-        let info = unsafe { &mut *out };
-        with(|c| {
-            check!(
-                c,
-                owner == BRIDGE.cast_const()
-                    && info.struct_size as usize == size_of::<Info>()
-                    && info.abi_version == RSF_FSR4_BRIDGE_ABI_VERSION
-            )
-        });
-        info.adapter_luid = ADAPTER;
-        info.provider_version = VERSION;
-        info.vendor_id = 0x8086;
-        info.int8_compatibility = 1;
-        0
-    }),
-    create_fence: leaf!(|owner: Handle, out: *mut Handle| -> i32 {
-        with(|c| check!(c, owner == BRIDGE));
-        event(out)
-    }),
-    create_image: leaf!(|owner: Handle,
-                         width: u32,
-                         height: u32,
-                         format: u32,
-                         writable: u32,
-                         handle: *mut Handle,
-                         out: *mut Handle|
-     -> i32 {
-        let index = with(|c| {
-            let index = c.resources;
-            c.resources += 1;
-            check!(c, owner == BRIDGE && FORMATS.get(index) == Some(&format));
-            check!(
-                c,
-                writable == u32::from(index == 3) && (width, height) == extent(index)
-            );
-            index
-        });
-        unsafe { out.write(ptr::without_provenance_mut(300 + index)) };
-        event(handle)
-    }),
-    release_image: leaf!(|_: Handle| { with(|c| c.retirement.push(Step::Com)) }),
-    capture_initialize: leaf!(|_: Handle, _: *const Setup, provider: u64| -> i32 {
-        with(|c| check!(c, provider == VERSION));
-        0
-    }),
-    capture_begin: leaf!(|record: *const Record| {
-        let r = unsafe { &*record };
-        with(|c| check!(c, r.session_id == 10 && r.view_id == 11));
-    }),
-    capture_record: leaf!(|_: Handle,
-                           commands: Handle,
-                           image: *const Image,
-                           _: *const Record,
-                           role: *const std::ffi::c_char,
-                           reset: u32| {
-        let (image, role) = unsafe { ((*image).image, CStr::from_ptr(role).to_bytes().to_vec()) };
-        with(|c| c.captures.push((commands, image, role, reset)));
-    }),
-    capture_parameters: leaf!(|_: *const Frame, reset: u32| {
-        with(|c| check!(c, c.dispatches.last().is_some_and(|f| f.reset == reset)));
-    }),
-    capture_flush: leaf!(|_: Handle| -> i32 {
-        with(|c| {
-            c.retirement.push(Step::Flush);
-            i32::from(!c.flush_error)
-        })
-    }),
-    transition: leaf!(|_: Handle, commands: Handle, plan: *const Barrier| {
-        let plan = unsafe { *plan };
-        with(|c| {
-            check!(
-                c,
-                plan.source_stages == STAGE && plan.target_stages == STAGE
-            );
-            c.barriers.push((commands, plan));
-        });
-    }),
-    copy: leaf!(|_: Handle,
-                 commands: Handle,
-                 source: u64,
-                 target: u64,
-                 width: u32,
-                 height: u32| {
-        with(|c| {
-            check!(
-                c,
-                (width, height) == if commands == PRODUCER { RENDER } else { OUTPUT }
-            );
-            c.copies.push((commands, source, target));
-        });
-    }),
-    split: leaf!(|handoff: *const Handoff,
-                  commands: Handle,
-                  sem: u64,
-                  prior: u64,
-                  ready: u64,
-                  done: u64,
-                  out: *mut Handle|
-     -> i32 {
-        with(|c| {
-            check!(
-                c,
-                unsafe { (*handoff).user == DEVICE && (*out).is_null() }
-                    && commands == PRODUCER
-                    && sem == TIMELINE
-            );
-            c.splits.push([prior, ready, done]);
-            unsafe { out.write(if c.repeat_commands { PRODUCER } else { RESUMED }) };
-        });
-        0
-    }),
-    bridge_sharpness: leaf!(|owner: Handle, amount: f32| -> i32 {
-        with(|c| {
-            check!(c, owner == BRIDGE);
-            c.sharpness = amount;
-        });
-        0
-    }),
-    bridge_evaluate: leaf!(|owner: Handle, frame: *const BridgeFrame| -> i32 {
-        let frame = unsafe { *frame };
-        with(|c| {
-            check!(
-                c,
-                owner == BRIDGE
-                    && frame.struct_size as usize == size_of::<BridgeFrame>()
-                    && frame.abi_version == RSF_FSR4_BRIDGE_ABI_VERSION
-            );
-            check!(
-                c,
-                [
-                    frame.color.addr(),
-                    frame.depth.addr(),
-                    frame.motion.addr(),
-                    frame.output.addr()
-                ] == [300, 301, 302, 303]
-            );
-            check!(
-                c,
-                c.splits
-                    .last()
-                    .is_some_and(|s| s[1] == frame.ready_value && s[2] == frame.done_value)
-            );
-            check!(
-                c,
-                (
-                    frame.motion_scale_x,
-                    frame.motion_scale_y,
-                    frame.jitter_x,
-                    frame.pre_exposure
-                ) == (-192.0, 108.0, 0.25, 2.0)
-            );
-            c.dispatches.push(frame);
-            c.expected_done = frame.done_value;
-            c.sdk_error
-        })
-    }),
-    sharpen: leaf!(
-        |_: Handle, _: *const Setup, commands: Handle, _: *const Frame, image: u64| {
-            with(|c| {
-                check!(c, commands == RESUMED && image == 103);
-                check!(
-                    c,
-                    c.barriers
-                        .last()
-                        .is_some_and(|(commands, plan)| *commands == RESUMED
-                            && plan.image == image
-                            && plan.source_family == FAMILY_EXTERNAL
-                            && plan.target_family == FAMILY
-                            && plan.old_layout == GENERAL
-                            && plan.new_layout == GENERAL)
-                );
-                c.sharpened += 1;
-            });
-        }
-    ),
-    retire: leaf!(|_: Handle, commands: Handle| {
-        with(|c| {
-            check!(c, commands == RESUMED);
-            c.retires += 1;
-        })
-    }),
-    clear_sharpen: leaf!(|_: Handle| { with(|c| c.retirement.push(Step::Clear)) }),
-    wait: leaf!(|_: Handle, sem: u64, target: u64, timeout: u64| -> i32 {
-        with(|c| {
-            check!(
-                c,
-                sem == TIMELINE && target == c.expected_done && timeout == WAIT_NS
-            );
-            c.retirement.push(Step::Wait);
-            c.wait_error
-        })
-    }),
-    idle: leaf!(|_: Handle| -> i32 {
-        with(|c| {
-            c.retirement.push(Step::Idle);
-            c.idle_error
-        })
-    }),
-    bridge_prepare_destroy: leaf!(|owner: Handle| -> i32 {
-        with(|c| {
-            check!(c, owner == BRIDGE);
-            c.retirement.push(Step::Prepare);
-            c.prepare_error
-        })
-    }),
-    bridge_destroy: leaf!(|owner: Handle| -> i32 {
-        with(|c| {
-            check!(c, owner == BRIDGE);
-            c.retirement.push(Step::Bridge);
-            c.destroy_error
-        })
-    }),
-};
+    pub(crate) unsafe extern "C" fn destroy_image(_: Handle, _: u64) {
+        with(|c| c.retirement.push(Step::Image))
+    }
+
+    pub(crate) unsafe extern "C" fn free_memory(_: Handle, _: u64) {
+        with(|c| c.retirement.push(Step::Memory))
+    }
+}
+
+pub(crate) unsafe extern "C" fn close(_: Handle) {
+    with(|c| c.retirement.push(Step::Graphics))
+}
+
+pub(crate) unsafe extern "C" fn bridge_create(setup: *const BridgeCreate, out: *mut Handle) -> i32 {
+    let setup = unsafe { &*setup };
+    with(|c| {
+        check!(
+            c,
+            setup.struct_size as usize == size_of::<BridgeCreate>()
+                && setup.abi_version == RSF_FSR4_BRIDGE_ABI_VERSION
+        );
+        check!(
+            c,
+            setup.adapter_luid == ADAPTER
+                && setup.depth_inverted == 1
+                && setup.motion_jittered == 1
+        );
+        check!(
+            c,
+            (setup.render_width, setup.render_height) == OUTPUT
+                && (setup.output_width, setup.output_height) == OUTPUT
+        );
+        let expected: Vec<_> = "C:\\signedé".encode_utf16().chain([0]).collect();
+        check!(
+            c,
+            unsafe { std::slice::from_raw_parts(setup.runtime_directory, expected.len()) }
+                == expected
+        );
+    });
+    unsafe { out.write(BRIDGE) };
+    0
+}
+
+pub(crate) unsafe extern "C" fn bridge_plan(
+    owner: Handle,
+    quality: u32,
+    width: *mut u32,
+    height: *mut u32,
+) -> i32 {
+    with(|c| check!(c, owner == BRIDGE && quality == 2));
+    unsafe {
+        width.write(RENDER.0);
+        height.write(RENDER.1);
+    };
+    0
+}
+
+pub(crate) unsafe extern "C" fn bridge_info(owner: *const c_void, out: *mut Info) -> i32 {
+    let info = unsafe { &mut *out };
+    with(|c| {
+        check!(
+            c,
+            owner == BRIDGE.cast_const()
+                && info.struct_size as usize == size_of::<Info>()
+                && info.abi_version == RSF_FSR4_BRIDGE_ABI_VERSION
+        )
+    });
+    info.adapter_luid = ADAPTER;
+    info.provider_version = VERSION;
+    info.vendor_id = 0x8086;
+    info.int8_compatibility = 1;
+    0
+}
+
+pub(crate) unsafe extern "C" fn create_fence(owner: Handle, out: *mut Handle) -> i32 {
+    with(|c| check!(c, owner == BRIDGE));
+    event(out)
+}
+
+pub(crate) unsafe extern "C" fn create_image(
+    owner: Handle,
+    width: u32,
+    height: u32,
+    format: u32,
+    writable: u32,
+    handle: *mut Handle,
+    out: *mut Handle,
+) -> i32 {
+    let index = with(|c| {
+        let index = c.resources;
+        c.resources += 1;
+        check!(c, owner == BRIDGE && FORMATS.get(index) == Some(&format));
+        check!(
+            c,
+            writable == u32::from(index == 3) && (width, height) == extent(index)
+        );
+        index
+    });
+    unsafe { out.write(ptr::without_provenance_mut(300 + index)) };
+    event(handle)
+}
+
+pub(crate) unsafe extern "C" fn release_image(_: Handle) {
+    with(|c| c.retirement.push(Step::Com))
+}
+
+pub(crate) unsafe extern "C" fn capture_initialize(
+    _: Handle,
+    _: *const Setup,
+    provider: u64,
+) -> i32 {
+    with(|c| check!(c, provider == VERSION));
+    0
+}
+
+pub(crate) unsafe extern "C" fn capture_begin(record: *const Record) {
+    let r = unsafe { &*record };
+    with(|c| check!(c, r.session_id == 10 && r.view_id == 11));
+}
+
+pub(crate) unsafe extern "C" fn capture_record(
+    _: Handle,
+    commands: Handle,
+    image: *const Image,
+    _: *const Record,
+    role: *const std::ffi::c_char,
+    reset: u32,
+) {
+    let (image, role) = unsafe { ((*image).image, CStr::from_ptr(role).to_bytes().to_vec()) };
+    with(|c| c.captures.push((commands, image, role, reset)));
+}
+
+pub(crate) unsafe extern "C" fn capture_parameters(_: *const Frame, reset: u32) {
+    with(|c| check!(c, c.dispatches.last().is_some_and(|f| f.reset == reset)));
+}
+
+pub(crate) unsafe extern "C" fn capture_flush(_: Handle) -> i32 {
+    with(|c| {
+        c.retirement.push(Step::Flush);
+        i32::from(!c.flush_error)
+    })
+}
+
+pub(crate) unsafe extern "C" fn transition(_: Handle, commands: Handle, plan: *const Barrier) {
+    let plan = unsafe { *plan };
+    with(|c| {
+        check!(
+            c,
+            plan.source_stages == STAGE && plan.target_stages == STAGE
+        );
+        c.barriers.push((commands, plan));
+    });
+}
+
+pub(crate) unsafe extern "C" fn copy(
+    _: Handle,
+    commands: Handle,
+    source: u64,
+    target: u64,
+    width: u32,
+    height: u32,
+) {
+    with(|c| {
+        check!(
+            c,
+            (width, height) == if commands == PRODUCER { RENDER } else { OUTPUT }
+        );
+        c.copies.push((commands, source, target));
+    });
+}
+
+pub(crate) unsafe extern "C" fn split(
+    handoff: *const Handoff,
+    commands: Handle,
+    sem: u64,
+    prior: u64,
+    ready: u64,
+    done: u64,
+    out: *mut Handle,
+) -> i32 {
+    with(|c| {
+        check!(
+            c,
+            unsafe { (*handoff).user == DEVICE && (*out).is_null() }
+                && commands == PRODUCER
+                && sem == TIMELINE
+        );
+        c.splits.push([prior, ready, done]);
+        unsafe { out.write(if c.repeat_commands { PRODUCER } else { RESUMED }) };
+    });
+    0
+}
+
+pub(crate) unsafe extern "C" fn bridge_sharpness(owner: Handle, amount: f32) -> i32 {
+    with(|c| {
+        check!(c, owner == BRIDGE);
+        c.sharpness = amount;
+    });
+    0
+}
+
+pub(crate) unsafe extern "C" fn bridge_evaluate(owner: Handle, frame: *const BridgeFrame) -> i32 {
+    let frame = unsafe { *frame };
+    with(|c| {
+        check!(
+            c,
+            owner == BRIDGE
+                && frame.struct_size as usize == size_of::<BridgeFrame>()
+                && frame.abi_version == RSF_FSR4_BRIDGE_ABI_VERSION
+        );
+        check!(
+            c,
+            [
+                frame.color.addr(),
+                frame.depth.addr(),
+                frame.motion.addr(),
+                frame.output.addr()
+            ] == [300, 301, 302, 303]
+        );
+        check!(
+            c,
+            c.splits
+                .last()
+                .is_some_and(|s| s[1] == frame.ready_value && s[2] == frame.done_value)
+        );
+        check!(
+            c,
+            (
+                frame.motion_scale_x,
+                frame.motion_scale_y,
+                frame.jitter_x,
+                frame.pre_exposure
+            ) == (-192.0, 108.0, 0.25, 2.0)
+        );
+        c.dispatches.push(frame);
+        c.expected_done = frame.done_value;
+        c.sdk_error
+    })
+}
+
+pub(crate) unsafe extern "C" fn sharpen(
+    _: Handle,
+    _: *const Setup,
+    commands: Handle,
+    _: *const Frame,
+    image: u64,
+) {
+    with(|c| {
+        check!(c, commands == RESUMED && image == 103);
+        check!(
+            c,
+            c.barriers
+                .last()
+                .is_some_and(|(commands, plan)| *commands == RESUMED
+                    && plan.image == image
+                    && plan.source_family == FAMILY_EXTERNAL
+                    && plan.target_family == FAMILY
+                    && plan.old_layout == GENERAL
+                    && plan.new_layout == GENERAL)
+        );
+        c.sharpened += 1;
+    });
+}
+
+pub(crate) unsafe extern "C" fn retire(_: Handle, commands: Handle) {
+    with(|c| {
+        check!(c, commands == RESUMED);
+        c.retires += 1;
+    })
+}
+
+pub(crate) unsafe extern "C" fn clear_sharpen(_: Handle) {
+    with(|c| c.retirement.push(Step::Clear))
+}
+
+pub(crate) unsafe extern "C" fn wait(_: Handle, sem: u64, target: u64, timeout: u64) -> i32 {
+    with(|c| {
+        check!(
+            c,
+            sem == TIMELINE && target == c.expected_done && timeout == WAIT_NS
+        );
+        c.retirement.push(Step::Wait);
+        c.wait_error
+    })
+}
+
+pub(crate) unsafe extern "C" fn idle(_: Handle) -> i32 {
+    with(|c| {
+        c.retirement.push(Step::Idle);
+        c.idle_error
+    })
+}
+
+pub(crate) unsafe extern "C" fn bridge_prepare_destroy(owner: Handle) -> i32 {
+    with(|c| {
+        check!(c, owner == BRIDGE);
+        c.retirement.push(Step::Prepare);
+        c.prepare_error
+    })
+}
+
+pub(crate) unsafe extern "C" fn bridge_destroy(owner: Handle) -> i32 {
+    with(|c| {
+        check!(c, owner == BRIDGE);
+        c.retirement.push(Step::Bridge);
+        c.destroy_error
+    })
+}
 
 struct Fixture {
     setup: Setup,
@@ -580,7 +658,7 @@ impl Fixture {
         }
     }
     fn create(&mut self) -> i32 {
-        unsafe { create(&PLATFORM, &self.setup, &self.handoff, &mut self.owner) }
+        unsafe { create(&self.setup, &self.handoff, &mut self.owner) }
     }
     fn evaluate(&mut self) -> i32 {
         self.frame.record = &raw const self.record;
@@ -788,33 +866,4 @@ extern "C" fn rsf_fixture_fsr4sr_state() -> i32 {
     evaluate_and_retire();
     create_failure_and_legacy();
     i32::from(with(|c| c.failures) != 0)
-}
-
-/// The native device fixture lends its public bridge entry point, which is
-/// only linked when the FSR4 SDK is present.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fixture_fsr4sr_public_abi(
-    create: unsafe extern "C" fn(*const BridgeCreate, *mut Handle) -> i32,
-) -> i32 {
-    let mut output = ptr::without_provenance_mut(1);
-    let mut setup = BridgeCreate {
-        struct_size: size_of::<BridgeCreate>() as u32 - 1,
-        abi_version: RSF_FSR4_BRIDGE_ABI_VERSION,
-        ..unsafe { std::mem::zeroed() }
-    };
-    if unsafe { create(&setup, &mut output) } != INVALID || !output.is_null() {
-        return 1;
-    }
-    setup.struct_size += 1;
-    setup.abi_version += 1;
-    if unsafe { create(&setup, &mut output) } != ABI_MISMATCH || !output.is_null() {
-        return 2;
-    }
-    let relative: Vec<u16> = "relative".encode_utf16().chain([0]).collect();
-    setup.abi_version = RSF_FSR4_BRIDGE_ABI_VERSION;
-    setup.runtime_directory = relative.as_ptr();
-    if unsafe { create(&setup, &mut output) } != INVALID || !output.is_null() {
-        return 3;
-    }
-    0
 }
