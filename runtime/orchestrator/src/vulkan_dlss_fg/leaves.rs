@@ -364,10 +364,6 @@ unsafe extern "C" {
     fn rsf_vk_sl_worker_timeout_epoch() -> u64;
 }
 
-unsafe extern "C" fn timeout_epoch() -> u64 {
-    unsafe { rsf_vk_sl_worker_timeout_epoch() }
-}
-
 // SAFETY: the table holds function pointers and the address of an immutable static.
 unsafe impl Sync for crate::vulkan_dlss_fg_abi::Platform {}
 
@@ -392,5 +388,5 @@ pub(super) static LEAVES: crate::vulkan_dlss_fg_abi::Platform =
         capture_group: rsf_core_dlgvk_sdk_capture_group,
         flush: rsf_core_dlgvk_sdk_flush,
         detach_capture: rsf_core_dlgvk_sdk_detach_capture,
-        timeout_epoch,
+        timeout_epoch: rsf_vk_sl_worker_timeout_epoch,
     };

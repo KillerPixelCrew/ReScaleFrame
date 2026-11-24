@@ -761,11 +761,11 @@ mod streamline_bridge {
 
     unsafe extern "C" {
         fn rsf_vk_sl_initialize_features(
-            path: *const u16,
-            application: *const c_char,
-            features: u32,
-            flags: u32,
+            directory: *const u16,
+            project: *const c_char,
             reflex: u32,
+            frame_generation: u32,
+            super_resolution: u32,
         ) -> i32;
         fn rsf_vk_sl_module() -> *mut c_void;
         fn rsf_vk_sl_shutdown_checked() -> i32;
