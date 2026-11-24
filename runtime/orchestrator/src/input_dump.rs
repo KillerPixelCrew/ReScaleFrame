@@ -15,7 +15,6 @@ use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
-use windows::core::Interface;
 
 pub(super) use crate::capture_pixels::Pixels;
 pub(super) use rsf_graphics::dump_options::{
@@ -39,30 +38,19 @@ const RAW: u32 = 0;
 const D3D11: u32 = 1;
 const MAX_IMAGES: usize = 96;
 
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
 struct Clock {
     tick: u64,
     process: u32,
-    year: u32,
-    month: u32,
-    day: u32,
-    hour: u32,
-    minute: u32,
-    second: u32,
-    millisecond: u32,
-    key_down: u32,
+    key_down: bool,
 }
 
-#[repr(C)]
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct Surface {
     width: u32,
     height: u32,
     format: u32,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 struct Encoding {
     raw: i32,
@@ -80,11 +68,7 @@ impl Encoding {
     }
 }
 
-fn clock() -> Clock {
-    let mut facts = Clock::default();
-    native::read_clock(&mut facts);
-    facts
-}
+use native::clock;
 
 #[derive(Clone, Copy, Default)]
 struct PassIdentity {
@@ -513,17 +497,16 @@ impl Owner {
         if ticket > u64::MAX >> 8 {
             return;
         }
-        let mut now = *now;
-        native::read_local_time(&mut now);
+        let local = native::local_time();
         let name = format!(
             "scene-{:04}{:02}{:02}-{:02}{:02}{:02}-{:03}-{}-{}-{ticket}",
-            now.year,
-            now.month,
-            now.day,
-            now.hour,
-            now.minute,
-            now.second,
-            now.millisecond,
+            local.wYear,
+            local.wMonth,
+            local.wDay,
+            local.wHour,
+            local.wMinute,
+            local.wSecond,
+            local.wMilliseconds,
             now.tick,
             now.process
         );
@@ -556,11 +539,10 @@ impl Owner {
         {
             self.finish("incomplete_waiting_for_gpu_or_frame");
         }
-        let down = now.key_down != 0;
-        if down && !self.key_down {
+        if now.key_down && !self.key_down {
             self.request(now);
         }
-        self.key_down = down;
+        self.key_down = now.key_down;
     }
 
     fn complete(&mut self, result: i32) {
@@ -666,29 +648,19 @@ unsafe fn write_texture(
     source: *mut c_void,
     raw: bool,
 ) -> ImageResult {
-    let mut surface = Surface::default();
-    let mut encoding = Encoding::INVALID;
-    let texture = unsafe { com_ref::owned(native::open_texture(context, source, &mut surface)) };
+    let opened = unsafe { native::open_texture(context, source) };
+    let surface = opened.as_ref().map(|(_, surface)| *surface).unwrap_or_default();
     let view = preview_view(work.view, surface.format, false);
-    if let Some(texture) = texture {
-        match prefix(&work.prefix) {
-            Ok(prefix) => unsafe {
-                native::encode_texture(
-                    context,
-                    texture.as_raw(),
-                    &work.options(&prefix, view),
-                    u32::from(raw),
-                    &mut encoding,
-                )
-            },
-            Err(_) => {
-                encoding = Encoding {
-                    raw: WRITE_FAILED,
-                    preview: WRITE_FAILED,
-                }
-            }
-        }
-    }
+    let encoding = match (&opened, prefix(&work.prefix)) {
+        (None, _) => Encoding::INVALID,
+        (Some(_), Err(_)) => Encoding {
+            raw: WRITE_FAILED,
+            preview: WRITE_FAILED,
+        },
+        (Some((texture, _)), Ok(prefix)) => unsafe {
+            native::encode_texture(context, texture, &work.options(&prefix, view), raw)
+        },
+    };
     ImageResult {
         api: D3D11,
         native_format: surface.format,

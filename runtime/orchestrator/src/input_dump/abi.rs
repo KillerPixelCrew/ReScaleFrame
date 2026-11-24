@@ -3,7 +3,6 @@ use super::*;
 use crate::sr_session::has_capacity;
 use crate::sys::{rsf_named_frame_dump, rsf_named_frame_dump_report};
 use crate::texture_dump::{PackedRows, pixel_bytes};
-use windows::core::Interface;
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_input_dump_configure(
@@ -334,10 +333,7 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_named_texture(
     if !valid_name(name) || request.view > DENSE_MOTION {
         return INVALID;
     }
-    let mut surface = Surface::default();
-    let Some(texture) =
-        (unsafe { com_ref::owned(native::open_texture(context, source, &mut surface)) })
-    else {
+    let Some((texture, surface)) = (unsafe { native::open_texture(context, source) }) else {
         return INVALID;
     };
     let directory = Path::new(directory);
@@ -353,8 +349,7 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_named_texture(
         request.scale,
         Log::new(request.log, request.log_user),
     );
-    let mut encoding = Encoding::INVALID;
-    unsafe { native::encode_texture(context, texture.as_raw(), &options, 0, &mut encoding) };
+    let encoding = unsafe { native::encode_texture(context, &texture, &options, false) };
     if encoding.preview == 0 && unsafe { has_capacity(report) } {
         unsafe {
             std::ptr::addr_of_mut!((*report).width).write(surface.width);

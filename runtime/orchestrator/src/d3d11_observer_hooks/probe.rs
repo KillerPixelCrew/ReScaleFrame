@@ -60,7 +60,6 @@ pub(super) struct Route {
     pub(super) hook: Handle,
 }
 
-#[repr(C)]
 struct Description {
     width: u32,
     height: u32,
@@ -91,7 +90,6 @@ struct Attempt {
     returned: u32,
 }
 
-#[repr(C)]
 struct Tables {
     device: Table,
     chain: Table,
@@ -222,11 +220,10 @@ unsafe extern "C" fn resident_vtable(object: Handle, count: usize) -> Table {
     table
 }
 
+// The guarded C creation writes this record.
 const _: () = {
-    assert!(size_of::<Description>() == 28);
     assert!(size_of::<Attempt>() == 32);
     assert!(std::mem::offset_of!(Attempt, result) == 24);
-    assert!(size_of::<Tables>() == 3 * size_of::<Handle>());
 };
 
 // The context, chain and device retire in the order used by the native probe.
@@ -294,14 +291,7 @@ fn probe(window: Handle) -> Option<Tables> {
 }
 
 pub(super) fn native_slots(slots: &mut [Slot; SLOT_COUNT]) -> Option<[Route; 2]> {
-    let mut tables = Tables {
-        device: null_mut(),
-        chain: null_mut(),
-        chain1: null_mut(),
-    };
-    if run(&mut tables) == 0 {
-        return None;
-    }
+    let tables = run()?;
     let present = detours::hook_present as Handle;
     let routes = [
         Route {
@@ -356,19 +346,14 @@ pub(super) fn native_slots(slots: &mut [Slot; SLOT_COUNT]) -> Option<[Route; 2]>
     Some(routes)
 }
 
-fn run(tables: &mut Tables) -> u32 {
+fn run() -> Option<Tables> {
     let window = unsafe { leaf::window(DESCRIPTION.width, DESCRIPTION.height) };
     if window.is_null() {
-        return 0;
+        return None;
     }
-    let result = probe(window);
+    let tables = probe(window);
     unsafe { leaf::destroy_window(window) };
-    if let Some(result) = result {
-        *tables = result;
-        1
-    } else {
-        0
-    }
+    tables
 }
 
 #[cfg(test)]
@@ -503,13 +488,7 @@ mod tests {
             *fixture = Fixture::new();
             fixture.resident_device = false;
         });
-        let mut tables = Tables {
-            device: null_mut(),
-            chain: null_mut(),
-            chain1: null_mut(),
-        };
-        assert_eq!(run(&mut tables), 0);
-        assert!(tables.device.is_null());
+        assert!(run().is_none());
         FIXTURE.with_borrow(|fixture| {
             assert_eq!(fixture.windows_destroyed, 1);
             assert_eq!(fixture.refs(), [1; 4]);
@@ -523,22 +502,14 @@ mod tests {
                 *fixture = Fixture::new();
                 fixture.throw_in_hardware = interrupted;
             });
-            let mut tables = Tables {
-                device: null_mut(),
-                chain: null_mut(),
-                chain1: null_mut(),
-            };
-            assert_eq!(run(&mut tables), u32::from(!interrupted));
+            let tables = run();
+            assert_eq!(tables.is_some(), !interrupted);
             FIXTURE.with_borrow(|fixture| {
                 assert_eq!(fixture.windows_destroyed, 1);
                 if interrupted {
                     assert_eq!(fixture.drivers.as_slice(), &[HARDWARE]);
-                    assert!(
-                        tables.device.is_null()
-                            && tables.chain.is_null()
-                            && tables.chain1.is_null()
-                    );
                 } else {
+                    let tables = tables.as_ref().unwrap();
                     assert_eq!(fixture.drivers.as_slice(), &[HARDWARE, WARP]);
                     assert_eq!(tables.device, raw(&fixture.device).cast());
                     assert_eq!(tables.chain, raw(&fixture.chain).cast());

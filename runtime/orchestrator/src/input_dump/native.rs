@@ -9,61 +9,54 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use windows::core::{BOOL, IUnknown, Interface};
+use windows_sys::Win32::Foundation::SYSTEMTIME;
 use windows_sys::Win32::System::SystemInformation::{GetLocalTime, GetTickCount64};
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_F10};
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
-pub(super) fn read_clock(out: &mut Clock) {
+pub(super) fn clock() -> Clock {
     let mut foreground = 0;
     unsafe {
         GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground);
-        out.process = GetCurrentProcessId();
-        out.tick = GetTickCount64();
-        out.key_down =
-            u32::from(foreground == out.process && GetAsyncKeyState(i32::from(VK_F10)) < 0);
+        let process = GetCurrentProcessId();
+        Clock {
+            tick: GetTickCount64(),
+            process,
+            key_down: foreground == process && GetAsyncKeyState(i32::from(VK_F10)) < 0,
+        }
     }
 }
 
-pub(super) fn read_local_time(out: &mut Clock) {
-    let mut now = windows_sys::Win32::Foundation::SYSTEMTIME::default();
+pub(super) fn local_time() -> SYSTEMTIME {
+    let mut now = SYSTEMTIME::default();
     unsafe { GetLocalTime(&mut now) };
-    out.year = u32::from(now.wYear);
-    out.month = u32::from(now.wMonth);
-    out.day = u32::from(now.wDay);
-    out.hour = u32::from(now.wHour);
-    out.minute = u32::from(now.wMinute);
-    out.second = u32::from(now.wSecond);
-    out.millisecond = u32::from(now.wMilliseconds);
+    now
 }
 
+// The texture behind `source` when `context` is an immediate context.
 pub(super) unsafe fn open_texture(
     context: *mut c_void,
     source: *mut c_void,
-    surface: &mut Surface,
-) -> *mut c_void {
-    let (Some(context), Some(source)) = (unsafe {
+) -> Option<(ID3D11Texture2D, Surface)> {
+    let (context, source) = unsafe {
         (
-            ID3D11DeviceContext::from_raw_borrowed(&context),
-            IUnknown::from_raw_borrowed(&source),
+            ID3D11DeviceContext::from_raw_borrowed(&context)?,
+            IUnknown::from_raw_borrowed(&source)?,
         )
-    }) else {
-        return ptr::null_mut();
     };
     if unsafe { context.GetType() } != D3D11_DEVICE_CONTEXT_IMMEDIATE {
-        return ptr::null_mut();
+        return None;
     }
-    let Ok(texture) = source.cast::<ID3D11Texture2D>() else {
-        return ptr::null_mut();
-    };
+    let texture = source.cast::<ID3D11Texture2D>().ok()?;
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { texture.GetDesc(&mut desc) };
-    *surface = Surface {
+    let surface = Surface {
         width: desc.Width,
         height: desc.Height,
         format: desc.Format.0 as u32,
     };
-    texture.into_raw()
+    Some((texture, surface))
 }
 
 pub(super) unsafe fn backbuffer(chain: *mut c_void) -> *mut c_void {
@@ -118,17 +111,18 @@ impl Drop for Predicate<'_> {
 
 pub(super) unsafe fn encode_texture(
     context: Handle,
-    source: Handle,
-    options: *const TextureOptions,
-    include_raw: u32,
-    result: &mut Encoding,
-) {
+    texture: &ID3D11Texture2D,
+    options: &TextureOptions,
+    include_raw: bool,
+) -> Encoding {
+    let mut result = Encoding::INVALID;
     let Some(immediate) = (unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }) else {
-        return;
+        return result;
     };
     let Ok(device) = (unsafe { immediate.GetDevice() }) else {
-        return;
+        return result;
     };
+    let source = texture.as_raw();
     let mut predicate = Predicate {
         context: immediate,
         saved: None,
@@ -138,7 +132,7 @@ pub(super) unsafe fn encode_texture(
     unsafe {
         immediate.GetPredication(Some(&mut predicate.saved), Some(&mut predicate.value));
         immediate.SetPredication(None::<&ID3D11Predicate>, false);
-        if include_raw != 0 {
+        if include_raw {
             result.raw =
                 texture_dump::rsf_dump_texture_bytes(device.as_raw(), context, source, options);
         }
@@ -150,6 +144,7 @@ pub(super) unsafe fn encode_texture(
             ptr::null_mut(),
         );
     }
+    result
 }
 
 pub(super) unsafe fn preview_pixels(pixels: *const Pixels, options: *const TextureOptions) -> i32 {

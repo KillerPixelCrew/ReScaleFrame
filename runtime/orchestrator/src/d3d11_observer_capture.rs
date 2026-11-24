@@ -20,7 +20,6 @@ use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::core::{IUnknown, Interface};
 
 type Handle = *mut c_void;
-type Immediate = unsafe extern "C" fn(Handle) -> Handle;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const NOT_READY: i32 = -6;
@@ -321,24 +320,17 @@ fn cache_context(retained: &mut Retained, device: &IUnknown, context: &IUnknown)
     }
 }
 
-fn resolve_context(
-    device: &IUnknown,
-    cached: Option<IUnknown>,
-    immediate: Immediate,
-) -> Option<IUnknown> {
+// The cached immediate context, or the device's, cached for later dumps.
+fn resolve_context(device: &IUnknown, cached: Option<IUnknown>) -> Option<IUnknown> {
     if cached.is_some() {
         return cached;
     }
-    let context = unsafe { com_ref::owned(immediate(device.as_raw())) }?;
+    let raw = device.as_raw();
+    let context: IUnknown = unsafe { ID3D11Device::from_raw_borrowed(&raw)?.GetImmediateContext() }
+        .ok()?
+        .into();
     cache_context(&mut lock().retained, device, &context);
     Some(context)
-}
-
-unsafe extern "C" fn capture_immediate(device: Handle) -> Handle {
-    let Some(device) = (unsafe { ID3D11Device::from_raw_borrowed(&device) }) else {
-        return ptr::null_mut();
-    };
-    unsafe { device.GetImmediateContext() }.map_or(ptr::null_mut(), Interface::into_raw)
 }
 
 #[unsafe(no_mangle)]
@@ -359,7 +351,7 @@ unsafe extern "C" fn rsf_observer_acquire_device(
     let context = if context_out.is_null() {
         None
     } else {
-        resolve_context(&device, context, capture_immediate)
+        resolve_context(&device, context)
     };
     if !device_out.is_null() {
         unsafe { device_out.write(device.into_raw()) };
@@ -457,7 +449,7 @@ pub(super) fn dump_presenter(presenter: &IUnknown) {
                 .map_or_else(Vec::new, |entry| entry.constants.clone()),
         )
     };
-    let context = resolve_context(&device, context, capture_immediate);
+    let context = resolve_context(&device, context);
     let result = dump::write(
         &settings,
         &request,
