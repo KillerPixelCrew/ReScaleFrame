@@ -314,11 +314,11 @@ impl Lifecycle {
         // before calling it; neither feature entry points nor retries remain valid.
         session.shutdown_result = Some(0);
         let mut result = 0;
-        if session.initialized {
-            if let Some(sdk_result) = unsafe { leaf::shutdown() } {
-                result = sdk_result;
-                session.shutdown_result = Some(result);
-            }
+        if session.initialized
+            && let Some(sdk_result) = unsafe { leaf::shutdown() }
+        {
+            result = sdk_result;
+            session.shutdown_result = Some(result);
         }
         session.initialized = false;
         self.published.initialized.store(false, Ordering::Release);

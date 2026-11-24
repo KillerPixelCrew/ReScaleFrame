@@ -141,9 +141,8 @@ struct Dispatch {
     slot: u32,
 }
 
-const _: () = assert!(
-    size_of::<LegacyFrame>() == 96 && std::mem::offset_of!(LegacyFrame, ready_value) == 80
-);
+const _: () =
+    assert!(size_of::<LegacyFrame>() == 96 && std::mem::offset_of!(LegacyFrame, ready_value) == 80);
 
 fn candidate(vendor: u32) -> bool {
     // AMD natively; NVIDIA and Intel only through the INT8 compatibility lease.
