@@ -612,7 +612,7 @@ impl Case {
     }
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn jitter_follows_the_row_vector_rule() {
     let p = perspective(1.2, 1.7778, 0.2);
     let (x, y, w, h) = (0.25f32, -1.0f32 / 6.0, 1286u32, 724u32);
@@ -647,7 +647,7 @@ fn jitter_follows_the_row_vector_rule() {
     assert_eq!(jitter_projection(&p, 0.0, 0.0, w, h), Some(p));
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn full_transform_composes_row_vectors() {
     let p = perspective(1.2, 1.7778, 0.2);
     let full = engine_mul(&p, &VIEW);
@@ -662,7 +662,7 @@ fn full_transform_composes_row_vectors() {
     }
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn first_person_projection_is_jittered_once() {
     let main = jitter_projection(&perspective(1.2, 1.7778, 0.2), 0.25, -0.1, 1286, 724).unwrap();
     let fresh = perspective(0.9, 1.7778, 0.05);
@@ -689,7 +689,7 @@ fn first_person_projection_is_jittered_once() {
     );
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn twin_extents_follow_the_engine_division() {
     assert_eq!(twin_extent(1920, 1920, 1286, false), Some((1286, false)));
     assert_eq!(twin_extent(960, 1920, 1286, true), Some((643, true)));
@@ -707,7 +707,7 @@ fn twin_extents_follow_the_engine_division() {
     assert_eq!(twin_extent(960, 1920, 1920, true), Some((960, true)));
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage1_window_swaps_and_restores_engine_bytes() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts()));
@@ -760,7 +760,7 @@ fn stage1_window_swaps_and_restores_engine_bytes() {
     assert!(c.stock() && c.host().drops == 1);
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn upscale_can_read_the_published_twin_generation_during_the_seam() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts2()));
@@ -772,7 +772,7 @@ fn upscale_can_read_the_published_twin_generation_during_the_seam() {
     assert!(c.stock());
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage3_window_jitters_main_and_first_person_once() {
     let mut c = Case::new(true);
     c.engine().guard = i32::MIN + 7;
@@ -822,7 +822,7 @@ fn stage3_window_jitters_main_and_first_person_once() {
     assert!(c.view().refusal.is_null());
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn sun_cascades_borrow_the_unjittered_camera() {
     let c = Case::new(true);
     let (main, full) = (c.engine().project, c.engine().full);
@@ -859,7 +859,7 @@ fn sun_cascades_borrow_the_unjittered_camera() {
     assert!(c.stock() && c.host().upload_calls == uploads);
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn failed_first_person_jitter_restores_the_camera_and_uploaded_projection() {
     for fail_upload in [false, true] {
         let c = Case::new(true);
@@ -883,7 +883,7 @@ fn failed_first_person_jitter_restores_the_camera_and_uploaded_projection() {
     }
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn pending_camera_and_sampler_restoration_retains_twins_until_quiesce_retries() {
     let c = Case::new(true);
     let saved = (c.engine().project, c.engine().full);
@@ -913,7 +913,7 @@ fn pending_camera_and_sampler_restoration_retains_twins_until_quiesce_retries() 
     );
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn sun_refusal_returns_the_frame_to_output_size() {
     for failure in 0..3 {
         let c = Case::new(true);
@@ -954,7 +954,7 @@ fn sun_refusal_returns_the_frame_to_output_size() {
     }
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn scope_frames_stay_stock() {
     let c = Case::new(true);
     let facts = Facts {
@@ -980,7 +980,7 @@ fn scope_frames_stay_stock() {
     assert!(c.prepare(&c.facts3(0.25, 0.1)) && c.seam() && c.stock());
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn a_failed_exchange_rolls_every_write_back() {
     let probe = Case::new(true);
     probe.engine().guard = 1;
@@ -1007,7 +1007,7 @@ fn a_failed_exchange_rolls_every_write_back() {
     }
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn a_partially_written_cache_range_rolls_back_before_drawing() {
     let c = Case::new(true);
     // 99 target fields, four globals, then the texture-list pointer and PS range.
@@ -1025,7 +1025,7 @@ fn a_partially_written_cache_range_rolls_back_before_drawing() {
     assert_eq!(c.engine().backend, expected);
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn cache_readback_refusal_keeps_twins_until_the_range_is_clear() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts2()));
@@ -1047,7 +1047,7 @@ fn cache_readback_refusal_keeps_twins_until_the_range_is_clear() {
     assert_eq!(c.host().drops, 1);
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn a_failed_restore_keeps_twins_until_shutdown_can_verify_the_fields() {
     for global in [false, true] {
         let c = Case::new(true);
@@ -1091,7 +1091,7 @@ fn a_failed_restore_keeps_twins_until_shutdown_can_verify_the_fields() {
     }
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn layout_and_platform_are_checked_at_creation() {
     let mut wide = layout();
     wide.backend_textures[0].count = MAX_CACHE_SLOTS + 1;
@@ -1118,7 +1118,7 @@ fn layout_and_platform_are_checked_at_creation() {
 }
 
 /// The production engine layout (sr_profile.rs) matches this fixture's independent copy.
-#[cfg_attr(test, test)]
+#[test]
 fn engine_layout_matches_the_fixture() {
     let native = crate::sr_profile::rsf_anomaly_sr_engine_layout();
     let fixture = layout();

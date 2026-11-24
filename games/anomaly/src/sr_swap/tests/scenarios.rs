@@ -10,7 +10,7 @@ use crate::sys::{
     RSF_ANOMALY_SWAP_SKIP_TWINS as TWINS,
 };
 
-#[cfg_attr(test, test)]
+#[test]
 fn blur_only() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts()) && c.seam());
@@ -18,7 +18,7 @@ fn blur_only() {
     assert!(c.stock() && c.view().counters.seams_without_window == 0);
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn combine_without_seam() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts()));
@@ -28,7 +28,7 @@ fn combine_without_seam() {
     assert!(!c.prepare(&c.facts()) && c.skipped(OFF) == 1 && c.stock());
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stale_prepare() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts()) && c.prepare(&c.facts()));
@@ -38,7 +38,7 @@ fn stale_prepare() {
     assert!(c.stock() && c.restored(STALE) == 2 && !c.view().open);
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn frame_end_open() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts()));
@@ -46,7 +46,7 @@ fn frame_end_open() {
     assert!(c.stock() && !c.view().refusal.is_null() && c.restored(FRAME_END) == 1);
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn shutdown_open() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts()) && crate::sr_swap::shutdown(c.swap));
@@ -78,7 +78,7 @@ fn check_ineligible(world: bool) {
     assert!(c.prepare(&facts) && c.seam() && c.stock());
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn ineligible() {
     check_ineligible(false);
 }
@@ -94,7 +94,7 @@ fn refused(mut change: impl FnMut(&mut Engine), world: bool, reason: u32) {
     );
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn layout_refusals() {
     let cases: [fn(&mut Engine); 7] = [
         |e| put(&mut e.crt[0], 0x40, 28u32),
@@ -118,7 +118,7 @@ fn layout_refusals() {
     );
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn twin_failures() {
     let c = Case::new(true);
     c.host().make_result = RSF_ANOMALY_SWAP_MAKE_FAILED;
@@ -152,7 +152,7 @@ fn twin_failures() {
     );
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn write_fault() {
     for at in 0..22 {
         let c = Case::new(true);
@@ -164,7 +164,7 @@ fn write_fault() {
     }
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn foreign_change() {
     let c = Case::new(true);
     assert!(c.prepare(&c.facts()));
@@ -186,12 +186,12 @@ fn failed_draw(world: bool) {
     assert!(!c.view().refusal.is_null() && c.view().counters.round_trip_failures == 1);
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn round_trip_failure() {
     failed_draw(false);
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn reset_resize() {
     let mut c = Case::new(true);
     assert!(c.prepare(&c.facts()) && c.seam());
@@ -249,7 +249,7 @@ fn globals(c: &Case, width: u32, height: u32) {
     );
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage2_normal() {
     let mut c = Case::new(true);
     c.ssao([960., 540.]);
@@ -322,7 +322,7 @@ fn stage2_normal() {
 
 // Row and column index two matrices and the axes together.
 #[allow(clippy::needless_range_loop)]
-#[cfg_attr(test, test)]
+#[test]
 fn stage2_optional_odd() {
     let c = Case::new(false);
     assert!(c.prepare(&c.facts2()));
@@ -354,7 +354,7 @@ fn stage2_optional_odd() {
     assert_eq!(c.host().makes, 2);
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage2_layout() {
     let cases: [fn(&mut Engine); 11] = [
         |e| put(&mut e.crt[2], 0x40, 21u32),
@@ -408,7 +408,7 @@ fn close(c: &Case, reason: u32) {
     }
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage2_exits() {
     for reason in [COMBINE, FRAME_END, STALE, SHUTDOWN] {
         let c = Case::new(true);
@@ -436,7 +436,7 @@ fn stage2_exits() {
     check_ineligible(true);
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage2_foreign() {
     for mutator in [0, 1, 2] {
         let c = Case::new(true);
@@ -456,7 +456,7 @@ fn stage2_foreign() {
     }
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage2_ssao_viewport() {
     let mut c = Case::new(true);
     c.ssao([640., 360.]);
@@ -486,7 +486,7 @@ fn stage2_ssao_viewport() {
     assert!(c.prepare(&facts) && c.engine().viewport[2] == 960. && c.seam() && c.stock());
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage2_lifecycle() {
     let mut c = Case::new(true);
     c.ssao([960., 540.]);
@@ -554,7 +554,7 @@ fn first_person(c: &Case) -> Matrix {
     p
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage3_normal() {
     stage3_window_jitters_main_and_first_person_once();
     let mut c = Case::new(true);
@@ -615,7 +615,7 @@ fn stage3_normal() {
     assert!(crate::sr_swap::shutdown(c.swap) && c.stock());
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage3_exits() {
     for reason in [COMBINE, FRAME_END, STALE, SHUTDOWN] {
         let c = Case::new(true);
@@ -676,7 +676,7 @@ fn stage3_exits() {
     pending_camera_and_sampler_restoration_retains_twins_until_quiesce_retries();
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage3_foreign_ineligible() {
     for mode in [0, 1] {
         let c = Case::new(true);
@@ -757,7 +757,7 @@ fn stage3_foreign_ineligible() {
     );
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage3_sun_cascades() {
     sun_cascades_borrow_the_unjittered_camera();
     for index in [0, 5, 17] {
@@ -834,7 +834,7 @@ fn stage3_sun_cascades() {
     );
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage3_sun_rollback() {
     sun_refusal_returns_the_frame_to_output_size();
     for failure in 0..5 {
@@ -867,7 +867,7 @@ fn stage3_sun_rollback() {
     }
 }
 
-#[cfg_attr(test, test)]
+#[test]
 fn stage3_position_reconstruction() {
     let c = Case::new(true);
     let mut byte = 0u8;
@@ -913,7 +913,7 @@ fn stage3_position_reconstruction() {
 }
 
 /// The jittered main and first-person cameras against the independent native camera oracle (temporal_fixture.rs).
-#[cfg_attr(test, test)]
+#[test]
 fn stage3_matches_the_independent_camera_oracle() {
     for i in [0, 1, 2, 5, 17] {
         let c = Case::new(true);
