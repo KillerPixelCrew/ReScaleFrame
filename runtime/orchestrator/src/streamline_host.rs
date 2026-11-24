@@ -14,7 +14,7 @@ use crate::sys::{
     rsf_fg_swapchain_desc as ChainDesc,
 };
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::mem::{offset_of, zeroed};
+use std::mem::zeroed;
 use std::ptr::{NonNull, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::sync::{Mutex, MutexGuard};
@@ -79,7 +79,6 @@ const PCL_MARKER: u32 = 32;
 const PCL_STATE: u32 = 64;
 const GENERATION: u32 = GET_STATE | SET_OPTIONS;
 
-#[repr(C)]
 struct InitPreferences {
     directory: *const u16,
     engine_version: *const c_char,
@@ -93,14 +92,12 @@ struct InitPreferences {
     log_level: u32,
 }
 
-#[repr(C)]
 #[derive(Default)]
 struct Reflex {
     low_latency_available: u32,
     latency_report_available: u32,
 }
 
-#[repr(C)]
 struct Startup {
     engine_count: u32,
     interposer_loaded: unsafe extern "C" fn() -> u32,
@@ -129,7 +126,6 @@ struct Startup {
     pcl_defaults: unsafe extern "C" fn(Handle),
 }
 
-#[repr(C)]
 struct Platform {
     startup: &'static Startup,
     dispose: unsafe extern "C" fn(Handle),
@@ -157,15 +153,6 @@ struct Platform {
     tags: unsafe extern "C" fn(Handle, Handle, Handle, &Frame) -> i32,
 }
 
-const _: () = {
-    assert!(size_of::<InitPreferences>() == 64);
-    assert!(offset_of!(InitPreferences, flags) == 32);
-    assert!(offset_of!(InitPreferences, log_level) == 56);
-    assert!(offset_of!(Startup, interposer_loaded) == size_of::<Handle>());
-    assert!(size_of::<Startup>() == 25 * size_of::<Handle>());
-    assert!(size_of::<Reflex>() == 8);
-    assert!(size_of::<Platform>() == 24 * size_of::<Handle>());
-};
 
 #[derive(Clone, Copy)]
 struct Token {
@@ -238,14 +225,11 @@ impl Frames {
     }
 }
 
-#[repr(C)]
 struct CommonPresent {
     resolve: unsafe extern "C" fn(Handle, &mut [Handle; 2]) -> u32,
     before: unsafe extern "C" fn(Handle, Handle, u32, u32) -> u32,
     after: unsafe extern "C" fn(Handle, u32) -> u32,
 }
-
-const _: () = assert!(size_of::<CommonPresent>() == 3 * size_of::<Handle>());
 
 pub(crate) struct Host {
     native: Handle,

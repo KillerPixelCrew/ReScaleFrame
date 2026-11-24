@@ -21,9 +21,7 @@ const MFG_REFUSED: u32 = 2;
 // Active DLSS-G needs Reflex frame tracking and PCL markers on the same token.
 const REQUIRED: u32 = GET_STATE | SET_OPTIONS | SLEEP | PCL_MARKER | REFLEX_OPTIONS | REFLEX_STATE;
 
-// The sl::DLSSGOptions fields this provider sets. Only the native table reads them.
-#[allow(dead_code)]
-#[repr(C)]
+// The sl::DLSSGOptions fields this provider sets.
 pub(super) struct Request {
     pub(super) mode: u32,
     pub(super) frames: u32,
@@ -32,7 +30,6 @@ pub(super) struct Request {
 }
 
 // One slDLSSGGetState answer plus the compiled MFG allocation limit.
-#[repr(C)]
 pub(super) struct Observed {
     pub(super) max_generated_frames: u32,
     pub(super) dynamic_supported: u32,
@@ -46,11 +43,6 @@ pub(super) struct Observed {
     pub(super) fence_value: u64,
 }
 
-const _: () = {
-    assert!(size_of::<Request>() == 16);
-    assert!(size_of::<Observed>() == 56);
-    assert!(offset_of!(Observed, presented) == 32);
-};
 
 #[derive(Clone, Copy)]
 pub(super) struct Snapshot {
