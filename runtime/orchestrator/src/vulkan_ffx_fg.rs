@@ -741,18 +741,6 @@ unsafe fn live<'a>(owner: *mut Owner) -> Option<&'a mut Owner> {
     unsafe { owner.as_mut() }.filter(|owner| !owner.retiring)
 }
 
-/// Creates an owner over the SDK leaf with `host`, which outlives every owner (`sdk::NATIVE_HOST`,
-/// or a fixture's table). A null host is the
-/// disabled build, which validates the arguments and reports NOT_COMPILED.
-unsafe extern "C" fn rsf_core_ffxgvk_create_sdk(
-    host: *const Host,
-    setup: *const Setup,
-    output: *mut *mut Owner,
-    chain: *mut u64,
-) -> i32 {
-    unsafe { create(host.as_ref(), setup, output, chain) }
-}
-
 /// The provider entry: the production host when CMake found the FidelityFX Vulkan headers (the
 /// `ffx-vk` feature), otherwise the disabled build.
 // vulkan_fg.rs dispatches here; its unit tests route to the dispatch_tests doubles instead.
@@ -762,15 +750,13 @@ pub(crate) unsafe extern "C" fn rsf_ffxgvk_create(
     output: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
-    let host = if cfg!(feature = "ffx-vk") {
-        &sdk::NATIVE_HOST as *const Host
-    } else {
-        ptr::null()
-    };
-    unsafe { rsf_core_ffxgvk_create_sdk(host, setup, output, chain) }
+    let host = cfg!(feature = "ffx-vk").then_some(&sdk::NATIVE_HOST);
+    unsafe { create(host, setup, output, chain) }
 }
 
-/// `host` is None in the disabled build.
+/// Creates an owner over the SDK leaf with `host`, which outlives every owner (`sdk::NATIVE_HOST`,
+/// or a fixture's table). `host` is None in the disabled build, which validates the arguments and
+/// reports NOT_COMPILED./// `host` is None in the disabled build.
 unsafe fn create(
     host: Option<&'static Host>,
     setup: *const Setup,
@@ -1478,8 +1464,7 @@ mod tests {
         };
         assert_eq!(create(&setup(), &recreated).0, NOT_SUPPORTED);
         let (mut owner, mut chain) = (ptr::null_mut(), 0);
-        let disabled =
-            unsafe { rsf_core_ffxgvk_create_sdk(ptr::null(), &setup(), &mut owner, &mut chain) };
+        let disabled = unsafe { super::create(None, &setup(), &mut owner, &mut chain) };
         assert_eq!((disabled, owner.is_null(), chain), (NOT_COMPILED, true, 0));
         assert_eq!(calls(|c| c.opens), 0);
     }

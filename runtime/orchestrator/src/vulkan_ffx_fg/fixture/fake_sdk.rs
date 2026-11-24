@@ -16,9 +16,7 @@ use crate::sys::{RSF_FGVK_ABI_VERSION, RSF_SRVK_ABI_VERSION, rsf_fgvk_setup, rsf
 use crate::vulkan_ffx_fg::sdk::{
     Host, WsiDispatch, rsf_ffxgvk_guard_memory, rsf_ffxgvk_guard_resolve,
 };
-use crate::vulkan_ffx_fg::{
-    Owner, rsf_core_ffxgvk_create_sdk, rsf_core_ffxgvk_wsi_borrow, rsf_core_ffxgvk_wsi_return,
-};
+use crate::vulkan_ffx_fg::{Owner, create, rsf_core_ffxgvk_wsi_borrow, rsf_core_ffxgvk_wsi_return};
 use crate::vulkan_fg_resources::Platform as rsf_vkfg_platform;
 use crate::vulkan_fg_resources::device::{
     DEVICE_PLATFORM, Device, rsf_core_vkfg_device_memory, rsf_core_vkfg_load_device,
@@ -602,7 +600,7 @@ pub(super) unsafe fn rsf_fixture_ffx_start(
     chain: *mut u64,
 ) -> i32 {
     let setup = Setup::new();
-    let result = unsafe { rsf_core_ffxgvk_create_sdk(&HOST, &setup.value, out, chain) };
+    let result = unsafe { create(Some(&HOST), &setup.value, out, chain) };
     if route && result == FIXTURE_OK {
         unsafe { (*rsf_fixture_wsi_route_state()).owner = *out };
     }
