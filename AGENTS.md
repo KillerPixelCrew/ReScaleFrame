@@ -95,7 +95,7 @@ and valid output on native, reduced-resolution and failure paths. Unresolved req
 
 Repository skills use the open [Agent Skills format](https://agentskills.io/specification) under `.agents/skills/<name>/SKILL.md`. Keep one shared skill source with standard YAML metadata. Clients with different discovery paths can load the linked file explicitly; do not fork its instructions per agent.
 
-Every reverse-engineering result must explain the question, why the approach was chosen, how it was found, the evidence, and where and when the runtime uses it. Record the researched build's fingerprint, source revisions, units, frame/view identity, resource lifetime, failed approaches, and uncertainty. Keep `games/<id>/engine.json`, research notes, and the implementation tracker consistent.
+Every reverse-engineering result must explain the question, why the approach was chosen, how it was found, the evidence, and where and when the runtime uses it. Record the builds the signatures were derived and verified on (their hashes as evidence only), source revisions, units, frame/view identity, resource lifetime, failed approaches, and uncertainty. Keep `games/<id>/engine.json`, research notes, and the implementation tracker consistent.
 
 Every commit and PR includes its research or links to the relevant notes. For changes without a new experiment, give the rationale and checks performed. Never invent research or describe a source review as a runtime test. When evidence corrects an earlier conclusion, retain a concise account of what changed and why.
 
