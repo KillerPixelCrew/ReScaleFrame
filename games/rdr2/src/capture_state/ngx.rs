@@ -6,6 +6,7 @@ use super::metadata::*;
 use super::recordings::resource_state;
 use super::shots::{self, input_shot};
 use super::{Capture, has_inputs};
+use crate::discovery::{Site, rva};
 use crate::{
     layout,
     platform::{lock, read_bytes, worker_tls_slots},
@@ -40,7 +41,7 @@ fn camera(state: &Native, input: &InputId) {
     unsafe { QueryPerformanceCounter(&mut qpc) };
     let mut facts = CameraFacts {
         frame: state
-            .read(state.base + layout::FRAME_COUNTER)
+            .read(state.base + rva(Site::FrameCounter))
             .unwrap_or_default(),
         thread: unsafe { GetCurrentThreadId() },
         tick: unsafe { GetTickCount64() },
@@ -48,7 +49,7 @@ fn camera(state: &Native, input: &InputId) {
         ..CameraFacts::default()
     };
     let camera = state
-        .read::<u32>(state.base + layout::TLS_INDEX)
+        .read::<u32>(state.base + rva(Site::TlsIndex))
         .filter(|&index| index < layout::block::TLS_LIMIT)
         .and_then(|index| {
             let address =

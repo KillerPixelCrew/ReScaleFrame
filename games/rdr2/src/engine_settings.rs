@@ -5,7 +5,8 @@
 //! preference arrives from the ScriptHook fiber and is applied through the engine's own graphics
 //! reconfiguration. RSF settings and other graphics settings are never changed here.
 use crate::asi;
-use crate::layout::asi::{self as site, collection, manager};
+use crate::discovery::{self, Site, rva};
+use crate::layout::asi::{collection, manager};
 use crate::platform::{self, trampoline};
 use crate::runtime_worker::log as write_log;
 use rsf_minhook_sys::{MH_ApplyQueued, MH_OK, MH_QueueEnableHook};
@@ -377,8 +378,8 @@ unsafe extern "C" fn refresh_dimensions() {
     let image = IMAGE.load(Ordering::Acquire) as *const u8;
     let (input, output) = unsafe {
         (
-            image.add(site::RENDER_INPUT),
-            image.add(site::RENDER_OUTPUT),
+            image.add(rva(Site::RenderInput)),
+            image.add(rva(Site::RenderOutput)),
         )
     };
     let thread = unsafe { GetCurrentThreadId() };
@@ -405,9 +406,9 @@ unsafe fn pin_pending(manager_object: *mut c_void, quality: u32) -> bool {
     let ids = [manager::GRAPHICS_ID];
     let (active, pending) = unsafe {
         (
-            asi::engine_owner(image + site::OWNER.rva, manager_object).cast::<u8>(),
+            asi::engine_owner(image + rva(Site::Owner), manager_object).cast::<u8>(),
             asi::engine_find(
-                image + site::FIND.rva,
+                image + rva(Site::Find),
                 manager_object,
                 ids.as_ptr(),
                 ids.len() as u64,
@@ -476,12 +477,13 @@ unsafe extern "C" fn reconfigure(manager_object: *mut c_void) {
 }
 
 struct Hook {
-    site: &'static crate::layout::Site,
+    site: Site,
     detour: *const c_void,
     original: &'static AtomicPtr<c_void>,
 }
 
-/// Installs the seven settings hooks after exact-image decryption, before native settings load.
+/// Installs the seven settings hooks after decryption, before native settings load, at their
+/// discovered sites.
 /// Every entry and engine function is checked first; any refusal leaves no hook behind.
 pub(crate) fn install(configured_quality: u32) -> bool {
     if INSTALLED.load(Ordering::SeqCst) {
@@ -498,52 +500,52 @@ pub(crate) fn install(configured_quality: u32) -> bool {
     );
     let image = unsafe { platform::main_module() };
     IMAGE.store(image, Ordering::Release);
+    if discovery::admit().is_err() {
+        return false;
+    }
     let hooks = [
         Hook {
-            site: &site::COPY,
+            site: Site::Copy,
             detour: copy as *const c_void,
             original: &ORIGINAL_COPY,
         },
         Hook {
-            site: &site::LOAD,
+            site: Site::Load,
             detour: load as *const c_void,
             original: &ORIGINAL_LOAD,
         },
         Hook {
-            site: &site::APPLY,
+            site: Site::Apply,
             detour: apply as *const c_void,
             original: &ORIGINAL_APPLY,
         },
         Hook {
-            site: &site::OPTIMAL,
+            site: Site::Optimal,
             detour: optimal as *const c_void,
             original: &ORIGINAL_OPTIMAL,
         },
         Hook {
-            site: &site::FSR_DIMENSIONS,
+            site: Site::FsrDimensions,
             detour: fsr_dimensions as *const c_void,
             original: &ORIGINAL_DIMENSIONS,
         },
         Hook {
-            site: &site::REFRESH_DIMENSIONS,
+            site: Site::RefreshDimensions,
             detour: refresh_dimensions as *const c_void,
             original: &ORIGINAL_REFRESH,
         },
         Hook {
-            site: &site::RECONFIGURE,
+            site: Site::Reconfigure,
             detour: reconfigure as *const c_void,
             original: &ORIGINAL_RECONFIGURE,
         },
     ];
+    // The hooked entries and the engine functions the quality request calls.
     if !hooks
         .iter()
-        .all(|hook| platform::matches(image + hook.site.rva, &hook.site.expected))
-    {
-        return false;
-    }
-    if ![site::MANAGER, site::OWNER, site::FIND]
-        .iter()
-        .all(|function| platform::matches(image + function.rva, function.expected))
+        .map(|hook| hook.site)
+        .chain([Site::Manager, Site::Owner, Site::Find])
+        .all(|site| discovery::verify(image, site))
     {
         return false;
     }
@@ -552,18 +554,18 @@ pub(crate) fn install(configured_quality: u32) -> bool {
     }
     let remove = |hooks: &[Hook]| {
         for hook in hooks {
-            platform::remove(image + hook.site.rva);
+            platform::remove(image + rva(hook.site));
         }
     };
     for (created, hook) in hooks.iter().enumerate() {
-        if !platform::create(image + hook.site.rva, hook.detour, hook.original) {
+        if !platform::create(image + rva(hook.site), hook.detour, hook.original) {
             remove(&hooks[..created]);
             return false;
         }
     }
     if hooks
         .iter()
-        .any(|hook| unsafe { MH_QueueEnableHook((image + hook.site.rva) as _) } != MH_OK)
+        .any(|hook| unsafe { MH_QueueEnableHook((image + rva(hook.site)) as _) } != MH_OK)
     {
         remove(&hooks[..]);
         return false;
@@ -571,7 +573,7 @@ pub(crate) fn install(configured_quality: u32) -> bool {
     let installed = unsafe { MH_ApplyQueued() } == MH_OK;
     if !installed {
         for hook in &hooks {
-            platform::disable(image + hook.site.rva);
+            platform::disable(image + rva(hook.site));
         }
         remove(&hooks[..]);
     }
@@ -590,7 +592,7 @@ pub(crate) unsafe fn quality_tick(quality: u32) {
         return;
     }
     let image = IMAGE.load(Ordering::Acquire);
-    let manager_object = unsafe { asi::engine_manager(image + site::MANAGER.rva) };
+    let manager_object = unsafe { asi::engine_manager(image + rva(Site::Manager)) };
     if manager_object.is_null() {
         return;
     }
@@ -636,9 +638,9 @@ pub(crate) fn report() {
         } else {
             "REFUSED"
         },
-        site::COPY.rva,
-        site::LOAD.rva,
-        site::APPLY.rva,
+        rva(Site::Copy),
+        rva(Site::Load),
+        rva(Site::Apply),
         (cached >> 32) as u32,
         cached as u32,
         OVERRIDES.load(Ordering::SeqCst),

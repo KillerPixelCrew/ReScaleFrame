@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Red Dead Redemption 2 (Steam 1.0.1491.50) game plugin policy for `ReScaleFrame.Game.RDR2.dll`.
+//! Red Dead Redemption 2 game plugin policy for `ReScaleFrame.Game.RDR2.dll`, researched on Steam
+//! 1.0.1491.50; its native sites are discovered by signature (`discovery.rs`).
 //! Recognition, lifecycle validation, native SR routing and the completed-scene producer live here.
 //! Windows and COM services are implemented in the platform module.
 //!
@@ -32,6 +33,7 @@ mod capture_state;
 mod d3d12_trace;
 #[cfg(all(windows, feature = "research"))]
 mod diagnostics;
+mod discovery;
 mod engine_settings;
 mod host;
 mod layout;
@@ -109,10 +111,14 @@ unsafe extern "C" fn status(output: *mut rsf_game_renderer_status) -> i32 {
     valid
 }
 
+/// Recognized by name; whether this build is usable is decided by site discovery at prepare.
 unsafe extern "C" fn detect(raw: *const rsf_game_probe) -> u32 {
     unsafe {
         Probe::detect(raw, |probe| {
-            probe.matches(layout::EXECUTABLE_NAME, layout::SHA256)
+            probe
+                .executable
+                .to_bytes()
+                .eq_ignore_ascii_case(layout::EXECUTABLE_NAME.to_bytes())
         })
     }
 }

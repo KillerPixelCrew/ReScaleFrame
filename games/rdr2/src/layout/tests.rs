@@ -68,37 +68,11 @@ fn unknown_fsr_resource_state_refuses() {
 }
 
 #[test]
-fn output_callers_resolve_to_the_postfx_output() {
-    for site in OUTPUT_CALLS {
-        let displacement = (OUTPUT.rva as i64 - site as i64 - 5) as i32;
-        let mut call = [0xe8, 0, 0, 0, 0];
-        call[1..].copy_from_slice(&displacement.to_le_bytes());
-        assert_eq!(call_target(site, &call), Some(OUTPUT.rva));
-        assert_eq!(
-            OUTPUT_RETURNS
-                .iter()
-                .filter(|&&ret| ret == site + 5)
-                .count(),
-            1
-        );
-        call[0] = 0xe9;
-        assert_eq!(call_target(site, &call), None);
-    }
-}
-
-#[test]
-fn every_site_names_distinct_rvas() {
-    let sites = [
-        EVALUATE.rva,
-        POP.rva,
-        BLIT.rva,
-        MARKER.rva,
-        OUTPUT.rva,
-        SLEEP.rva,
-        MODE.rva,
-    ];
-    for (index, site) in sites.iter().enumerate() {
-        assert!(*site < IMAGE_SIZE as usize - 16);
-        assert!(!sites[..index].contains(site));
-    }
+fn call_targets_decode_only_rel32_calls() {
+    let (site, target) = (0x5c_aafc, 0x5f_1e08);
+    let mut call = [0xe8, 0, 0, 0, 0];
+    call[1..].copy_from_slice(&((target as i64 - site as i64 - 5) as i32).to_le_bytes());
+    assert_eq!(call_target(site, &call), Some(target));
+    call[0] = 0xe9;
+    assert_eq!(call_target(site, &call), None);
 }

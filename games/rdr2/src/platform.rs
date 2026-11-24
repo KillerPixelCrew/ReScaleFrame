@@ -133,6 +133,7 @@ pub(crate) fn image_header(module: usize) -> Option<(usize, ImageFacts)> {
     ))
 }
 
+#[cfg(feature = "research")]
 pub(crate) fn image_facts(module: usize) -> Option<ImageFacts> {
     image_header(module).map(|(_, facts)| facts)
 }

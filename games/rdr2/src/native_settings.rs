@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Opt-in, bounded settings evidence collection. The detours never change native data.
 use crate::asi::{DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
-use crate::layout::settings_probe::{BIND, GETTER_SLOT, KEYS, METADATA_KEY, READ};
+use crate::discovery::Site;
+use crate::layout::settings_probe::{GETTER_SLOT, KEYS, METADATA_KEY};
 use crate::platform::{self, lock, read_bytes, read_value};
 use crate::runtime_worker::log;
 use std::ffi::{OsString, c_void};
@@ -65,11 +66,12 @@ pub(crate) fn install(path: &[u16]) -> bool {
     let Some(facts) = platform::image_facts(image) else {
         return false;
     };
-    let installed = match install_diagnostic_hooks(image, [BIND, READ], &hooks) {
-        DiagnosticInstall::Installed => true,
-        DiagnosticInstall::Refused => return false,
-        DiagnosticInstall::Retained => false,
-    };
+    let installed =
+        match install_diagnostic_hooks(image, [Site::SettingsBind, Site::SettingsRead], &hooks) {
+            DiagnosticInstall::Installed => true,
+            DiagnosticInstall::Refused => return false,
+            DiagnosticInstall::Retained => false,
+        };
     *probe = Some(Probe {
         output: PathBuf::from(OsString::from_wide(path)),
         image,

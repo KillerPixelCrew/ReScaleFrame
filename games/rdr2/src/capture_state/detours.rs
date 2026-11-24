@@ -9,7 +9,8 @@ use super::metadata::*;
 use super::pipeline::{graphics_facts, stream_facts};
 use super::recordings::*;
 use super::shots::{self, Image, draw_shot, pending_count};
-use crate::{camera_probe::rsf_rdr2_camera_request, layout, platform::lock};
+use crate::discovery::{Site, rva};
+use crate::{camera_probe::rsf_rdr2_camera_request, platform::lock};
 use std::{arch::naked_asm, cell::Cell, ffi::c_void, ptr::null_mut, sync::atomic::Ordering};
 use windows::Win32::Graphics::{
     Direct3D12::*,
@@ -159,7 +160,7 @@ pub(super) unsafe fn copy_resource(
     }
     image.tick = unsafe { GetTickCount64() };
     image.frame = state
-        .read(state.base + layout::FRAME_COUNTER)
+        .read(state.base + rva(Site::FrameCounter))
         .unwrap_or_default();
     true
 }
@@ -612,7 +613,7 @@ pub(super) unsafe extern "C" fn before_present(chain: Raw) {
             state.selected_chain.load(Ordering::Acquire)
         } else {
             state
-                .read::<usize>(state.base + layout::SWAPCHAIN)
+                .read::<usize>(state.base + rva(Site::Swapchain))
                 .map_or(null_mut(), |chain| chain as Raw)
         };
         if chain != game_chain {

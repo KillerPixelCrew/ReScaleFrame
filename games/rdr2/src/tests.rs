@@ -19,14 +19,18 @@ fn probe(executable: &CStr, sha256: &CStr) -> rsf_game_probe {
 const SHA: &CStr = c"B56C9548F670654A9B73BF25DEF3CD73AF12E269F6E47DBA28A34079ADAF465E";
 
 #[test]
-fn detection_matches_only_the_fingerprinted_executable() {
+fn detection_matches_the_executable_by_name_not_by_build() {
     let mut value = probe(c"rdr2.EXE", SHA);
     assert_eq!(unsafe { detect(&value) }, RECOGNIZED);
     value.pe_machine = 0x14c;
     assert_eq!(unsafe { detect(&value) }, UNKNOWN);
     value.pe_machine = layout::AMD64;
+    // Another build is recognized; prepare decides by discovering its sites.
     value.sha256_hex = c"unknown".as_ptr();
+    assert_eq!(unsafe { detect(&value) }, RECOGNIZED);
+    value.executable_name_utf8 = c"PlayRDR2.exe".as_ptr();
     assert_eq!(unsafe { detect(&value) }, UNKNOWN);
+    value.executable_name_utf8 = c"RDR2.exe".as_ptr();
     value.sha256_hex = SHA.as_ptr();
     value.executable_name_utf8 = ptr::null();
     assert_eq!(unsafe { detect(&value) }, UNKNOWN);

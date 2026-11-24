@@ -376,9 +376,18 @@ pub fn mapped_sections(
         if rva.checked_add(size)? > headers.image_size() {
             return None;
         }
+        // Read in chunks; a page that cannot be read (a guard or no-access page) stays zero, which
+        // no pattern can match, instead of refusing the whole image.
         let mut bytes = vec![0; size];
-        if !image(rva, bytes.as_mut_ptr(), size) {
-            return None;
+        for (index, chunk) in bytes.chunks_mut(1 << 20).enumerate() {
+            let start = rva + (index << 20);
+            if !image(start, chunk.as_mut_ptr(), chunk.len()) {
+                for (page, part) in chunk.chunks_mut(0x1000).enumerate() {
+                    if !image(start + page * 0x1000, part.as_mut_ptr(), part.len()) {
+                        part.fill(0);
+                    }
+                }
+            }
         }
         kept.push((rva, bytes));
     }

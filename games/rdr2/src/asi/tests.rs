@@ -32,17 +32,17 @@ fn configuration_sits_beside_the_asi() {
 
 #[test]
 fn read_sites_resolve_to_the_api_parameter() {
-    for (rva, opcode) in asi::API_OVERRIDE_READS {
-        let displacement = asi::API_OVERRIDE.wrapping_sub(rva + 7).to_le_bytes();
-        let mut bytes = [0; 7];
-        bytes[..3].copy_from_slice(&opcode);
-        bytes[3..].copy_from_slice(&displacement);
-        assert!(reads_parameter(rva, opcode, bytes));
+    let (parameter, site) = (0x57a_bf10usize, 0x2c6_5575usize);
+    for register in [0x05, 0x0d, 0x1d] {
+        let mut bytes = [0x48, 0x8b, register, 0, 0, 0, 0];
+        bytes[3..].copy_from_slice(&((parameter - site - 7) as u32).to_le_bytes());
+        assert_eq!(discovery::parameter_read(site, bytes), Some(parameter));
+        // A register operand or another opcode is not a RIP-relative load.
         let mut other = bytes;
         other[2] ^= 1;
-        assert!(!reads_parameter(rva, opcode, other));
+        assert_eq!(discovery::parameter_read(site, other), None);
         other = bytes;
-        other[3] = other[3].wrapping_add(1);
-        assert!(!reads_parameter(rva, opcode, other));
+        other[1] = 0x89;
+        assert_eq!(discovery::parameter_read(site, other), None);
     }
 }

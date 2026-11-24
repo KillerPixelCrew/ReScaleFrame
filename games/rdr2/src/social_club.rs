@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Keep RAGE's supplied backbuffer index when Social Club records into RAGE's command list.
-//! The guarded renderer bytes and continuation addresses are from rdr2-renderer.md.
+//! The game's dispatcher and the renderer's frame entry and gate are discovered by signature; see
+//! rdr2-renderer.md.
 use crate::asi::status_text;
-use crate::layout::{asi::SOCIAL_CLUB_DISPATCHER, social_club as profile};
+use crate::discovery::{self, Site, rva};
+use crate::layout::social_club as profile;
 use crate::platform::{self, lock, read_value, trampoline};
 use crate::runtime_worker::log;
 use rsf_minhook_sys::{
@@ -71,16 +73,14 @@ fn enable(target: usize) -> i32 {
 
 pub(crate) fn install(current_index: CurrentIndex, trace: bool) -> bool {
     let image = unsafe { platform::main_module() };
-    let Some(site) = image
-        .checked_add(SOCIAL_CLUB_DISPATCHER as usize)
-        .filter(|_| image != 0)
-    else {
-        return false;
-    };
-    if !platform::matches(site, &profile::DISPATCH_BYTES) || !unsafe { platform::hook_initialize() }
+    if image == 0
+        || discovery::admit().is_err()
+        || !discovery::verify(image, Site::SocialClubDispatcher)
+        || !unsafe { platform::hook_initialize() }
     {
         return false;
     }
+    let site = image + rva(Site::SocialClubDispatcher);
     if OPTIONS
         .set(Options {
             current_index,
@@ -93,16 +93,10 @@ pub(crate) fn install(current_index: CurrentIndex, trace: bool) -> bool {
     create(site, dispatch as *const c_void, &ORIGINAL_DISPATCH) == MH_OK && enable(site) == MH_OK
 }
 
-fn renderer_matches(base: usize) -> bool {
-    platform::image_facts(base).is_some_and(|facts| {
-        facts.timestamp == profile::IMAGE_TIMESTAMP && facts.image_size == profile::IMAGE_SIZE
-    }) && platform::matches(base + profile::GATE, &profile::GATE_BYTES)
-        && platform::matches(base + profile::ENTRY, &profile::ENTRY_BYTES)
-}
-
-fn relay(base: usize) -> [u8; 43] {
+/// The gate relay resuming after the gate's comparison at `gate`.
+fn relay(gate: usize) -> [u8; 43] {
     let mut code = profile::RELAY;
-    let continuation = ((base + profile::AFTER_COMPARISON) as u64).to_le_bytes();
+    let continuation = ((gate + profile::GATE_LENGTH) as u64).to_le_bytes();
     code[14..22].copy_from_slice(&continuation);
     code[35..43].copy_from_slice(&continuation);
     code
@@ -129,14 +123,15 @@ fn observe_dispatch() {
     }
     *attempted = true;
     let base = module as usize;
-    if !renderer_matches(base) {
-        log(
-            "Social Club backbuffer fix refused: unsupported renderer image or modified instructions.",
-        );
-        return;
-    }
+    let [entry, gate] = match discovery::social_club(base) {
+        Ok(sites) => sites,
+        Err(reason) => {
+            log(format!("Social Club backbuffer fix refused: {reason}."));
+            return;
+        }
+    };
 
-    let code = relay(base);
+    let code = relay(base + gate);
     let page =
         unsafe { VirtualAlloc(null(), code.len(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
     if page.is_null() {
@@ -149,7 +144,7 @@ fn observe_dispatch() {
         VirtualProtect(page, code.len(), PAGE_EXECUTE_READ, &mut old) != 0
             && FlushInstructionCache(GetCurrentProcess(), page, code.len()) != 0
     };
-    let target = base + profile::GATE;
+    let target = base + gate;
     let mut status = MH_ERROR_MEMORY_PROTECT;
     let mut registered = false;
     if published {
@@ -162,7 +157,7 @@ fn observe_dispatch() {
     let repaired = registered && matches!(status, MH_OK | MH_ERROR_ENABLED);
     REPAIRED.store(repaired, Ordering::Release);
     log(format!(
-        "Social Club backbuffer fix at renderer RVA 0x4b89: {}",
+        "Social Club backbuffer fix at renderer RVA 0x{gate:x}: {}",
         status_text(status)
     ));
     if !repaired {
@@ -177,7 +172,7 @@ fn observe_dispatch() {
         return;
     }
     if options.trace {
-        let target = base + profile::ENTRY;
+        let target = base + entry;
         let mut status = create(target, trace_render as *const c_void, &ORIGINAL_RENDER);
         if status == MH_OK {
             status = enable(target);

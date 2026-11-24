@@ -3,16 +3,14 @@
 //! direct-resource descriptor and lend the same leased SR pass to the host. Any refusal returns to
 //! the game's own upscaler for that frame and resets RSF history.
 use crate::camera::{self, CameraInputs, CameraResult};
+use crate::discovery::{self, Site, rva};
 use crate::host::{Host, HostCell};
 use crate::layout::{
-    EVALUATE, Evaluation, FRAME_TIME, FSR_IMPORT, FSR_WRAPPER_RETURN, IMAGE_SIZE, IMAGE_TIMESTAMP,
-    NGX_CREATE_FLAGS, NGX_DEPTH_INVERTED, NGX_FAIL, NGX_FAIL_MASK, NGX_GET_INT_SLOT,
-    NGX_MV_JITTERED, NGX_SUCCESS, POP, SUBMIT_RETURN, SWAPCHAIN, block, d3d, fsr, fsr_dispatch,
-    view,
+    Evaluation, NGX_CREATE_FLAGS, NGX_DEPTH_INVERTED, NGX_FAIL, NGX_FAIL_MASK, NGX_GET_INT_SLOT,
+    NGX_MV_JITTERED, NGX_SUCCESS, block, d3d, fsr, fsr_dispatch, view,
 };
 use crate::platform::{
-    self, ImageFacts, ResourceFacts, Scope, image_facts, lock, matches, read_bytes, read_pointer,
-    read_value, trampoline,
+    self, ResourceFacts, Scope, lock, matches, read_bytes, read_pointer, read_value, trampoline,
 };
 use crate::scene;
 use crate::{BUSY, NATIVE_REFUSED, NOT_READY, OK};
@@ -277,7 +275,7 @@ fn sample(ctx: &Context, flags: u32, camera: &mut [u8; view::BYTES]) -> Option<(
     if !read_bytes(view_address, camera) {
         return None;
     }
-    let dt = read_value::<f32>(ctx.image.wrapping_add(FRAME_TIME))?;
+    let dt = read_value::<f32>(ctx.image.wrapping_add(rva(Site::FrameTime)))?;
     let valid = dt.is_finite() && dt > 0.0 && dt <= 1.0 && flags & NGX_DEPTH_INVERTED != 0;
     valid.then_some((view_address, frame, dt))
 }
@@ -303,7 +301,7 @@ fn process(ctx: &Context, request: &Request, d: &Evaluation, history: &mut Histo
             "RDR2 SR native fallback: nonzero input/output subrect origin.",
         );
     }
-    let active_swapchain = read_pointer(ctx.image.wrapping_add(SWAPCHAIN));
+    let active_swapchain = read_pointer(ctx.image.wrapping_add(rva(Site::Swapchain)));
     let generation = {
         let observers = lock(&OBSERVERS);
         (active_swapchain == Some(observers.swapchain.active) && observers.ready())
@@ -533,8 +531,9 @@ fn report_fsr_caller(ctx: &Context, caller: usize) {
     let (base, path) = platform::module_at(caller);
     let name = path.rsplit('\\').next().unwrap_or_default();
     let name = if name.is_empty() { "<unknown>" } else { name };
-    let measured =
-        base != 0 && base == ctx.image && caller.wrapping_sub(ctx.image) == FSR_WRAPPER_RETURN;
+    let measured = base != 0
+        && base == ctx.image
+        && caller.wrapping_sub(ctx.image) == rva(Site::FsrWrapperReturn);
     ctx.host.log(&format!(
         "RDR2 native FSR2 dispatch observed from {name}+{:x}{}.",
         caller.wrapping_sub(base),
@@ -733,7 +732,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_pop_detour(
 ) -> *mut c_void {
     let _callback = Scope::enter(&CALLBACKS);
     let image = IMAGE.load(Ordering::SeqCst);
-    let game_submit = caller == image.wrapping_add(SUBMIT_RETURN);
+    let game_submit = caller == image.wrapping_add(rva(Site::SubmitReturn));
     let result = match unsafe { trampoline::<PopFn>(&ORIGINAL_POP) } {
         Some(native) => unsafe { native(ring, record) },
         None => ptr::null_mut(),
@@ -743,7 +742,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_pop_detour(
         && let Some(ctx) = context()
     {
         let queue = read_pointer(record as usize).unwrap_or(0);
-        let swapchain = read_pointer(image.wrapping_add(SWAPCHAIN)).unwrap_or(0);
+        let swapchain = read_pointer(image.wrapping_add(rva(Site::Swapchain))).unwrap_or(0);
         select_observers(&ctx.host, queue, swapchain);
     }
     result
@@ -756,29 +755,21 @@ fn find_fsr_export(host: &Host, image: usize) -> Result<usize, &'static str> {
     if module == 0 {
         return Err("ffx_fsr2_api_x64.dll is not loaded");
     }
-    let expected = ImageFacts {
-        timestamp: fsr::TIMESTAMP,
-        image_size: fsr::IMAGE_SIZE,
-    };
-    if image_facts(module) != Some(expected) {
-        return Err(
-            "ffx_fsr2_api_x64.dll is not the 1491.50 build (timestamp 64907ede, image 0x10000)",
-        );
-    }
     let entry = unsafe { platform::export_address(module, fsr::DISPATCH.as_ptr()) };
-    if entry != module.wrapping_add(fsr::DISPATCH_RVA) || !matches(entry, &fsr::DISPATCH_BYTES) {
-        return Err("ffxFsr2ContextDispatch is not at +3c70 with the expected entry bytes");
+    if entry == 0 || !matches(entry, &fsr::DISPATCH_BYTES) {
+        return Err("ffxFsr2ContextDispatch export is missing or its entry bytes differ");
     }
     let create = unsafe { platform::export_address(module, fsr::CREATE.as_ptr()) };
-    if create == module.wrapping_add(fsr::CREATE_RVA)
+    if create != 0
         && matches(create, &fsr::CREATE_BYTES)
         && platform::create(create, fsr_create as *const c_void, &ORIGINAL_FSR_CREATE)
     {
         FSR_CREATE_EXPORT.store(create, Ordering::SeqCst);
     }
-    let resolves = read_pointer(image.wrapping_add(FSR_IMPORT)) == Some(entry);
+    let resolves = read_pointer(image.wrapping_add(rva(Site::FsrImport))) == Some(entry);
     host.log(&format!(
-        "RDR2 FSR2 import slot +6032a98 {} ffx_fsr2_api_x64.dll!ffxFsr2ContextDispatch.",
+        "RDR2 FSR2 import slot +{:x} {} ffx_fsr2_api_x64.dll!ffxFsr2ContextDispatch.",
+        rva(Site::FsrImport),
         if resolves {
             "resolves to"
         } else {
@@ -798,28 +789,24 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> i32 {
     }
     let image = unsafe { platform::main_module() };
     IMAGE.store(image, Ordering::SeqCst);
-    let expected = ImageFacts {
-        timestamp: IMAGE_TIMESTAMP,
-        image_size: IMAGE_SIZE,
-    };
-    if image_facts(image) != Some(expected) {
-        return NOT_READY;
+    let host = Host(*services);
+    if let Err(refusal) = discovery::admit() {
+        host.log(refusal);
+        return NATIVE_REFUSED;
     }
-    if !matches(image.wrapping_add(EVALUATE.rva), &EVALUATE.expected)
-        || !matches(image.wrapping_add(POP.rva), &POP.expected)
-    {
+    if !discovery::verify(image, Site::Evaluate) || !discovery::verify(image, Site::Pop) {
+        host.log("RDR2 SR hooks refused: DLSS evaluate or queue pop bytes changed.");
         return NATIVE_REFUSED;
     }
     if !unsafe { platform::hook_initialize() } {
         return NATIVE_REFUSED;
     }
-    let host = Host(*services);
-    let evaluate_site = image.wrapping_add(EVALUATE.rva);
+    let evaluate_site = image.wrapping_add(rva(Site::Evaluate));
     if !platform::create(evaluate_site, evaluate as *const c_void, &ORIGINAL_EVALUATE) {
         return NATIVE_REFUSED;
     }
     if !platform::create(
-        image.wrapping_add(POP.rva),
+        image.wrapping_add(rva(Site::Pop)),
         platform::pop_detour as *const c_void,
         &ORIGINAL_POP,
     ) {
@@ -850,7 +837,11 @@ pub(crate) fn prepare(services: &rsf_game_host_services) -> i32 {
             "RDR2 FSR2 input route refused: {reason}. Native FSR2 is retained."
         ));
     }
-    host.log("RDR2 SR hooks prepared: expected bytes match +26f3a3c and +26c97d4.");
+    host.log(&format!(
+        "RDR2 SR hooks prepared at discovered +{:x} (DLSS evaluate) and +{:x} (queue pop).",
+        rva(Site::Evaluate),
+        rva(Site::Pop)
+    ));
     OK
 }
 
@@ -859,12 +850,12 @@ pub(crate) fn start() -> i32 {
         return NOT_READY;
     }
     let image = IMAGE.load(Ordering::SeqCst);
-    let pop_site = image.wrapping_add(POP.rva);
+    let pop_site = image.wrapping_add(rva(Site::Pop));
     if !platform::enable(pop_site) {
         return NATIVE_REFUSED;
     }
     ACTIVE.store(true, Ordering::SeqCst);
-    if !platform::enable(image.wrapping_add(EVALUATE.rva)) {
+    if !platform::enable(image.wrapping_add(rva(Site::Evaluate))) {
         ACTIVE.store(false, Ordering::SeqCst);
         platform::disable(pop_site);
         return NATIVE_REFUSED;
@@ -930,8 +921,8 @@ pub(crate) fn stop() -> i32 {
     let mut sites = [
         fsr_export,
         fsr_create_export,
-        image.wrapping_add(EVALUATE.rva),
-        image.wrapping_add(POP.rva),
+        image.wrapping_add(rva(Site::Evaluate)),
+        image.wrapping_add(rva(Site::Pop)),
     ]
     .into_iter()
     .filter(|&site| site != 0);

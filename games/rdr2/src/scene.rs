@@ -3,12 +3,9 @@
 //! measured callers marks the blit that writes the completed scene into the swapchain buffer; the
 //! native marker function reports frame events. This module reports facts and leases resources; it
 //! never chooses latency or frame-generation behaviour.
+use crate::discovery::{self, Site, rva};
 use crate::host::{Host, HostCell};
-use crate::layout::{
-    BLIT, BLIT_RETURN, FRAME_COUNTER, FRAME_COUNTER_POINTER, MARKER, MODE, NATIVE_TEXTURE,
-    NATIVE_TEXTURE_RVA, OUTPUT, OUTPUT_CALLS, OUTPUT_RETURNS, SLEEP, TLS_INDEX, block, call_target,
-    draw,
-};
+use crate::layout::{block, call_target, draw};
 use crate::platform::{
     self, Retained, Scope, lock, read_bytes, read_pointer, read_value, trampoline,
 };
@@ -113,7 +110,7 @@ fn slot<T>(items: &mut [T], frame: u64) -> &mut T {
 
 /// The per-thread render block's `field` and the native frame counter it belongs to.
 pub(crate) fn render_block(image: usize, field: usize) -> Option<(usize, u64)> {
-    let index = read_value::<u32>(image.wrapping_add(TLS_INDEX))?;
+    let index = read_value::<u32>(image.wrapping_add(rva(Site::TlsIndex)))?;
     if index >= block::TLS_LIMIT {
         return None;
     }
@@ -122,10 +119,10 @@ pub(crate) fn render_block(image: usize, field: usize) -> Option<(usize, u64)> {
     let value = read_pointer(block.wrapping_add(field))?;
     let flags = read_value::<u32>(block.wrapping_add(block::FLAGS))?;
     let counter = if flags & block::INDIRECT_COUNTER != 0 {
-        let pointer = read_pointer(image.wrapping_add(FRAME_COUNTER_POINTER))?;
+        let pointer = read_pointer(image.wrapping_add(rva(Site::FrameCounterPointer)))?;
         read_value::<u32>(pointer)?
     } else {
-        read_value::<u32>(image.wrapping_add(FRAME_COUNTER))?
+        read_value::<u32>(image.wrapping_add(rva(Site::FrameCounter)))?
     };
     (value != 0 && counter != 0).then_some((value, u64::from(counter)))
 }
@@ -196,7 +193,7 @@ unsafe extern "C" fn sleep() -> bool {
     let _scope = Scope::enter(&READERS);
     let image = IMAGE.load(Ordering::SeqCst);
     // Same producer as the game's INPUT_SAMPLE caller at abcfea: direct counter + 1.
-    if let Some(current) = read_value::<u32>(image.wrapping_add(FRAME_COUNTER)) {
+    if let Some(current) = read_value::<u32>(image.wrapping_add(rva(Site::FrameCounter))) {
         let frame = u64::from(current.wrapping_add(1));
         if ACTIVE.load(Ordering::SeqCst) {
             input_thread(frame);
@@ -233,7 +230,7 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_output_detour(
     let image = IMAGE.load(Ordering::SeqCst);
     let selected = OUTPUT_RETURNS
         .iter()
-        .any(|&rva| caller == image.wrapping_add(rva));
+        .any(|&site| caller == image.wrapping_add(rva(site)));
     let scoped = ACTIVE.load(Ordering::SeqCst) && selected;
     let previous = OUTPUT_SCOPE.with(|scope| scope.replace(scoped));
     let result = match unsafe { trampoline::<OutputFn>(&ORIGINAL_OUTPUT) } {
@@ -284,7 +281,8 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_blit_detour(
 ) -> usize {
     let _scope = Scope::enter(&READERS);
     let image = IMAGE.load(Ordering::SeqCst);
-    let selected = OUTPUT_SCOPE.with(Cell::get) && caller == image.wrapping_add(BLIT_RETURN);
+    let selected =
+        OUTPUT_SCOPE.with(Cell::get) && caller == image.wrapping_add(rva(Site::BlitReturn));
     let result = match unsafe { trampoline::<BlitFn>(&ORIGINAL_BLIT) } {
         Some(native) => unsafe {
             native(
@@ -470,8 +468,15 @@ unsafe extern "C" fn marker(kind: u32, frame: u64) -> bool {
     }
 }
 
+/// The three postfx output calls; only their return addresses open an output scope.
+const OUTPUT_RETURNS: [Site; 3] = [
+    Site::OutputReturn1,
+    Site::OutputReturn2,
+    Site::OutputReturn3,
+];
+
 struct Hook {
-    rva: usize,
+    site: Site,
     detour: *const c_void,
     original: &'static AtomicPtr<c_void>,
 }
@@ -480,45 +485,50 @@ struct Hook {
 fn hooks() -> [Hook; 5] {
     [
         Hook {
-            rva: OUTPUT.rva,
+            site: Site::Output,
             detour: platform::output_detour as *const c_void,
             original: &ORIGINAL_OUTPUT,
         },
         Hook {
-            rva: BLIT.rva,
+            site: Site::Blit,
             detour: platform::blit_detour as *const c_void,
             original: &ORIGINAL_BLIT,
         },
         Hook {
-            rva: MARKER.rva,
+            site: Site::Marker,
             detour: marker as *const c_void,
             original: &ORIGINAL_MARKER,
         },
         Hook {
-            rva: SLEEP.rva,
+            site: Site::Sleep,
             detour: sleep as *const c_void,
             original: &ORIGINAL_SLEEP,
         },
         Hook {
-            rva: MODE.rva,
+            site: Site::Mode,
             detour: mode as *const c_void,
             original: &ORIGINAL_MODE,
         },
     ]
 }
 
+/// The hooked entries and the renderer's native-texture accessor still match their patterns.
 fn bytes_match(image: usize) -> bool {
-    [&BLIT, &MARKER, &OUTPUT, &SLEEP, &MODE]
+    hooks()
         .iter()
-        .all(|site| platform::matches(image.wrapping_add(site.rva), &site.expected))
-        && platform::matches(image.wrapping_add(NATIVE_TEXTURE_RVA), &NATIVE_TEXTURE)
+        .map(|hook| hook.site)
+        .chain([Site::NativeTexture])
+        .all(|site| discovery::verify(image, site))
 }
 
+/// Each output scope opens only after a call of the discovered output.
 fn output_callers_match(image: usize) -> bool {
-    OUTPUT_CALLS.iter().all(|&site| {
-        let mut call = [0; 5];
-        read_bytes(image.wrapping_add(site), &mut call)
-            && call_target(site, &call) == Some(OUTPUT.rva)
+    OUTPUT_RETURNS.iter().all(|&site| {
+        let call = rva(site).wrapping_sub(5);
+        let mut bytes = [0; 5];
+        discovery::verify(image, site)
+            && read_bytes(image.wrapping_add(call), &mut bytes)
+            && call_target(call, &bytes) == Some(rva(Site::Output))
     })
 }
 
@@ -538,16 +548,24 @@ pub(crate) fn prepare(image: usize, services: &rsf_game_host_services) -> bool {
     }
     let hooks = hooks();
     for (index, hook) in hooks.iter().enumerate() {
-        if !platform::create(image.wrapping_add(hook.rva), hook.detour, hook.original) {
+        if !platform::create(
+            image.wrapping_add(rva(hook.site)),
+            hook.detour,
+            hook.original,
+        ) {
             for created in hooks[..index].iter().rev() {
-                platform::remove(image.wrapping_add(created.rva));
+                platform::remove(image.wrapping_add(rva(created.site)));
             }
             return false;
         }
     }
     HOST.set(Some(*services));
     PREPARED.store(true, Ordering::SeqCst);
-    host.log("RDR2 scene producer prepared at +5c1254; native frame markers observed at +26d4674.");
+    host.log(&format!(
+        "RDR2 scene producer prepared at discovered +{:x}; native frame markers observed at +{:x}.",
+        rva(Site::Blit),
+        rva(Site::Marker)
+    ));
     true
 }
 
@@ -558,15 +576,21 @@ pub(crate) fn start() -> bool {
     let image = IMAGE.load(Ordering::SeqCst);
     ACTIVE.store(true, Ordering::SeqCst);
     // The blit is enabled last so a completed scene is never produced without its frame markers.
-    let enabled = [OUTPUT.rva, MARKER.rva, SLEEP.rva, MODE.rva, BLIT.rva]
-        .iter()
-        .all(|&rva| platform::enable(image.wrapping_add(rva)));
+    let enabled = [
+        Site::Output,
+        Site::Marker,
+        Site::Sleep,
+        Site::Mode,
+        Site::Blit,
+    ]
+    .iter()
+    .all(|&site| platform::enable(image.wrapping_add(rva(site))));
     if enabled {
         return true;
     }
     ACTIVE.store(false, Ordering::SeqCst);
-    for rva in [MARKER.rva, OUTPUT.rva, SLEEP.rva, MODE.rva] {
-        platform::disable(image.wrapping_add(rva));
+    for site in [Site::Marker, Site::Output, Site::Sleep, Site::Mode] {
+        platform::disable(image.wrapping_add(rva(site)));
     }
     false
 }
@@ -587,8 +611,14 @@ pub(crate) fn stop() -> bool {
     let image = IMAGE.load(Ordering::SeqCst);
     INPUT_SOURCE.store(0, Ordering::SeqCst);
     unsafe { platform::input_disable() };
-    let sites =
-        [BLIT.rva, MARKER.rva, OUTPUT.rva, SLEEP.rva, MODE.rva].map(|rva| image.wrapping_add(rva));
+    let sites = [
+        Site::Blit,
+        Site::Marker,
+        Site::Output,
+        Site::Sleep,
+        Site::Mode,
+    ]
+    .map(|site| image.wrapping_add(rva(site)));
     if !unsafe { platform::input_unhook() }
         || !sites.iter().all(|&site| platform::disable(site))
         || READERS.load(Ordering::SeqCst) != 0

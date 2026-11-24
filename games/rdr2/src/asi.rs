@@ -18,8 +18,9 @@ pub(crate) use windows::{
     module_list, native_capture,
 };
 
+use crate::discovery::{self, Site, rva};
 use crate::engine_settings;
-use crate::layout::{self, asi};
+use crate::layout;
 use crate::platform::{self, lock, read_value};
 use crate::runtime_worker::log;
 use rsf_game_sys::win32::module_path;
@@ -66,19 +67,18 @@ pub(crate) enum DiagnosticInstall {
 #[cfg(feature = "research")]
 pub(crate) fn install_diagnostic_hooks(
     image: usize,
-    sites: [layout::Site; 2],
+    sites: [Site; 2],
     hooks: &[DiagnosticHook; 2],
 ) -> DiagnosticInstall {
     use rsf_minhook_sys::{MH_CreateHook, MH_OK};
     if image == 0
-        || !sites
-            .iter()
-            .all(|site| platform::matches(image.wrapping_add(site.rva), &site.expected))
+        || discovery::admit().is_err()
+        || !sites.iter().all(|&site| discovery::verify(image, site))
         || !unsafe { platform::hook_initialize() }
     {
         return DiagnosticInstall::Refused;
     }
-    let targets = sites.map(|site| image + site.rva);
+    let targets = sites.map(|site| image + rva(site));
     for (index, (&target, hook)) in targets.iter().zip(hooks).enumerate() {
         if unsafe { MH_CreateHook(target as _, hook.detour.cast_mut(), hook.original) } != MH_OK {
             let removed = targets[..index]
@@ -137,12 +137,6 @@ pub(crate) fn deployment(module: &[u16]) -> Option<(Vec<u16>, Vec<u16>)> {
     (configuration.len() <= LONG_PATH as usize).then_some((root, configuration))
 }
 
-/// `site_rva + 7 + disp32` of a RIP-relative `mov r64, [rip + disp32]` names the parameter.
-pub(crate) fn reads_parameter(site_rva: u32, opcode: [u8; 3], bytes: [u8; 7]) -> bool {
-    let displacement = u32::from_le_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]);
-    bytes[..3] == opcode && site_rva.wrapping_add(7).wrapping_add(displacement) == asi::API_OVERRIDE
-}
-
 struct Configuration {
     section: Vec<u16>,
     path: Vec<u16>,
@@ -196,24 +190,26 @@ enum Force {
     Refused(String),
 }
 
-/// Writes "d3d12" to the engine's API parameter when the image, the parameter's section and every
-/// read site match the supported build and nothing else has set it.
+/// Writes "d3d12" to the engine's API parameter when every site is discovered, the parameter lies
+/// in .data, all four of its reads still address it and nothing else has set it.
 fn force_d3d12() -> Force {
     let base = unsafe { platform::main_module() };
     let Some((nt, facts)) = platform::image_header(base) else {
         return Force::Refused("ForceD3D12 refused: no main image.".into());
     };
-    if facts.timestamp != layout::IMAGE_TIMESTAMP || facts.image_size != layout::IMAGE_SIZE {
-        return Force::Refused(format!(
-            "ForceD3D12 refused: build differs (timestamp 0x{:x}, image 0x{:x}).",
-            facts.timestamp, facts.image_size
-        ));
+    // Evidence only: the build is logged, the discovered sites decide.
+    record(format!(
+        "RDR2 image timestamp 0x{:x}, size 0x{:x}.",
+        facts.timestamp, facts.image_size
+    ));
+    if let Err(refusal) = discovery::admit() {
+        return Force::Refused(format!("ForceD3D12 refused: {refusal}"));
     }
     // IMAGE_FIRST_SECTION: NumberOfSections at +6, SizeOfOptionalHeader at +0x14.
     let sections = read_value::<u16>(nt + 6).unwrap_or(0);
     let optional = read_value::<u16>(nt + 0x14).unwrap_or(0);
     let first = nt + 0x18 + usize::from(optional);
-    let parameter = u64::from(asi::API_OVERRIDE);
+    let parameter = rva(Site::ApiOverride) as u64;
     let in_data = (0..usize::from(sections)).any(|index| {
         let header = first + index * 40;
         let name = read_value::<[u8; 8]>(header);
@@ -226,18 +222,27 @@ fn force_d3d12() -> Force {
     if !in_data {
         return Force::Refused("ForceD3D12 refused: parameter outside .data.".into());
     }
-    for (rva, opcode) in asi::API_OVERRIDE_READS {
-        let bytes = read_value::<[u8; 7]>(base + rva as usize);
-        if !bytes.is_some_and(|bytes| reads_parameter(rva, opcode, bytes)) {
+    for site in [
+        Site::ApiRead1,
+        Site::ApiRead2,
+        Site::ApiRead3,
+        Site::ApiRead4,
+    ] {
+        let read = rva(site);
+        let bytes = read_value::<[u8; 7]>(base + read);
+        if !discovery::verify(base, site)
+            || bytes.and_then(|bytes| discovery::parameter_read(read, bytes))
+                != Some(rva(Site::ApiOverride))
+        {
             return Force::Refused(format!(
-                "ForceD3D12 refused: unexpected bytes at RVA 0x{rva:x}."
+                "ForceD3D12 refused: unexpected bytes at RVA 0x{read:x}."
             ));
         }
     }
     static D3D12: &CStr = c"d3d12";
     // The parameter is a pointer in the verified .data section; the string has static storage
     // in this never-unloaded module.
-    let address = (base + asi::API_OVERRIDE as usize) as *mut *mut c_char;
+    let address = (base + rva(Site::ApiOverride)) as *mut *mut c_char;
     let slot = unsafe { AtomicPtr::from_ptr(address) };
     let previous = slot.compare_exchange(
         ptr::null_mut(),
@@ -255,18 +260,21 @@ fn force_d3d12() -> Force {
 
 #[cfg(feature = "research")]
 fn trace_d3d12(applied: bool, path: &[u16]) -> String {
-    // ForceD3D12 already validated this exact image and the decrypted read sites.
+    // ForceD3D12 already discovered the sites and validated the decrypted read sites.
     if !applied {
-        return "D3D12 result trace refused: build not validated.".into();
+        return "D3D12 result trace refused: sites not validated.".into();
     }
-    let target = unsafe { platform::main_module() } + asi::RESULT_CHECK.rva;
-    if !platform::matches(target, &asi::RESULT_CHECK.expected) {
+    let image = unsafe { platform::main_module() };
+    let target = image + rva(Site::ResultCheck);
+    let Some(facts) =
+        platform::image_facts(image).filter(|_| discovery::verify(image, Site::ResultCheck))
+    else {
         return "D3D12 result trace refused: unexpected helper bytes.".into();
-    }
-    let status = unsafe { d3d12_trace(target, layout::IMAGE_SIZE, path.as_ptr()) };
+    };
+    let status = unsafe { d3d12_trace(target, facts.image_size, path.as_ptr()) };
     format!(
         "D3D12 result trace at RVA 0x{:x}: {}",
-        asi::RESULT_CHECK.rva,
+        rva(Site::ResultCheck),
         status_text(status)
     )
 }
@@ -371,7 +379,7 @@ fn arm(
         record(match force {
             Force::Applied => format!(
                 "ForceD3D12 applied: API parameter at RVA 0x{:x} set to \"d3d12\".",
-                asi::API_OVERRIDE
+                rva(Site::ApiOverride)
             ),
             Force::Refused(reason) => reason,
         });
@@ -387,7 +395,7 @@ fn arm(
         let installed = unsafe { social_club(trace) };
         record(format!(
             "Social Club backbuffer dispatcher at RVA 0x{:x}: {}",
-            asi::SOCIAL_CLUB_DISPATCHER,
+            rva(Site::SocialClubDispatcher),
             if installed { "armed" } else { "refused" }
         ));
     }

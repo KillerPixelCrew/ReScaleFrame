@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Opt-in camera capture at the native upscaler boundary and its separate fiber reference.
 use crate::asi::{DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
-use crate::layout::{self, FRAME_COUNTER, TLS_INDEX, block, camera_probe};
+use crate::discovery::{Site, rva};
+use crate::layout::{block, camera_probe};
 use crate::platform::{self, lock, read_bytes, read_value, trampoline, worker_tls_slots};
 use crate::script_input::ScriptHook;
 use rsf_game_sys::ffi_util::wide;
@@ -94,8 +95,8 @@ fn timestamp() -> u64 {
 
 impl Snapshot {
     fn read_worker(&mut self, image: usize) {
-        self.frame_counter = read_value(image + FRAME_COUNTER).unwrap_or(0);
-        let Some(index) = read_value::<u32>(image + TLS_INDEX) else {
+        self.frame_counter = read_value(image + rva(Site::FrameCounter)).unwrap_or(0);
+        let Some(index) = read_value::<u32>(image + rva(Site::TlsIndex)) else {
             self.tls_index = u32::MAX;
             return;
         };
@@ -173,14 +174,10 @@ pub(crate) unsafe extern "C" fn rsf_rdr2_install_camera_probe(directory: *const 
     if probe.is_some() {
         return false;
     }
+    // The diagnostic install discovers and verifies both upscale entries.
     let image = unsafe { platform::main_module() };
-    if platform::image_facts(image).is_none_or(|facts| {
-        facts.timestamp != layout::IMAGE_TIMESTAMP || facts.image_size != layout::IMAGE_SIZE
-    }) {
-        return false;
-    }
     let installed =
-        match install_diagnostic_hooks(image, [camera_probe::FSR, camera_probe::DLSS], &hooks) {
+        match install_diagnostic_hooks(image, [Site::CameraFsr, Site::CameraDlss], &hooks) {
             DiagnosticInstall::Installed => true,
             DiagnosticInstall::Refused => return false,
             DiagnosticInstall::Retained => false,
@@ -301,7 +298,7 @@ extern "C" fn script_reference() {
             && let Some(([px, py, pz], [rx, ry, rz], fov)) = reference_sample(script)
         {
             let qpc = timestamp();
-            let frame = read_value::<u32>(image + FRAME_COUNTER).unwrap_or(0);
+            let frame = read_value::<u32>(image + rva(Site::FrameCounter)).unwrap_or(0);
             let thread = unsafe { GetCurrentThreadId() };
             let process = unsafe { GetCurrentProcessId() };
             let path = directory.join(format!("script-{process}-{capture:03}.jsonl"));
