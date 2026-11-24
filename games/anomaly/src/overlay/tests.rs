@@ -436,10 +436,7 @@ fn runtime_start_and_capture_report_refusals() {
     start.log_user = ptr::from_ref(&log).cast_mut().cast();
     let overlay = Overlay::new();
     assert_eq!(
-        overlay
-            .start(&start, None, Vec::new())
-            .unwrap_err()
-            .status,
+        overlay.start(&start, None, Vec::new()).unwrap_err().status,
         API_MISSING
     );
     assert!(
@@ -454,10 +451,7 @@ fn runtime_start_and_capture_report_refusals() {
     };
     start.api_override = &api;
     assert_eq!(
-        overlay
-            .start(&start, None, Vec::new())
-            .unwrap_err()
-            .status,
+        overlay.start(&start, None, Vec::new()).unwrap_err().status,
         CONFIGURE_REFUSED
     );
     assert!(lines(&log).iter().any(|line| line.contains("rejected")));
@@ -493,20 +487,12 @@ fn a_hook_refusal_stays_refused_on_retry() {
     PRESENT_REFUSED.set(true);
     let overlay = Overlay::new();
     let first = overlay
-        .start(
-            &options(&api, true),
-            Some(&UNUSED_HOOKS),
-            Vec::new(),
-        )
+        .start(&options(&api, true), Some(&UNUSED_HOOKS), Vec::new())
         .unwrap_err();
     assert_eq!(first.status, HOOKS_REFUSED);
     assert_eq!(reason_of(first), "dummy swap chain creation failed");
     let retry = overlay
-        .start(
-            &options(&api, true),
-            Some(&UNUSED_HOOKS),
-            Vec::new(),
-        )
+        .start(&options(&api, true), Some(&UNUSED_HOOKS), Vec::new())
         .unwrap_err();
     assert_eq!(retry.status, HOOKS_REFUSED);
     assert!(reason_of(retry).contains("refused earlier"));
@@ -519,10 +505,7 @@ fn a_hook_refusal_stays_refused_on_retry() {
     let mut empty = options(&api, false);
     empty.configuration = w!("");
     assert_eq!(
-        overlay
-            .start(&empty, None, Vec::new())
-            .unwrap_err()
-            .status,
+        overlay.start(&empty, None, Vec::new()).unwrap_err().status,
         CONFIGURE_REFUSED
     );
     assert_eq!(

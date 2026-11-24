@@ -308,7 +308,9 @@ pub(super) unsafe fn rsf_latencyvk_require_device(
     0
 }
 
-pub(super) unsafe fn rsf_latencyvk_device_created(facts: *const rsf_latencyvk_created_device) -> i32 {
+pub(super) unsafe fn rsf_latencyvk_device_created(
+    facts: *const rsf_latencyvk_created_device,
+) -> i32 {
     let facts = unsafe { &*facts };
     let request = unsafe { &*facts.create_info.cast::<vk::DeviceCreateInfo<'static>>() };
     CALLS.with_borrow_mut(|calls| {
@@ -324,17 +326,10 @@ pub(super) unsafe fn rsf_latencyvk_device_destroyed(device: *mut c_void) {
 #[test]
 fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
     assert!(
-        unsafe { crate::rsf_godot_vk_creation_resolver(None, 1, None, ptr::null_mut()) }
-            .is_none()
+        unsafe { crate::rsf_godot_vk_creation_resolver(None, 1, None, ptr::null_mut()) }.is_none()
     );
     let begin = |xess| unsafe {
-        crate::rsf_godot_vk_creation_resolver(
-            Some(mock_proc),
-            xess,
-            None,
-            ptr::null_mut(),
-        )
-        .unwrap()
+        crate::rsf_godot_vk_creation_resolver(Some(mock_proc), xess, None, ptr::null_mut()).unwrap()
     };
     let gipa = begin(1);
     assert!(unsafe { gipa(ptr::null_mut(), ptr::null()) }.is_none());

@@ -8,9 +8,7 @@ use super::api::{self, Bind, GString, Godot, PackedBytes, Ref, StringName, Typed
 use super::sys::*;
 use super::{Dictionary, EFFECT_CLASS, Sink};
 use crate::effect::Effect;
-use crate::platform::{
-    EFFECT_MOTION_FORMAT, EffectFrame, EffectReadback, EffectResources,
-};
+use crate::platform::{EFFECT_MOTION_FORMAT, EffectFrame, EffectReadback, EffectResources};
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 

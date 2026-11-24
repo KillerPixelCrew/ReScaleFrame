@@ -8,9 +8,7 @@ use crate::platform::vulkan_negotiation::{
     VK_XESS_FLOAT16_INT8, VK_XESS_INTEGER_DOT_PRODUCT, VK_XESS_SCALAR_BLOCK_LAYOUT,
     xess_structures,
 };
-use crate::platform::{
-    VK_SCOPE_INSTANCE, VkChainFacts, VkDeviceDerive, VkLatencyRequirements,
-};
+use crate::platform::{VK_SCOPE_INSTANCE, VkChainFacts, VkDeviceDerive, VkLatencyRequirements};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
@@ -375,11 +373,7 @@ unsafe fn destroy_device(destroy: VkFunction, device: *mut c_void, _: *const c_v
     record(format!("destroy_device {:#x}", device.addr()));
 }
 
-unsafe fn adapter(
-    properties: VkFunction,
-    physical: *mut c_void,
-    output: *mut VkAdapter,
-) -> u32 {
+unsafe fn adapter(properties: VkFunction, physical: *mut c_void, output: *mut VkAdapter) -> u32 {
     assert_eq!(properties as usize, properties_marker as *const () as usize);
     record(format!("adapter {:#x}", physical.addr()));
     let Some(value) = ADAPTER.get() else {

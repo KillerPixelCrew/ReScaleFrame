@@ -109,18 +109,12 @@ pub(crate) struct VkDeviceCall {
 pub(crate) struct VkCreationLeaves {
     pub(crate) xess_instance_requirements:
         unsafe fn(*mut u32, *mut *const *const c_char, *mut u32) -> i32,
-    pub(crate) derive_instance: unsafe fn(
-        *mut c_void,
-        *const c_void,
-        u32,
-        *const *const c_char,
-        u32,
-    ) -> *const c_void,
+    pub(crate) derive_instance:
+        unsafe fn(*mut c_void, *const c_void, u32, *const *const c_char, u32) -> *const c_void,
     pub(crate) create_instance:
         unsafe fn(VkFunction, *const c_void, *const c_void, *mut c_void) -> i32,
     pub(crate) chain_facts: unsafe fn(*const c_void, *mut VkChainFacts),
-    pub(crate) xess_features:
-        unsafe fn(*mut c_void, *const c_void, u32, *mut *mut c_void) -> u32,
+    pub(crate) xess_features: unsafe fn(*mut c_void, *const c_void, u32, *mut *mut c_void) -> u32,
     pub(crate) xess_device_requirements: unsafe fn(
         *mut c_void,
         *mut c_void,
@@ -138,22 +132,11 @@ pub(crate) struct VkCreationLeaves {
         *const c_void,
         *mut VkLatencyRequirements,
     ) -> u32,
-    pub(crate) derive_device:
-        unsafe fn(*mut c_void, u32, *const VkDeviceDerive) -> *const c_void,
-    pub(crate) create_device: unsafe fn(
-        VkFunction,
-        *mut c_void,
-        *const c_void,
-        *const c_void,
-        *mut c_void,
-    ) -> i32,
-    pub(crate) latency_created: unsafe fn(
-        *mut c_void,
-        *mut c_void,
-        *mut c_void,
-        Option<VkProc>,
-        *const c_void,
-    ) -> i32,
+    pub(crate) derive_device: unsafe fn(*mut c_void, u32, *const VkDeviceDerive) -> *const c_void,
+    pub(crate) create_device:
+        unsafe fn(VkFunction, *mut c_void, *const c_void, *const c_void, *mut c_void) -> i32,
+    pub(crate) latency_created:
+        unsafe fn(*mut c_void, *mut c_void, *mut c_void, Option<VkProc>, *const c_void) -> i32,
     pub(crate) latency_destroyed: unsafe fn(*mut c_void),
     pub(crate) destroy_device: unsafe fn(VkFunction, *mut c_void, *const c_void),
     pub(crate) adapter: unsafe fn(VkFunction, *mut c_void, *mut VkAdapter) -> u32,

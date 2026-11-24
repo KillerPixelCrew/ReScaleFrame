@@ -463,10 +463,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_destroy_slot(
     }
 }
 
-pub(crate) unsafe fn rsf_uvk_gpu_fence_ready(
-    shared: *const DeviceHandles,
-    fence: u64,
-) -> bool {
+pub(crate) unsafe fn rsf_uvk_gpu_fence_ready(shared: *const DeviceHandles, fence: u64) -> bool {
     let shared = unsafe { &*shared };
     unsafe {
         (shared.dispatch().fence_status)(shared.vk_device(), vk::Fence::from_raw(fence)) == SUCCESS

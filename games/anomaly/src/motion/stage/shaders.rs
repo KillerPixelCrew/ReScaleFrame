@@ -232,10 +232,7 @@ impl Pack {
         let profile = build.motion.shader_profile();
         let pack = wide_path(&root.join("motion.rsfpatch"));
         let cache = wide_path(&root.join("cache"));
-        unsafe {
-            RuntimePack::open_engine(&pack, &cache, build.image, profile)
-        }
-        .map(Self)
+        unsafe { RuntimePack::open_engine(&pack, &cache, build.image, profile) }.map(Self)
     }
 
     pub(super) unsafe fn attach(&self, device: Raw) -> i32 {
@@ -597,12 +594,7 @@ impl Stage {
     pub(super) fn admit_shader_creation(&self, native: &ShaderCreation) {
         let mut filename = [0; FILENAME_CAPACITY];
         let call = Creation::read(native, &mut filename, |address, bytes| unsafe {
-            leaf::read_engine(
-                ptr::null(),
-                address,
-                bytes.as_mut_ptr(),
-                bytes.len(),
-            )
+            leaf::read_engine(ptr::null(), address, bytes.as_mut_ptr(), bytes.len())
         });
         if let Some(call) = call
             && self.active.load(Acquire)

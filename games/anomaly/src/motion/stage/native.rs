@@ -198,23 +198,26 @@ pub(super) mod leaf {
             size: u32,
         ) -> bool;
         #[link_name = "rsf_anomaly_motion_native_read_engine"]
-        pub(in crate::motion) fn read_engine(owner: *const c_void, address: usize, out: *mut u8, size: usize)
-        -> bool;
+        pub(in crate::motion) fn read_engine(
+            owner: *const c_void,
+            address: usize,
+            out: *mut u8,
+            size: usize,
+        ) -> bool;
         #[link_name = "rsf_anomaly_motion_native_bind_read"]
         fn bind_read(host: Raw, address: *const c_void, out: Raw, size: usize) -> u32;
         #[link_name = "rsf_anomaly_motion_native_bind_write"]
         fn bind_write(host: Raw, address: Raw, input: *const c_void, size: usize) -> u32;
     }
 
-
     /// The RTV2 binder's engine calls: the leaf's guarded copies and the motion device's target bindings.
-    pub(in crate::motion) static BIND: crate::motion_target::Platform = crate::motion_target::Platform {
-        read: bind_read,
-        write: bind_write,
-        set_targets: crate::motion_device::rsf_anomaly_motion_bind_targets,
-        clear_targets: crate::motion_device::rsf_anomaly_motion_clear_targets,
-    };
-
+    pub(in crate::motion) static BIND: crate::motion_target::Platform =
+        crate::motion_target::Platform {
+            read: bind_read,
+            write: bind_write,
+            set_targets: crate::motion_device::rsf_anomaly_motion_bind_targets,
+            clear_targets: crate::motion_device::rsf_anomaly_motion_clear_targets,
+        };
 }
 
 #[cfg(test)]
@@ -223,13 +226,23 @@ pub(super) mod leaf {
     use super::Engine;
     use std::ffi::c_void;
 
-    pub(in crate::motion) unsafe extern "C" fn copy(_: *mut c_void, _: *const c_void, _: usize) -> bool {
+    pub(in crate::motion) unsafe extern "C" fn copy(
+        _: *mut c_void,
+        _: *const c_void,
+        _: usize,
+    ) -> bool {
         unreachable!("motion C leaf in a unit test")
     }
     pub(in crate::motion) unsafe fn observe_flush(_: bool) {
         unreachable!("motion C leaf in a unit test")
     }
-    pub(in crate::motion) unsafe fn install_hooks(_: Raw, _: u32, _: *const Engine, _: *const c_void, _: usize) -> bool {
+    pub(in crate::motion) unsafe fn install_hooks(
+        _: Raw,
+        _: u32,
+        _: *const Engine,
+        _: *const c_void,
+        _: usize,
+    ) -> bool {
         unreachable!("motion C leaf in a unit test")
     }
     pub(in crate::motion) unsafe fn disable_hooks() -> bool {
@@ -271,13 +284,30 @@ pub(super) mod leaf {
     pub(in crate::motion) unsafe fn world(_: *mut [f32; 16]) -> bool {
         unreachable!("motion C leaf in a unit test")
     }
-    pub(in crate::motion) unsafe fn read_constant(_: u32, _: u32, _: u32, _: *mut c_void, _: u32) -> bool {
+    pub(in crate::motion) unsafe fn read_constant(
+        _: u32,
+        _: u32,
+        _: u32,
+        _: *mut c_void,
+        _: u32,
+    ) -> bool {
         unreachable!("motion C leaf in a unit test")
     }
-    pub(in crate::motion) unsafe fn write_constant(_: u32, _: u32, _: u32, _: *const c_void, _: u32) -> bool {
+    pub(in crate::motion) unsafe fn write_constant(
+        _: u32,
+        _: u32,
+        _: u32,
+        _: *const c_void,
+        _: u32,
+    ) -> bool {
         unreachable!("motion C leaf in a unit test")
     }
-    pub(in crate::motion) unsafe fn read_engine(_: *const c_void, _: usize, _: *mut u8, _: usize) -> bool {
+    pub(in crate::motion) unsafe fn read_engine(
+        _: *const c_void,
+        _: usize,
+        _: *mut u8,
+        _: usize,
+    ) -> bool {
         unreachable!("motion C leaf in a unit test")
     }
     unsafe extern "C" fn bind_read(_: Raw, _: *const c_void, _: Raw, _: usize) -> u32 {
@@ -286,11 +316,11 @@ pub(super) mod leaf {
     unsafe extern "C" fn bind_write(_: Raw, _: Raw, _: *const c_void, _: usize) -> u32 {
         unreachable!("motion C leaf in a unit test")
     }
-    pub(in crate::motion) static BIND: crate::motion_target::Platform = crate::motion_target::Platform {
-        read: bind_read,
-        write: bind_write,
-        set_targets: crate::motion_device::rsf_anomaly_motion_bind_targets,
-        clear_targets: crate::motion_device::rsf_anomaly_motion_clear_targets,
-    };
-
+    pub(in crate::motion) static BIND: crate::motion_target::Platform =
+        crate::motion_target::Platform {
+            read: bind_read,
+            write: bind_write,
+            set_targets: crate::motion_device::rsf_anomaly_motion_bind_targets,
+            clear_targets: crate::motion_device::rsf_anomaly_motion_clear_targets,
+        };
 }

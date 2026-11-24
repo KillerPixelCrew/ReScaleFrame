@@ -532,9 +532,11 @@ fn commands_retired() -> bool {
         {
             return false;
         }
-        state.creation.device.as_ref().map(|device| {
-            (device.handles, device.slots.map(|slot| slot.complete))
-        })
+        state
+            .creation
+            .device
+            .as_ref()
+            .map(|device| (device.handles, device.slots.map(|slot| slot.complete)))
     };
     let Some((handles, fences)) = proof else {
         return VULKAN.lock().drained(0);
@@ -717,17 +719,15 @@ fn configure_surface(width: u32, height: u32) -> *mut c_void {
         };
         (
             device.handles,
-            state
-                .surface
-                .as_ref()
-                .map(|surface| surface.chain),
+            state.surface.as_ref().map(|surface| surface.chain),
         )
     };
     if let Some(chain) = current {
         let (mut current_width, mut current_height) = (0, 0);
         unsafe { ops::chain_extent(chain, &mut current_width, &mut current_height) };
         if (width, height) == (current_width, current_height)
-            || (unsafe { ops::drain(&device) } && unsafe { ops::chain_resize(chain, width, height) })
+            || (unsafe { ops::drain(&device) }
+                && unsafe { ops::chain_resize(chain, width, height) })
         {
             return chain;
         }

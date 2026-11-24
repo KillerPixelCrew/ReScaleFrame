@@ -22,9 +22,7 @@ use crate::camera;
 use crate::frame_dump::{DumpApi, anomaly_directory};
 use crate::lease::Lease;
 use crate::native_geometry_abi::SCOPE;
-use crate::sr_d3d11::{
-    DrawViews, Extent, PREPARE, REINSERT, ROUND_TRIP, TemporalTargets, UPSCALE,
-};
+use crate::sr_d3d11::{DrawViews, Extent, PREPARE, REINSERT, ROUND_TRIP, TemporalTargets, UPSCALE};
 #[cfg(any(windows, test))]
 use crate::sr_temporal::Admit;
 use crate::sys::*;
@@ -1162,7 +1160,13 @@ impl Stage {
             }
             let failed = leaf!(
                 p,
-                verify_guards(module, image_size, build, world_window(stage), temporal(stage))
+                verify_guards(
+                    module,
+                    image_size,
+                    build,
+                    world_window(stage),
+                    temporal(stage)
+                )
             );
             if !failed.is_null() {
                 // The leaf returns an immutable site name from the profile tables.

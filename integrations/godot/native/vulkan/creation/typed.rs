@@ -7,8 +7,8 @@ use crate::platform::vulkan_negotiation::{
     VK_XESS_SCALAR_BLOCK_LAYOUT,
 };
 use crate::platform::{
-    VK_ROUTE_CREATE_DEVICE, VK_ROUTE_CREATE_INSTANCE, VK_ROUTE_DESTROY_DEVICE,
-    VkAdapter, VkCreationLeaves, VkDeviceCall, VkDeviceDerive, VkFunction, VkInstanceCall,
+    VK_ROUTE_CREATE_DEVICE, VK_ROUTE_CREATE_INSTANCE, VK_ROUTE_DESTROY_DEVICE, VkAdapter,
+    VkCreationLeaves, VkDeviceCall, VkDeviceDerive, VkFunction, VkInstanceCall,
     VkLatencyRequirements, VkProc,
 };
 use crate::sys::*;
@@ -378,20 +378,12 @@ unsafe fn latency_destroyed(device: *mut c_void) {
     unsafe { rsf_latencyvk_device_destroyed(device) };
 }
 
-unsafe fn call_destroy_device(
-    destroy: VkFunction,
-    device: *mut c_void,
-    allocator: *const c_void,
-) {
+unsafe fn call_destroy_device(destroy: VkFunction, device: *mut c_void, allocator: *const c_void) {
     let destroy = unsafe { std::mem::transmute::<VkFunction, vk::PFN_vkDestroyDevice>(destroy) };
     unsafe { destroy(handle(device), allocator.cast()) };
 }
 
-unsafe fn adapter(
-    function: VkFunction,
-    physical: *mut c_void,
-    out: *mut VkAdapter,
-) -> u32 {
+unsafe fn adapter(function: VkFunction, physical: *mut c_void, out: *mut VkAdapter) -> u32 {
     let properties = unsafe {
         std::mem::transmute::<VkFunction, vk::PFN_vkGetPhysicalDeviceProperties>(function)
     };

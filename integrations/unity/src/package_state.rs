@@ -874,9 +874,9 @@ pub(crate) extern "C" fn rsf_unity_package_bridge_failed(result: i32) {
 mod tests {
     use super::*;
     use crate::sys::RSF_SR_DLSS;
+    use crate::sys::rsf_fg_status;
     use crate::sys::rsf_fg12_setup;
     use rsf_game_sys::{rsf_game_cpu_event, rsf_game_host_services};
-    use crate::sys::rsf_fg_status;
     use std::cell::{Cell, RefCell};
     use std::ffi::CStr;
     use std::ptr::without_provenance_mut;

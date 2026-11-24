@@ -8,8 +8,8 @@ use super::draw::{
     rsf_anomaly_motion_fixture_patch_core,
 };
 use crate::motion_device::{
-    Owner, rsf_anomaly_motion_device_get,
-    rsf_anomaly_motion_device_target, rsf_anomaly_motion_device_upload,
+    Owner, rsf_anomaly_motion_device_get, rsf_anomaly_motion_device_target,
+    rsf_anomaly_motion_device_upload,
 };
 use crate::shader_loader::deployed::{
     Deployed, Prepared, REPLACED, REPLACED_FROM_CACHE, ShaderRequest, outcome_name, parse_manifest,

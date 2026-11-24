@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! D3D11 resource and replay calls, which the engine and the fixtures share.
-use super::replay::{CLASS_INTERFACES, Depth, Pixel, RENDER_TARGETS};
 use super::Raw;
+use super::replay::{CLASS_INTERFACES, Depth, Pixel, RENDER_TARGETS};
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::core::{IUnknown, Interface};
@@ -33,7 +33,9 @@ pub(super) mod device {
     use rsf_shader_compiler::{Compiler, Request, compile};
     use std::ptr::{copy_nonoverlapping, null_mut};
     use windows::Win32::Graphics::Direct3D11::*;
-    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC};
+    use windows::Win32::Graphics::Dxgi::Common::{
+        DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC,
+    };
     use windows::core::Interface;
 
     pub(in crate::motion_device) use super::{release, retain};
@@ -86,8 +88,10 @@ pub(super) mod device {
         };
         let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
         let mut result = None;
-        if unsafe { device.CreatePixelShader(&code, None::<&ID3D11ClassLinkage>, Some(&mut result)) }
-            .is_err()
+        if unsafe {
+            device.CreatePixelShader(&code, None::<&ID3D11ClassLinkage>, Some(&mut result))
+        }
+        .is_err()
         {
             return null_mut();
         }
@@ -156,7 +160,8 @@ pub(super) mod device {
         let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
         let buffer = unsafe { ID3D11Resource::from_raw_borrowed(&buffer) }.unwrap();
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-        if unsafe { context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped)) }.is_err() {
+        if unsafe { context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped)) }.is_err()
+        {
             return 0;
         }
         let valid = !mapped.pData.is_null();
@@ -169,7 +174,11 @@ pub(super) mod device {
         valid.into()
     }
 
-    pub(in crate::motion_device) unsafe fn bind(raw: Raw, buffer: Raw, stage: std::ffi::c_char) -> u32 {
+    pub(in crate::motion_device) unsafe fn bind(
+        raw: Raw,
+        buffer: Raw,
+        stage: std::ffi::c_char,
+    ) -> u32 {
         let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
         let vtable = context.vtable();
         let bind = match stage as u8 {
@@ -236,7 +245,11 @@ pub(crate) unsafe fn clear_target(raw: Raw, target: Raw) {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_anomaly_motion_bind_targets(raw: Raw, views: *const Raw, depth: Raw) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_motion_bind_targets(
+    raw: Raw,
+    views: *const Raw,
+    depth: Raw,
+) {
     if !raw.is_null() {
         unsafe { targets(raw, 4, views, depth) };
     }

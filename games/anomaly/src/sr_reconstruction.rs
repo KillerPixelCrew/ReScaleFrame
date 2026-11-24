@@ -79,13 +79,7 @@ impl Slot {
     }
 }
 
-fn prepare_slot(
-    layout: &Layout,
-    constant: usize,
-    stage: u32,
-    x: f32,
-    y: f32,
-) -> Option<Slot> {
+fn prepare_slot(layout: &Layout, constant: usize, stage: u32, x: f32, y: f32) -> Option<Slot> {
     let [a, b, c, d] = read(constant, layout.load as usize + stage as usize * 4)?;
     let offset = usize::from(u16::from_le_bytes([a, b]));
     if u16::from_le_bytes([c, d]) != 1 || !offset.is_multiple_of(size_of::<f32>()) {
@@ -115,7 +109,8 @@ pub(crate) fn rsf_anomaly_sr_correct_position_constant(
     x: f32,
     y: f32,
 ) -> u32 {
-    let Some(destination) = read(constant, layout.destination as usize).map(u32::from_le_bytes) else {
+    let Some(destination) = read(constant, layout.destination as usize).map(u32::from_le_bytes)
+    else {
         return 0;
     };
     if destination & 0x7b == 0 || destination & 0x84 != 0 {

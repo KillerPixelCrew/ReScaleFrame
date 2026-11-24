@@ -31,7 +31,8 @@ type View = rsf_anomaly_swap_view;
 #[cfg(not(test))]
 use crate::sr_stage::native::swap_host as host;
 #[cfg(test)]
-use tests::swap_host as host;/// X-Ray Fmatrix bytes: row-major storage, row vectors (clip = v * M).
+use tests::swap_host as host;
+/// X-Ray Fmatrix bytes: row-major storage, row vectors (clip = v * M).
 type Matrix = [f32; 16];
 
 const SLOTS: usize = RSF_ANOMALY_SWAP_SLOT_COUNT as usize;
@@ -586,18 +587,15 @@ impl Swap {
         let clear = |offset, len| {
             let address = self.backend.at(offset).0;
             // Only the verified pointer span is cleared.
-            if !unsafe {
-                host::write(self.host, address, zeros.as_ptr().cast(), len)
-            } {
+            if !unsafe { host::write(self.host, address, zeros.as_ptr().cast(), len) } {
                 return false;
             }
             if !verify {
                 return true;
             }
             let mut actual = [0xffu8; (MAX_CACHE_SLOTS * POINTER) as usize];
-            (unsafe {
-                host::read(self.host, address, actual.as_mut_ptr().cast(), len)
-            }) && actual[..len] == zeros[..len]
+            (unsafe { host::read(self.host, address, actual.as_mut_ptr().cast(), len) })
+                && actual[..len] == zeros[..len]
         };
         let mut ok = clear(self.layout.backend_texture_list, POINTER as usize);
         for range in self.layout.backend_textures {
@@ -1034,8 +1032,7 @@ impl Swap {
             self.release_twins();
             let mut made = Twins::default();
             // The two records are borrowed only during native allocation.
-            let result =
-                unsafe { host::make_twins(self.host, &request, &mut made) };
+            let result = unsafe { host::make_twins(self.host, &request, &mut made) };
             match result {
                 RSF_ANOMALY_SWAP_MAKE_CREATED => {}
                 RSF_ANOMALY_SWAP_MAKE_FAILED => {
@@ -1207,9 +1204,7 @@ impl Swap {
         }
         let (x, y) = (self.projection.x, self.projection.y);
         // The leaf corrects the engine's constant buffer under its exception guard.
-        let result = unsafe {
-            host::correct_position_constant(self.host, constant, x, y)
-        };
+        let result = unsafe { host::correct_position_constant(self.host, constant, x, y) };
         if result == 1 {
             self.view.counters.position_corrected += 1;
         } else {

@@ -430,12 +430,7 @@ struct Rig {
 }
 
 impl Rig {
-    fn new(
-        d: &Device,
-        input: [u32; 2],
-        output: [u32; 2],
-        colour: Option<&[u16]>,
-    ) -> Self {
+    fn new(d: &Device, input: [u32; 2], output: [u32; 2], colour: Option<&[u16]>) -> Self {
         let count = texels(input);
         let colour = colour.map_or_else(
             || {
@@ -728,8 +723,7 @@ fn depth_twins(d: &Device) {
     let dsv = d
         .dsv(&d.texture(output, DEPTH, DSV).unwrap(), None)
         .unwrap();
-    let depth =
-        |source, output| target_device(d).depth(source, extent(output), extent(render));
+    let depth = |source, output| target_device(d).depth(source, extent(output), extent(render));
     let (twin, desc) = depth(dsv.as_raw(), output).unwrap();
     let view = twin.view(desc, 0);
     assert_eq!(
@@ -837,9 +831,7 @@ extern "C" fn rsf_anomaly_sr_roundtrip_device_fixture() -> i32 {
     case("round-trip state", &|| state_preserved(&d, &roundtrip));
     case("round-trip twins", &|| twins(&d));
     case("round-trip debug layer", &|| debug_layer(&d, &roundtrip));
-    case("scale 1 identity", &|| {
-        identity(&d, &upscale, &roundtrip)
-    });
+    case("scale 1 identity", &|| identity(&d, &upscale, &roundtrip));
     for (input, output) in [
         ([64, 36], [128, 72]),
         ([64, 36], [96, 54]),
@@ -854,9 +846,7 @@ extern "C" fn rsf_anomaly_sr_roundtrip_device_fixture() -> i32 {
     });
     case("world twins", &|| world_twins(&d));
     case("depth twins", &|| depth_twins(&d));
-    case("upscale debug layer", &|| {
-        debug_layer_stage2(&d, &upscale)
-    });
+    case("upscale debug layer", &|| debug_layer_stage2(&d, &upscale));
     println!("{failures} failure(s)");
     i32::from(failures != 0)
 }

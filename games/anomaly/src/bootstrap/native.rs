@@ -2,13 +2,13 @@
 //! The adapter's stage calls for the cold start (`bootstrap::leaves`): the C entries of the stage leaves (sr_stage_platform.c,
 //! motion_stage_platform.c, fg_stage_platform.c, bootstrap_platform.c, native_hooks_platform.c) and the Rust stages.
 use super::*;
+pub(super) use crate::adapter_options::register as register_options;
 use crate::engine_guards::{Image, Read};
 use crate::engine_slots::Exchange;
 use crate::executable::running_build;
-use crate::fg_stage::rsf_anomaly_fg_stage_input_received;
-pub(super) use crate::adapter_options::register as register_options;
 pub(super) use crate::fg_stage::rsf_anomaly_fg_installed as fg_installed;
 use crate::fg_stage::rsf_anomaly_fg_set_overlay_sink;
+use crate::fg_stage::rsf_anomaly_fg_stage_input_received;
 use crate::input::rsf_anomaly_input_install;
 use crate::input::rsf_anomaly_input_received;
 use crate::native_hooks::HookOps;
@@ -237,10 +237,7 @@ unsafe fn enter(configuration: *const u16) -> u32 {
 
 #[unsafe(no_mangle)]
 unsafe extern "system" fn rsf_anomaly_start(configuration: *const u16) -> u32 {
-    catch_unwind(AssertUnwindSafe(|| unsafe {
-        enter(configuration)
-    }))
-    .unwrap_or_else(|_| {
+    catch_unwind(AssertUnwindSafe(|| unsafe { enter(configuration) })).unwrap_or_else(|_| {
         write_log(b"Anomaly startup refused after a contained panic.");
         FAULT
     })

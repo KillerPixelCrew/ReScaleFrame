@@ -63,11 +63,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_chain_extent(
     }
 }
 
-pub(crate) unsafe fn rsf_uvk_gpu_chain_resize(
-    chain: *mut c_void,
-    width: u32,
-    height: u32,
-) -> bool {
+pub(crate) unsafe fn rsf_uvk_gpu_chain_resize(chain: *mut c_void, width: u32, height: u32) -> bool {
     unsafe {
         borrow::<IDXGISwapChain3>(&chain)
             .ResizeBuffers(BUFFER_COUNT, width, height, FORMAT, DXGI_SWAP_CHAIN_FLAG(0))

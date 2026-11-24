@@ -168,7 +168,13 @@ pub(crate) fn create_texture(
     texture
 }
 
-pub(super) unsafe extern "C" fn texture(raw: Raw, width: u32, height: u32, format: u32, bind: u32) -> Raw {
+pub(super) unsafe extern "C" fn texture(
+    raw: Raw,
+    width: u32,
+    height: u32,
+    format: u32,
+    bind: u32,
+) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     owned(create_texture(
         device,

@@ -271,8 +271,7 @@ fn prepare_case(d: &Device) {
     let pass = make_pass(d);
     let device = d.device.as_raw();
     let format = HDR.0 as u32;
-    let targets =
-        TemporalTargets::new(device, extent(size), extent(output), format).unwrap();
+    let targets = TemporalTargets::new(device, extent(size), extent(output), format).unwrap();
     assert!(targets.matches(device, extent(size), extent(output), format));
     assert!(!targets.matches(device, extent([w + 1, h]), extent(output), format));
     let mut depths = Vec::new();

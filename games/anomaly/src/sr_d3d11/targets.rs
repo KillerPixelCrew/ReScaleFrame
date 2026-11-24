@@ -162,8 +162,7 @@ impl Device {
     }
 
     fn view(self, texture: &Lease, kind: u32, template: Option<&View>) -> Result<Lease, Error> {
-        let reference =
-            unsafe { d3d::view(self.handle, texture.as_ptr(), kind, template) };
+        let reference = unsafe { d3d::view(self.handle, texture.as_ptr(), kind, template) };
         lease(reference).ok_or(Error::Create)
     }
 
@@ -265,8 +264,7 @@ impl Device {
         if view.format != D24_UNORM_S8_UINT || view.texture2d == 0 || view.flags != 0 {
             return Err(Error::Depth);
         }
-        let resource = lease(unsafe { d3d::view_resource(engine) })
-            .ok_or(Error::Depth)?;
+        let resource = lease(unsafe { d3d::view_resource(engine) }).ok_or(Error::Depth)?;
         let texture = self.query_texture(resource.as_ptr()).ok_or(Error::Depth)?;
         let desc = self.describe(&texture);
         if desc.size != output || desc.samples != 1 || desc.layers != 1 {

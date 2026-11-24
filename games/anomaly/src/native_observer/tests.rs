@@ -10,14 +10,17 @@ static FG_ENDS: AtomicU32 = AtomicU32::new(0);
 static FG_RETIRE_READY: AtomicBool = AtomicBool::new(false);
 static TEARDOWN: Mutex<Vec<&str>> = Mutex::new(Vec::new());
 
-pub(crate) unsafe extern "C" fn sample_copy(out: *mut c_void, source: *const c_void, size: usize) -> bool {
+pub(crate) unsafe extern "C" fn sample_copy(
+    out: *mut c_void,
+    source: *const c_void,
+    size: usize,
+) -> bool {
     if source.addr() == 1 {
         return false;
     }
     unsafe { ptr::copy_nonoverlapping(source.cast::<u8>(), out.cast::<u8>(), size) };
     true
 }
-
 
 #[test]
 fn camera_copy_refusal_keeps_the_last_complete_sample() {

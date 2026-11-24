@@ -63,7 +63,16 @@ pub(super) fn copy(
         return None;
     }
     let copy = lease(unsafe { d3d::texture(device.as_ptr(), &description, null(), 0) })?;
-    leaf!(platform, copy_subresource(context, copy.as_ptr(), SUBRESOURCE, texture.as_ptr(), SUBRESOURCE));
+    leaf!(
+        platform,
+        copy_subresource(
+            context,
+            copy.as_ptr(),
+            SUBRESOURCE,
+            texture.as_ptr(),
+            SUBRESOURCE
+        )
+    );
     // The device and then the source reference drop here, as the former ComPtr locals did.
     Some(GpuLease(copy))
 }
@@ -148,7 +157,10 @@ pub(super) fn map<'a>(
         return (layout, None);
     }
     let (mut data, mut row_pitch) = (null(), 0);
-    if !leaf!(platform, map_read(context, handle, SUBRESOURCE, &mut data, &mut row_pitch)) {
+    if !leaf!(
+        platform,
+        map_read(context, handle, SUBRESOURCE, &mut data, &mut row_pitch)
+    ) {
         return (layout, None);
     }
     let mapping = Mapping {

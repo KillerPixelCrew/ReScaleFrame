@@ -3,8 +3,7 @@ use crate::sys::{
     RSF_ANOMALY_MOTION_BIND_ALREADY_BOUND as ALREADY_BOUND, RSF_ANOMALY_MOTION_BIND_BOUND as BOUND,
     RSF_ANOMALY_MOTION_BIND_CONFLICT as CONFLICT, RSF_ANOMALY_MOTION_BIND_FAULT as FAULT,
     RSF_ANOMALY_MOTION_BIND_NONE as NONE, RSF_ANOMALY_MOTION_BIND_UNBOUND as UNBOUND,
-    rsf_anomaly_motion_bind_layout as Layout,
-    rsf_anomaly_motion_bind_state as State,
+    rsf_anomaly_motion_bind_layout as Layout, rsf_anomaly_motion_bind_state as State,
 };
 use std::ffi::c_void;
 use std::mem::MaybeUninit;

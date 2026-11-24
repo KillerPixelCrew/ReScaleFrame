@@ -2,9 +2,7 @@
 //! Typed D3D11 calls for the SR owners and their native fixtures. Under test the owners call the recording fakes, so
 //! these are compiled but unused.
 #![cfg_attr(test, allow(dead_code))]
-use super::{
-    DEPTH_SRV, DSV, Draw, Extent, Log, Ptr, ROUND_TRIP, RTV, SRV, Texture, UAV, View,
-};
+use super::{DEPTH_SRV, DSV, Draw, Extent, Log, Ptr, ROUND_TRIP, RTV, SRV, Texture, UAV, View};
 use rsf_shader_compiler::{Compiler, Request, compile};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{copy_nonoverlapping, null_mut};
@@ -24,10 +22,12 @@ fn owned<T: Interface>(value: Option<T>) -> Ptr {
 /// leaves and the pipeline-state snapshot of sr_d3d11_platform.c.
 #[cfg(not(test))]
 pub(crate) mod calls {
+    use super::Ptr;
     pub(crate) use super::{
         compile_with_guarded_log as shader, rsf_anomaly_sr_as_texture as as_texture,
         rsf_anomaly_sr_blend_state as blend_state, rsf_anomaly_sr_clear_stencil as clear_stencil,
-        rsf_anomaly_sr_constant_buffer as constant_buffer, rsf_anomaly_sr_depth_state as depth_state,
+        rsf_anomaly_sr_constant_buffer as constant_buffer,
+        rsf_anomaly_sr_depth_state as depth_state,
         rsf_anomaly_sr_describe_texture as describe_texture,
         rsf_anomaly_sr_describe_view as describe_view, rsf_anomaly_sr_draw as draw,
         rsf_anomaly_sr_format_support as format_support, rsf_anomaly_sr_ps_constant as ps_constant,
@@ -38,7 +38,6 @@ pub(crate) mod calls {
         rsf_anomaly_sr_update_constants as update_constants,
         rsf_anomaly_sr_view_resource as view_resource, view_with_default_srv as view,
     };
-    use super::Ptr;
 
     unsafe extern "C" {
         /// An owned snapshot of the immediate-context pipeline, or null.
@@ -471,7 +470,11 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_sr_depth_state(raw: Ptr, write_depth
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_anomaly_sr_update_constants(raw: Ptr, buffer: Ptr, data: *const u32) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_update_constants(
+    raw: Ptr,
+    buffer: Ptr,
+    data: *const u32,
+) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let buffer = unsafe { ID3D11Buffer::from_raw_borrowed(&buffer) }.unwrap();
     unsafe { context.UpdateSubresource(buffer, 0, None, data.cast(), 0, 0) };
@@ -490,7 +493,12 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_sr_ps_constant(raw: Ptr, slot: u32, 
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_anomaly_sr_targets(raw: Ptr, count: u32, targets: *const Ptr, depth: Ptr) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_targets(
+    raw: Ptr,
+    count: u32,
+    targets: *const Ptr,
+    depth: Ptr,
+) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let depth = unsafe { ID3D11DepthStencilView::from_raw_borrowed(&depth) };
     // The pass always supplies a non-null pointer to its nullable RTV array.

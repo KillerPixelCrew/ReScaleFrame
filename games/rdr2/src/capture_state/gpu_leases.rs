@@ -123,11 +123,7 @@ impl Drop for ReadbackLeases {
 
 /// Called under the native capture mutex with the real queue that just submitted.
 /// The returned fence is borrowed until the caller finishes assigning the receipt.
-pub(super) unsafe fn signal(
-    owner: &Capture,
-    queue: *mut c_void,
-    proof: &mut Signal,
-) -> u32 {
+pub(super) unsafe fn signal(owner: &Capture, queue: *mut c_void, proof: &mut Signal) -> u32 {
     let Some(queue) = NonNull::new(queue) else {
         return CREATE_REFUSED;
     };

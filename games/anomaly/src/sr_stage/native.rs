@@ -77,7 +77,12 @@ mod c {
         #[link_name = "rsf_anomaly_sr_native_set_mip_bias"]
         pub(super) fn set_mip_bias(function: Ptr, cache: Ptr, bias: f32) -> bool;
         #[link_name = "rsf_anomaly_sr_native_constant_buffer"]
-        pub(super) fn constant_buffer(function: Ptr, constants: Ptr, constant: usize, stage: u32) -> usize;
+        pub(super) fn constant_buffer(
+            function: Ptr,
+            constants: Ptr,
+            constant: usize,
+            stage: u32,
+        ) -> usize;
         #[link_name = "rsf_anomaly_sr_native_install_hooks"]
         pub(super) fn install_hooks(image: Ptr, size: u32, sites: Ptr, count: usize) -> bool;
         #[link_name = "rsf_anomaly_sr_native_hooks_created"]
@@ -90,7 +95,12 @@ mod c {
         #[link_name = "rsf_anomaly_sr_position_setup_detour"]
         pub(super) fn position_setup(this: Ptr, constant: Ptr);
         #[link_name = "rsf_anomaly_compare_slot"]
-        pub(super) fn compare_slot(address: Ptr, expected: Ptr, value: Ptr, previous: *mut Ptr) -> bool;
+        pub(super) fn compare_slot(
+            address: Ptr,
+            expected: Ptr,
+            value: Ptr,
+            previous: *mut Ptr,
+        ) -> bool;
         #[link_name = "rsf_anomaly_geometry_current_view"]
         pub(super) fn current_view(module: *const c_void, build: usize) -> u8;
         #[link_name = "rsf_texture_pixel_bytes"]
@@ -186,7 +196,6 @@ static RESOURCES: AtomicPtr<StageResources> = AtomicPtr::new(null_mut());
 static TWIN_LOG: AtomicPtr<Log> = AtomicPtr::new(null_mut());
 static SWAP: OnceLock<usize> = OnceLock::new();
 
-
 fn engine() -> Option<(usize, &'static Build)> {
     let image = IMAGE.load(Ordering::Acquire);
     let build = BUILD.load(Ordering::Acquire);
@@ -226,9 +235,8 @@ fn address(rva: u32) -> Ptr {
 }
 
 fn swap() -> *mut Handle {
-    *SWAP.get_or_init(|| {
-        swap_owner::create(rsf_anomaly_sr_engine_layout(), null_mut()) as usize
-    }) as *mut Handle
+    *SWAP.get_or_init(|| swap_owner::create(rsf_anomaly_sr_engine_layout(), null_mut()) as usize)
+        as *mut Handle
 }
 
 fn resources() -> *mut StageResources {
@@ -250,16 +258,26 @@ fn context() -> Ptr {
 #[cfg(not(test))]
 pub(crate) mod swap_host {
     pub(crate) use super::{
-        correct_position_constant, drop_twins, make_twins, set_mip_bias, set_viewport, swap_read as read,
-        swap_write as write, upload_projection,
+        correct_position_constant, drop_twins, make_twins, set_mip_bias, set_viewport,
+        swap_read as read, swap_write as write, upload_projection,
     };
 }
 
-pub(crate) unsafe extern "C" fn swap_read(_: Ptr, address: *const c_void, output: Ptr, size: usize) -> bool {
+pub(crate) unsafe extern "C" fn swap_read(
+    _: Ptr,
+    address: *const c_void,
+    output: Ptr,
+    size: usize,
+) -> bool {
     unsafe { c::copy(output, address, size) }
 }
 
-pub(crate) unsafe extern "C" fn swap_write(_: Ptr, address: Ptr, input: *const c_void, size: usize) -> bool {
+pub(crate) unsafe extern "C" fn swap_write(
+    _: Ptr,
+    address: Ptr,
+    input: *const c_void,
+    size: usize,
+) -> bool {
     unsafe { c::copy(address, input, size) }
 }
 
@@ -376,9 +394,7 @@ pub(crate) unsafe extern "C" fn set_mip_bias(_: Ptr, value: f32) -> bool {
     let Some(sr) = sr().filter(|_| function != 0) else {
         return false;
     };
-    unsafe {
-        c::set_mip_bias(function as Ptr, address(sr.sampler_cache_rva), value)
-    }
+    unsafe { c::set_mip_bias(function as Ptr, address(sr.sampler_cache_rva), value) }
 }
 
 // Constant-buffer fields used after the native binder has written the stock vector.
@@ -425,7 +441,12 @@ pub(crate) mod position {
     }
 }
 
-pub(crate) unsafe extern "C" fn correct_position_constant(_: Ptr, constant: Ptr, x: f32, y: f32) -> u32 {
+pub(crate) unsafe extern "C" fn correct_position_constant(
+    _: Ptr,
+    constant: Ptr,
+    x: f32,
+    y: f32,
+) -> u32 {
     rsf_anomaly_sr_correct_position_constant(&POSITION_LAYOUT, constant as usize, x, y)
 }
 
@@ -685,7 +706,10 @@ pub(crate) unsafe extern "C" fn pixel_bytes(format: u32) -> u32 {
     unsafe { c::pixel_bytes(format) }
 }
 
-pub(crate) unsafe extern "C" fn draw_pass(kind: u32, views: *const crate::sr_d3d11::DrawViews) -> bool {
+pub(crate) unsafe extern "C" fn draw_pass(
+    kind: u32,
+    views: *const crate::sr_d3d11::DrawViews,
+) -> bool {
     let pass = rsf_anomaly_sr_stage_pass(unsafe { resources().as_ref() });
     rsf_anomaly_sr_run_pass(unsafe { pass.as_ref() }, context(), kind, unsafe {
         &*views
@@ -731,11 +755,7 @@ pub(crate) unsafe extern "C" fn verify_guards(
 ) -> *const c_char {
     // Stage::install lends the build record it was given.
     let build = unsafe { &*build.cast::<Build>() };
-    let image = Image::new(
-        module.cast_const().cast(),
-        image_size,
-        c::copy,
-    );
+    let image = Image::new(module.cast_const().cast(), image_size, c::copy);
     sr_guard_failure(&image, build.sr, world_window, temporal)
 }
 
@@ -807,11 +827,7 @@ pub(crate) unsafe extern "C" fn install_position_slot() -> bool {
         return false;
     };
     let site = &build.sr.function_sites[SITE_POSITION_SETUP];
-    let checked = Image::new(
-        image as *const u8,
-        build.native.image_size,
-        c::copy,
-    );
+    let checked = Image::new(image as *const u8, build.native.image_size, c::copy);
     // The slot must hold the profiled function, and the function its guard.
     checked.matches(site) && {
         rsf_anomaly_slot_install(
@@ -861,17 +877,19 @@ pub(crate) mod leaves {
     pub(crate) use super::{
         apply_colour_transport, back_buffer, build_sha256, close_stale, combine_end, controller,
         create_motion_view, depth_texture, device_size, disable_hooks, draw_pass, engine_frame,
-        frame_end, frame_facts, geometry_active, host_reset, host_stats, hooks_created,
-        install_hooks, install_position_slot, loading_registered, motion_target, now,
-        pixel_bytes, position_setup, precache_frame, prepare, prepared, read_camera,
-        remove_hooks, render_target, rm_near, seam_surface, set_engine, set_rm_near,
-        set_swap_enabled, shutdown, stage_context as context, stage_device as device,
-        sun_begin, sun_end, swap_counters, swap_handle, temporal_ready, verify_guards,
+        frame_end, frame_facts, geometry_active, hooks_created, host_reset, host_stats,
+        install_hooks, install_position_slot, loading_registered, motion_target, now, pixel_bytes,
+        position_setup, precache_frame, prepare, prepared, read_camera, remove_hooks,
+        render_target, rm_near, seam_surface, set_engine, set_rm_near, set_swap_enabled, shutdown,
+        stage_context as context, stage_device as device, sun_begin, sun_end, swap_counters,
+        swap_handle, temporal_ready, verify_guards,
     };
     pub(crate) use crate::adapter_options::{
         rsf_anomaly_sr_persist_int as persist_int, rsf_anomaly_sr_persist_text as persist_text,
     };
-    pub(crate) use crate::ini::{rsf_anomaly_sr_ini_int as ini_int, rsf_anomaly_sr_ini_text as ini_text};
+    pub(crate) use crate::ini::{
+        rsf_anomaly_sr_ini_int as ini_int, rsf_anomaly_sr_ini_text as ini_text,
+    };
     pub(crate) use crate::sr_d3d11::native::{
         rsf_anomaly_sr_context_device as context_device,
         rsf_anomaly_sr_copy_subresource as copy_subresource,

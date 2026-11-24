@@ -157,8 +157,7 @@ fn orchestrate(entry: &mut Entry, request: &Request, runtime: &Runtime) -> u32 {
         }
         // FG also rides on Observe. Its presentation bridge must intercept the engine's swap-chain creation, so it
         // installs here, before the device exists. A refusal leaves presentation stock.
-        let fg =
-            unsafe { leaves::fg(ini, request.observe, runtime.module, request.build, LOG_FN) };
+        let fg = unsafe { leaves::fg(ini, request.observe, runtime.module, request.build, LOG_FN) };
         if fg && !request.observe {
             write_log(
                 b"Anomaly FG refused: FG/FGBridge require Mode=Observe; presentation stays stock.",

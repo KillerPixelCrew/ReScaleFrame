@@ -3,8 +3,8 @@ use super::d3d::Modules;
 use super::manifest::{Manifest, Root, admit_pack};
 use super::reflection::{Snapshot, reflect, rsf_anomaly_shader_compatible};
 use super::{
-    Bytes, Compatibility, EngineShaderProfile, Outcome, Request,
-    rsf_anomaly_shader_skin_mode, runtime_refusal,
+    Bytes, Compatibility, EngineShaderProfile, Outcome, Request, rsf_anomaly_shader_skin_mode,
+    runtime_refusal,
 };
 use crate::motion_device::ConstantOps;
 use crate::runtime_module::rsf_anomaly_runtime_module;
@@ -61,7 +61,12 @@ mod engine {
 #[cfg(test)]
 mod engine {
     use std::ffi::{c_char, c_void};
-    pub(super) unsafe fn open(_: *mut c_void, _: *const c_char, _: *mut *const c_void, _: *mut u32) -> bool {
+    pub(super) unsafe fn open(
+        _: *mut c_void,
+        _: *const c_char,
+        _: *mut *const c_void,
+        _: *mut u32,
+    ) -> bool {
         false
     }
     pub(super) unsafe fn copy(_: *mut c_void, _: *const c_void, _: usize) -> bool {
@@ -104,7 +109,8 @@ unsafe extern "C" fn resolve_include(
     let mut data = std::ptr::null();
     let mut size = 0;
     let table = includes.table;
-    if !unsafe { engine::open(table, name.as_ptr().cast(), &mut data, &mut size) } || data.is_null() {
+    if !unsafe { engine::open(table, name.as_ptr().cast(), &mut data, &mut size) } || data.is_null()
+    {
         return RSF_PATCH_SOURCE;
     }
     let opened = OpenInclude { table, data };
@@ -284,8 +290,7 @@ fn includer_table(image: usize, setup_rva: u32) -> Result<usize, &'static str> {
         let close = usize::from_le_bytes(read_bytes(table.checked_add(size_of::<usize>())?)?);
         Some(
             read_bytes::<9>(open)? == [0x40, 0x53, 0x48, 0x81, 0xec, 0x40, 0x02, 0x00, 0x00]
-                && read_bytes::<8>(close)?
-                    == [0x48, 0x83, 0xec, 0x28, 0x48, 0x85, 0xd2, 0x74],
+                && read_bytes::<8>(close)? == [0x48, 0x83, 0xec, 0x28, 0x48, 0x85, 0xd2, 0x74],
         )
     };
     if entries() == Some(true) {

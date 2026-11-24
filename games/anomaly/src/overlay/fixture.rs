@@ -3,6 +3,7 @@
 use super::*;
 use crate::input::gate;
 use crate::{overlay_hooks, overlay_native};
+use rsf_test_support::Window;
 use windows::Win32::Devices::HumanInterfaceDevice::*;
 use windows::Win32::Foundation::{GENERIC_READ, HWND};
 use windows::Win32::Graphics::Direct3D::*;
@@ -10,7 +11,6 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::{Common::*, *};
 use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::*;
-use rsf_test_support::Window;
 use windows::Win32::UI::WindowsAndMessaging::{WINDOW_STYLE, WS_OVERLAPPEDWINDOW, WS_POPUP};
 use windows::core::{Interface, PCWSTR};
 use windows_sys::Win32::Foundation::POINT;
@@ -25,7 +25,14 @@ use std::time::Duration;
 
 /// A fixture window of its own class: the engine's, a foreign one, or the input test's.
 fn window(class: PCWSTR, style: WINDOW_STYLE, width: i32, height: i32) -> Option<Window> {
-    Window::new(class, windows::core::w!("Anomaly fixture"), style, width, height).ok()
+    Window::new(
+        class,
+        windows::core::w!("Anomaly fixture"),
+        style,
+        width,
+        height,
+    )
+    .ok()
 }
 
 struct Graphics {
@@ -462,8 +469,13 @@ fn visibility(query: rsf_get_overlay_api_fn) -> Result<i32, Box<dyn std::error::
     if runtime.is_null() {
         return Err("the imported Runtime DLL is absent".into());
     }
-    let window = window(windows::core::w!("_XRAY_1.5"), WS_OVERLAPPEDWINDOW, 640, 360)
-        .ok_or("creating the hidden engine window failed")?;
+    let window = window(
+        windows::core::w!("_XRAY_1.5"),
+        WS_OVERLAPPEDWINDOW,
+        640,
+        360,
+    )
+    .ok_or("creating the hidden engine window failed")?;
     let Some(gpu) = Graphics::new(window.handle, D3D_DRIVER_TYPE_HARDWARE, 640, 360, true)
         .or_else(|| Graphics::new(window.handle, D3D_DRIVER_TYPE_WARP, 640, 360, true))
     else {

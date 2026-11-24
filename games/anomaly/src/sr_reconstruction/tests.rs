@@ -114,9 +114,10 @@ pub(super) mod engine {
         let engine = unsafe { &mut *ENGINE.get() };
         let write = engine.writes;
         engine.writes += 1;
-        if engine.fail_write.is_some_and(|failure| {
-            failure == write || (engine.fail_restoration && write > failure)
-        }) {
+        if engine
+            .fail_write
+            .is_some_and(|failure| failure == write || (engine.fail_restoration && write > failure))
+        {
             return false;
         }
         let Some(bytes) = engine.memory.get_mut(address..address.saturating_add(size)) else {

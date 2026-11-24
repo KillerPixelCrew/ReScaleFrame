@@ -272,12 +272,14 @@ use self::tests::leaves;
 
 #[cfg(not(test))]
 mod native {
+    pub(super) use super::win32::{engine_window, insert_held};
     use super::{HookOps, c_char, c_void, rsf_anomaly_sr_settings, rsf_overlay_sr_report};
-    use crate::sr_stage::{OverlayChoices, STAGE};
-        pub(super) use super::win32::{engine_window, insert_held};
-    pub(super) use crate::fg_stage::{foreign_chain as fg_foreign_chain, overlay_options as fg_options};
+    pub(super) use crate::fg_stage::{
+        foreign_chain as fg_foreign_chain, overlay_options as fg_options,
+    };
     pub(super) use crate::overlay_hooks::install_input;
     pub(super) use crate::overlay_native::{capture_backbuffer, describe_chain as chain};
+    use crate::sr_stage::{OverlayChoices, STAGE};
 
     pub(super) fn install_present(hooks: &HookOps, reason: &mut *const c_char) -> bool {
         crate::overlay_hooks::install_present(
@@ -674,9 +676,8 @@ impl Service {
             struct_size: size_of::<rsf_named_frame_dump_report>() as u32,
             ..Default::default()
         };
-        let result = unsafe {
-            leaves::capture_backbuffer(chain, Some(capture.dump), &request, &mut report)
-        };
+        let result =
+            unsafe { leaves::capture_backbuffer(chain, Some(capture.dump), &request, &mut report) };
         self.say(format_args!(
             "Anomaly overlay capture {name}: result {result} ({}x{} format {}) -> {}",
             report.width,

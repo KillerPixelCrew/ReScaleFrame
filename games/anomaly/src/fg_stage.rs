@@ -819,7 +819,10 @@ pub(crate) fn foreign_chain(chain: Raw) -> bool {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_anomaly_fg_stage_camera(view: *const f32, projection: *const f32) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_fg_stage_camera(
+    view: *const f32,
+    projection: *const f32,
+) {
     if let Some(stage) = installed()
         && !view.is_null()
         && !projection.is_null()
@@ -888,7 +891,11 @@ pub(crate) extern "C" fn rsf_anomaly_fg_stage_input_received(kinds: u32, message
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_fg_stage_render_begin(native_frame: u32, width: u32, height: u32) {
+pub(crate) extern "C" fn rsf_anomaly_fg_stage_render_begin(
+    native_frame: u32,
+    width: u32,
+    height: u32,
+) {
     let Some(stage) = installed() else { return };
     let phase = stage.engine.lock().unwrap().phase;
     if phase == Phase::Rendering {

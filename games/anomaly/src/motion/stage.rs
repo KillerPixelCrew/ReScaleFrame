@@ -12,8 +12,8 @@ mod report;
 pub(super) mod shaders;
 
 use self::abi::*;
-use self::native::leaf;
 use self::capture::Capture;
+use self::native::leaf;
 use self::options::Settings;
 use self::report::Counters;
 use self::shaders::{Chain, Loader, Pack, Registry};
@@ -107,9 +107,7 @@ impl WindowFacts {
             return None;
         }
         let (mut frame, mut view) = (0, 0);
-        if !unsafe { leaf::native_frame(&mut frame) }
-            || !unsafe { leaf::render_view(&mut view) }
-        {
+        if !unsafe { leaf::native_frame(&mut frame) } || !unsafe { leaf::render_view(&mut view) } {
             return None;
         }
         let generation = crate::native_observer::resets();
@@ -466,9 +464,7 @@ impl Stage {
             render.reset_history();
             lock(&self.registry).clear_links();
             let runtime = lock(&self.loader).pack.as_ref().map(Pack::constant_ops);
-            let owner = render
-                .device
-                .get_or_insert_with(Owner::new);
+            let owner = render.device.get_or_insert_with(Owner::new);
             let log = self.log();
             if !owner.create(facts.device, runtime, log.callback, log.user as Raw) {
                 log.text(c"Anomaly motion: device resources could not be created.");
@@ -632,7 +628,11 @@ impl Stage {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_stage_configure(ini: *const u16, log: rsf_game_log_fn, user: Raw) {
+unsafe extern "C" fn rsf_anomaly_motion_stage_configure(
+    ini: *const u16,
+    log: rsf_game_log_fn,
+    user: Raw,
+) {
     Stage::get().configure(
         ini,
         Log {
@@ -748,13 +748,7 @@ unsafe extern "C" fn rsf_anomaly_motion_stage_replay_begin(
     if !stage.active.load(Acquire) {
         return false;
     }
-    let result = unsafe {
-        rsf_anomaly_motion_replay_begin(
-            view,
-            flight.context,
-            replay,
-        )
-    };
+    let result = unsafe { rsf_anomaly_motion_replay_begin(view, flight.context, replay) };
     match result {
         REPLAY_READY => return true,
         REPLAY_NO_DEPTH_WRITE => lock(&stage.render).counters.replay_skipped_no_depth_write += 1,

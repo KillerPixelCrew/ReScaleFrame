@@ -11,7 +11,8 @@ use crate::sys::{
     rsf_sharpening_options, rsf_sr12, rsf_sr12_create_planned, rsf_sr12_plan_result,
     rsf_sr12_setup, rsf_unity_package_view_setup,
 };
-use crate::vulkan_state::bridge::rsf_uvk_bridge_update_window;use std::ffi::{c_int, c_void};
+use crate::vulkan_state::bridge::rsf_uvk_bridge_update_window;
+use std::ffi::{c_int, c_void};
 use std::sync::atomic::Ordering::SeqCst;
 use windows::Win32::Graphics::{
     Direct3D12::{ID3D12Device, ID3D12GraphicsCommandList, ID3D12Resource},
@@ -32,14 +33,14 @@ pub(super) mod raw {
         rsf_unity_package_create_directory as create_directory,
         rsf_unity_package_local_app_data as local_app_data,
         rsf_unity_package_log_close as log_close, rsf_unity_package_log_open as log_open,
-        rsf_unity_package_log_write as log_write,
-        rsf_unity_package_player_window as player_window, rsf_unity_package_restore as restore,
-        rsf_unity_package_session_seed as session_seed, rsf_unity_package_subclass as subclass,
-        rsf_unity_package_timestamp as timestamp,
+        rsf_unity_package_log_write as log_write, rsf_unity_package_player_window as player_window,
+        rsf_unity_package_restore as restore, rsf_unity_package_session_seed as session_seed,
+        rsf_unity_package_subclass as subclass, rsf_unity_package_timestamp as timestamp,
         rsf_unity_package_window_class as window_class,
     };
     pub(in crate::package_state) use super::{
-        rsf_unity_package_create_view as sr_create, rsf_unity_package_default_fg as fg_default_backend,
+        rsf_unity_package_create_view as sr_create,
+        rsf_unity_package_default_fg as fg_default_backend,
         rsf_unity_package_dlss_preset_valid as dlss_preset_valid,
         rsf_unity_package_prepare_preview as preview_prepare,
         rsf_unity_package_renderer_vulkan as renderer_vulkan,

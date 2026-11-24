@@ -359,7 +359,11 @@ pub(crate) extern "C" fn driver_bind() -> bool {
 pub(crate) unsafe extern "C" fn set_engine(_: *mut c_void, _: *const c_void, temporal: bool) {
     record(format!("set engine temporal={temporal}"));
 }
-pub(crate) unsafe extern "C" fn ini_int(_: *const c_void, key: *const c_char, fallback: i32) -> i32 {
+pub(crate) unsafe extern "C" fn ini_int(
+    _: *const c_void,
+    key: *const c_char,
+    fallback: i32,
+) -> i32 {
     let key = unsafe { CStr::from_ptr(key) }.to_str().unwrap();
     fake(|f| {
         f.ini
@@ -1118,7 +1122,11 @@ pub(crate) unsafe extern "C" fn timer_clock(
     };
     fake(|f| f.timer_result)
 }
-pub(crate) unsafe extern "C" fn timer_timestamp(_: *mut c_void, _: *mut c_void, ticks: *mut u64) -> i32 {
+pub(crate) unsafe extern "C" fn timer_timestamp(
+    _: *mut c_void,
+    _: *mut c_void,
+    ticks: *mut u64,
+) -> i32 {
     let tick = fake(|f| {
         f.timer_tick += 2;
         f.timer_tick
@@ -1560,10 +1568,10 @@ pub(crate) mod leaves {
         controller_frame_end as frame_end, create_motion_view, device, device_size, draw_pass,
         driver_bind, driver_boundary, driver_count_prepared, driver_enabled, driver_evaluate,
         driver_fallback, driver_stop, engine_frame, frame_facts, geometry_active, hooks_created,
-        host_reset, install_hooks, install_position_slot, loading_registered,
-        motion_target, now, persist_int, persist_text, precache_frame, prepare, read_camera,
-        release_view as release, remove_hooks, render_target, set_engine, set_rm_near,
-        set_swap_enabled, shutdown, temporal_ready, verify_guards,
+        host_reset, install_hooks, install_position_slot, loading_registered, motion_target, now,
+        persist_int, persist_text, precache_frame, prepare, read_camera, release_view as release,
+        remove_hooks, render_target, set_engine, set_rm_near, set_swap_enabled, shutdown,
+        temporal_ready, verify_guards,
     };
     pub(crate) use crate::sr_stage::staging::tests::{
         context_device, copy_subresource, immediate_context, map_read, pixel_bytes, unmap,
@@ -1572,7 +1580,11 @@ pub(crate) mod leaves {
     use std::ptr::null;
 
     /// The INI reads: the fake map, or the production Win32 reader for the tests that set `production_ini`.
-    pub(crate) unsafe extern "C" fn ini_int(ini: *const c_void, key: *const c_char, fallback: i32) -> i32 {
+    pub(crate) unsafe extern "C" fn ini_int(
+        ini: *const c_void,
+        key: *const c_char,
+        fallback: i32,
+    ) -> i32 {
         if fake(|f| f.production_ini) {
             unsafe { crate::ini::rsf_anomaly_sr_ini_int(ini, key, fallback) }
         } else {
@@ -1599,10 +1611,18 @@ pub(crate) mod leaves {
         }
     }
     pub(crate) fn timer_retain_device(device: *mut c_void) -> *mut c_void {
-        if fake(|f| f.timers) { retain_timer(device) } else { null_mut() }
+        if fake(|f| f.timers) {
+            retain_timer(device)
+        } else {
+            null_mut()
+        }
     }
     pub(crate) fn timer_create_query(device: *mut c_void, disjoint: bool) -> *mut c_void {
-        if fake(|f| f.timers) { create_timer_query(device, disjoint) } else { null_mut() }
+        if fake(|f| f.timers) {
+            create_timer_query(device, disjoint)
+        } else {
+            null_mut()
+        }
     }
     pub(crate) fn timer_issue(context: *mut c_void, query: *mut c_void, begin: bool) {
         if fake(|f| f.timers) {
@@ -1615,10 +1635,22 @@ pub(crate) mod leaves {
         frequency: *mut u64,
         disjoint: *mut bool,
     ) -> i32 {
-        if fake(|f| f.timers) { unsafe { super::timer_clock(context, query, frequency, disjoint) } } else { -1 }
+        if fake(|f| f.timers) {
+            unsafe { super::timer_clock(context, query, frequency, disjoint) }
+        } else {
+            -1
+        }
     }
-    pub(crate) unsafe fn timer_timestamp(context: *mut c_void, query: *mut c_void, ticks: *mut u64) -> i32 {
-        if fake(|f| f.timers) { unsafe { super::timer_timestamp(context, query, ticks) } } else { -1 }
+    pub(crate) unsafe fn timer_timestamp(
+        context: *mut c_void,
+        query: *mut c_void,
+        ticks: *mut u64,
+    ) -> i32 {
+        if fake(|f| f.timers) {
+            unsafe { super::timer_timestamp(context, query, ticks) }
+        } else {
+            -1
+        }
     }
 
     // No test drives these; they answer as an absent leaf did.

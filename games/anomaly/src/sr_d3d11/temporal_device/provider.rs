@@ -320,12 +320,9 @@ pub(super) fn run(root: &OsStr) -> bool {
             continue;
         }
         let size = driver.plan(OUTPUT).unwrap();
-        let targets = TemporalTargets::new(device,
-            extent(size),
-            extent(OUTPUT),
-            driver.output_format(),
-        )
-        .unwrap();
+        let targets =
+            TemporalTargets::new(device, extent(size), extent(OUTPUT), driver.output_format())
+                .unwrap();
         let scene = Scene::new(&d, size);
         let mut sequence = JitterSequence::new();
         let mut state = Jitter::default();

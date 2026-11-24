@@ -36,7 +36,13 @@ pub(super) unsafe fn sr(_: *const u16, configure: bool, _: rsf_game_log_fn) -> b
 pub(super) unsafe fn motion(_: *const u16, _: rsf_game_log_fn) {
     MOTION.fetch_add(1, SeqCst);
 }
-pub(super) unsafe fn fg(_: *const u16, configure: bool, _: HMODULE, _: usize, _: rsf_game_log_fn) -> bool {
+pub(super) unsafe fn fg(
+    _: *const u16,
+    configure: bool,
+    _: HMODULE,
+    _: usize,
+    _: rsf_game_log_fn,
+) -> bool {
     if configure {
         FG.fetch_add(1, SeqCst);
     }
@@ -141,19 +147,13 @@ fn retry_repeats_only_unfinished_steps() {
     };
 
     let mut entry = Entry::new();
-    assert_eq!(
-        orchestrate(&mut entry, &request, &runtime),
-        OVERLAY_REFUSED
-    );
+    assert_eq!(orchestrate(&mut entry, &request, &runtime), OVERLAY_REFUSED);
     assert_eq!(counts(), [1, 1, 1, 1, 1, 1, 1, 1, 0]);
     assert_eq!(RECEIPTS.load(SeqCst), 1);
     assert_eq!(PUBLISHED.load(SeqCst), 1);
     INPUT_ACCEPTS.store(true, SeqCst);
     OVERLAY_ACCEPTS.store(true, SeqCst);
-    assert_eq!(
-        orchestrate(&mut entry, &request, &runtime),
-        READY
-    );
+    assert_eq!(orchestrate(&mut entry, &request, &runtime), READY);
     assert!(entry.started && entry.observation == Observation::Active);
     assert_eq!(counts(), [1, 1, 1, 1, 2, 1, 1, 2, 1]);
     assert_eq!(RECEIPTS.load(SeqCst), 1);
@@ -162,36 +162,24 @@ fn retry_repeats_only_unfinished_steps() {
 
     PREPARE_RESULT.store(-4, SeqCst);
     let mut entry = Entry::new();
-    assert_eq!(
-        orchestrate(&mut entry, &request, &runtime),
-        PREPARE_REFUSED
-    );
+    assert_eq!(orchestrate(&mut entry, &request, &runtime), PREPARE_REFUSED);
     assert!(!entry.session.is_null() && entry.observation == Observation::RetainedAfterRefusal);
     assert_eq!(counts(), [2, 2, 2, 2, 3, 2, 1, 2, 1]);
-    assert_eq!(
-        orchestrate(&mut entry, &request, &runtime),
-        PREPARE_REFUSED
-    );
+    assert_eq!(orchestrate(&mut entry, &request, &runtime), PREPARE_REFUSED);
     assert_eq!(counts(), [2, 2, 2, 2, 3, 2, 1, 2, 1]);
     assert_eq!(QUIESCED.load(SeqCst), 1);
     assert_eq!(STOPPED.load(SeqCst), 0);
     let retained = entry.session;
 
     QUIESCE_RESULT.store(RSF_OK, SeqCst);
-    assert_eq!(
-        orchestrate(&mut entry, &request, &runtime),
-        PREPARE_REFUSED
-    );
+    assert_eq!(orchestrate(&mut entry, &request, &runtime), PREPARE_REFUSED);
     assert_eq!(entry.session, retained);
     assert_eq!(counts(), [2, 2, 2, 2, 3, 2, 1, 2, 1]);
     assert_eq!(STOPPED.load(SeqCst), 1);
 
     PREPARE_RESULT.store(RSF_OK, SeqCst);
     STOP_RESULT.store(RSF_OK, SeqCst);
-    assert_eq!(
-        orchestrate(&mut entry, &request, &runtime),
-        READY
-    );
+    assert_eq!(orchestrate(&mut entry, &request, &runtime), READY);
     assert_eq!(counts(), [2, 2, 2, 2, 3, 3, 2, 3, 2]);
     assert!(entry.started && entry.observation == Observation::Active);
     assert_eq!(QUIESCED.load(SeqCst), 3);
@@ -199,17 +187,11 @@ fn retry_repeats_only_unfinished_steps() {
 
     START_RESULT.store(-4, SeqCst);
     let mut entry = Entry::new();
-    assert_eq!(
-        orchestrate(&mut entry, &request, &runtime),
-        START_REFUSED
-    );
+    assert_eq!(orchestrate(&mut entry, &request, &runtime), START_REFUSED);
     assert!(!entry.session.is_null() && entry.observation == Observation::Prepared);
     assert_eq!(counts(), [3, 3, 3, 3, 4, 4, 3, 3, 2]);
     START_RESULT.store(RSF_OK, SeqCst);
-    assert_eq!(
-        orchestrate(&mut entry, &request, &runtime),
-        READY
-    );
+    assert_eq!(orchestrate(&mut entry, &request, &runtime), READY);
     assert_eq!(counts(), [3, 3, 3, 3, 4, 4, 4, 4, 3]);
     assert!(entry.started && entry.observation == Observation::Active);
     assert_eq!(QUIESCED.load(SeqCst), 3);

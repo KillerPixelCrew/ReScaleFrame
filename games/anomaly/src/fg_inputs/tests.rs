@@ -118,14 +118,20 @@ pub(super) unsafe extern "C" fn texture(
     lease_resource(device, label)
 }
 
-pub(super) unsafe extern "C" fn depth_view(device: *mut c_void, depth_copy: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn depth_view(
+    device: *mut c_void,
+    depth_copy: *mut c_void,
+) -> *mut c_void {
     if label(depth_copy) != "depth_copy" {
         return ptr::null_mut();
     }
     lease_resource(device, "depth_view")
 }
 
-pub(super) unsafe extern "C" fn unordered_view(device: *mut c_void, texture: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn unordered_view(
+    device: *mut c_void,
+    texture: *mut c_void,
+) -> *mut c_void {
     match label(texture) {
         "depth" => lease_resource(device, "depth_uav"),
         "motion" => lease_resource(device, "motion_uav"),

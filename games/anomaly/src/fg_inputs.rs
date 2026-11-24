@@ -138,9 +138,14 @@ impl SurfaceSet {
             unsafe { leaves::depth_view(device, depth_copy.as_ptr()) },
             release,
         )?;
-        let depth_uav = Lease::new(unsafe { leaves::unordered_view(device, depth.as_ptr()) }, release)?;
-        let motion_uav =
-            Lease::new(unsafe { leaves::unordered_view(device, motion.as_ptr()) }, release)?;
+        let depth_uav = Lease::new(
+            unsafe { leaves::unordered_view(device, depth.as_ptr()) },
+            release,
+        )?;
+        let motion_uav = Lease::new(
+            unsafe { leaves::unordered_view(device, motion.as_ptr()) },
+            release,
+        )?;
         Some(Self {
             motion_uav,
             depth_uav,

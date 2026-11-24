@@ -141,7 +141,12 @@ pub(crate) unsafe extern "C" fn format_support(_: Ptr, format: u32) -> u32 {
     })
 }
 
-pub(crate) unsafe extern "C" fn texture(_: Ptr, desc: &Texture, data: *const c_void, pitch: u32) -> Ptr {
+pub(crate) unsafe extern "C" fn texture(
+    _: Ptr,
+    desc: &Texture,
+    data: *const c_void,
+    pitch: u32,
+) -> Ptr {
     let first_word = (!data.is_null()).then(|| unsafe { data.cast::<u32>().read_unaligned() });
     fake(|state| {
         let reference = state.allocate();
@@ -261,9 +266,10 @@ pub(crate) unsafe extern "C" fn draw(_: Ptr, draw: &Draw) {
 #[allow(unused_imports)] // the fixtures and production use the rest
 pub(crate) mod calls {
     pub(crate) use super::{
-        as_texture, blend_state, clear_stencil, constant_buffer, depth_state, describe_texture, describe_view,
-        draw, format_support, ps_constant, ps_resources, raster_state, release, restore_state, retain,
-        save_state, shader, targets, texture, texture_device, update_constants, view, view_resource,
+        as_texture, blend_state, clear_stencil, constant_buffer, depth_state, describe_texture,
+        describe_view, draw, format_support, ps_constant, ps_resources, raster_state, release,
+        restore_state, retain, save_state, shader, targets, texture, texture_device,
+        update_constants, view, view_resource,
     };
 }
 

@@ -326,7 +326,10 @@ pub(crate) unsafe extern "C" fn set_viewport(user: *mut c_void, width: u32, heig
     host(user).viewports.push((width, height));
 }
 
-pub(crate) unsafe extern "C" fn upload_projection(user: *mut c_void, matrix: *const c_void) -> bool {
+pub(crate) unsafe extern "C" fn upload_projection(
+    user: *mut c_void,
+    matrix: *const c_void,
+) -> bool {
     let host = host(user);
     let call = host.upload_calls;
     host.upload_calls += 1;
@@ -375,7 +378,8 @@ struct Case {
 /// The fake engine host under the production names (`sr_swap::host`).
 pub(crate) mod swap_host {
     pub(crate) use super::{
-        correct_position_constant, drop_twins, make_twins, read, set_mip_bias, set_viewport, upload_projection, write,
+        correct_position_constant, drop_twins, make_twins, read, set_mip_bias, set_viewport,
+        upload_projection, write,
     };
 }
 

@@ -394,8 +394,8 @@ pub(crate) const VK_ROUTE_CREATE_DEVICE: u32 = 4;
 pub(crate) const VK_ROUTE_DESTROY_DEVICE: u32 = 5;
 pub(crate) mod vulkan_negotiation;
 pub(crate) use vulkan_negotiation::{
-    VkAdapter, VkChainFacts, VkCreationLeaves, VkDeviceCall, VkDeviceDerive,
-    VkFunction, VkInstanceCall, VkLatencyRequirements, VkProc,
+    VkAdapter, VkChainFacts, VkCreationLeaves, VkDeviceCall, VkDeviceDerive, VkFunction,
+    VkInstanceCall, VkLatencyRequirements, VkProc,
 };
 
 /// `RSF_GODOT_EFFECT_MOTION_FORMAT`, `RenderingDevice::DATA_FORMAT_R16G16_SFLOAT`.

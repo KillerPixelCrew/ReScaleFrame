@@ -45,8 +45,7 @@ mod stages {
         rsf_anomaly_fg_stage_camera as camera, rsf_anomaly_fg_stage_device_reset as device_reset,
         rsf_anomaly_fg_stage_end_after as end_after, rsf_anomaly_fg_stage_end_before as end_before,
         rsf_anomaly_fg_stage_render_begin as render_begin,
-        rsf_anomaly_fg_stage_scope as scope_frame,
-        rsf_anomaly_fg_stage_ui_boundary as ui_boundary,
+        rsf_anomaly_fg_stage_scope as scope_frame, rsf_anomaly_fg_stage_ui_boundary as ui_boundary,
     };
     pub(super) use crate::input::rsf_anomaly_input_idle as input_idle;
     pub(super) use crate::motion::stage::rsf_anomaly_motion_stage_quiesce as quiesce_motion;
@@ -636,9 +635,7 @@ pub(crate) unsafe fn rsf_anomaly_observer_prepare(
     OBSERVER.prepare(unsafe { &*host })
 }
 
-pub(crate) unsafe fn rsf_anomaly_observer_start(
-    args: *const rsf_game_start_args,
-) -> rsf_result {
+pub(crate) unsafe fn rsf_anomaly_observer_start(args: *const rsf_game_start_args) -> rsf_result {
     match unsafe { validate(args) } {
         OK => OBSERVER.start(),
         error => error,

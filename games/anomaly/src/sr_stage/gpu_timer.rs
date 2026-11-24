@@ -36,7 +36,10 @@ impl Ring {
         if !platform.bound {
             return None;
         }
-        let device = Lease::new(leaf!(platform, timer_retain_device(device)), leaves::release)?;
+        let device = Lease::new(
+            leaf!(platform, timer_retain_device(device)),
+            leaves::release,
+        )?;
         let create = |clock| {
             let query = leaf!(platform, timer_create_query(device.as_ptr(), clock));
             Lease::new(query, leaves::release)
@@ -70,7 +73,10 @@ impl Ring {
             let mut frequency = 0;
             let mut disjoint = false;
             let clock = if platform.bound {
-                leaf!(platform, timer_clock(context, slot.clock.as_ptr(), &mut frequency, &mut disjoint))
+                leaf!(
+                    platform,
+                    timer_clock(context, slot.clock.as_ptr(), &mut frequency, &mut disjoint)
+                )
             } else {
                 -1
             };

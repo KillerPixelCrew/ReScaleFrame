@@ -112,8 +112,7 @@ impl Compiler {
         let Some(constants) = self.constants() else {
             return Ok(None);
         };
-        let Some(no_depth) = lease(unsafe { d3d::depth_state(self.device, 0) })
-        else {
+        let Some(no_depth) = lease(unsafe { d3d::depth_state(self.device, 0) }) else {
             return Ok(None);
         };
         Ok(Some(TemporalPass {
@@ -156,15 +155,11 @@ impl SavedState {
     }
 
     fn targets(&self, targets: &[Ptr], depth: Ptr) {
-        unsafe {
-            d3d::targets(self.context, targets.len() as u32, targets.as_ptr(), depth)
-        };
+        unsafe { d3d::targets(self.context, targets.len() as u32, targets.as_ptr(), depth) };
     }
 
     fn resources(&self, slot: u32, inputs: &[Ptr]) {
-        unsafe {
-            d3d::ps_resources(self.context, slot, inputs.len() as u32, inputs.as_ptr())
-        };
+        unsafe { d3d::ps_resources(self.context, slot, inputs.len() as u32, inputs.as_ptr()) };
     }
 }
 
@@ -180,12 +175,7 @@ impl Pass {
         self.temporal.is_some()
     }
 
-    pub(super) fn new(
-        device: Ptr,
-        kind: u32,
-        log: Log,
-        user: Ptr,
-    ) -> Option<Self> {
+    pub(super) fn new(device: Ptr, kind: u32, log: Log, user: Ptr) -> Option<Self> {
         if device.is_null() {
             return None;
         }
