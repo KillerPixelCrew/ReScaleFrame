@@ -6,7 +6,6 @@ Every other binding is generated at build time by the build.rs of the crate that
 skipped with a note.
 """
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -15,8 +14,6 @@ from committed_bindings import bindgen, emit, finish  # noqa: E402
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--vulkan-sdk", type=Path, default=os.environ.get("VULKAN_SDK"),
-                    help="Vulkan SDK root for tests/vulkan-fg/src/wsi_abi.rs (default: VULKAN_SDK)")
 parser.add_argument("--minhook", type=Path, default=root / "build/windows-x64/_deps/minhook-src",
                     help="MinHook v1.3.4 source tree for the HDE64 records")
 args = parser.parse_args()
@@ -58,24 +55,6 @@ generate("tests/engine_sharpening_abi.rs", "integrations/unity/native/package_st
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use rsf_game_sys::rsf_sharpening_options;",
           "--with-derive-custom-struct", "rsf_(godot_settings|unity_package_settings)=PartialEq"])
-
-# wsi_abi.h includes the Vulkan SDK headers, which the repository does not carry.
-if args.vulkan_sdk:
-    generate("tests/vulkan-fg/src/wsi_abi.rs", "tests/vulkan-fg/wsi_abi.h",
-             "rsf_ffx_wsi_dispatch", "NOTHING",
-             ["-x", "c++", "-std=c++17", "-Wno-pragma-once-outside-header", f"-I{args.vulkan_sdk / 'Include'}"],
-             ["--allowlist-function", "(rsf_fixture_sdk_wsi_.*|rsfFfxSetVulkanWsiDispatch)",
-              "--no-recursive-allowlist", "--blocklist-type", "Vk.*|PFN_vk.*",
-              "--raw-line", "#![allow(non_snake_case)]",
-              "--raw-line", "use ash::vk::{\n"
-                            "    self, Device as VkDevice, Queue as VkQueue, Result as VkResult, SwapchainKHR as VkSwapchainKHR,\n};",
-              "--raw-line", "type PFN_vkCreateSwapchainKHR = Option<vk::PFN_vkCreateSwapchainKHR>;",
-              "--raw-line", "type PFN_vkDestroySwapchainKHR = Option<vk::PFN_vkDestroySwapchainKHR>;",
-              "--raw-line", "type PFN_vkQueuePresentKHR = Option<vk::PFN_vkQueuePresentKHR>;",
-              "--raw-line", "type PFN_vkAcquireNextImageKHR = Option<vk::PFN_vkAcquireNextImageKHR>;",
-              "--raw-line", "type PFN_vkGetSwapchainImagesKHR = Option<vk::PFN_vkGetSwapchainImagesKHR>;"])
-else:
-    print("skipped tests/vulkan-fg/src/wsi_abi.rs: pass --vulkan-sdk or set VULKAN_SDK")
 
 # hde64.h comes from the MinHook checkout CMake fetches (third_party/minhook/minhook.lock.json pins v1.3.4).
 hde = args.minhook / "src/hde/hde64.h"

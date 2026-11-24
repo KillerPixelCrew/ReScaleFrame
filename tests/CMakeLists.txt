@@ -48,8 +48,7 @@ foreach(archive rsf_game_sdk_fixtures_rust rsf_game_sdk_render_host_rust rsf_gam
     endif()
 endforeach()
 # rsf-vulkan-fg-fixtures: each provider fixture reaches its own SDK leaves and Runtime entries.
-foreach(feature wsi-dispatch streamline-selected streamline-dispatch xess-sr xess-input-range
-        xess-device)
+foreach(feature xess-sr xess-input-range xess-device)
     string(MAKE_C_IDENTIFIER "${feature}" name)
     rsf_add_rust_static(rsf_vulkan_fg_${name}_rust rsf_rust_vulkan_fg_${name}
         rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features ${feature})
@@ -552,10 +551,9 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_FG)
 endif()
 if(RSF_HAVE_VULKAN)
     add_executable(rsf_ffx_vulkan_wsi_dispatch_test ffx_vulkan_wsi_dispatch.c)
-    set_target_properties(rsf_ffx_vulkan_wsi_dispatch_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
-        LINKER_LANGUAGE CXX)
+    set_target_properties(rsf_ffx_vulkan_wsi_dispatch_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
     target_include_directories(rsf_ffx_vulkan_wsi_dispatch_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_link_libraries(rsf_ffx_vulkan_wsi_dispatch_test PRIVATE rsf_vulkan_fg_wsi_dispatch_rust rsf_build_options)
+    target_link_libraries(rsf_ffx_vulkan_wsi_dispatch_test PRIVATE rsf_build_options)
     add_test(NAME ffx_vulkan_wsi_dispatch COMMAND rsf_ffx_vulkan_wsi_dispatch_test)
     if(RSF_HAVE_FFX_VK)
         # vulkan_ffx_fg/fixture.rs in the test-fixtures orchestrator archive: the scenarios replace the SDK module
@@ -667,7 +665,7 @@ set_tests_properties(native_xess_vulkan_device PROPERTIES TIMEOUT 120 SKIP_RETUR
 if(RSF_HAVE_VULKAN)
     add_executable(rsf_streamline_vulkan_dispatch_test streamline_vulkan_dispatch.cpp)
     target_include_directories(rsf_streamline_vulkan_dispatch_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
-    target_link_libraries(rsf_streamline_vulkan_dispatch_test PRIVATE rsf_vulkan_fg_streamline_dispatch_rust rsf_build_options)
+    target_link_libraries(rsf_streamline_vulkan_dispatch_test PRIVATE rsf_build_options)
     add_test(NAME streamline_vulkan_dispatch_contract COMMAND rsf_streamline_vulkan_dispatch_test)
     add_executable(rsf_native_antilag_vulkan_test fixture_main.c)
     target_compile_definitions(rsf_native_antilag_vulkan_test PRIVATE RSF_FIXTURE_ENTRY=rsf_native_antilag_vulkan_fixture)
@@ -680,7 +678,7 @@ if(RSF_HAVE_VULKAN AND RSF_HAVE_STREAMLINE)
     add_executable(rsf_streamline_selected_device_test streamline_selected_device.cpp)
     get_filename_component(rsf_streamline_source_root "${RSF_STREAMLINE_INCLUDE}" DIRECTORY)
     target_include_directories(rsf_streamline_selected_device_test SYSTEM PRIVATE "${rsf_streamline_source_root}" "${RSF_STREAMLINE_INCLUDE}")
-    target_link_libraries(rsf_streamline_selected_device_test PRIVATE rsf_vulkan_fg_streamline_selected_rust rsf_build_options)
+    target_link_libraries(rsf_streamline_selected_device_test PRIVATE rsf_build_options)
     add_test(NAME streamline_selected_device_contract COMMAND rsf_streamline_selected_device_test)
     # The production DLSS-G table (vulkan_dlss_fg/leaves.rs) and its Rust leaves, with the fixture's
     # Streamline session and SDK entries (vulkan_dlss_fg/fixture.rs in the test-fixtures orchestrator archive).
@@ -762,16 +760,11 @@ if(TARGET rsf_vendor_census)
     # tests compare the restated offsets with the headers where an untracked checkout provides them.
     function(rsf_census_layout_check suffix define probe)
         if(EXISTS "${probe}")
-            add_executable(rsf_vendor_census_layouts_${suffix} loader/vendor_layout_facts.c)
+            # Streamline and FSR 2 declare C++ types (constructors, virtual members), so the check is C++.
+            add_executable(rsf_vendor_census_layouts_${suffix} loader/vendor_layouts.cpp)
             target_compile_definitions(rsf_vendor_census_layouts_${suffix} PRIVATE ${define})
-            # Streamline and FSR 2 declare C++ types; their facts come from the C++ leaf.
-            if(suffix STREQUAL "sl" OR suffix STREQUAL "fsr2")
-                target_sources(rsf_vendor_census_layouts_${suffix} PRIVATE loader/vendor_layout_facts.cpp)
-                target_compile_definitions(rsf_vendor_census_layouts_${suffix} PRIVATE RSF_CENSUS_LAYOUT_CXX)
-            endif()
             target_include_directories(rsf_vendor_census_layouts_${suffix} SYSTEM PRIVATE ${ARGN})
-            target_link_libraries(rsf_vendor_census_layouts_${suffix} PRIVATE
-                rsf_loader_fixtures_rust rsf_build_options)
+            target_link_libraries(rsf_vendor_census_layouts_${suffix} PRIVATE rsf_build_options)
             add_test(NAME vendor_census_layouts_${suffix} COMMAND rsf_vendor_census_layouts_${suffix})
         else()
             message(STATUS "vendor census layout check ${suffix} skipped: ${probe} not found")

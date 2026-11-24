@@ -994,7 +994,6 @@ name = "rsf-vulkan-fg-fixtures"
 version = "0.1.2"
 dependencies = [
  "ash",
- "rsf-bindgen",
  "rsf-game-sys",
  "rsf-orchestrator",
  "rsf-test-support",

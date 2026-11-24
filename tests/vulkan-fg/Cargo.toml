@@ -13,9 +13,6 @@ crate-type = ["staticlib"]
 test = false
 
 [features]
-wsi-dispatch = ["dep:ash"]
-streamline-selected = []
-streamline-dispatch = ["dep:ash"]
 xess-sr = ["dep:ash", "dep:windows-sys"]
 # The owner entries and production table are C symbols only in the orchestrator's test-fixtures build;
 # the owner reaches XeSS through the Vulkan SR table, so both of its Vulkan SR features are on (CMake
@@ -39,9 +36,6 @@ windows-sys = { workspace = true, features = [
   "Win32_Foundation",
   "Win32_System_LibraryLoader",
 ], optional = true }
-
-[build-dependencies]
-rsf-bindgen = { path = "../../tools/bindgen" }
 
 [lints]
 workspace = true

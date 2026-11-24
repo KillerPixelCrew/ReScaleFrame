@@ -17,8 +17,6 @@ mod thin;
 mod vendor_census_asi;
 #[cfg(target_env = "msvc")]
 mod vendor_census_fixture;
-#[cfg(target_env = "msvc")]
-mod vendor_layouts;
 
 use rsf_test_support::wide_os;
 use std::ffi::{CStr, OsStr};
