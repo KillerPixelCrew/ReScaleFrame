@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Skyrim's native PS sampler selection and restoration around the cached-state flush.
 
-use crate::platform::{self, Platform};
+use crate::platform::Platform;
 use crate::render_hook::RenderHook;
 use crate::render_inputs::renderer_thread;
 use crate::render_native::thread;
@@ -172,18 +172,14 @@ fn apply(restore: bool) {
 }
 
 pub(crate) fn sampling_guard() -> bool {
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     let base = platform.main_module();
     base != 0 && platform.matches(base + FLUSH, &FLUSH_BYTES)
 }
 
 /// Lifecycle calls are serialized by the adapter session.
 pub(crate) fn start(host: &rsf_game_host_services) -> bool {
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     let base = platform.main_module();
     if base == 0 {
         return false;
@@ -226,9 +222,7 @@ pub(crate) fn stop() -> bool {
     if HOOK.original.load(Ordering::Acquire).is_null() {
         return true;
     }
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     let base = platform.main_module();
     base != 0 && platform.hook_disable(base + FLUSH) && !busy()
 }

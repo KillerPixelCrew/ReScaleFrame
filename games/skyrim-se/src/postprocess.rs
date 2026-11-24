@@ -4,7 +4,7 @@
 use crate::compatibility::{HdrCall, matches_postprocess, render_allowed};
 use crate::cpu_events::render_source;
 use crate::layout::target_slot;
-use crate::platform::{self, Platform};
+use crate::platform::Platform;
 use crate::render_inputs;
 use crate::render_native::thread;
 use crate::session;
@@ -93,18 +93,14 @@ pub(crate) fn reset_observations() {
 }
 
 pub(crate) fn cleanup_pending() -> bool {
-    let Some(platform) = platform::get() else {
-        return crate::auxiliary::pending();
-    };
+    let platform = &Platform;
     crate::auxiliary::pending() || !drain(platform, &mut lock_or_recover(&RESTORE))
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_postprocess_prepare(call: &HdrCall, receipt: &mut TaaReceipt) {
     *receipt = TaaReceipt::default();
-    let Some(platform) = platform::get() else {
-        return;
-    };
+    let platform = &Platform;
     if !drain(platform, &mut lock_or_recover(&RESTORE)) {
         return;
     }
@@ -140,9 +136,7 @@ extern "C" fn rsf_skyrim_postprocess_restore(receipt: &TaaReceipt) {
     if receipt.taa == 0 {
         return;
     }
-    let Some(platform) = platform::get() else {
-        return;
-    };
+    let platform = &Platform;
     let restored = {
         let mut state = lock_or_recover(&RESTORE);
         *state = Restore::Pending(*receipt);

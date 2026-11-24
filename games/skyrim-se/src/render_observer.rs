@@ -3,7 +3,7 @@
 
 use crate::compatibility::render_allowed;
 use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
-use crate::platform::{self, Platform};
+use crate::platform::Platform;
 use crate::session;
 use crate::{auxiliary, presentation, resolution, sampling};
 use rsf_game_sys::rsf_game_host_services;
@@ -57,8 +57,7 @@ unsafe extern "C" fn rsf_skyrim_render_end_enter(retained: &mut rsf_game_host_se
     if session::accepting()
         && render_allowed()
         && binding != 0
-        && let Some(platform) = platform::get()
-        && let Some(chain) = swapchain(platform)
+        && let Some(chain) = swapchain(&Platform)
     {
         let request = PresentationBinding {
             struct_size: size_of::<PresentationBinding>() as u32,
@@ -74,9 +73,7 @@ unsafe extern "C" fn rsf_skyrim_render_end_enter(retained: &mut rsf_game_host_se
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_render_end_leave(retained: &rsf_game_host_services) {
     presentation::finish();
-    if let Some(platform) = platform::get() {
-        auxiliary::finish(platform, retained);
-    }
+    auxiliary::finish(&Platform, retained);
 }
 
 #[unsafe(no_mangle)]
@@ -84,9 +81,7 @@ extern "C" fn rsf_skyrim_render_upload_enter(
     renderer: usize,
     observation: &mut UploadObservation,
 ) -> bool {
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     let base = platform.main_module();
     let mut dirty = [0];
     if base == 0
@@ -142,9 +137,7 @@ extern "C" fn rsf_skyrim_render_jitter_observed(state: usize) {
     if !render_allowed() {
         host = unsafe { std::mem::zeroed() };
     }
-    let Some(platform) = platform::get() else {
-        return;
-    };
+    let platform = &Platform;
     let _ = resolution::configure(platform, state, &host);
     if !session::accepting() {
         return;

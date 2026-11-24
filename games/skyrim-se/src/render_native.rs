@@ -39,7 +39,7 @@ pub(crate) unsafe extern "C" fn log_host(
     }
 }
 
-pub(crate) unsafe fn rsf_skyrim_call_render_pass(
+pub(crate) unsafe fn call_render_pass(
     host: &rsf_game_host_services,
     context: *mut c_void,
     pass: &rsf_game_render_pass,
@@ -49,7 +49,7 @@ pub(crate) unsafe fn rsf_skyrim_call_render_pass(
         && unsafe { rsf_skyrim_render_pass_guarded(host, context, pass, begin) }
 }
 
-pub(crate) unsafe fn rsf_skyrim_call_upscale(
+pub(crate) unsafe fn call_upscale(
     host: &rsf_game_host_services,
     context: *mut c_void,
     pass: &rsf_game_render_pass,
@@ -58,7 +58,7 @@ pub(crate) unsafe fn rsf_skyrim_call_upscale(
         && unsafe { rsf_skyrim_upscale_guarded(host, context, pass) } == 0
 }
 
-pub(crate) fn rsf_skyrim_call_render_config(
+pub(crate) fn call_render_config(
     host: &rsf_game_host_services,
     config: &mut rsf_game_render_config,
 ) {

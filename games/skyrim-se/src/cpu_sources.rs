@@ -305,7 +305,7 @@ pub(crate) struct PollProvenance {
     pub(crate) poll_generation: u64,
 }
 
-pub(crate) fn rsf_skyrim_poll_provenance(
+pub(crate) fn poll_provenance(
     out: &mut PollProvenance,
     scope: &PollScope,
     ticket: &JobTicket,
@@ -491,7 +491,7 @@ pub(crate) enum PollSample {
     Ready,
 }
 
-pub(crate) fn rsf_skyrim_poll_sample_status(scope: &PollScope, source: u64) -> PollSample {
+pub(crate) fn poll_sample_status(scope: &PollScope, source: u64) -> PollSample {
     // Finish an exclusive poll first. Report SAMPLED only for the exact completed
     // generation, and leave it unadoptable until the native host call returns.
     if EPOCHS.snapshot().generation != scope.ticket.generation {
@@ -514,7 +514,7 @@ const _: () = {
     assert!(size_of::<Reserve>() == 72);
 };
 
-pub(crate) fn rsf_skyrim_sources_reserve(
+pub(crate) fn sources_reserve(
     source: u64,
     predecessor: u64,
     session: u64,
@@ -532,31 +532,31 @@ pub(crate) fn rsf_skyrim_sources_reserve(
     })
 }
 
-pub(crate) fn rsf_skyrim_sources_still_reserved(source: u64) -> bool {
+pub(crate) fn sources_still_reserved(source: u64) -> bool {
     lock_store(&PRODUCTION).pending.polling(source)
 }
 
-pub(crate) fn rsf_skyrim_sources_sample(source: u64, produced: bool, kinds: u32) -> bool {
+pub(crate) fn sources_sample(source: u64, produced: bool, kinds: u32) -> bool {
     lock_store(&PRODUCTION).sample(source, produced, kinds)
 }
 
-pub(crate) fn rsf_skyrim_sources_withdraw_pending(only: u64) -> u64 {
+pub(crate) fn sources_withdraw_pending(only: u64) -> u64 {
     lock_store(&PRODUCTION).withdraw_pending(only)
 }
 
-pub(crate) fn rsf_skyrim_sources_adopt(session: u64, joined: u64) -> Reservation {
+pub(crate) fn sources_adopt(session: u64, joined: u64) -> Reservation {
     lock_store(&PRODUCTION).adopt(session, joined)
 }
 
-pub(crate) fn rsf_skyrim_sources_bind(source: u64, completed: u64) -> bool {
+pub(crate) fn sources_bind(source: u64, completed: u64) -> bool {
     lock_store(&PRODUCTION).bind(source, completed)
 }
 
-pub(crate) fn rsf_skyrim_sources_owned() -> Reservation {
+pub(crate) fn sources_owned() -> Reservation {
     lock_store(&PRODUCTION).owned
 }
 
-pub(crate) fn rsf_skyrim_sources_release(source: u64) -> Reservation {
+pub(crate) fn sources_release(source: u64) -> Reservation {
     lock_store(&PRODUCTION).release(source)
 }
 
@@ -589,7 +589,7 @@ pub(crate) struct WorkerCounts {
 
 const _: () = assert!(size_of::<WorkerCounts>() == 16);
 
-pub(crate) fn rsf_skyrim_worker_bind(source: u64) {
+pub(crate) fn worker_bind(source: u64) {
     WORKERS.source.store(0, SeqCst);
     WORKERS.movement.store(0, SeqCst);
     WORKERS.player_update.store(0, SeqCst);
@@ -598,17 +598,17 @@ pub(crate) fn rsf_skyrim_worker_bind(source: u64) {
     WORKERS.source.store(source, SeqCst);
 }
 
-pub(crate) fn rsf_skyrim_worker_release() {
+pub(crate) fn worker_release() {
     WORKERS.source.store(0, SeqCst);
 }
 
-pub(crate) fn rsf_skyrim_worker_intervening_poll() {
+pub(crate) fn worker_intervening_poll() {
     if WORKERS.source.load(SeqCst) != 0 {
         WORKERS.mismatched.fetch_add(1, SeqCst);
     }
 }
 
-pub(crate) fn rsf_skyrim_worker_record_consumer(stamp: &Stamp, consumer: Consumer) {
+pub(crate) fn worker_record_consumer(stamp: &Stamp, consumer: Consumer) {
     let source = WORKERS.source.load(SeqCst);
     if source == 0 {
         return;
@@ -635,7 +635,7 @@ pub(crate) fn rsf_skyrim_worker_record_consumer(stamp: &Stamp, consumer: Consume
     }
 }
 
-pub(crate) fn rsf_skyrim_worker_counts() -> WorkerCounts {
+pub(crate) fn worker_counts() -> WorkerCounts {
     WorkerCounts {
         movement: WORKERS.movement.load(SeqCst),
         player_update: WORKERS.player_update.load(SeqCst),
@@ -652,7 +652,7 @@ pub(crate) fn clear_proof(drained: bool) {
     }
     EPOCHS.invalidate();
     *lock_store(&PRODUCTION) = Sources::EMPTY;
-    rsf_skyrim_worker_release();
+    worker_release();
 }
 
 #[repr(u32)]
@@ -664,7 +664,7 @@ enum BindRefusal {
     FreeCamera,
 }
 
-pub(crate) fn rsf_skyrim_bind_refusal(
+pub(crate) fn bind_refusal(
     readable: bool,
     queued_move: bool,
     consumed_before_bind: bool,
@@ -789,23 +789,23 @@ mod tests {
     #[test]
     fn binding_requires_the_unconsumed_gameplay_envelope() {
         assert_eq!(
-            rsf_skyrim_bind_refusal(true, false, false, false),
+            bind_refusal(true, false, false, false),
             BindRefusal::None as u32
         );
         assert_eq!(
-            rsf_skyrim_bind_refusal(false, false, false, false),
+            bind_refusal(false, false, false, false),
             BindRefusal::Unreadable as u32
         );
         assert_eq!(
-            rsf_skyrim_bind_refusal(true, true, false, false),
+            bind_refusal(true, true, false, false),
             BindRefusal::QueuedMove as u32
         );
         assert_eq!(
-            rsf_skyrim_bind_refusal(true, false, true, false),
+            bind_refusal(true, false, true, false),
             BindRefusal::ConsumedBeforeBind as u32
         );
         assert_eq!(
-            rsf_skyrim_bind_refusal(true, false, false, true),
+            bind_refusal(true, false, false, true),
             BindRefusal::FreeCamera as u32
         );
     }

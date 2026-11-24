@@ -8,9 +8,7 @@ use crate::camera::render::{RenderCamera, accept_sr, read_frame};
 use crate::layout::{NATIVE_FRAME, target_slot};
 use crate::platform::Platform;
 use crate::presentation::{begin_inputs, empty_pass, identify, same_source};
-use crate::render_native::{
-    desc, retain, rsf_skyrim_call_render_pass, rsf_skyrim_call_upscale, thread, viewport,
-};
+use crate::render_native::{call_render_pass, call_upscale, desc, retain, thread, viewport};
 use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR,
     rsf_game_host_services, rsf_game_render_pass,
@@ -270,8 +268,7 @@ pub(crate) fn produce(
         // These are the pre-mutation inputs. The Runtime consumes them synchronously.
         render_diagnostic(c"FG_INPUTS", &pass);
         if !unsafe {
-            rsf_skyrim_call_render_pass(host, context, &pass, 1)
-                && rsf_skyrim_call_render_pass(host, context, &pass, 0)
+            call_render_pass(host, context, &pass, 1) && call_render_pass(host, context, &pass, 0)
         } {
             return None;
         }
@@ -287,7 +284,7 @@ pub(crate) fn produce(
     pass.flags |= RSF_GAME_RENDER_NO_FG;
     bind_inputs(&mut pass, &view, &inputs);
     let reconstructed = if view.render == view.output {
-        unsafe { rsf_skyrim_call_upscale(host, context, &pass) }
+        unsafe { call_upscale(host, context, &pass) }
     } else {
         auxiliary::reconstruct(platform, context, &pass, host)
     };

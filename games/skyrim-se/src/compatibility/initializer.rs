@@ -315,9 +315,7 @@ pub(crate) fn checkpoint(refusal: &mut *const c_char, arm: bool) -> bool {
 }
 
 fn checkpoint_with(refusal: &mut *const c_char, withdraw: Option<Withdraw>) -> bool {
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     {
         let mut state = state();
         if withdraw.is_some() {
@@ -489,9 +487,7 @@ fn initialize(platform: &Platform, skse: *const c_void) -> bool {
 }
 
 unsafe extern "C" fn initialize_detour(skse: *const c_void) -> bool {
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     initialize(platform, skse)
 }
 
@@ -539,9 +535,7 @@ pub(crate) fn status() -> *const c_char {
 }
 
 pub(crate) fn matches_postprocess(call: &HdrCall) -> bool {
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     let game = platform.main_module();
     let (phase, module) = {
         let state = state();

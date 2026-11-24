@@ -8,7 +8,7 @@
 //! only while the game's renderer owner has no device (the cold owner). Anything else refuses
 //! admission and the game's native creation and Present run unchanged.
 use crate::layout::*;
-use crate::platform::{self, CreationCall, CreationScope, NativeChain, Platform};
+use crate::platform::{CreationCall, CreationScope, NativeChain, Platform};
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CStr, c_void};
@@ -188,7 +188,7 @@ fn cold(platform: &Platform) -> bool {
 /// Cold-owner callback for the Steam facade, which may call it again on a later prepare.
 #[cfg(not(test))]
 unsafe extern "C" fn cold_owner() -> bool {
-    platform::get().is_some_and(cold)
+    cold(&Platform)
 }
 
 pub(crate) fn prepare(platform: &Platform, host: &rsf_game_host_services) -> bool {
@@ -230,9 +230,7 @@ pub(crate) fn prepare(platform: &Platform, host: &rsf_game_host_services) -> boo
 }
 
 pub(crate) fn start() -> bool {
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     let shared = shared();
     if ORIGINAL.load(Ordering::Acquire).is_null() || shared.begin == 0 || shared.end == 0 {
         return false;
@@ -263,9 +261,7 @@ pub(crate) fn stop() -> bool {
     if ORIGINAL.load(Ordering::Acquire).is_null() {
         return true;
     }
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     platform.hook_disable(thunk(platform)) && !busy()
 }
 

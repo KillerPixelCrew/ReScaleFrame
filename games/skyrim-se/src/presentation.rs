@@ -3,9 +3,9 @@
 
 use crate::cpu_events::{render_diagnostic, render_identity};
 use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
-use crate::platform::{self, Platform};
+use crate::platform::Platform;
 use crate::render_hook::RenderHook;
-use crate::render_native::{backbuffer, desc, retain, rsf_skyrim_call_render_pass};
+use crate::render_native::{backbuffer, call_render_pass, desc, retain};
 use rsf_game_sys::rsf_d3d11_host_capture as Capture;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG,
@@ -145,7 +145,7 @@ impl Binding {
     }
 
     fn render(self, context: *mut c_void, pass: &rsf_game_render_pass, begin: bool) -> bool {
-        unsafe { rsf_skyrim_call_render_pass(&self.host, context, pass, u32::from(begin)) }
+        unsafe { call_render_pass(&self.host, context, pass, u32::from(begin)) }
     }
 }
 
@@ -391,9 +391,7 @@ pub(crate) fn finish() {
 }
 
 pub(crate) fn presentation_guard() -> bool {
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     let base = platform.main_module();
     base != 0 && platform.matches(base + DRAW_INTERFACE, &INTERFACE_BYTES)
 }
@@ -403,9 +401,7 @@ pub(crate) fn start(host: &rsf_game_host_services) -> bool {
     if busy() {
         return false;
     }
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     let base = platform.main_module();
     if base == 0
         || (!HOOK.live.load(Ordering::Acquire)
@@ -443,9 +439,7 @@ pub(crate) fn stop() -> bool {
     if HOOK.original.load(Ordering::Acquire).is_null() {
         return !busy();
     }
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     let base = platform.main_module();
     base != 0 && platform.hook_disable(base + DRAW_INTERFACE) && !busy()
 }

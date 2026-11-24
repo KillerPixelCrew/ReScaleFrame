@@ -92,11 +92,6 @@ const _: () = {
     assert!(std::mem::offset_of!(CreationCall, outputs) == 104);
 };
 
-/// The platform. Unit tests see none, so they never reach the game image.
-pub(crate) fn get() -> Option<&'static Platform> {
-    if cfg!(test) { None } else { Some(&Platform) }
-}
-
 pub(crate) use rsf_game_sys::ffi_util::wide;
 
 pub(super) fn hex_sha256(path: &Path) -> Option<[u8; 64]> {
@@ -104,10 +99,6 @@ pub(super) fn hex_sha256(path: &Path) -> Option<[u8; 64]> {
 }
 
 impl Platform {
-    pub(crate) fn main_module(&self) -> usize {
-        unsafe { GetModuleHandleW(ptr::null()) as usize }
-    }
-
     pub(crate) fn module_handle(&self, name: &str) -> usize {
         let name = wide(name);
         unsafe { GetModuleHandleW(name.as_ptr()) as usize }
@@ -165,33 +156,12 @@ impl Platform {
         hex_sha256(Path::new(&OsString::from_wide(path.units())))
     }
 
-    pub(crate) fn pin_module(&self, address: usize) -> usize {
-        rsf_game_sys::win32::pin_module(address as *const c_void)
-            .map_or(0, |module| module as usize)
-    }
-
     pub(crate) fn last_error(&self) -> u32 {
         unsafe { GetLastError() }
     }
 
     pub(crate) fn set_last_error(&self, error: u32) {
         unsafe { SetLastError(error) };
-    }
-
-    pub(crate) fn hook_create(&self, target: usize, detour: *const c_void) -> Option<*mut c_void> {
-        let mut original = ptr::null_mut();
-        let created = unsafe {
-            rsf_windows::minhook::create(target as *mut c_void, detour.cast_mut(), &mut original)
-        };
-        (created && !original.is_null()).then_some(original)
-    }
-
-    pub(crate) fn hook_enable(&self, target: usize) -> bool {
-        unsafe { rsf_windows::minhook::enable_idempotent(target as *mut c_void) }
-    }
-
-    pub(crate) fn hook_disable(&self, target: usize) -> bool {
-        unsafe { rsf_windows::minhook::disable(target as *mut c_void) }
     }
 
     pub(crate) fn log(&self, host: &rsf_game_host_services, message: &CStr) {
@@ -231,5 +201,57 @@ impl Platform {
     }
 }
 
+/// The calls that reach the game image and MinHook.
+#[cfg(not(test))]
+impl Platform {
+    pub(crate) fn main_module(&self) -> usize {
+        unsafe { GetModuleHandleW(ptr::null()) as usize }
+    }
+
+    pub(crate) fn pin_module(&self, address: usize) -> usize {
+        rsf_game_sys::win32::pin_module(address as *const c_void)
+            .map_or(0, |module| module as usize)
+    }
+
+    pub(crate) fn hook_create(&self, target: usize, detour: *const c_void) -> Option<*mut c_void> {
+        let mut original = ptr::null_mut();
+        let created = unsafe {
+            rsf_windows::minhook::create(target as *mut c_void, detour.cast_mut(), &mut original)
+        };
+        (created && !original.is_null()).then_some(original)
+    }
+
+    pub(crate) fn hook_enable(&self, target: usize) -> bool {
+        unsafe { rsf_windows::minhook::enable_idempotent(target as *mut c_void) }
+    }
+
+    pub(crate) fn hook_disable(&self, target: usize) -> bool {
+        unsafe { rsf_windows::minhook::disable(target as *mut c_void) }
+    }
+}
+
+/// Unit tests refuse them, so they never reach the game image or MinHook.
+#[cfg(test)]
+impl Platform {
+    pub(crate) fn main_module(&self) -> usize {
+        0
+    }
+
+    pub(crate) fn pin_module(&self, _: usize) -> usize {
+        0
+    }
+
+    pub(crate) fn hook_create(&self, _: usize, _: *const c_void) -> Option<*mut c_void> {
+        None
+    }
+
+    pub(crate) fn hook_enable(&self, _: usize) -> bool {
+        false
+    }
+
+    pub(crate) fn hook_disable(&self, _: usize) -> bool {
+        false
+    }
+}
 #[cfg(test)]
 mod tests;

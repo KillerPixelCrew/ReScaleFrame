@@ -6,7 +6,7 @@ use crate::cpu_native::*;
 use crate::cpu_policy::*;
 use crate::cpu_sources::*;
 use crate::platform;
-use crate::render_native::{rsf_skyrim_call_render_pass, thread};
+use crate::render_native::{call_render_pass, thread};
 use crate::sys::*;
 use rsf_game_sys::host_log;
 use std::cell::Cell;
@@ -95,7 +95,7 @@ static PROSPECTIVE_REPORTS: AtomicU32 = AtomicU32::new(0);
 static RENDER_REPORTS: AtomicU32 = AtomicU32::new(0);
 
 fn base() -> usize {
-    platform::get().map_or(0, platform::Platform::main_module)
+    platform::Platform.main_module()
 }
 
 fn from_site(caller: usize, rva: usize) -> bool {
@@ -116,7 +116,7 @@ fn frame_event(frame: NonNull<Frame>, stage: u32) {
         if host.cpu_event.is_none() {
             return;
         }
-        let event = rsf_skyrim_cpu_frame_event(
+        let event = cpu_frame_event(
             &frame.render,
             stage,
             host.session_id,
@@ -145,7 +145,7 @@ fn source_event(
     if host.cpu_event.is_none() || source == 0 {
         return;
     }
-    let event = rsf_skyrim_cpu_source_event(
+    let event = cpu_source_event(
         stage,
         host.session_id,
         source,
@@ -196,7 +196,7 @@ fn begin_frame(main: usize) -> Receipt {
         return Receipt::None;
     };
     // Only a sampled late poll whose native job joined normally can be adopted.
-    let reservation = rsf_skyrim_sources_adopt(services.host.session_id, JOBS.retired());
+    let reservation = sources_adopt(services.host.session_id, JOBS.retired());
     let mut queued = None;
     let (source, entry_readable) = if reservation.source != 0 {
         queued = queued_move();
@@ -204,10 +204,10 @@ fn begin_frame(main: usize) -> Receipt {
     } else {
         abort(
             services,
-            rsf_skyrim_sources_withdraw_pending(0),
+            sources_withdraw_pending(0),
             RSF_GAME_CPU_ABORT_STATE_CHANGED,
         );
-        (rsf_skyrim_cpu_next_source(), false)
+        (cpu_next_source(), false)
     };
     Receipt::Frame(Frame {
         services,
@@ -229,14 +229,14 @@ fn finish_frame(frame: NonNull<Frame>, returned: bool) {
         (frame.source, frame.services, frame.reservation)
     };
     if facts.source != 0 {
-        let owned = rsf_skyrim_sources_release(source);
+        let owned = sources_release(source);
         if owned.phase == Phase::Bound {
-            rsf_skyrim_worker_release();
+            worker_release();
         }
         if !returned {
             abort(services, owned.source, RSF_GAME_CPU_ABORT_NOT_CONSUMED);
         } else if services.host.log.is_some() && PROSPECTIVE_REPORTS.fetch_add(1, Relaxed) < 16 {
-            let worker = rsf_skyrim_worker_counts();
+            let worker = worker_counts();
             let message = {
                 let frame = unsafe { frame.as_ref() };
                 format!(
@@ -274,7 +274,7 @@ fn begin_submit(caller: usize) -> Receipt {
     if active() {
         if let Some(mut frame) = FRAME.get().filter(|frame| {
             from_site(caller, SUBMIT_RETURN)
-                && rsf_skyrim_cpu_manager_state(&mut before)
+                && cpu_manager_state(&mut before)
                 && before.main == unsafe { frame.as_ref().main }
                 && before.requested == 0
                 && before.running == 0
@@ -291,7 +291,7 @@ fn begin_submit(caller: usize) -> Receipt {
                 let refusal = {
                     let frame = unsafe { frame.as_mut() };
                     let input = &frame.input;
-                    frame.refusal = rsf_skyrim_bind_refusal(
+                    frame.refusal = bind_refusal(
                         frame.entry_readable && free_camera.is_some(),
                         frame.queued_move,
                         input.player_update_calls != 0
@@ -305,16 +305,16 @@ fn begin_submit(caller: usize) -> Receipt {
                 if refusal != 0 {
                     abort(
                         services,
-                        rsf_skyrim_sources_release(source).source,
+                        sources_release(source).source,
                         RSF_GAME_CPU_ABORT_NOT_CONSUMED,
                     );
-                } else if rsf_skyrim_sources_bind(source, stamp().generation) {
-                    rsf_skyrim_worker_bind(source);
+                } else if sources_bind(source, stamp().generation) {
+                    worker_bind(source);
                     source_event(services, RSF_GAME_CPU_SOURCE_BIND, source, 0, 0, 0, 0, 0, 0);
                 } else {
                     abort(
                         services,
-                        rsf_skyrim_sources_release(source).source,
+                        sources_release(source).source,
                         RSF_GAME_CPU_ABORT_STATE_CHANGED,
                     );
                 }
@@ -341,7 +341,7 @@ fn begin_join(caller: usize) -> Receipt {
         let frame = unsafe { frame.as_ref() };
         ticket = frame.jobs;
         from_site(caller, JOIN_RETURN)
-            && rsf_skyrim_cpu_manager_state(&mut before)
+            && cpu_manager_state(&mut before)
             && before.main == frame.main
             && before.manager == ticket.manager
             && before.requested <= 1
@@ -366,7 +366,7 @@ fn finish_jobs(
     if index == RSF_SKYRIM_CPU_SUBMIT {
         if ticket.generation != 0
             && (result.is_none_or(|r| r == 0)
-                || !rsf_skyrim_cpu_manager_state(&mut after)
+                || !cpu_manager_state(&mut after)
                 || after.manager != before.manager
                 || after.main != before.main
                 || after.requested != 1
@@ -377,7 +377,7 @@ fn finish_jobs(
     } else if owns_wait {
         // WAIT_OBJECT_0
         if result == Some(0)
-            && rsf_skyrim_cpu_manager_state(&mut after)
+            && cpu_manager_state(&mut after)
             && after.manager == before.manager
             && after.main == before.main
             && after.requested == 0
@@ -399,7 +399,7 @@ fn begin_named_poll(caller: usize) -> Receipt {
     if active()
         && from_site(caller, NAMED_POLL_RETURN)
         && previous.generation == 0
-        && rsf_skyrim_cpu_manager_state(&mut native)
+        && cpu_manager_state(&mut native)
         && native.manager == ticket.manager
         && native.requested <= 1
         && native.running == 1
@@ -415,9 +415,8 @@ fn prepare_poll(mut poll: NonNull<Poll>) {
         POLL.set(Some(NonNull::from(&mut poll.scope)));
         let mut provenance = PollProvenance::default();
         let running = active();
-        let scheduled = running
-            && rsf_skyrim_poll_provenance(&mut provenance, &poll.scope, &NAMED_POLL.get())
-            && active();
+        let scheduled =
+            running && poll_provenance(&mut provenance, &poll.scope, &NAMED_POLL.get()) && active();
         poll.services = running.then(cpu_hooks::services).flatten();
         (poll.services, provenance, scheduled)
     };
@@ -437,8 +436,8 @@ fn prepare_poll(mut poll: NonNull<Poll>) {
             );
         }
         if scheduled {
-            let source = rsf_skyrim_cpu_next_source();
-            let receipt = rsf_skyrim_sources_reserve(
+            let source = cpu_next_source();
+            let receipt = sources_reserve(
                 source,
                 provenance.submitting_source,
                 provenance.session,
@@ -468,7 +467,7 @@ fn prepare_poll(mut poll: NonNull<Poll>) {
                 );
                 // The synchronous callback may overlap withdrawal. Reissue the
                 // terminal fact if withdrawal won before reservation publication.
-                if rsf_skyrim_sources_still_reserved(source) {
+                if sources_still_reserved(source) {
                     reserved = source;
                 } else {
                     abort(services, source, RSF_GAME_CPU_ABORT_STATE_CHANGED);
@@ -477,15 +476,15 @@ fn prepare_poll(mut poll: NonNull<Poll>) {
         } else {
             abort(
                 services,
-                rsf_skyrim_sources_withdraw_pending(0),
+                sources_withdraw_pending(0),
                 RSF_GAME_CPU_ABORT_INTERVENING_POLL,
             );
-            rsf_skyrim_worker_intervening_poll();
+            worker_intervening_poll();
         }
     }
     if let Some(mut frame) = FRAME.get()
         && !scheduled
-        && rsf_skyrim_cpu_sample_tick(&mut unsafe { frame.as_mut() }.render)
+        && cpu_sample_tick(&mut unsafe { frame.as_mut() }.render)
     {
         frame_event(frame, RSF_GAME_CPU_INPUT_SAMPLE);
     }
@@ -508,7 +507,7 @@ fn finish_poll(poll: &mut Poll, returned: bool) {
         return;
     };
     let source = poll.reserved;
-    match rsf_skyrim_poll_sample_status(&poll.scope, source) {
+    match poll_sample_status(&poll.scope, source) {
         PollSample::NotProduced => abort(services, source, RSF_GAME_CPU_ABORT_NOT_PRODUCED),
         PollSample::Ready if returned => {
             source_event(
@@ -522,10 +521,10 @@ fn finish_poll(poll: &mut Poll, returned: bool) {
                 0,
                 poll.begin,
             );
-            if !rsf_skyrim_sources_sample(source, true, poll.scope.kinds) {
+            if !sources_sample(source, true, poll.scope.kinds) {
                 abort(
                     services,
-                    rsf_skyrim_sources_withdraw_pending(source),
+                    sources_withdraw_pending(source),
                     RSF_GAME_CPU_ABORT_STATE_CHANGED,
                 );
             }
@@ -536,17 +535,12 @@ fn finish_poll(poll: &mut Poll, returned: bool) {
 
 fn begin_dispatch(manager: usize, list: usize) -> Receipt {
     let mut event = unsafe { std::mem::zeroed::<rsf_game_cpu_event>() };
-    let services = if active() && rsf_skyrim_cpu_is_input_manager(manager) {
-        let kinds = rsf_skyrim_cpu_input_kinds(list, rsf_game_sys::win32::read_process);
+    let services = if active() && cpu_is_input_manager(manager) {
+        let kinds = cpu_input_kinds(list, rsf_game_sys::win32::read_process);
         cpu_hooks::services()
             .filter(|_| kinds != 0)
             .inspect(|services| {
-                event = rsf_skyrim_cpu_input_event(
-                    services.host.session_id,
-                    kinds,
-                    qpc(),
-                    services.frequency,
-                );
+                event = cpu_input_event(services.host.session_id, kinds, qpc(), services.frequency);
             })
     } else {
         None
@@ -576,7 +570,7 @@ fn finish_consumer(owner: usize, stamp: &Stamp, mapped: bool, consumer: Consumer
     }
     let mapped = match consumer {
         Consumer::Movement | Consumer::PlayerUpdate => {
-            if !mapped || !rsf_skyrim_cpu_is_player(owner) {
+            if !mapped || !cpu_is_player(owner) {
                 return;
             }
             true
@@ -585,14 +579,14 @@ fn finish_consumer(owner: usize, stamp: &Stamp, mapped: bool, consumer: Consumer
         _ => mapped,
     };
     if let Some(mut frame) = FRAME.get() {
-        rsf_skyrim_cpu_record_consumer(
+        cpu_record_consumer(
             &mut unsafe { frame.as_mut() }.input,
             stamp,
             consumer,
             mapped,
         );
     } else if mapped {
-        rsf_skyrim_worker_record_consumer(stamp, consumer);
+        worker_record_consumer(stamp, consumer);
     }
 }
 
@@ -605,14 +599,14 @@ pub(crate) fn render_source() -> u64 {
 pub(crate) fn render_identity(pass: &mut rsf_game_render_pass) -> bool {
     FRAME.get().is_some_and(|frame| {
         let frame = unsafe { frame.as_ref() };
-        rsf_skyrim_cpu_render_identity(&frame.render, pass, frame.source, active())
+        cpu_render_identity(&frame.render, pass, frame.source, active())
     })
 }
 
 pub(crate) fn render_eligible() -> bool {
     FRAME.get().is_some_and(|frame| {
         let render = &unsafe { frame.as_ref() }.render;
-        rsf_skyrim_rendered_source_eligible(
+        rendered_source_eligible(
             active() && render.scope != 0,
             render.primary_world_entries,
             render.screen,
@@ -632,7 +626,7 @@ pub(crate) fn render_diagnostic(stage: &CStr, pass: &rsf_game_render_pass) {
     {
         return;
     }
-    let owned = rsf_skyrim_sources_owned();
+    let owned = sources_owned();
     let message = {
         let frame = unsafe { frame.as_ref() };
         let render = &frame.render;
@@ -673,7 +667,7 @@ fn render_fact(pass: &mut rsf_game_render_pass, role: u32) {
     if let Some(frame) = FRAME.get() {
         let host = unsafe { frame.as_ref().services.host };
         if host.render_pass.is_some() && render_identity(pass) {
-            rsf_skyrim_cpu_render_fact(pass, host.session_id);
+            cpu_render_fact(pass, host.session_id);
         }
     }
 }
@@ -681,16 +675,15 @@ fn render_fact(pass: &mut rsf_game_render_pass, role: u32) {
 fn report_render(pass: &rsf_game_render_pass, begin: u32) {
     if let Some(frame) = FRAME.get().filter(|_| pass.source_frame_id != 0) {
         let host = unsafe { frame.as_ref().services.host };
-        unsafe { rsf_skyrim_call_render_pass(&host, ptr::null_mut(), pass, begin) };
+        unsafe { call_render_pass(&host, ptr::null_mut(), pass, begin) };
     }
 }
 
 fn begin_render(main: usize, pass: &mut rsf_game_render_pass) -> Receipt {
     let restore = FRAME.get().map(|mut frame| {
-        let screen = rsf_skyrim_cpu_screen(main, false, rsf_skyrim_query_menus);
+        let screen = cpu_screen(main, false, rsf_skyrim_query_menus);
         let mut previous = RenderReceipt::default();
-        if rsf_skyrim_cpu_begin_render(&mut unsafe { frame.as_mut() }.render, screen, &mut previous)
-        {
+        if cpu_begin_render(&mut unsafe { frame.as_mut() }.render, screen, &mut previous) {
             frame_event(frame, RSF_GAME_CPU_SIMULATION_END);
         }
         (frame, previous)
@@ -709,11 +702,11 @@ fn begin_world(
     render_fact(pass, RSF_GAME_RENDER_SUBMISSION);
     let primary = FRAME.get().is_some_and(|mut frame| {
         let render = &mut unsafe { frame.as_mut() }.render;
-        if !rsf_skyrim_cpu_begin_world(render, pass, base(), caller, output) {
+        if !cpu_begin_world(render, pass, base(), caller, output) {
             return false;
         }
-        let screen = rsf_skyrim_cpu_screen(main, true, rsf_skyrim_query_menus);
-        rsf_skyrim_cpu_world_screen(&mut unsafe { frame.as_mut() }.render, screen);
+        let screen = cpu_screen(main, true, rsf_skyrim_query_menus);
+        cpu_world_screen(&mut unsafe { frame.as_mut() }.render, screen);
         render_identity(pass);
         report_render(pass, 1);
         true
@@ -765,9 +758,9 @@ unsafe extern "C" fn rsf_skyrim_cpu_before(
         | RSF_SKYRIM_CPU_PLAYER_CAMERA => {
             let stamp = stamp();
             let mapped = match index {
-                RSF_SKYRIM_CPU_CAMERA => rsf_skyrim_cpu_camera_consumes(owner),
-                RSF_SKYRIM_CPU_PLAYER_CAMERA => rsf_skyrim_cpu_is_player_camera(owner),
-                _ => rsf_skyrim_cpu_is_player(owner),
+                RSF_SKYRIM_CPU_CAMERA => cpu_camera_consumes(owner),
+                RSF_SKYRIM_CPU_PLAYER_CAMERA => cpu_is_player_camera(owner),
+                _ => cpu_is_player(owner),
             };
             Receipt::Consumer { stamp, mapped }
         }
@@ -810,12 +803,12 @@ unsafe extern "C" fn rsf_skyrim_cpu_after(
                 report_render(pass, 0);
             }
             if let Some((mut frame, previous)) = restore.take() {
-                rsf_skyrim_cpu_end_render(&mut unsafe { frame.as_mut() }.render, &previous);
+                cpu_end_render(&mut unsafe { frame.as_mut() }.render, &previous);
             }
         }
         Receipt::World(true) if returned => {
             if let Some(mut frame) = FRAME.get() {
-                rsf_skyrim_cpu_end_world(&mut unsafe { frame.as_mut() }.render);
+                cpu_end_world(&mut unsafe { frame.as_mut() }.render);
                 let pass = unsafe { &mut *pass };
                 render_identity(pass);
                 report_render(pass, 0);
@@ -840,7 +833,7 @@ unsafe extern "C" fn rsf_skyrim_cpu_after(
                 EPOCHS.invalidate();
             } else if active()
                 && let Some(mut scope) = matching_poll(argument)
-                && rsf_skyrim_cpu_is_player_controls(owner)
+                && cpu_is_player_controls(owner)
             {
                 unsafe { scope.as_mut() }.produced = true;
             }

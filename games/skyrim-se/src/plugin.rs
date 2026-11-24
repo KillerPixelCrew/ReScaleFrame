@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! GameSDK identity and the exact-build admission of the native observers.
 use crate::layout::{END, JITTER, PROCESS, PROCESS_CALL, RESET, RESOLUTION, UPLOAD, VIEWPORT};
-use crate::platform;
+use crate::platform::Platform;
 use crate::session;
 use rsf_game_sys::session::{Probe, publish_api};
 use rsf_game_sys::win32::module_path;
@@ -28,9 +28,7 @@ pub(crate) fn admit_observers() -> i32 {
     if !leaf_is(path.units(), EXECUTABLE) {
         return 0;
     }
-    let Some(platform) = platform::get() else {
-        return 0;
-    };
+    let platform = &Platform;
     let base = platform.main_module();
     if base == 0
         || platform

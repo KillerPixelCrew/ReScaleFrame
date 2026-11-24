@@ -2,7 +2,7 @@
 //! Guarded Skyrim CPU producer and consumer observations.
 //! Evidence: docs/research/skyrim-se-integration.md.
 
-use crate::platform::{self, Platform};
+use crate::platform::Platform;
 
 pub(crate) const MAIN: usize = 0x323_0530;
 pub(crate) const PLAYER: usize = 0x323_0778;
@@ -48,8 +48,8 @@ fn byte(platform: &Platform, address: usize) -> Option<u8> {
     platform.read(address, &mut value).then_some(value[0])
 }
 
-pub(crate) fn rsf_skyrim_cpu_manager_state(out: &mut ManagerState) -> bool {
-    let Some(state) = platform::get().and_then(|p| ManagerState::read(p, p.main_module())) else {
+pub(crate) fn cpu_manager_state(out: &mut ManagerState) -> bool {
+    let Some(state) = ManagerState::read(&Platform, Platform.main_module()) else {
         return false;
     };
     *out = state;
@@ -57,9 +57,7 @@ pub(crate) fn rsf_skyrim_cpu_manager_state(out: &mut ManagerState) -> bool {
 }
 
 pub(crate) fn poll_managers_match(job_manager: usize, poll_manager: usize) -> bool {
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     let base = platform.main_module();
     ManagerState::read(platform, base).is_some_and(|state| {
         state.manager == job_manager && state.requested <= 1 && state.running == 1
@@ -67,31 +65,31 @@ pub(crate) fn poll_managers_match(job_manager: usize, poll_manager: usize) -> bo
 }
 
 fn matches_singleton(address: usize, offset: usize) -> bool {
-    platform::get().is_some_and(|p| singleton(p, p.main_module(), offset) == Some(address))
+    singleton(&Platform, Platform.main_module(), offset) == Some(address)
 }
 
-pub(crate) fn rsf_skyrim_cpu_is_input_manager(address: usize) -> bool {
+pub(crate) fn cpu_is_input_manager(address: usize) -> bool {
     matches_singleton(address, INPUT_MANAGER)
 }
 
-pub(crate) fn rsf_skyrim_cpu_is_player_controls(address: usize) -> bool {
+pub(crate) fn cpu_is_player_controls(address: usize) -> bool {
     matches_singleton(address, PLAYER_CONTROLS)
 }
 
-pub(crate) fn rsf_skyrim_cpu_is_player(address: usize) -> bool {
+pub(crate) fn cpu_is_player(address: usize) -> bool {
     matches_singleton(address, PLAYER)
 }
 
-pub(crate) fn rsf_skyrim_cpu_is_player_camera(address: usize) -> bool {
+pub(crate) fn cpu_is_player_camera(address: usize) -> bool {
     matches_singleton(address, PLAYER_CAMERA)
 }
 
-pub(crate) fn rsf_skyrim_cpu_camera_consumes(address: usize) -> bool {
-    platform::get().is_some_and(|p| address.checked_add(0xe0).and_then(|at| byte(p, at)) == Some(0))
+pub(crate) fn cpu_camera_consumes(address: usize) -> bool {
+    address.checked_add(0xe0).and_then(|at| byte(&Platform, at)) == Some(0)
 }
 
 pub(crate) fn queued_move() -> Option<bool> {
-    let p = platform::get()?;
+    let p = &Platform;
     let player = singleton(p, p.main_module(), PLAYER)?;
     let flags = byte(p, player.checked_add(0xbec)?)?;
     let pending = byte(p, player.checked_add(0x692)?)?;
@@ -99,7 +97,7 @@ pub(crate) fn queued_move() -> Option<bool> {
 }
 
 pub(crate) fn free_camera() -> Option<bool> {
-    let p = platform::get()?;
+    let p = &Platform;
     let camera = singleton(p, p.main_module(), PLAYER_CAMERA)?;
     let state = p.read_usize(camera.checked_add(0x28)?)?;
     let free = p.read_usize(camera.checked_add(0xd0)?)?;

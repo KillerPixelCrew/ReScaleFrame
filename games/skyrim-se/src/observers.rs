@@ -197,7 +197,7 @@ fn disable(index: u32) -> bool {
 #[cfg(not(test))]
 fn pin() -> bool {
     let address = DETOURS[0] as usize;
-    crate::platform::get().is_some_and(|platform| platform.pin_module(address) != 0)
+    crate::platform::Platform.pin_module(address) != 0
 }
 
 /// The test hook leaves: every operation succeeds; `ENABLE_REFUSES` names an index whose enable

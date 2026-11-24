@@ -5,7 +5,7 @@
 use crate::cpu_policy::bad_screen_query;
 use crate::cpu_sources::clear_proof;
 use crate::hook_set::HookSet;
-use crate::platform::{self, Platform};
+use crate::platform::Platform;
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CStr, c_char, c_void};
@@ -353,9 +353,7 @@ impl Control {
 }
 
 pub(crate) fn prepare() -> bool {
-    let Some(platform) = platform::get() else {
-        return false;
-    };
+    let platform = &Platform;
     lock_or_recover(&CONTROL).prepare(platform)
 }
 
@@ -372,8 +370,7 @@ pub(crate) fn bind(host: &rsf_game_host_services) -> bool {
 }
 
 pub(crate) fn start() -> Result<(), StartRefusal> {
-    let platform = platform::get().ok_or_else(|| StartRefusal::new(c"hook state", 0, 0))?;
-    lock_or_recover(&CONTROL).start(platform)
+    lock_or_recover(&CONTROL).start(&Platform)
 }
 
 pub(crate) fn quiesce() {

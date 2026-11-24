@@ -49,7 +49,7 @@ mod sampling;
 mod session;
 mod taa;
 
-use platform::CreationCall;
+use platform::{CreationCall, Platform};
 use std::ffi::c_void;
 
 /// Called by the detour before the original routine, which it returns.
@@ -59,10 +59,10 @@ use std::ffi::c_void;
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_skyrim_creation_enter(call: *mut CreationCall) -> *mut c_void {
     let original = creation::enter_lease();
-    if let (Some(platform), Some(call)) = (platform::get(), unsafe { call.as_mut() })
+    if let Some(call) = unsafe { call.as_mut() }
         && call.valid()
     {
-        creation::enter(platform, call);
+        creation::enter(&Platform, call);
     }
     original
 }
@@ -73,10 +73,10 @@ unsafe extern "C" fn rsf_skyrim_creation_enter(call: *mut CreationCall) -> *mut 
 /// `call` is null or the record passed to the matching enter.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_skyrim_creation_leave(call: *mut CreationCall) {
-    if let (Some(platform), Some(call)) = (platform::get(), unsafe { call.as_mut() })
+    if let Some(call) = unsafe { call.as_mut() }
         && call.valid()
     {
-        creation::leave(platform, call);
+        creation::leave(&Platform, call);
     }
     creation::leave_lease();
 }

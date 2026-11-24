@@ -8,7 +8,7 @@ mod fixture;
 use crate::cpu_native::{JOB_MANAGER, MAIN, PLAYER, REQUESTED_MODE, RUNNING_MODE};
 use crate::cpu_sources::{self, Consumer, Stamp};
 use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
-use crate::platform::{self, Platform};
+use crate::platform::Platform;
 use crate::sys::rsf_skyrim_menu_observation;
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE, RSF_GAME_CPU_FRAME_END,
@@ -139,33 +139,17 @@ mod tests {
         facts.owned_main = false;
         facts.loading_menu = true;
         assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
-        assert!(rsf_skyrim_rendered_source_eligible(
-            true,
-            1,
-            SCREEN_GAMEPLAY
-        ));
-        assert!(!rsf_skyrim_rendered_source_eligible(
-            true,
-            0,
-            SCREEN_GAMEPLAY
-        ));
-        assert!(!rsf_skyrim_rendered_source_eligible(
-            true,
-            2,
-            SCREEN_GAMEPLAY
-        ));
-        assert!(!rsf_skyrim_rendered_source_eligible(
-            false,
-            1,
-            SCREEN_GAMEPLAY
-        ));
+        assert!(rendered_source_eligible(true, 1, SCREEN_GAMEPLAY));
+        assert!(!rendered_source_eligible(true, 0, SCREEN_GAMEPLAY));
+        assert!(!rendered_source_eligible(true, 2, SCREEN_GAMEPLAY));
+        assert!(!rendered_source_eligible(false, 1, SCREEN_GAMEPLAY));
         for screen in [SCREEN_UNKNOWN, SCREEN_MENU, SCREEN_LOADING] {
-            assert!(!rsf_skyrim_rendered_source_eligible(true, 1, screen));
+            assert!(!rendered_source_eligible(true, 1, screen));
         }
     }
 }
 
-pub(crate) fn rsf_skyrim_cpu_record_consumer(
+pub(crate) fn cpu_record_consumer(
     state: &mut FrameInput,
     stamp: &Stamp,
     consumer: Consumer,
@@ -190,7 +174,7 @@ pub(crate) fn rsf_skyrim_cpu_record_consumer(
     }
 }
 
-pub(crate) fn rsf_skyrim_cpu_next_source() -> u64 {
+pub(crate) fn cpu_next_source() -> u64 {
     NEXT_SOURCE.fetch_add(1, Ordering::SeqCst)
 }
 
@@ -215,7 +199,7 @@ fn rsf_skyrim_classify_screen(facts: &ScreenFacts) -> rsf_screen_class {
     SCREEN_GAMEPLAY
 }
 
-pub(crate) fn rsf_skyrim_rendered_source_eligible(
+pub(crate) fn rendered_source_eligible(
     active_scope: bool,
     primary_world_entries: u32,
     screen: rsf_screen_class,
@@ -288,14 +272,8 @@ pub(crate) fn bad_screen_query(platform: &Platform, base: usize) -> u32 {
         .map_or(0, |(rva, _)| *rva as u32)
 }
 
-pub(crate) fn rsf_skyrim_cpu_screen(
-    main: usize,
-    primary: bool,
-    menus: MenuQueries,
-) -> rsf_screen_class {
-    let Some(platform) = platform::get() else {
-        return SCREEN_UNKNOWN;
-    };
+pub(crate) fn cpu_screen(main: usize, primary: bool, menus: MenuQueries) -> rsf_screen_class {
+    let platform = &Platform;
     let base = platform.main_module();
     let Some(before) = NativeScreen::read(platform, base).filter(|state| state.main == main) else {
         return SCREEN_UNKNOWN;
@@ -341,7 +319,7 @@ pub(crate) struct RenderReceipt {
     pub(crate) screen: rsf_screen_class,
 }
 
-pub(crate) fn rsf_skyrim_cpu_begin_render(
+pub(crate) fn cpu_begin_render(
     state: &mut RenderState,
     screen: rsf_screen_class,
     previous: &mut RenderReceipt,
@@ -356,12 +334,12 @@ pub(crate) fn rsf_skyrim_cpu_begin_render(
     !std::mem::replace(&mut state.simulation_ended, true)
 }
 
-pub(crate) fn rsf_skyrim_cpu_end_render(state: &mut RenderState, previous: &RenderReceipt) {
+pub(crate) fn cpu_end_render(state: &mut RenderState, previous: &RenderReceipt) {
     state.scope = previous.scope;
     state.screen = previous.screen;
 }
 
-pub(crate) fn rsf_skyrim_cpu_begin_world(
+pub(crate) fn cpu_begin_world(
     state: &mut RenderState,
     pass: &rsf_game_render_pass,
     base: usize,
@@ -380,7 +358,7 @@ pub(crate) fn rsf_skyrim_cpu_begin_world(
     true
 }
 
-pub(crate) fn rsf_skyrim_cpu_world_screen(state: &mut RenderState, screen: rsf_screen_class) {
+pub(crate) fn cpu_world_screen(state: &mut RenderState, screen: rsf_screen_class) {
     state.screen = if state.primary_world_entries == 1 {
         screen
     } else {
@@ -388,11 +366,11 @@ pub(crate) fn rsf_skyrim_cpu_world_screen(state: &mut RenderState, screen: rsf_s
     };
 }
 
-pub(crate) fn rsf_skyrim_cpu_end_world(state: &mut RenderState) {
+pub(crate) fn cpu_end_world(state: &mut RenderState) {
     state.primary_count = state.primary_count.wrapping_add(1);
 }
 
-pub(crate) fn rsf_skyrim_cpu_render_identity(
+pub(crate) fn cpu_render_identity(
     state: &RenderState,
     pass: &mut rsf_game_render_pass,
     source: u64,
@@ -406,16 +384,14 @@ pub(crate) fn rsf_skyrim_cpu_render_identity(
     pass.scope_id = state.scope;
     pass.screen = state.screen;
     pass.flags |= RSF_GAME_RENDER_AFTER_SIMULATION | RSF_GAME_RENDER_NO_FG;
-    if rsf_skyrim_rendered_source_eligible(active, state.primary_world_entries, state.screen) {
+    if rendered_source_eligible(active, state.primary_world_entries, state.screen) {
         pass.flags &= !RSF_GAME_RENDER_NO_FG;
     }
     true
 }
 
-pub(crate) fn rsf_skyrim_cpu_render_fact(pass: &mut rsf_game_render_pass, session: u64) {
-    let Some(platform) = platform::get() else {
-        return;
-    };
+pub(crate) fn cpu_render_fact(pass: &mut rsf_game_render_pass, session: u64) {
+    let platform = &Platform;
     let base = platform.main_module();
     pass.session_id = session;
     pass.flags |= RSF_GAME_RENDER_PRIMARY;
@@ -443,7 +419,7 @@ pub(crate) fn rsf_skyrim_cpu_render_fact(pass: &mut rsf_game_render_pass, sessio
     }
 }
 
-pub(crate) fn rsf_skyrim_cpu_sample_tick(state: &mut RenderState) -> bool {
+pub(crate) fn cpu_sample_tick(state: &mut RenderState) -> bool {
     !std::mem::replace(&mut state.sampled, true)
 }
 
@@ -470,7 +446,7 @@ fn cpu_event(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn rsf_skyrim_cpu_frame_event(
+pub(crate) fn cpu_frame_event(
     state: &RenderState,
     stage: u32,
     session: u64,
@@ -490,7 +466,7 @@ pub(crate) fn rsf_skyrim_cpu_frame_event(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn rsf_skyrim_cpu_source_event(
+pub(crate) fn cpu_source_event(
     stage: u32,
     session: u64,
     source: u64,
@@ -519,7 +495,7 @@ pub(crate) fn rsf_skyrim_cpu_source_event(
     }
 }
 
-pub(crate) fn rsf_skyrim_cpu_input_event(
+pub(crate) fn cpu_input_event(
     session: u64,
     kinds: u32,
     qpc: u64,
@@ -545,7 +521,7 @@ struct NativeInputEvent {
 
 const _: () = assert!(size_of::<NativeInputEvent>() == 0x18);
 
-pub(crate) fn rsf_skyrim_cpu_input_kinds(list: usize, read: ReadNative) -> u32 {
+pub(crate) fn cpu_input_kinds(list: usize, read: ReadNative) -> u32 {
     let mut next = 0usize;
     if list == 0
         || !unsafe {

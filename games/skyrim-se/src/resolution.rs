@@ -4,9 +4,7 @@
 use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
 use crate::platform::Platform;
 use crate::render_inputs::renderer_thread;
-use crate::render_native::{
-    retain, rsf_skyrim_call_render_config, rsf_skyrim_call_upscale, thread,
-};
+use crate::render_native::{call_render_config, call_upscale, retain, thread};
 use crate::taa;
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::sampling::halton_f32 as halton;
@@ -125,10 +123,10 @@ fn reconfigure(
         let _context =
             unsafe { retain::<ID3D11DeviceContext>(ptr::with_exposed_provenance_mut(context)) }?;
         let _chain = unsafe { retain::<IDXGISwapChain>(pass.swapchain) }?;
-        unsafe { rsf_skyrim_call_upscale(host, ptr::with_exposed_provenance_mut(context), &pass) };
+        unsafe { call_upscale(host, ptr::with_exposed_provenance_mut(context), &pass) };
     }
     let mut config = rsf_game_render_config::request();
-    rsf_skyrim_call_render_config(host, &mut config);
+    call_render_config(host, &mut config);
     config.checked_render_extent(output)
 }
 
