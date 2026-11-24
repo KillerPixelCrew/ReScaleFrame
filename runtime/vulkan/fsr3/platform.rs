@@ -9,10 +9,7 @@ use crate::sdk_abi as abi;
 use abi::*;
 
 const BGRA8_UNORM: i32 = 44;
-const _: () = {
-    assert!(size_of::<VkSwapchainKHR>() == size_of::<Vk>());
-    assert!(offset_of!(VkSwapchainCreateInfoKHR, oldSwapchain) == OLD_SWAPCHAIN_OFFSET);
-};
+const _: () = assert!(size_of::<VkSwapchainKHR>() == size_of::<Vk>());
 
 static DEVICE_PROC: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 const VULKAN_DLL: [u16; 13] = rsf_game_sys::ffi_util::ascii_wide(b"vulkan-1.dll\0");

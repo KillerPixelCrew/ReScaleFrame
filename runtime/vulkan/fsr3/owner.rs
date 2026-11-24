@@ -28,13 +28,10 @@ use platform_win32 as leaf;
 use tests as leaf;
 /// The pinned FidelityFX SDK 1.1.4 Vulkan records (generate-bindings.py), shared with the Runtime.
 pub mod sdk_abi;
+// The swapchain pass-through refusal.
+use sdk_abi::{VK_ERROR_INITIALIZATION_FAILED, VkSwapchainCreateInfoKHR};
 
 type Handle = *mut c_void;
-
-/// `VK_ERROR_INITIALIZATION_FAILED`, the swapchain pass-through refusal.
-const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
-/// Byte offset of `VkSwapchainCreateInfoKHR::oldSwapchain`, asserted natively.
-const OLD_SWAPCHAIN_OFFSET: usize = 96;
 
 /// Non-dispatchable Vulkan handle (`VkSwapchainKHR`, `VkSemaphore`, `VkFence`).
 type Vk = u64;
@@ -57,10 +54,9 @@ const EXPORTS: [&CStr; 5] = [
     c"ffxConfigure",
 ];
 
-/// Matches `rsf_fsr3_sdk`. Entries are opaque here; only native leaves and the
+/// The bound runtime. Entries are opaque here; only the platform leaves and the
 /// presentation callback call them.
 #[derive(Clone, Copy)]
-#[repr(C)]
 struct Sdk {
     module: Handle,
     create: Handle,
@@ -90,7 +86,7 @@ fn sdk() -> &'static Sdk {
     SDK.get().unwrap_or(&UNBOUND)
 }
 
-/// Matches `rsf_vk_fsr3_image`.
+/// Matches the managed `Fsr3Image`.
 #[repr(C)]
 struct Image {
     image: u64,
@@ -99,7 +95,7 @@ struct Image {
     format: i32,
 }
 
-/// Matches `rsf_vk_fsr3_frame` and the managed `Fsr3Frame`.
+/// Matches the managed `Fsr3Frame`.
 // platform.rs reads the commands and constants; the unit tests replace it.
 #[cfg_attr(test, allow(dead_code))]
 #[repr(C)]
@@ -129,10 +125,6 @@ impl Frame {
             && self.reactive.format == R8_UNORM
             && self.composition.format == R8_UNORM
     }
-
-    fn frame_time_ms(&self) -> f32 {
-        frame_time_ms(self.delta_ms)
-    }
 }
 
 // NaN and non-positive deltas take the default.
@@ -144,7 +136,7 @@ fn frame_time_ms(delta_ms: f32) -> f32 {
     }
 }
 
-/// Matches `rsf_vk_fsr3_fg_frame` and the managed `Fsr3FgFrame`.
+/// Matches the managed `Fsr3FgFrame`.
 // platform.rs's configure, prepare, generate and UI leaves read the resources, constants and
 // camera vectors; the unit tests replace it.
 #[cfg_attr(test, allow(dead_code))]
@@ -178,10 +170,9 @@ impl FgFrame {
     }
 }
 
-/// Matches `rsf_fsr3wsi_create`.
+/// The arguments of `rsf_vk_fsr3_swapchain_create`.
 // platform.rs's create leaf reads the queue family; the unit tests replace it.
 #[cfg_attr(test, allow(dead_code))]
-#[repr(C)]
 struct WsiRequest {
     physical: Handle,
     device: Handle,
@@ -204,14 +195,13 @@ impl WsiRequest {
             && !self.present.is_null()
             && !self.acquire.is_null()
             && !self.info.is_null()
-            && unsafe { self.info.add(OLD_SWAPCHAIN_OFFSET).cast::<Vk>().read() } == 0
+            && unsafe { (*self.info.cast::<VkSwapchainCreateInfoKHR>()).oldSwapchain }.is_null()
     }
 }
 
-/// Matches `rsf_fsr3fg_create`.
+/// The arguments of `rsf_vk_fsr3_fg_create`.
 // platform.rs's create leaf maps the back-buffer format; the unit tests replace it.
 #[cfg_attr(test, allow(dead_code))]
-#[repr(C)]
 struct FgRequest {
     device: Handle,
     physical: Handle,
@@ -220,8 +210,7 @@ struct FgRequest {
     back_buffer_format: i32,
 }
 
-/// Matches `rsf_fsr3sr_create`.
-#[repr(C)]
+/// The arguments of `rsf_vk_fsr3_create`.
 struct Request {
     device: Handle,
     physical: Handle,
@@ -231,35 +220,28 @@ struct Request {
     height: u32,
 }
 
-/// Opaque `rsf_fsr3sr_native` capsule.
-#[repr(C)]
-struct Native {
-    _private: [u8; 0],
-}
-
+// The managed records' layouts.
 const _: () = {
     assert!(size_of::<Image>() == 24);
     assert!(size_of::<Frame>() == 184);
     assert!(offset_of!(Frame, jitter_x) == 152);
     assert!(offset_of!(Frame, composition) == 128);
-    assert!(size_of::<Sdk>() == 48 && offset_of!(Sdk, dispatch) == 32);
-    assert!(size_of::<Request>() == 32 && offset_of!(Request, render_width) == 16);
     assert!(size_of::<FgFrame>() == 248);
     assert!(offset_of!(FgFrame, delta_ms) == 136 && offset_of!(FgFrame, frame_id) == 152);
     assert!(offset_of!(FgFrame, ui) == 216 && offset_of!(FgFrame, swapchain_context) == 240);
-    assert!(size_of::<WsiRequest>() == 64 && offset_of!(WsiRequest, info) == 48);
-    assert!(offset_of!(WsiRequest, queue_family) == 56);
-    assert!(size_of::<FgRequest>() == 32 && offset_of!(FgRequest, back_buffer_format) == 24);
 };
 
-/// Opaque `rsf_fsr3wsi_native` capsule.
-#[repr(C)]
+/// Opaque SR capsule (platform.rs's `SrCapsule`).
+struct Native {
+    _private: [u8; 0],
+}
+
+/// Opaque presentation capsule (platform.rs's `WsiCapsule`).
 struct WsiNative {
     _private: [u8; 0],
 }
 
-/// Opaque `rsf_fsr3fg_native` capsule.
-#[repr(C)]
+/// Opaque interpolation capsule (platform.rs's `FgCapsule`).
 struct FgNative {
     _private: [u8; 0],
 }
@@ -268,12 +250,6 @@ struct FgNative {
 /// context and retires its Vulkan work before destruction.
 struct Context {
     native: NonNull<Native>,
-}
-
-/// Returns the bound SDK table, or an all-null table before a successful open.
-#[cfg(test)]
-fn rsf_core_fsr3_sdk() -> *const Sdk {
-    sdk()
 }
 
 /// Binds the five FidelityFX exports from a borrowed runtime module.
@@ -438,7 +414,7 @@ unsafe extern "C" fn rsf_vk_fsr3_evaluate_with_composition(
             context.native.as_ptr(),
             dispatch,
             frame,
-            frame.frame_time_ms(),
+            frame_time_ms(frame.delta_ms),
         )
     }
 }
@@ -1130,7 +1106,7 @@ mod tests {
         MARK[index..].as_ptr().cast_mut().cast()
     }
 
-    pub(super) unsafe extern "C" fn resolve(module: Handle, name: *const c_char) -> Handle {
+    pub(super) unsafe fn resolve(module: Handle, name: *const c_char) -> Handle {
         let name = unsafe { CStr::from_ptr(name) };
         if module as usize == MISSING_CONFIGURE && name == c"ffxConfigure" {
             return ptr::null_mut();
@@ -1139,21 +1115,21 @@ mod tests {
         mark(index + 1)
     }
 
-    pub(super) unsafe extern "C" fn allocate() -> *mut Native {
+    pub(super) unsafe fn allocate() -> *mut Native {
         LIVE.fetch_add(1, Ordering::SeqCst);
         Box::into_raw(Box::new(Fake { effect: false })).cast()
     }
 
-    pub(super) unsafe extern "C" fn release(native: *mut Native) {
+    pub(super) unsafe fn release(native: *mut Native) {
         LIVE.fetch_sub(1, Ordering::SeqCst);
         drop(unsafe { Box::from_raw(native.cast::<Fake>()) });
     }
 
-    pub(super) unsafe extern "C" fn bind_vulkan(device: Handle) -> bool {
+    pub(super) unsafe fn bind_vulkan(device: Handle) -> bool {
         !matches!(device as usize, NO_LOADER | NO_BUFFER_REQUIREMENTS)
     }
 
-    pub(super) unsafe extern "C" fn create(
+    pub(super) unsafe fn create(
         native: *mut Native,
         create: Handle,
         request: *const Request,
@@ -1166,7 +1142,7 @@ mod tests {
         0
     }
 
-    pub(super) unsafe extern "C" fn plan(
+    pub(super) unsafe fn plan(
         query: Handle,
         width: u32,
         height: u32,
@@ -1182,7 +1158,7 @@ mod tests {
         0
     }
 
-    pub(super) unsafe extern "C" fn evaluate(
+    pub(super) unsafe fn evaluate(
         _: *mut Native,
         dispatch: Handle,
         _: *const Frame,
@@ -1194,11 +1170,11 @@ mod tests {
         0
     }
 
-    pub(super) unsafe extern "C" fn has_effect(native: *const Native) -> bool {
+    pub(super) unsafe fn has_effect(native: *const Native) -> bool {
         unsafe { &*native.cast::<Fake>() }.effect
     }
 
-    pub(super) unsafe extern "C" fn destroy(native: *mut Native, destroy: Handle) -> i32 {
+    pub(super) unsafe fn destroy(native: *mut Native, destroy: Handle) -> i32 {
         assert_eq!(destroy, mark(2));
         if FAIL_DESTROY.load(Ordering::SeqCst) {
             return 5;
@@ -1293,7 +1269,7 @@ mod tests {
         unsafe { &mut *native.cast_mut().cast::<FakeFg>() }
     }
 
-    pub(super) unsafe extern "C" fn wsi_allocate() -> *mut WsiNative {
+    pub(super) unsafe fn wsi_allocate() -> *mut WsiNative {
         LIVE_WSI.fetch_add(1, Ordering::SeqCst);
         Box::into_raw(Box::new(FakeWsi {
             context: false,
@@ -1302,12 +1278,12 @@ mod tests {
         .cast()
     }
 
-    pub(super) unsafe extern "C" fn wsi_release(native: *mut WsiNative) {
+    pub(super) unsafe fn wsi_release(native: *mut WsiNative) {
         LIVE_WSI.fetch_sub(1, Ordering::SeqCst);
         drop(unsafe { Box::from_raw(native.cast::<FakeWsi>()) });
     }
 
-    pub(super) unsafe extern "C" fn wsi_create(
+    pub(super) unsafe fn wsi_create(
         native: *mut WsiNative,
         create: Handle,
         request: *const WsiRequest,
@@ -1323,7 +1299,7 @@ mod tests {
         code
     }
 
-    pub(super) unsafe extern "C" fn wsi_query(native: *mut WsiNative, query: Handle) -> i32 {
+    pub(super) unsafe fn wsi_query(native: *mut WsiNative, query: Handle) -> i32 {
         assert_eq!(query, mark(3));
         let code = step("wsi_query");
         if code == 0 {
@@ -1332,15 +1308,15 @@ mod tests {
         code
     }
 
-    pub(super) unsafe extern "C" fn wsi_complete(native: *const WsiNative) -> bool {
+    pub(super) unsafe fn wsi_complete(native: *const WsiNative) -> bool {
         wsi(native).complete
     }
 
-    pub(super) unsafe extern "C" fn wsi_has_context(native: *const WsiNative) -> bool {
+    pub(super) unsafe fn wsi_has_context(native: *const WsiNative) -> bool {
         wsi(native).context
     }
 
-    pub(super) unsafe extern "C" fn wsi_destroy(native: *mut WsiNative, destroy: Handle) -> i32 {
+    pub(super) unsafe fn wsi_destroy(native: *mut WsiNative, destroy: Handle) -> i32 {
         assert_eq!(destroy, mark(2));
         let code = step("wsi_destroy");
         if code == 0 {
@@ -1349,12 +1325,12 @@ mod tests {
         code
     }
 
-    pub(super) unsafe extern "C" fn wsi_wait(_: *mut WsiNative, dispatch: Handle) -> i32 {
+    pub(super) unsafe fn wsi_wait(_: *mut WsiNative, dispatch: Handle) -> i32 {
         assert_eq!(dispatch, mark(4));
         step("wsi_wait")
     }
 
-    pub(super) unsafe extern "C" fn wsi_register_ui(
+    pub(super) unsafe fn wsi_register_ui(
         _: *mut WsiNative,
         configure: Handle,
         frame: *const FgFrame,
@@ -1367,7 +1343,7 @@ mod tests {
         })
     }
 
-    pub(super) unsafe extern "C" fn wsi_recreate(
+    pub(super) unsafe fn wsi_recreate(
         _: *mut WsiNative,
         device: Handle,
         _: *const u8,
@@ -1379,7 +1355,7 @@ mod tests {
         code
     }
 
-    pub(super) unsafe extern "C" fn wsi_get_images(
+    pub(super) unsafe fn wsi_get_images(
         _: *mut WsiNative,
         _: Handle,
         _: Vk,
@@ -1390,7 +1366,7 @@ mod tests {
         step("wsi_get_images")
     }
 
-    pub(super) unsafe extern "C" fn wsi_acquire(
+    pub(super) unsafe fn wsi_acquire(
         _: *mut WsiNative,
         _: Handle,
         _: Vk,
@@ -1403,7 +1379,7 @@ mod tests {
         step("wsi_acquire")
     }
 
-    pub(super) unsafe extern "C" fn wsi_present(
+    pub(super) unsafe fn wsi_present(
         _: *mut WsiNative,
         _: Handle,
         _: *const c_void,
@@ -1411,29 +1387,29 @@ mod tests {
         step("wsi_present")
     }
 
-    pub(super) unsafe extern "C" fn wsi_destroy_chain(_: *mut WsiNative, _: Handle, _: Vk) -> i32 {
+    pub(super) unsafe fn wsi_destroy_chain(_: *mut WsiNative, _: Handle, _: Vk) -> i32 {
         step("wsi_destroy_chain")
     }
 
-    pub(super) unsafe extern "C" fn wsi_last_present_count(_: *mut WsiNative, chain: Vk) -> u64 {
+    pub(super) unsafe fn wsi_last_present_count(_: *mut WsiNative, chain: Vk) -> u64 {
         chain + 1
     }
 
-    pub(super) unsafe extern "C" fn fg_allocate() -> *mut FgNative {
+    pub(super) unsafe fn fg_allocate() -> *mut FgNative {
         LIVE_FG.fetch_add(1, Ordering::SeqCst);
         Box::into_raw(Box::new(FakeFg { effect: false })).cast()
     }
 
-    pub(super) unsafe extern "C" fn fg_release(native: *mut FgNative) {
+    pub(super) unsafe fn fg_release(native: *mut FgNative) {
         LIVE_FG.fetch_sub(1, Ordering::SeqCst);
         drop(unsafe { Box::from_raw(native.cast::<FakeFg>()) });
     }
 
-    pub(super) unsafe extern "C" fn fg_bind_vulkan() -> bool {
+    pub(super) unsafe fn fg_bind_vulkan() -> bool {
         step("fg_bind_vulkan") == 0
     }
 
-    pub(super) unsafe extern "C" fn fg_create(
+    pub(super) unsafe fn fg_create(
         native: *mut FgNative,
         create: Handle,
         _: *const FgRequest,
@@ -1446,11 +1422,11 @@ mod tests {
         code
     }
 
-    pub(super) unsafe extern "C" fn fg_has_effect(native: *const FgNative) -> bool {
+    pub(super) unsafe fn fg_has_effect(native: *const FgNative) -> bool {
         fg(native).effect
     }
 
-    pub(super) unsafe extern "C" fn fg_destroy(native: *mut FgNative, destroy: Handle) -> i32 {
+    pub(super) unsafe fn fg_destroy(native: *mut FgNative, destroy: Handle) -> i32 {
         assert_eq!(destroy, mark(2));
         let code = step("fg_destroy");
         if code == 0 {
@@ -1459,7 +1435,7 @@ mod tests {
         code
     }
 
-    pub(super) unsafe extern "C" fn fg_disable(
+    pub(super) unsafe fn fg_disable(
         _: *mut FgNative,
         configure: Handle,
         chain: Vk,
@@ -1469,7 +1445,7 @@ mod tests {
         step("fg_disable")
     }
 
-    pub(super) unsafe extern "C" fn fg_configure(
+    pub(super) unsafe fn fg_configure(
         _: *mut FgNative,
         configure: Handle,
         _: *const FgFrame,
@@ -1483,7 +1459,7 @@ mod tests {
         })
     }
 
-    pub(super) unsafe extern "C" fn fg_prepare(
+    pub(super) unsafe fn fg_prepare(
         _: *mut FgNative,
         dispatch: Handle,
         _: *const FgFrame,
@@ -1494,7 +1470,7 @@ mod tests {
         step("fg_prepare")
     }
 
-    pub(super) unsafe extern "C" fn fg_generate(
+    pub(super) unsafe fn fg_generate(
         _: *mut FgNative,
         dispatch: Handle,
         _: *const FgFrame,
@@ -1871,7 +1847,7 @@ mod tests {
         let mut context = ptr::null_mut();
         unsafe {
             // Unbound: every SDK-dependent entry refuses with -1.
-            assert!(rsf_core_fsr3_sdk().read().module.is_null());
+            assert!(sdk().module.is_null());
             assert_eq!(rsf_vk_fsr3_plan(8, 8, 2, &mut width, &mut height), -1);
             assert_eq!(create_sr(&request(1, 8), &mut context), -1);
             assert_eq!(
@@ -1883,10 +1859,10 @@ mod tests {
 
             assert_eq!(rsf_vk_fsr3_open(ptr::null_mut()), -1);
             assert_eq!(rsf_vk_fsr3_open(MISSING_CONFIGURE as Handle), -2);
-            assert!(rsf_core_fsr3_sdk().read().module.is_null());
+            assert!(sdk().module.is_null());
             assert_eq!(rsf_vk_fsr3_open(0x1000 as Handle), 0);
             assert_eq!(rsf_vk_fsr3_open(0x3000 as Handle), -2);
-            let bound = rsf_core_fsr3_sdk().read();
+            let bound = sdk();
             assert_eq!(bound.module as usize, 0x1000);
             assert_eq!(bound.configure, mark(5));
 
