@@ -4,10 +4,8 @@ use super::{
     Context, DEPTH_INFINITE, DEPTH_INVERTED, Dispatch, FAILED, Handle, MAX_VERSIONS,
     MOTION_JITTERED, Version, ffx_version,
 };
-use crate::dx12_bridge as provider_module;
 use crate::ffx_abi::*;
 use core::ptr;
-use windows::Win32::Foundation::FARPROC;
 
 /// The directory of the module holding this bridge, with its trailing separator.
 pub(super) fn own_directory() -> Option<Vec<u16>> {
@@ -41,41 +39,6 @@ pub(super) fn own_directory() -> Option<Vec<u16>> {
         .iter()
         .rposition(|&unit| unit == u16::from(b'\\') || unit == u16::from(b'/'))?;
     Some(name[..=separator].to_vec())
-}
-
-pub(super) unsafe fn load_provider(
-    path: *const u16,
-    out: &mut Handle,
-    create: &mut PfnFfxCreateContext,
-    destroy: &mut PfnFfxDestroyContext,
-    dispatch: &mut PfnFfxDispatch,
-    query: &mut PfnFfxQuery,
-) -> i32 {
-    let Ok(module) = (unsafe { provider_module::load_module(path) }) else {
-        return -7;
-    };
-    *out = module.0;
-    // Each optional export uses its SDK signature on Windows x64.
-    unsafe {
-        *create = core::mem::transmute::<FARPROC, PfnFfxCreateContext>(
-            provider_module::module_export(module, c"ffxCreateContext"),
-        );
-        *destroy = core::mem::transmute::<FARPROC, PfnFfxDestroyContext>(
-            provider_module::module_export(module, c"ffxDestroyContext"),
-        );
-        *dispatch = core::mem::transmute::<FARPROC, PfnFfxDispatch>(
-            provider_module::module_export(module, c"ffxDispatch"),
-        );
-        *query = core::mem::transmute::<FARPROC, PfnFfxQuery>(provider_module::module_export(
-            module,
-            c"ffxQuery",
-        ));
-    }
-    if create.is_some() && destroy.is_some() && dispatch.is_some() && query.is_some() {
-        0
-    } else {
-        -8
-    }
 }
 
 // Function-like FidelityFX macros of the pinned 2.4.0 headers; see

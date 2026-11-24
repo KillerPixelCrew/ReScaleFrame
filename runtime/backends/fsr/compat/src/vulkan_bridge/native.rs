@@ -21,6 +21,7 @@ use crate::ffx_abi::{
 use crate::ffx_resource;
 use ash::vk;
 use core::ptr;
+use rsf_game_sys::win32::typed_export;
 use windows::{
     Win32::{
         Foundation::{HANDLE, WAIT_OBJECT_0},
@@ -185,15 +186,27 @@ impl Capsule {
     /// four exports: zero, -7 when the module does not load, or -8 when an export
     /// is missing.
     pub(super) fn load(&mut self, path: *const u16) -> i32 {
+        let Ok(module) = (unsafe { dx12::load_module(path) }) else {
+            return -7;
+        };
+        self.module = module.0;
+        // Each export uses its SDK signature on Windows x64.
         unsafe {
-            sdk::load_provider(
-                path,
-                &mut self.module,
-                &mut self.create,
-                &mut self.destroy,
-                &mut self.dispatch,
-                &mut self.query,
-            )
+            self.create =
+                typed_export::<PfnFfxCreateContext>(module.0, c"ffxCreateContext").flatten();
+            self.destroy =
+                typed_export::<PfnFfxDestroyContext>(module.0, c"ffxDestroyContext").flatten();
+            self.dispatch = typed_export::<PfnFfxDispatch>(module.0, c"ffxDispatch").flatten();
+            self.query = typed_export::<PfnFfxQuery>(module.0, c"ffxQuery").flatten();
+        }
+        if self.create.is_some()
+            && self.destroy.is_some()
+            && self.dispatch.is_some()
+            && self.query.is_some()
+        {
+            0
+        } else {
+            -8
         }
     }
 
