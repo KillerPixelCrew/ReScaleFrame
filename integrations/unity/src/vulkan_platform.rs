@@ -113,7 +113,7 @@ unsafe fn release<T: Interface>(raw: *mut c_void) {
     }
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_create_device(
+pub(crate) unsafe fn rsf_uvk_gpu_create_device(
     shared: *mut DeviceHandles,
     instance: u64,
     gipa: vk::PFN_vkGetInstanceProcAddr,

@@ -90,7 +90,7 @@ pub(super) unsafe fn sharpening_defaults(output: *mut rsf_sharpening_options) {
 }
 
 /// Runs inside the bridge's admitted SR callback and borrows the recording list.
-pub(super) unsafe extern "C" fn rsf_unity_package_create_view(
+pub(super) unsafe fn rsf_unity_package_create_view(
     commands: *mut c_void,
     view: *mut rsf_unity_package_view_setup,
     result: *mut i32,
@@ -162,7 +162,7 @@ pub(super) unsafe extern "C" fn rsf_unity_package_create_view(
     1
 }
 
-pub(super) unsafe extern "C" fn rsf_unity_package_default_fg(backend: *mut u32) -> u32 {
+pub(super) unsafe fn rsf_unity_package_default_fg(backend: *mut u32) -> u32 {
     let Some((device, _queue)) = graphics() else {
         return 0;
     };
@@ -179,7 +179,7 @@ pub(super) unsafe extern "C" fn rsf_unity_package_default_fg(backend: *mut u32) 
     1
 }
 
-pub(super) unsafe extern "C" fn rsf_unity_package_texture_desc(
+pub(super) unsafe fn rsf_unity_package_texture_desc(
     resource: *mut c_void,
     width: *mut u64,
     height: *mut u32,
@@ -196,7 +196,7 @@ pub(super) unsafe extern "C" fn rsf_unity_package_texture_desc(
     }
 }
 
-pub(super) extern "C" fn rsf_unity_package_prepare_preview(width: u32, height: u32) -> u32 {
+pub(super) fn rsf_unity_package_prepare_preview(width: u32, height: u32) -> u32 {
     let Some((device, queue)) = graphics() else {
         return 0;
     };

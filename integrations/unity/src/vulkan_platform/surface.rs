@@ -75,13 +75,13 @@ pub(crate) unsafe fn rsf_uvk_gpu_chain_destroy(chain: *mut c_void) {
     unsafe { release::<IDXGISwapChain3>(chain) };
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_buffer(chain: *mut c_void) -> *mut c_void {
+pub(crate) unsafe fn rsf_uvk_gpu_chain_buffer(chain: *mut c_void) -> *mut c_void {
     let chain = unsafe { borrowed::<IDXGISwapChain3>(&chain) };
     unsafe { chain.GetBuffer::<ID3D12Resource>(chain.GetCurrentBackBufferIndex()) }
         .map_or(null_mut(), Interface::into_raw)
 }
 
-pub(crate) unsafe extern "C" fn rsf_uvk_gpu_chain_present(chain: *mut c_void) -> bool {
+pub(crate) unsafe fn rsf_uvk_gpu_chain_present(chain: *mut c_void) -> bool {
     unsafe {
         borrowed::<IDXGISwapChain3>(&chain)
             .Present(0, DXGI_PRESENT(0))

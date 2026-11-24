@@ -37,7 +37,7 @@ pub(super) fn route() -> Route {
     }
 }
 
-pub(crate) unsafe extern "C" fn rsf_unity_package_bridge_load(interfaces: *mut c_void) -> u32 {
+pub(crate) unsafe fn rsf_unity_package_bridge_load(interfaces: *mut c_void) -> u32 {
     if interfaces.is_null() {
         return 0;
     }
@@ -63,7 +63,7 @@ pub(crate) unsafe extern "C" fn rsf_unity_package_bridge_load(interfaces: *mut c
     1
 }
 
-pub(crate) extern "C" fn rsf_unity_package_bridge_unload() {
+pub(crate) fn rsf_unity_package_bridge_unload() {
     if matches!(route(), Route::D3d12) {
         rsf_unity_frames_activate(0);
         unsafe { rsf_unity_d3d12_sdk_unload() };
@@ -76,14 +76,14 @@ pub(crate) extern "C" fn rsf_unity_package_bridge_unload() {
     RENDERER.store(RSF_UNITY_BRIDGE_NONE, SeqCst);
 }
 
-pub(crate) unsafe extern "C" fn rsf_unity_package_bridge_prepare(
+pub(crate) unsafe fn rsf_unity_package_bridge_prepare(
     host: *const rsf_game_host_services,
     api: *mut rsf_unity_native_api,
 ) -> u32 {
     unsafe { prepare(host, api) }
 }
 
-pub(crate) extern "C" fn rsf_unity_package_bridge_open(editor: u32) -> u32 {
+pub(crate) fn rsf_unity_package_bridge_open(editor: u32) -> u32 {
     match route() {
         Route::Vulkan => {
             vulkan_state::open();
@@ -98,7 +98,7 @@ pub(crate) extern "C" fn rsf_unity_package_bridge_open(editor: u32) -> u32 {
     }
 }
 
-pub(crate) extern "C" fn rsf_unity_package_bridge_try_close() -> u32 {
+pub(crate) fn rsf_unity_package_bridge_try_close() -> u32 {
     rsf_unity_frames_activate(0);
     let route = route();
     let vulkan = matches!(route, Route::Vulkan);
@@ -131,7 +131,7 @@ pub(crate) extern "C" fn rsf_unity_package_bridge_try_close() -> u32 {
     0
 }
 
-pub(crate) extern "C" fn rsf_unity_package_bridge_finish_retirement(commit: u32) {
+pub(crate) fn rsf_unity_package_bridge_finish_retirement(commit: u32) {
     let commit = commit != 0;
     let route = route();
     let vulkan = matches!(route, Route::Vulkan);

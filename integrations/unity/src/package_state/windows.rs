@@ -59,11 +59,11 @@ pub(super) fn startup_paths() -> (bool, Vec<u16>) {
     (editor, terminated(ini))
 }
 
-pub(super) extern "C" fn rsf_unity_package_session_seed() -> u64 {
+pub(super) fn rsf_unity_package_session_seed() -> u64 {
     unsafe { GetTickCount64() }
 }
 
-pub(super) unsafe extern "C" fn rsf_unity_package_timestamp(
+pub(super) unsafe fn rsf_unity_package_timestamp(
     counter: *mut u64,
     frequency: *mut u64,
 ) {
@@ -76,7 +76,7 @@ pub(super) unsafe extern "C" fn rsf_unity_package_timestamp(
     }
 }
 
-pub(super) unsafe extern "C" fn rsf_unity_package_local_app_data(
+pub(super) unsafe fn rsf_unity_package_local_app_data(
     output: *mut u16,
     capacity: u32,
 ) -> u32 {
@@ -84,11 +84,11 @@ pub(super) unsafe extern "C" fn rsf_unity_package_local_app_data(
     if length < capacity { length } else { 0 }
 }
 
-pub(super) unsafe extern "C" fn rsf_unity_package_create_directory(path: *const u16) {
+pub(super) unsafe fn rsf_unity_package_create_directory(path: *const u16) {
     unsafe { CreateDirectoryW(path, null()) };
 }
 
-pub(super) unsafe extern "C" fn rsf_unity_package_log_open(path: *const u16) -> HANDLE {
+pub(super) unsafe fn rsf_unity_package_log_open(path: *const u16) -> HANDLE {
     let file = unsafe {
         CreateFileW(
             path,
@@ -107,7 +107,7 @@ pub(super) unsafe extern "C" fn rsf_unity_package_log_open(path: *const u16) -> 
     }
 }
 
-pub(super) unsafe extern "C" fn rsf_unity_package_log_write(file: HANDLE, text: *const c_char) {
+pub(super) unsafe fn rsf_unity_package_log_write(file: HANDLE, text: *const c_char) {
     unsafe {
         OutputDebugStringA(text.cast());
         OutputDebugStringA(c"\n".as_ptr().cast());
@@ -126,7 +126,7 @@ pub(super) unsafe extern "C" fn rsf_unity_package_log_write(file: HANDLE, text: 
     }
 }
 
-pub(super) unsafe extern "C" fn rsf_unity_package_log_close(file: HANDLE) {
+pub(super) unsafe fn rsf_unity_package_log_close(file: HANDLE) {
     unsafe { CloseHandle(file) };
 }
 
@@ -176,7 +176,7 @@ unsafe extern "system" fn input_proc(
     value
 }
 
-pub(super) extern "C" fn rsf_unity_package_subclass(hwnd: HWND) -> u32 {
+pub(super) fn rsf_unity_package_subclass(hwnd: HWND) -> u32 {
     let owner = unsafe { GetCurrentThreadId() };
     if unsafe { GetWindowThreadProcessId(hwnd, null_mut()) } != owner {
         return 0;
@@ -227,7 +227,7 @@ pub(super) extern "C" fn rsf_unity_package_subclass(hwnd: HWND) -> u32 {
     1
 }
 
-pub(super) extern "C" fn rsf_unity_package_restore(hwnd: HWND) {
+pub(super) fn rsf_unity_package_restore(hwnd: HWND) {
     REPORTING.store(false, SeqCst);
     let mut receipt = RECEIPT.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(active) = receipt.as_ref() else {
@@ -252,7 +252,7 @@ pub(super) extern "C" fn rsf_unity_package_restore(hwnd: HWND) {
     *receipt = None;
 }
 
-pub(super) extern "C" fn rsf_unity_package_window_class(hwnd: HWND) -> u32 {
+pub(super) fn rsf_unity_package_window_class(hwnd: HWND) -> u32 {
     let mut process = 0;
     unsafe { GetWindowThreadProcessId(hwnd, &mut process) };
     if process != unsafe { GetCurrentProcessId() } {
@@ -282,7 +282,7 @@ unsafe extern "system" fn find_player_window(hwnd: HWND, output: LPARAM) -> i32 
     }
 }
 
-pub(super) extern "C" fn rsf_unity_package_player_window() -> *mut c_void {
+pub(super) fn rsf_unity_package_player_window() -> *mut c_void {
     let mut hwnd: HWND = null_mut();
     unsafe { EnumWindows(Some(find_player_window), (&raw mut hwnd) as LPARAM) };
     hwnd

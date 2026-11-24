@@ -314,7 +314,7 @@ fn d3d_ring(bridge: u32) -> Option<MutexGuard<'static, ProducerRing>> {
     Some(owner.lock().unwrap_or_else(PoisonError::into_inner))
 }
 
-pub(crate) extern "C" fn rsf_unity_package_sr_slot_reset(
+pub(crate) fn rsf_unity_package_sr_slot_reset(
     bridge: u32,
     commands: *mut c_void,
     slot: u32,
@@ -324,7 +324,7 @@ pub(crate) extern "C" fn rsf_unity_package_sr_slot_reset(
     }
 }
 
-pub(crate) extern "C" fn rsf_unity_package_sr_slots_released(bridge: u32) {
+pub(crate) fn rsf_unity_package_sr_slots_released(bridge: u32) {
     if let Some(mut ring) = d3d_ring(bridge) {
         ring.released();
     }
@@ -341,7 +341,7 @@ pub(crate) fn rsf_unity_package_sr_ring_begin() -> u64 {
         .unwrap_or(0)
 }
 
-pub(super) extern "C" fn rsf_unity_package_sr_recording(
+pub(super) fn rsf_unity_package_sr_recording(
     commands: *mut c_void,
     epoch: u64,
     slot: u32,
@@ -864,7 +864,7 @@ unsafe extern "C" fn render_config(_: *mut c_void, output: *mut rsf_game_render_
     1
 }
 
-pub(crate) extern "C" fn rsf_unity_package_bridge_failed(result: i32) {
+pub(crate) fn rsf_unity_package_bridge_failed(result: i32) {
     PACKAGE.bridge_failed(result);
 }
 
