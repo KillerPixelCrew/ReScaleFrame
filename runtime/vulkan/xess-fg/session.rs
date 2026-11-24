@@ -2,7 +2,6 @@
 //! Shared session owner for the integrated Runtime and standalone XeSS-FG DLL, and the owner of
 //! the XeSS-FG bridge and SDK records.
 
-use std::alloc::{Layout, alloc};
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::MaybeUninit;
@@ -34,7 +33,7 @@ use bridge_abi::{
     rsf_xess_bridge_present_status as IntegratedStatus, rsf_xess_bridge_start as IntegratedStart,
 };
 use capture::{Capture, Footprint};
-use rsf_game_sys::ffi_util::has_capacity;
+use rsf_game_sys::ffi_util::{has_capacity, try_box};
 use session_records_abi::{
     RSF_XESS_BRIDGE_ALLOCATOR_COUNT as ALLOCATOR_COUNT, rsf_xess_bridge_modules as Modules,
     rsf_xess_bridge_resource_desc as PresentResourceDesc, rsf_xess_capture_desc as Desc,
@@ -231,7 +230,7 @@ const WAIT_INCOMPLETE: i32 = -3;
 const CAPTURE_FLUSH_FAILED: i32 = -7010;
 const CAPTURE_START_FAILED: i32 = -7011;
 
-// Values are checked against the native headers in bridge.cpp.
+// Values are checked against the native headers in bridge.c.
 const DXGI_FORMAT_R16G16_FLOAT: u32 = 34;
 const DXGI_FORMAT_D32_FLOAT: u32 = 40;
 const DXGI_FORMAT_R32_FLOAT: u32 = 41;
@@ -877,36 +876,30 @@ unsafe extern "C" fn rsf_core_xess_bridge_create(
     // Both C++ consumers lend a static table with every callback populated.
     let platform = unsafe { &*platform };
     CREATE_STAGE.set(c"native context allocation");
-    let session = unsafe { alloc(Layout::new::<Session>()).cast::<Session>() };
-    if session.is_null() {
-        return -2;
-    }
-    let capture = Box::new(Capture::from_environment(platform));
     let timing = NonNull::from(Box::leak(Box::<Accumulator>::default()));
-    unsafe {
-        session.write(Session {
-            platform,
-            native: ptr::null_mut(),
-            capture: NonNull::from(Box::leak(capture)),
-            timing,
-            modules: Modules {
-                fg: ptr::null_mut(),
-                xell: ptr::null_mut(),
-            },
-            event: None,
-            max_generated: 0,
-            active_generated: 0,
-            width: 0,
-            height: 0,
-            backbuffer_hudless: false,
-            next_allocator: 0,
-            allocator_completion: [0; ALLOCATOR_COUNT as usize],
-            completion_value: 0,
-            last_done_signalled: 0,
-            phase: Phase::Creating,
-            failure: AtomicI32::new(0),
-        });
-    }
+    // A refused allocation drops the session, which releases the capture and timing owners.
+    let Some(session) = try_box(Session {
+        platform,
+        native: ptr::null_mut(),
+        capture: NonNull::from(Box::leak(Box::new(Capture::from_environment(platform)))),
+        timing,
+        modules: Modules::default(),
+        event: None,
+        max_generated: 0,
+        active_generated: 0,
+        width: 0,
+        height: 0,
+        backbuffer_hudless: false,
+        next_allocator: 0,
+        allocator_completion: [0; ALLOCATOR_COUNT as usize],
+        completion_value: 0,
+        last_done_signalled: 0,
+        phase: Phase::Creating,
+        failure: AtomicI32::new(0),
+    }) else {
+        return -2;
+    };
+    let session = Box::into_raw(session);
     let native = unsafe { (platform.allocate)(session, timing.as_ptr()) };
     if native.is_null() {
         drop(unsafe { Box::from_raw(session) });
