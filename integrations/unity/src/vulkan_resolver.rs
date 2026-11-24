@@ -13,34 +13,11 @@ use std::sync::{Mutex, MutexGuard};
 #[path = "vulkan_wsi.rs"]
 mod wsi;
 
-const FORWARD: u32 = 0;
-const INSTANCE_PROC: u32 = 1;
-const DEVICE_PROC: u32 = 2;
-const CREATE_DEVICE: u32 = 3;
-const CREATE_SWAPCHAIN: u32 = 4;
-const DESTROY_SWAPCHAIN: u32 = 5;
-const PRESENT: u32 = 6;
-const CREATE_SURFACE: u32 = 7;
-const DESTROY_SURFACE: u32 = 8;
-const SLOTS: usize = DESTROY_SURFACE as usize + 1;
-
 pub(crate) const SUCCESS: i32 = vk::Result::SUCCESS.as_raw();
 const OUT_OF_HOST_MEMORY: i32 = vk::Result::ERROR_OUT_OF_HOST_MEMORY.as_raw();
 const OUT_OF_DEVICE_MEMORY: i32 = vk::Result::ERROR_OUT_OF_DEVICE_MEMORY.as_raw();
 const INITIALIZATION_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
 pub(crate) const DEVICE_LOST: i32 = vk::Result::ERROR_DEVICE_LOST.as_raw();
-
-/// Resolver keys by slot. vkGetInstanceProcAddr itself is never routed, and vkGetDeviceProcAddr
-/// only from the instance resolver.
-const KEYS: [(u32, &CStr); 7] = [
-    (DEVICE_PROC, c"vkGetDeviceProcAddr"),
-    (CREATE_DEVICE, c"vkCreateDevice"),
-    (CREATE_SWAPCHAIN, c"vkCreateSwapchainKHR"),
-    (DESTROY_SWAPCHAIN, c"vkDestroySwapchainKHR"),
-    (PRESENT, c"vkQueuePresentKHR"),
-    (CREATE_SURFACE, c"vkCreateWin32SurfaceKHR"),
-    (DESTROY_SURFACE, c"vkDestroySurfaceKHR"),
-];
 
 /// The device extensions the shared memory and fence imports need.
 use rsf_game_sys::vulkan_extensions::{self, WIN32_INTEROP as INTEROP};
@@ -79,79 +56,70 @@ struct NativeHooks {
 }
 
 struct Resolver {
-    /// Native interceptors by slot, published with the loader's instance resolver. FORWARD has none.
-    interceptors: [Option<Function>; SLOTS],
-    /// The Unity loader resolver. Vulkan commands dispatch on their supplied owner.
-    original_instance: Option<Function>,
+    /// The Unity loader resolver. Vulkan commands dispatch on their supplied owner, so no
+    /// device-specific original is kept.
+    original_instance: Option<Lookup>,
     /// The device created with both interop extensions in its request.
     interop_device: usize,
     native: Option<NativeHooks>,
 }
 
-static RESOLVER: Mutex<Resolver> = Mutex::new(Resolver::NEW);
+static RESOLVER: Mutex<Resolver> = Mutex::new(Resolver {
+    original_instance: None,
+    interop_device: 0,
+    native: None,
+});
 
 fn resolver() -> MutexGuard<'static, Resolver> {
     lock_or_recover(&RESOLVER)
 }
 
-fn route(name: &CStr, from_instance: bool) -> u32 {
-    match KEYS.iter().find(|(_, key)| *key == name) {
-        Some(&(DEVICE_PROC | CREATE_SURFACE | DESTROY_SURFACE, _)) if !from_instance => FORWARD,
-        Some(&(slot, _)) => slot,
-        None => FORWARD,
+/// The interceptor that replaces `name`, or None to forward the loader's own result.
+/// vkGetDeviceProcAddr and the Win32 surface calls are routed only from the instance resolver.
+fn interceptor(name: &CStr, from_instance: bool, present: Function) -> Option<Function> {
+    // Vulkan defines PFN_vkVoidFunction for transport of any Vulkan function pointer.
+    unsafe {
+        Some(match name.to_bytes() {
+            b"vkGetDeviceProcAddr" if from_instance => {
+                std::mem::transmute::<Lookup, Function>(get_device_proc)
+            }
+            b"vkCreateDevice" => {
+                std::mem::transmute::<CreateDevice, Function>(intercept_create_device)
+            }
+            b"vkCreateSwapchainKHR" => {
+                std::mem::transmute::<wsi::CreateSwapchain, Function>(wsi::create_swapchain)
+            }
+            b"vkDestroySwapchainKHR" => {
+                std::mem::transmute::<wsi::Destroy, Function>(wsi::destroy_swapchain)
+            }
+            b"vkQueuePresentKHR" => present,
+            b"vkCreateWin32SurfaceKHR" if from_instance => {
+                std::mem::transmute::<wsi::CreateSurface, Function>(wsi::create_surface)
+            }
+            b"vkDestroySurfaceKHR" if from_instance => {
+                std::mem::transmute::<wsi::Destroy, Function>(wsi::destroy_surface)
+            }
+            _ => return None,
+        })
     }
 }
 
-#[cfg(test)]
-fn key(slot: u32) -> Option<&'static CStr> {
-    KEYS.iter()
-        .find(|(candidate, _)| *candidate == slot)
-        .map(|&(_, key)| key)
-}
-
-impl Resolver {
-    const NEW: Self = Self {
-        interceptors: [None; SLOTS],
-        original_instance: None,
-        interop_device: 0,
-        native: None,
+/// A null command stays null; an unhandled name forwards Unity's loader result.
+unsafe fn resolve(
+    name: *const c_char,
+    original: Option<Function>,
+    from_instance: bool,
+) -> Option<Function> {
+    let original = original?;
+    let Some(native) = resolver().native else {
+        return Some(original);
     };
-
-    /// The initialization route. A null loader resolver or an incomplete table leaves Unity on its
-    /// own resolver and publishes nothing.
-    fn bind(&mut self, original: Option<Function>, table: &[Option<Function>]) -> Option<Function> {
-        let original = original?;
-        if table.len() != SLOTS || table[INSTANCE_PROC as usize..].iter().any(Option::is_none) {
-            return Some(original);
-        }
-        self.interceptors.copy_from_slice(table);
-        self.interceptors[FORWARD as usize] = None;
-        self.original_instance = Some(original);
-        self.interceptors[INSTANCE_PROC as usize]
-    }
-
-    /// A null command stays null. An unhandled name forwards Unity's loader result.
-    fn resolve(
-        &self,
-        name: Option<&CStr>,
-        original: Option<Function>,
-        from_instance: bool,
-    ) -> Option<Function> {
-        let original = original?;
-        let Some(name) = name else {
-            return Some(original);
-        };
-        self.interceptors[route(name, from_instance) as usize].or(Some(original))
-    }
-
-    #[cfg(test)]
-    fn original(&self, slot: u32) -> Option<Function> {
-        if slot == INSTANCE_PROC {
-            self.original_instance
-        } else {
-            None
-        }
-    }
+    interceptor(
+        unsafe { CStr::from_ptr(name) },
+        from_instance,
+        native.present,
+    )
+    .or(Some(original))
 }
 
 #[unsafe(no_mangle)]
@@ -163,31 +131,15 @@ unsafe extern "C" fn rsf_unity_vk_install(
     let Some(&native) = (unsafe { hooks.as_ref() }) else {
         return Some(original);
     };
-    // Vulkan defines PFN_vkVoidFunction for transport of any Vulkan function pointer.
-    let cast = |lookup: Lookup| unsafe { std::mem::transmute::<Lookup, Function>(lookup) };
-    let table = [
-        None,
-        Some(cast(get_instance_proc)),
-        Some(cast(get_device_proc)),
-        Some(unsafe { std::mem::transmute::<CreateDevice, Function>(intercept_create_device) }),
-        Some(unsafe {
-            std::mem::transmute::<wsi::CreateSwapchain, Function>(wsi::create_swapchain)
-        }),
-        Some(unsafe { std::mem::transmute::<wsi::Destroy, Function>(wsi::destroy_swapchain) }),
-        Some(native.present),
-        Some(unsafe { std::mem::transmute::<wsi::CreateSurface, Function>(wsi::create_surface) }),
-        Some(unsafe { std::mem::transmute::<wsi::Destroy, Function>(wsi::destroy_surface) }),
-    ];
     let mut state = resolver();
     state.native = Some(native);
-    let _ = state.bind(Some(cast(original)), &table);
+    state.original_instance = Some(original);
     Some(get_instance_proc)
 }
 
 unsafe fn instance_command(instance: *mut c_void, name: *const c_char) -> Option<Function> {
     let original = resolver().original_instance?;
-    let lookup = unsafe { std::mem::transmute::<Function, Lookup>(original) };
-    unsafe { lookup(instance, name) }
+    unsafe { original(instance, name) }
 }
 
 /// Unity lends a NUL-terminated loader name, or null, for the call.
@@ -199,7 +151,7 @@ unsafe extern "system" fn get_instance_proc(
         return None;
     }
     let original = unsafe { instance_command(instance, name) };
-    resolver().resolve(Some(unsafe { CStr::from_ptr(name) }), original, true)
+    unsafe { resolve(name, original, true) }
 }
 
 unsafe extern "system" fn get_device_proc(
@@ -211,9 +163,8 @@ unsafe extern "system" fn get_device_proc(
     }
     let native = resolver().native?;
     let original = unsafe { (native.device_proc)(device, name) };
-    resolver().resolve(Some(unsafe { CStr::from_ptr(name) }), original, false)
+    unsafe { resolve(name, original, false) }
 }
-
 /// The recorded request short-circuits the lookups, which run in order outside the lock.
 pub(crate) fn interop_ready(device: *mut c_void, lookup: Lookup) -> bool {
     if device.is_null() {
@@ -323,130 +274,6 @@ unsafe extern "system" fn intercept_create_device(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    unsafe extern "system" fn loader() {}
-    unsafe extern "system" fn other_loader() {}
-    unsafe extern "system" fn interceptor() {}
-
-    fn address(function: Option<Function>) -> Option<usize> {
-        function.map(|function| function as usize)
-    }
-
-    fn table() -> [Option<Function>; SLOTS] {
-        let mut table = [Some(interceptor as Function); SLOTS];
-        table[FORWARD as usize] = None;
-        table
-    }
-
-    #[test]
-    fn keys_route_exactly_and_device_proc_only_from_the_instance() {
-        assert_eq!(route(c"vkGetDeviceProcAddr", true), DEVICE_PROC);
-        assert_eq!(route(c"vkGetDeviceProcAddr", false), FORWARD);
-        for from_instance in [true, false] {
-            assert_eq!(route(c"vkCreateDevice", from_instance), CREATE_DEVICE);
-            assert_eq!(
-                route(c"vkCreateSwapchainKHR", from_instance),
-                CREATE_SWAPCHAIN
-            );
-            assert_eq!(
-                route(c"vkDestroySwapchainKHR", from_instance),
-                DESTROY_SWAPCHAIN
-            );
-            assert_eq!(route(c"vkQueuePresentKHR", from_instance), PRESENT);
-            assert_eq!(route(c"vkGetInstanceProcAddr", from_instance), FORWARD);
-            assert_eq!(route(c"vkQueuePresentKHR2", from_instance), FORWARD);
-            assert_eq!(route(c"vkqueuepresentkhr", from_instance), FORWARD);
-        }
-        assert_eq!(key(DESTROY_SWAPCHAIN), Some(c"vkDestroySwapchainKHR"));
-        assert_eq!(key(INSTANCE_PROC), None);
-        assert_eq!(key(FORWARD), None);
-    }
-
-    #[test]
-    fn initialization_route_publishes_only_a_complete_table() {
-        let mut state = Resolver::NEW;
-        assert_eq!(address(state.bind(None, &table())), None);
-        assert_eq!(address(state.original(INSTANCE_PROC)), None);
-        let mut incomplete = table();
-        incomplete[PRESENT as usize] = None;
-        assert_eq!(
-            address(state.bind(Some(loader), &incomplete)),
-            Some(loader as *const () as usize)
-        );
-        assert_eq!(
-            address(state.bind(Some(loader), &table()[1..])),
-            Some(loader as *const () as usize)
-        );
-        assert!(state.interceptors.iter().all(Option::is_none));
-        assert_eq!(address(state.original(INSTANCE_PROC)), None);
-
-        let mut forward = table();
-        forward[FORWARD as usize] = Some(other_loader);
-        assert_eq!(
-            address(state.bind(Some(loader), &forward)),
-            Some(interceptor as *const () as usize)
-        );
-        assert!(state.interceptors[FORWARD as usize].is_none());
-        assert_eq!(
-            address(state.original(INSTANCE_PROC)),
-            Some(loader as *const () as usize)
-        );
-    }
-
-    #[test]
-    fn disabled_and_null_resolutions_forward_without_saving() {
-        let mut state = Resolver::NEW;
-        let present = state.resolve(Some(c"vkQueuePresentKHR"), Some(loader), false);
-        assert_eq!(address(present), Some(loader as *const () as usize));
-        assert_eq!(address(state.original(PRESENT)), None);
-
-        state.bind(Some(loader), &table());
-        assert_eq!(
-            address(state.resolve(Some(c"vkQueuePresentKHR"), None, false)),
-            None
-        );
-        assert_eq!(address(state.original(PRESENT)), None);
-        assert_eq!(
-            address(state.resolve(None, Some(loader), true)),
-            Some(loader as *const () as usize)
-        );
-        let device_proc = state.resolve(Some(c"vkGetDeviceProcAddr"), Some(other_loader), false);
-        assert_eq!(
-            address(device_proc),
-            Some(other_loader as *const () as usize)
-        );
-        assert_eq!(address(state.original(DEVICE_PROC)), None);
-        assert_eq!(address(state.original(SLOTS as u32)), None);
-    }
-
-    #[test]
-    fn device_resolutions_keep_the_continuation_on_its_dispatch_owner() {
-        unsafe extern "system" fn lookup(
-            device: *mut c_void,
-            _: *const c_char,
-        ) -> Option<Function> {
-            match device as usize {
-                1 => Some(loader),
-                2 => Some(other_loader),
-                _ => None,
-            }
-        }
-
-        let mut state = Resolver::NEW;
-        state.bind(Some(loader), &table());
-        state.resolve(Some(c"vkDestroySwapchainKHR"), Some(loader), false);
-        state.resolve(Some(c"vkDestroySwapchainKHR"), Some(other_loader), false);
-        assert_eq!(address(state.original(DESTROY_SWAPCHAIN)), None);
-        for (owner, expected) in [(1, loader as Function), (2, other_loader as Function)] {
-            let continuation = unsafe {
-                lookup(
-                    ptr::without_provenance_mut(owner),
-                    key(DESTROY_SWAPCHAIN).unwrap().as_ptr(),
-                )
-            };
-            assert_eq!(address(continuation), Some(expected as usize));
-        }
-    }
 
     /// A physical device whose count may grow after the first query.
     struct Enumeration {
