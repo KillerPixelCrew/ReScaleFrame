@@ -33,7 +33,12 @@ pub unsafe extern "C" fn rsf_frame_has_rendered_source(record: *const rsf_frame_
 /// See [`rsf_frame_has_rendered_source`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_frame_allows_sr(record: *const rsf_frame_record) -> c_int {
-    c_int::from(unsafe { checked(record) }.is_some_and(allows_sr))
+    // Not `is_some_and(allows_sr)`: that instance lands in a shared generic codegen unit, which
+    // then pulls these exports from every Rust archive a DLL links (LNK2005).
+    let Some(record) = (unsafe { checked(record) }) else {
+        return 0;
+    };
+    c_int::from(allows_sr(record))
 }
 
 /// # Safety
