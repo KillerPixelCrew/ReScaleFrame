@@ -90,8 +90,12 @@ pub(crate) unsafe fn legacy_camera(
     if matrices.iter().any(|matrix| matrix.is_null()) {
         return None;
     }
-    let [view_to_clip, clip_to_view, clip_to_previous, previous_to_clip] =
-        matrices.map(|matrix| unsafe { matrix.cast::<[f32; 16]>().read() });
+    let [
+        view_to_clip,
+        clip_to_view,
+        clip_to_previous,
+        previous_to_clip,
+    ] = matrices.map(|matrix| unsafe { matrix.cast::<[f32; 16]>().read() });
     Some(rsf_slvk_sdk_constants {
         view_to_clip,
         clip_to_view,

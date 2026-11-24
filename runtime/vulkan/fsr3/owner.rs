@@ -1379,11 +1379,7 @@ mod tests {
         step("wsi_acquire")
     }
 
-    pub(super) unsafe fn wsi_present(
-        _: *mut WsiNative,
-        _: Handle,
-        _: *const c_void,
-    ) -> i32 {
+    pub(super) unsafe fn wsi_present(_: *mut WsiNative, _: Handle, _: *const c_void) -> i32 {
         step("wsi_present")
     }
 
@@ -1435,11 +1431,7 @@ mod tests {
         code
     }
 
-    pub(super) unsafe fn fg_disable(
-        _: *mut FgNative,
-        configure: Handle,
-        chain: Vk,
-    ) -> i32 {
+    pub(super) unsafe fn fg_disable(_: *mut FgNative, configure: Handle, chain: Vk) -> i32 {
         assert_eq!(configure, mark(5));
         assert_ne!(chain, 0);
         step("fg_disable")
@@ -1470,11 +1462,7 @@ mod tests {
         step("fg_prepare")
     }
 
-    pub(super) unsafe fn fg_generate(
-        _: *mut FgNative,
-        dispatch: Handle,
-        _: *const FgFrame,
-    ) -> i32 {
+    pub(super) unsafe fn fg_generate(_: *mut FgNative, dispatch: Handle, _: *const FgFrame) -> i32 {
         assert_eq!(dispatch, mark(4));
         step("fg_generate")
     }
