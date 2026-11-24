@@ -16,6 +16,9 @@ struct Fixture {
     sha256: &'static CStr,
     prepare_result: i32,
     strict_lifecycle: bool,
+    /// Whether the probe alone is recognized. A discovering plugin also needs the game around the
+    /// running process, which a fixture process is not, so it must refuse here.
+    recognized: bool,
 }
 
 const FIXTURES: &[Fixture] = &[
@@ -25,6 +28,7 @@ const FIXTURES: &[Fixture] = &[
         sha256: c"fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8",
         prepare_result: RSF_ERROR_NATIVE_REFUSED,
         strict_lifecycle: true,
+        recognized: true,
     },
     Fixture {
         id: c"skyrim-se",
@@ -32,6 +36,7 @@ const FIXTURES: &[Fixture] = &[
         sha256: c"846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f",
         prepare_result: RSF_ERROR_NATIVE_REFUSED,
         strict_lifecycle: true,
+        recognized: true,
     },
     Fixture {
         id: c"ac7",
@@ -39,6 +44,7 @@ const FIXTURES: &[Fixture] = &[
         sha256: c"c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
         prepare_result: RSF_ERROR_NATIVE_REFUSED,
         strict_lifecycle: false,
+        recognized: true,
     },
     Fixture {
         id: c"project-wingman",
@@ -46,6 +52,7 @@ const FIXTURES: &[Fixture] = &[
         sha256: c"092e84225624a4de9c05d2404ff55269bd4a2aa2ff0548f2a183c6bf36abc85a",
         prepare_result: RSF_ERROR_NATIVE_REFUSED,
         strict_lifecycle: true,
+        recognized: true,
     },
     Fixture {
         id: c"rdr2",
@@ -53,13 +60,15 @@ const FIXTURES: &[Fixture] = &[
         sha256: c"b56c9548f670654a9b73bf25def3cd73af12e269f6e47dba28a34079adaf465e",
         prepare_result: RSF_ERROR_NOT_READY,
         strict_lifecycle: true,
+        recognized: true,
     },
     Fixture {
         id: c"unity-mono",
         executable: c"DragNWash.exe",
-        sha256: c"5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc",
+        sha256: c"",
         prepare_result: RSF_ERROR_NOT_READY,
         strict_lifecycle: true,
+        recognized: false,
     },
 ];
 
@@ -85,8 +94,8 @@ fn contract(fixture: &Fixture, module: &Module) {
     };
     assert_eq!(
         unsafe { detect(&probe) },
-        1,
-        "exact fingerprint recognition"
+        rsf_detection::from(fixture.recognized),
+        "recognition"
     );
 
     let prepare = api.hooks.prepare.expect("prepare callback");

@@ -11,6 +11,7 @@ use rsf_runtime_common as _;
 
 use rsf_unity::{bridge_state, generation, runtime_config, sys};
 
+mod discovery;
 #[cfg(windows)]
 mod lifecycle;
 #[cfg(windows)]
@@ -19,23 +20,19 @@ mod mono;
 mod runtime_setup;
 mod startup_policy;
 
-use rsf_game_sys::session::Probe;
-use rsf_game_sys::{rsf_detection, rsf_game_probe};
-use std::ffi::CStr;
+#[cfg(windows)]
+use rsf_game_sys::{rsf_detection, rsf_game_probe, session::Probe};
 
-/// The shared engine plugin starts with a researched-build allowlist. A Unity-looking file layout
-/// alone does not establish that the managed adapter is compatible with a game.
-const BUILDS: &[(&CStr, &CStr)] = &[(
-    c"DragNWash.exe",
-    c"5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc",
-)];
-
+/// Recognizes the running process when the probe names its executable and a Unity Mono URP player
+/// is discovered around it. The probe's SHA-256 is evidence only. Whether the player's URP methods
+/// match is the managed helper's preflight, which refuses naming the missing one.
+#[cfg(windows)]
 unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> rsf_detection {
     unsafe {
         Probe::detect(probe, |probe| {
-            BUILDS
-                .iter()
-                .any(|(executable, sha256)| probe.matches(executable, sha256))
+            discovery::running()
+                .as_ref()
+                .is_ok_and(|(executable, _)| discovery::names(executable, probe.executable))
         })
     }
 }
@@ -95,37 +92,31 @@ mod unity_sdk_absent {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
-    use rsf_game_sys::{RSF_GAME_RECOGNIZED as RECOGNIZED, RSF_GAME_UNKNOWN as UNKNOWN};
+    use rsf_game_sys::RSF_GAME_UNKNOWN as UNKNOWN;
+    use std::ffi::CString;
     use std::ptr;
 
-    const AMD64: u16 = 0x8664;
-
     #[test]
-    fn detection_needs_the_researched_name_and_hash() {
-        let hash = c"5FDFFFE386A2F43B77626CD3D70554D84C6588C94D309544924D6FAB088DDAFC";
+    fn detection_refuses_a_process_that_is_not_a_unity_player() {
+        // The test executable is named correctly but has no player around it.
+        let (executable, refusal) = match discovery::running() {
+            Ok(_) => panic!("the test process is not a Unity player"),
+            Err(refusal) => (std::env::current_exe().unwrap(), refusal),
+        };
+        assert!(refusal.contains("UnityPlayer.dll"), "{refusal}");
+        let name = CString::new(executable.file_name().unwrap().as_encoded_bytes()).unwrap();
         let mut probe = rsf_game_probe {
             struct_size: size_of::<rsf_game_probe>() as u32,
-            pe_machine: AMD64,
+            pe_machine: 0x8664,
             reserved: 0,
-            executable_name_utf8: c"dragnwash.EXE".as_ptr(),
-            sha256_hex: hash.as_ptr(),
+            executable_name_utf8: name.as_ptr(),
+            sha256_hex: c"".as_ptr(),
         };
-        assert_eq!(unsafe { detect(&probe) }, RECOGNIZED);
-        probe.sha256_hex = c"unknown".as_ptr();
-        assert_eq!(unsafe { detect(&probe) }, UNKNOWN);
-        probe.sha256_hex = hash.as_ptr();
-        probe.executable_name_utf8 = c"OtherGame.exe".as_ptr();
         assert_eq!(unsafe { detect(&probe) }, UNKNOWN);
         probe.executable_name_utf8 = ptr::null();
-        assert_eq!(unsafe { detect(&probe) }, UNKNOWN);
-        probe.executable_name_utf8 = c"DragNWash.exe".as_ptr();
-        probe.pe_machine = 0x14c;
-        assert_eq!(unsafe { detect(&probe) }, UNKNOWN);
-        probe.pe_machine = AMD64;
-        probe.struct_size -= 1;
         assert_eq!(unsafe { detect(&probe) }, UNKNOWN);
         assert_eq!(unsafe { detect(ptr::null()) }, UNKNOWN);
     }

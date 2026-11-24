@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Loader entry points, UnitySR settings and the bounded wait for Mono. This module passes the
-//! owned executable identity and adapter callbacks to the Runtime already loaded by the carrier.
+//! discovered player's identity and adapter callbacks to the Runtime already loaded by the carrier.
 use crate::bridge_state::rsf_unity_mono_drained_generation;
+use crate::discovery::{self, Player};
 use crate::generation::{self, RSF_DLSS_ENGINE_UNITY, Sources};
 use crate::runtime_config::{
-    Ini, file_name, path_setting, preferences_path, profile_int, setting, terminated, utf8,
+    Ini, path_setting, preferences_path, profile_int, setting, terminated, utf8,
 };
 use crate::startup_policy::{self, MONO_DEADLINE, wait_for_sr};
 use rsf_game_sys::ffi_util::lock_or_recover;
@@ -16,18 +17,17 @@ use crate::sys::{
     rsf_fg_choice_start, rsf_fg12_capture_outputs, rsf_fg12_install, rsf_fg12_setup,
     rsf_native_fg_options, rsf_overlay_saved_options_unregister,
 };
-use rsf_game_sys::win32::module_path;
 use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION_V2, rsf_callback_host_setup, rsf_callback_host_setup_v2,
     rsf_game_probe,
 };
 use rsf_unity::bridge_native::rsf_unity_set_engine_spatial;
-use std::ffi::{CStr, OsString, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, OsString, c_char, c_int, c_void};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::Path;
+use std::path::PathBuf;
 use std::ptr::null_mut;
 use std::sync::Mutex;
 use std::thread::sleep;
@@ -48,8 +48,8 @@ mod code {
     pub(super) const NO_PATHS: u32 = 3;
     pub(super) const FG_FRAMES_REFUSED: u32 = 4;
     pub(super) const FG_REFUSED: u32 = 5;
-    pub(super) const NO_EXECUTABLE: u32 = 5;
-    pub(super) const NO_HASH: u32 = 6;
+    /// The process is not a Unity Mono URP player; the log names the missing file.
+    pub(super) const NO_PLAYER: u32 = 6;
     pub(super) const SR_FAILED: u32 = 11;
     /// rsf_callback_host_stop's own refusal.
     pub(super) const STOP_REFUSED: u32 = 1;
@@ -72,7 +72,6 @@ static FG_STARTED: Mutex<bool> = Mutex::new(false);
 static LOG_PATH: Mutex<Vec<u16>> = Mutex::new(Vec::new());
 static DIAGNOSTICS_INI: Mutex<Vec<u16>> = Mutex::new(Vec::new());
 
-const ENGINE_VERSION: &CStr = c"6000.3";
 const PROJECT_ID: &CStr = c"57a42c7e-faf0-4bda-a9f9-892870948ac1";
 
 unsafe extern "C" fn capture_directory_changed(
@@ -168,6 +167,22 @@ unsafe extern "C" fn log(_: *mut c_void, message: *const c_char) {
     }
 }
 
+fn note(message: String) {
+    let message = CString::new(message).unwrap_or_default();
+    unsafe { log(null_mut(), message.as_ptr()) };
+}
+
+/// The discovered player, or None after logging what is missing.
+fn player() -> Option<&'static (PathBuf, Player)> {
+    match discovery::running() {
+        Ok(found) => Some(found),
+        Err(missing) => {
+            note(format!("Not a Unity Mono URP player: {missing}."));
+            None
+        }
+    }
+}
+
 fn unity_window_class(name: &[u16]) -> bool {
     name.iter().copied().eq("UnityWndClass".encode_utf16())
 }
@@ -211,6 +226,9 @@ fn fg_start(ini: *const u16) -> u32 {
     };
     let backend = fg_choice_start(&ini);
     *lock_or_recover(&LOG_PATH) = path_setting(&ini, w!("Log"));
+    let Some((_, player)) = player() else {
+        return code::FG_REFUSED;
+    };
     if setting(&ini, w!("GraphicsDebug"), 0) != 0 {
         let mut debug: Option<ID3D12Debug> = None;
         if unsafe { D3D12GetDebugInterface(&mut debug) }.is_ok()
@@ -243,7 +261,7 @@ fn fg_start(ini: *const u16) -> u32 {
         fsr4: paths.fsr4.as_ptr().cast(),
         xess: paths.xess.as_ptr().cast(),
         streamline: paths.streamline.as_ptr().cast(),
-        engine_version: ENGINE_VERSION.as_ptr(),
+        engine_version: player.unity_version.as_ptr(),
         project_id: PROJECT_ID.as_ptr(),
     };
     let setup: rsf_fg12_setup = generation::setup(backend, options, &sources, accept_window, log);
@@ -262,23 +280,33 @@ fn fg_start(ini: *const u16) -> u32 {
     if *started { code::OK } else { code::FG_REFUSED }
 }
 
-struct Fingerprint {
+/// The probe of the discovered player. The executable's SHA-256 is logged as evidence and gates
+/// nothing; an unreadable executable leaves it empty.
+struct Identity {
     name: Vec<u8>,
     hash: [c_char; 65],
+    player: &'static Player,
 }
 
-fn fingerprint() -> Result<Fingerprint, u32> {
-    let executable = unsafe { module_path(null_mut()) }.ok_or(code::NO_EXECUTABLE)?;
-    let name = terminated(utf8(file_name(executable.units())));
-    let path = OsString::from_wide(executable.units());
-    let hash = rsf_windows::sha256_file_hex(Path::new(&path)).ok_or(code::NO_HASH)?;
-    Ok(Fingerprint {
-        name,
+fn identify() -> Result<Identity, u32> {
+    let (executable, player) = player().ok_or(code::NO_PLAYER)?;
+    let name = executable
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let hash = rsf_windows::sha256_file_hex(executable).unwrap_or([0; 65]);
+    note(format!(
+        "Unity Mono URP player {name}: Unity {}, executable sha256 {} (evidence only).",
+        player.unity_version.to_string_lossy(),
+        String::from_utf8_lossy(&hash[..64]).trim_end_matches('\0'),
+    ));
+    Ok(Identity {
+        name: terminated(name.into_bytes()),
         hash: hash.map(|digit| digit as c_char),
+        player,
     })
 }
 
-fn sr_start(ini: *const u16, identity: &mut Option<Fingerprint>) -> u32 {
+fn sr_start(ini: *const u16, identity: &mut Option<Identity>) -> u32 {
     let Some(ini) = (unsafe { Ini::new(ini) }).filter(|ini| !ini.chars().is_empty()) else {
         return code::NO_CONFIGURATION;
     };
@@ -291,6 +319,7 @@ fn sr_start(ini: *const u16, identity: &mut Option<Fingerprint>) -> u32 {
     if plugin.is_empty() || output.is_empty() {
         return code::NO_PATHS;
     }
+    *lock_or_recover(&LOG_PATH) = output.clone();
     let (plugin, output) = (terminated(plugin), terminated(output));
 
     let streamline = directory(&ini, w!("Streamline"));
@@ -300,7 +329,7 @@ fn sr_start(ini: *const u16, identity: &mut Option<Fingerprint>) -> u32 {
     let xess = directory(&ini, w!("XeSS"));
     let identity = match identity {
         Some(identity) => identity,
-        slot @ None => match fingerprint() {
+        slot @ None => match identify() {
             Ok(identity) => slot.insert(identity),
             Err(code) => return code,
         },
@@ -337,7 +366,7 @@ fn sr_start(ini: *const u16, identity: &mut Option<Fingerprint>) -> u32 {
             dlss_preset,
             sr_backend_choices: SR_CHOICES,
             engine_type: RSF_DLSS_ENGINE_UNITY,
-            engine_version_utf8: ENGINE_VERSION.as_ptr(),
+            engine_version_utf8: identity.player.unity_version.as_ptr(),
             project_id_utf8: PROJECT_ID.as_ptr(),
             streamline_directory_utf8: streamline.as_ptr().cast(),
             fsr2_directory_utf8: fsr2.as_ptr().cast(),
