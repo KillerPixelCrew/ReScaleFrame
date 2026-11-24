@@ -14,7 +14,7 @@ mod platform {
     };
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 
-    pub(super) const NAME: &CStr = c"nvngx.dll";
+    pub(crate) const NAME: &CStr = c"nvngx.dll";
     const REPOSITORY: &str = "\\DriverStore\\FileRepository\\";
 
     fn search_path(
@@ -74,7 +74,7 @@ mod platform {
         module
     }
 
-    pub(super) fn open() -> Result<NonNull<c_void>, Vec<u8>> {
+    pub(crate) fn open() -> Result<NonNull<c_void>, Vec<u8>> {
         let module = unsafe { LoadLibraryA(NAME.as_ptr().cast()) };
         NonNull::new(module)
             .or_else(load_from_driver_store)
@@ -84,7 +84,7 @@ mod platform {
             })
     }
 
-    pub(super) fn symbol(module: NonNull<c_void>, name: &CStr) -> *mut c_void {
+    pub(crate) fn symbol(module: NonNull<c_void>, name: &CStr) -> *mut c_void {
         unsafe { GetProcAddress(module.as_ptr(), name.as_ptr().cast()) }
             .map_or(std::ptr::null_mut(), |entry| {
                 (entry as *const ()).cast_mut().cast()
@@ -96,9 +96,9 @@ mod platform {
 mod platform {
     use super::*;
 
-    pub(super) const NAME: &CStr = c"libnvidia-ngx.so.1";
+    pub(crate) const NAME: &CStr = c"libnvidia-ngx.so.1";
 
-    pub(super) fn open() -> Result<NonNull<c_void>, Vec<u8>> {
+    pub(crate) fn open() -> Result<NonNull<c_void>, Vec<u8>> {
         unsafe {
             libc::dlerror();
             let module = libc::dlopen(NAME.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
@@ -107,28 +107,15 @@ mod platform {
                 if error.is_null() {
                     b"the runtime could not be loaded".to_vec()
                 } else {
-                    CStr::from_ptr(error)
-                        .to_bytes()
-                        .iter()
-                        .copied()
-                        .take(511)
-                        .collect()
+                    CStr::from_ptr(error).to_bytes().to_vec()
                 }
             })
         }
     }
 
-    pub(super) fn symbol(module: NonNull<c_void>, name: &CStr) -> *mut c_void {
+    pub(crate) fn symbol(module: NonNull<c_void>, name: &CStr) -> *mut c_void {
         unsafe { libc::dlsym(module.as_ptr(), name.as_ptr()) }
     }
 }
 
-pub(crate) const NAME: &CStr = platform::NAME;
-
-pub(crate) fn open() -> Result<NonNull<c_void>, Vec<u8>> {
-    platform::open()
-}
-
-pub(crate) fn symbol(module: NonNull<c_void>, name: &CStr) -> *mut c_void {
-    platform::symbol(module, name)
-}
+pub(crate) use platform::{NAME, open, symbol};

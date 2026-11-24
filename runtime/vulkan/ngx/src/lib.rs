@@ -53,27 +53,24 @@ vendor_entries! {
     release_feature: c"NVSDK_NGX_VULKAN_ReleaseFeature"(Handle);
 }
 
-struct LoadState {
-    runtime: Result<Entries, [u8; LOAD_ERROR_CAPACITY]>,
-}
+/// The resolved runtime, or its NUL-terminated load error.
+static RUNTIME: OnceLock<Result<Entries, [u8; LOAD_ERROR_CAPACITY]>> = OnceLock::new();
 
-static LOAD_STATE: OnceLock<LoadState> = OnceLock::new();
-
-fn load() -> &'static LoadState {
-    LOAD_STATE.get_or_init(|| LoadState {
+fn load() -> &'static Result<Entries, [u8; LOAD_ERROR_CAPACITY]> {
+    RUNTIME.get_or_init(|| {
         // The acquired module reference is intentionally retained for the process.
-        runtime: loader::open().map(Entries::resolve).map_err(|message| {
+        loader::open().map(Entries::resolve).map_err(|message| {
             let mut error = [0; LOAD_ERROR_CAPACITY];
             let count = message.len().min(error.len() - 1);
             error[..count].copy_from_slice(&message[..count]);
             error
-        }),
+        })
     })
 }
 
 macro_rules! require {
     ($field:ident) => {{
-        let Ok(entries) = &load().runtime else {
+        let Ok(entries) = load() else {
             return RUNTIME_MISSING;
         };
         let Some(call) = entries.$field else {
@@ -102,15 +99,15 @@ extern "C" fn runtime_name() -> *const c_char {
 
 #[unsafe(export_name = "rsf_vk_ngx_last_load_error")]
 extern "C" fn last_load_error() -> *const c_char {
-    LOAD_STATE
+    RUNTIME
         .get()
-        .and_then(|state| state.runtime.as_ref().err())
+        .and_then(|runtime| runtime.as_ref().err())
         .map_or(c"".as_ptr(), |error| error.as_ptr().cast())
 }
 
 #[unsafe(export_name = "rsf_vk_ngx_load_runtime")]
 extern "C" fn load_runtime() -> ResultCode {
-    if load().runtime.is_ok() {
+    if load().is_ok() {
         SUCCESS
     } else {
         RUNTIME_MISSING
