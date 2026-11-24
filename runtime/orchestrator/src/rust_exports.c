@@ -233,7 +233,7 @@ RSF_EXPORT(rsf_fg12_status_try)
 RSF_EXPORT(rsf_fg12_options)
 RSF_EXPORT(rsf_fg12_capture_outputs)
 RSF_EXPORT(rsf_fg12_cpu_service)
-/* The D3D12 Streamline host (rescaleframe/streamline_host.h), defined in streamline_host/native.rs. */
+/* The D3D12 Streamline host (rescaleframe/streamline_host.h), defined in streamline_host.rs. */
 RSF_EXPORT(rsf_streamline_host_create)
 RSF_EXPORT(rsf_streamline_host_adopt)
 RSF_EXPORT(rsf_streamline_host_graphics)

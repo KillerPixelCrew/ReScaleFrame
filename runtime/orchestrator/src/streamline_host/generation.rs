@@ -3,14 +3,18 @@
 // status handoff, prepare ordering on the frame token and vendor retirement.
 use super::*;
 use crate::com_ref;
+use crate::d3d12_generation::admission::{
+    rsf_core_fg12_command, rsf_core_fg12_frame, rsf_core_fg12_setup_header,
+};
 use crate::d3d12_generation::{PrepareOrder, read_options};
 use crate::sys::{
     RSF_FG_AUTO, RSF_FG_DYNAMIC, RSF_FG_FIXED, RSF_FG_OFF, RSF_FG_STAT_ACTIVITY,
     RSF_FG_STAT_TOTAL_PRESENTED, rsf_fg_options as Options, rsf_fg_retirement as Retirement,
-    rsf_generation_setup as GenerationSetup,
+    rsf_generation_provider as Provider, rsf_generation_setup as GenerationSetup,
 };
 use rsf_game_sys::RSF_FRAME_SOURCE_RENDERED;
-use windows::core::{IUnknown, Interface};
+use windows::Win32::Foundation::HWND;
+use windows::Win32::Graphics::Dxgi::{IDXGIOutput, IDXGISwapChain1, IDXGISwapChain4};
 
 const UI_NONE: u32 = 1;
 const HUDLESS: u32 = 4;
@@ -18,31 +22,6 @@ const HUDLESS_UI: u32 = 8;
 const STAT_LATENCY_AVAILABLE: u32 = 4;
 const MFG_READY: u32 = 1;
 const MFG_REFUSED: u32 = 2;
-// Active DLSS-G needs Reflex frame tracking and PCL markers on the same token.
-const REQUIRED: u32 = GET_STATE | SET_OPTIONS | SLEEP | PCL_MARKER | REFLEX_OPTIONS | REFLEX_STATE;
-
-// The sl::DLSSGOptions fields this provider sets.
-pub(super) struct Request {
-    pub(super) mode: u32,
-    pub(super) frames: u32,
-    pub(super) ui_recomposition: u32,
-    pub(super) dynamic_target_fps: f32,
-}
-
-// One slDLSSGGetState answer plus the compiled MFG allocation limit.
-pub(super) struct Observed {
-    pub(super) max_generated_frames: u32,
-    pub(super) dynamic_supported: u32,
-    pub(super) vsync_supported: u32,
-    pub(super) min_dimension: u32,
-    pub(super) status: i32,
-    pub(super) mfg_status: u32,
-    pub(super) mfg_maximum: u32,
-    pub(super) presented: u64,
-    pub(super) fence: Handle,
-    pub(super) fence_value: u64,
-}
-
 #[derive(Clone, Copy)]
 pub(super) struct Snapshot {
     status: Status,
@@ -174,50 +153,65 @@ impl Session {
         unsafe { self.host.as_ref() }
     }
 
-    fn request(&self, mode: u32, frames: u32, dynamic_target_fps: f32) -> Request {
-        Request {
+    // slDLSSGSetOptions with the fields this provider sets.
+    fn set_options(&self, mode: u32, frames: u32, dynamic_target_fps: f32) -> i32 {
+        let options = records::pack_options(
             mode,
             frames,
-            ui_recomposition: (self.ui_mode == HUDLESS_UI).into(),
+            (self.ui_mode == HUDLESS_UI).into(),
             dynamic_target_fps,
+        );
+        let viewport = sdk::viewport(0);
+        match self.host().generation().set_options {
+            Some(set) if unsafe { set(&viewport, &options) } == sdk::OK => OK,
+            _ => FEATURE_FAILED,
         }
     }
 }
 
-fn release(mut session: Box<Session>, platform: &Platform) {
+fn release(mut session: Box<Session>) {
     let host = unsafe { session.host.as_ref() };
     if let Some(chain) = session.chain.take() {
-        if session.copied.read().status.effective_mode != RSF_FG_OFF {
-            unsafe { (platform.off)(host.native) };
+        if session.copied.read().status.effective_mode != RSF_FG_OFF
+            && let Some(set) = host.generation().set_options
+        {
+            // sl::DLSSGOptions{}: mode eOff with the SDK member defaults.
+            let mut options = records::pack_options(0, 1, 0, 0.0);
+            options.flags = 0;
+            unsafe { set(&sdk::viewport(0), &options) };
         }
         drop(chain);
     }
     host.borrowers.fetch_sub(1, Relaxed);
 }
 
-fn poll(session: &Session, platform: &Platform) -> i32 {
+fn poll(session: &Session) -> i32 {
     let host = session.host();
     let before = session.copied.read();
-    let mut sdk: Observed = unsafe { zeroed() };
-    if unsafe { (platform.observe)(host.native, &mut sdk) } != OK {
-        return FEATURE_FAILED;
+    let mut sdk_state = sdk::dlssg_state();
+    let viewport = sdk::viewport(0);
+    match host.generation().get_state {
+        Some(get) if unsafe { get(&viewport, &mut sdk_state, null()) } == sdk::OK => {}
+        _ => return FEATURE_FAILED,
     }
+    let (mut mfg_status, mut mfg_maximum) = (0, 0);
+    unsafe { mfg_state::rsf_core_mfg_status(host.mfg, &mut mfg_status, &mut mfg_maximum) };
     let mut state = before.status;
-    state.max_generated_frames = sdk.max_generated_frames;
-    state.mfg_unlock_status = sdk.mfg_status;
+    state.max_generated_frames = sdk_state.max_generated;
+    state.mfg_unlock_status = mfg_status;
     // Both the initialized SDK limit and the verified compiled allocation must agree.
     if state.mfg_unlock_status == MFG_READY {
-        state.max_generated_frames = state.max_generated_frames.min(sdk.mfg_maximum);
+        state.max_generated_frames = state.max_generated_frames.min(mfg_maximum);
     } else if state.mfg_unlock_status == MFG_REFUSED {
         state.max_generated_frames = state.max_generated_frames.min(1);
     }
-    state.dynamic_supported = sdk.dynamic_supported;
+    state.dynamic_supported = u32::from(sdk_state.dynamic_mfg == sdk::TRUE);
     if state.mfg_unlock_status == MFG_REFUSED {
         state.dynamic_supported = 0;
     }
-    state.vsync_supported = sdk.vsync_supported;
-    state.min_dimension = sdk.min_dimension;
-    state.vendor_status = sdk.status;
+    state.vsync_supported = u32::from(sdk_state.vsync == sdk::TRUE);
+    state.min_dimension = sdk_state.min_dimension;
+    state.vendor_status = sdk_state.status as i32;
     state.valid_statistics = RSF_FG_STAT_TOTAL_PRESENTED | RSF_FG_STAT_ACTIVITY;
     let mut frames = host.frames();
     let now = Instant::now();
@@ -225,19 +219,9 @@ fn poll(session: &Session, platform: &Platform) -> i32 {
         && frames
             .last_report
             .is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_secs(1));
-    let mut reflex = Reflex::default();
-    if host.has(REFLEX_STATE)
-        && unsafe {
-            (platform.reflex_state)(
-                host.native,
-                report.into(),
-                &frames.input_counts,
-                &mut reflex,
-            )
-        } == OK
-    {
-        state.low_latency_available = reflex.low_latency_available;
-        if reflex.latency_report_available != 0 {
+    if let Some((low_latency, report_available)) = host.read_reflex(report, &frames.input_counts) {
+        state.low_latency_available = low_latency;
+        if report_available != 0 {
             state.valid_statistics |= STAT_LATENCY_AVAILABLE;
         }
         if report {
@@ -246,15 +230,16 @@ fn poll(session: &Session, platform: &Platform) -> i32 {
     }
     let retirement = Retirement {
         struct_size: size_of::<Retirement>() as u32,
-        fence: sdk.fence,
-        value: sdk.fence_value,
+        fence: sdk_state.inputs_fence,
+        value: sdk_state.inputs_fence_value,
     };
+    let presented = u64::from(sdk_state.actual_presents);
     // DLSSGStatus::eOk is zero.
-    let sdk_active = sdk.status == 0 && sdk.presented > 1;
+    let sdk_active = sdk_state.status == 0 && presented > 1;
     frames.cached_capability = session.copied.polled(
         before.order.revision,
         &state,
-        sdk.presented,
+        presented,
         sdk_active,
         retirement,
     );
@@ -265,13 +250,55 @@ unsafe fn same_text(requested: *const c_char, owned: &[c_char]) -> bool {
     requested.is_null() || unsafe { CStr::from_ptr(requested) == CStr::from_ptr(owned.as_ptr()) }
 }
 
-// The native entry validated the setup header and cleared both outputs.
-pub(super) unsafe extern "C" fn rsf_core_slhost_session_create(
+// slIsFeatureSupported for DLSS-G and Reflex on the native device's adapter.
+fn supported(host: &Host, log: Log, user: Handle) -> i32 {
+    let Some(device) = host.native_device.as_ref() else {
+        return NOT_SUPPORTED;
+    };
+    let mut luid = crate::streamline_sr::luid_bits(unsafe { device.GetAdapterLuid() });
+    let info = sdk::adapter(&mut luid);
+    let supported = core(host.core.is_feature_supported);
+    let fg = unsafe { supported(sdk::FEATURE_DLSS_G, &info) };
+    let reflex = unsafe { supported(sdk::FEATURE_REFLEX, &info) };
+    if fg == sdk::OK && reflex == sdk::OK {
+        return OK;
+    }
+    records::report_support(fg as u32, reflex as u32, log, user);
+    NOT_SUPPORTED
+}
+
+// One owned, upgraded IDXGISwapChain4 reference on the host's factory and queue.
+unsafe fn create_chain(host: &Host, desc: &crate::sys::rsf_fg_swapchain_desc) -> Option<IUnknown> {
+    let description = crate::d3d12_generation::chain_description(desc);
+    let (factory, queue) = (host.factory.as_ref()?, host.queue.as_ref()?);
+    let created = unsafe {
+        factory.CreateSwapChainForHwnd(
+            queue,
+            HWND(desc.hwnd),
+            &description,
+            None,
+            None::<&IDXGIOutput>,
+        )
+    };
+    let mut raw = created.ok()?.into_raw();
+    if unsafe { host.upgrade_chain(&mut raw) } != OK {
+        drop(unsafe { IUnknown::from_raw(raw) });
+        return None;
+    }
+    let upgraded = unsafe { IDXGISwapChain1::from_raw(raw) };
+    let chain = upgraded.cast::<IDXGISwapChain4>().ok()?;
+    unsafe { com_ref::owned(chain.into_raw()) }
+}
+
+unsafe extern "C" fn create(
     setup: *const GenerationSetup,
     out: *mut Handle,
     chain: *mut Handle,
-    platform: &Platform,
 ) -> i32 {
+    let header = unsafe { rsf_core_fg12_setup_header(setup, out, chain) };
+    if header != OK {
+        return header;
+    }
     let setup = unsafe { &*setup };
     let ui_mode = setup.chain.ui_mode;
     if ![UI_NONE, HUDLESS, HUDLESS_UI].contains(&ui_mode) {
@@ -294,24 +321,26 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_create(
     if setup.development_runtime != 0 && !host.development_runtime {
         return NEEDS_RESTART;
     }
-    if unsafe {
-        (platform.same_graphics)(
-            host.native,
-            setup.chain.d3d12_device,
-            setup.chain.d3d12_queue,
-        )
-    } == 0
+    if setup.chain.d3d12_device != Host::raw(&host.device)
+        || setup.chain.d3d12_queue != Host::raw(&host.queue)
     {
         return WRONG_API;
     }
-    if !host.has(REQUIRED) {
+    // Active DLSS-G needs Reflex frame tracking and PCL markers on the same token.
+    let generation = host.generation();
+    if generation.get_state.is_none()
+        || generation.set_options.is_none()
+        || host.sleep.is_none()
+        || host.pcl_marker.is_none()
+        || host.reflex_options.is_none()
+        || host.reflex_state.is_none()
+    {
         return NOT_SUPPORTED;
     }
     if setup.chain.width == 0 || setup.chain.height == 0 || setup.chain.buffer_count < 2 {
         return INVALID;
     }
-    let supported =
-        unsafe { (platform.support)(host.native, setup.chain.log, setup.chain.log_user) };
+    let supported = supported(host, setup.chain.log, setup.chain.log_user);
     if supported != OK {
         return supported;
     }
@@ -331,9 +360,13 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_create(
     initial.supported = 1;
     initial.auto_supported = 1;
     initial.pacing_owner = RSF_PACING_REFLEX;
-    unsafe { (platform.version)(host.native, &mut initial) };
+    let mut version = sdk::feature_version();
+    let get_version = core(host.core.get_feature_version);
+    let found = unsafe { get_version(sdk::FEATURE_DLSS_G, &mut version) } == sdk::OK
+        && sdk::version_present(&version.ngx);
+    records::format_version(found.then_some(&version), &mut initial);
     if setup.version_id != 0 && setup.version_id != initial.version_id {
-        release(session, platform);
+        release(session);
         return NOT_SUPPORTED;
     }
     if borrowers > 1 {
@@ -345,27 +378,23 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_create(
     }
     session.copied.initialize(initial);
     if borrowers <= 1 {
-        let result = poll(&session, platform);
+        let result = poll(&session);
         if result != OK {
-            release(session, platform);
+            release(session);
             return result;
         }
     }
     if !setup.chain.hwnd.is_null() {
         // One host has one presentation chain.
         if borrowers > 1 {
-            release(session, platform);
+            release(session);
             return NOT_READY;
         }
-        let mut created = null_mut();
-        let result = unsafe { (platform.chain)(host.native, &setup.chain, &mut created) };
-        let created = unsafe { com_ref::owned(created) };
-        if result != OK || created.is_none() {
-            drop(created);
-            release(session, platform);
+        let Some(created) = (unsafe { create_chain(host, &setup.chain) }) else {
+            release(session);
             return INIT_FAILED;
-        }
-        session.chain = created;
+        };
+        session.chain = Some(created);
     }
     unsafe {
         chain.write(session.chain.as_ref().map_or(null_mut(), Interface::as_raw));
@@ -378,11 +407,7 @@ unsafe fn session<'a>(pointer: Handle) -> Option<&'a Session> {
     unsafe { pointer.cast::<Session>().as_ref() }
 }
 
-pub(super) unsafe extern "C" fn rsf_core_slhost_session_configure(
-    pointer: Handle,
-    options: *const Options,
-    platform: &Platform,
-) -> i32 {
+unsafe extern "C" fn configure(pointer: Handle, options: *const Options) -> i32 {
     let Some(session) = (unsafe { session(pointer) }) else {
         return INVALID;
     };
@@ -429,7 +454,7 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_configure(
     if options.mode != RSF_FG_OFF && before.status.low_latency_available == 0 {
         return NOT_SUPPORTED;
     }
-    let latency = reflex(host, mode, options.frame_limit_us, platform);
+    let latency = reflex(host, mode, options.frame_limit_us);
     if latency != OK {
         return latency;
     }
@@ -444,8 +469,7 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_configure(
     let generated = options
         .generated_frames
         .min(before.status.max_generated_frames);
-    let request = session.request(options.mode, generated, options.dynamic_target_fps);
-    if unsafe { (platform.options)(session.host().native, &request) } != OK {
+    if session.set_options(options.mode, generated, options.dynamic_target_fps) != OK {
         return FEATURE_FAILED;
     }
     let fixed = if options.mode == RSF_FG_FIXED {
@@ -457,48 +481,69 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_configure(
     OK
 }
 
-pub(super) unsafe extern "C" fn rsf_core_slhost_session_begin(
-    pointer: Handle,
-    id: u64,
-    platform: &Platform,
-) -> i32 {
+unsafe extern "C" fn begin_frame(pointer: Handle, id: u64) -> i32 {
     let Some(session) = (unsafe { session(pointer) }) else {
         return INVALID;
     };
     if id == 0 {
         return INVALID;
     }
-    let host = session.host();
-    let result = begin(host, id, platform);
+    let result = begin(session.host(), id);
     if result == OK {
         session.copied.paced();
     }
     result
 }
 
-pub(super) unsafe extern "C" fn rsf_core_slhost_session_marker(
-    pointer: Handle,
-    marker: u32,
-    id: u64,
-    controller: u32,
-    platform: &Platform,
-) -> i32 {
+unsafe extern "C" fn marker(pointer: Handle, marker: u32, id: u64, controller: u32) -> i32 {
     unsafe { session(pointer) }.map_or(INVALID, |session| {
-        marker_for(session.host(), id, marker, controller, platform)
+        marker_for(session.host(), id, marker, controller)
     })
 }
 
-pub(super) unsafe extern "C" fn rsf_core_slhost_session_prepare(
-    pointer: Handle,
-    command: Handle,
-    frame: *const Frame,
-    platform: &Platform,
+/// The constants of one generated frame. Sets them only when SR has not already done so.
+unsafe fn set_constants(
+    host: &Host,
+    token: Handle,
+    frame: &Frame,
+    reset: bool,
+    apply: bool,
 ) -> i32 {
+    let mut constants = unsafe { records::pack_fg_camera(frame, reset.into()) };
+    constants.previous_to_clip = sdk::full_invert(&constants.clip_to_previous);
+    if !constants
+        .previous_to_clip
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return INVALID;
+    }
+    let viewport = sdk::viewport(0);
+    if apply && unsafe { core(host.core.set_constants)(&constants, token, &viewport) } != sdk::OK {
+        return FEATURE_FAILED;
+    }
+    OK
+}
+
+unsafe fn set_tags(host: &Host, token: Handle, command: Handle, frame: &Frame) -> i32 {
+    let (planned, count) = records::plan_tags(frame);
+    let mut resources: [sdk::Resource; 5] =
+        std::array::from_fn(|i| sdk::texture(planned[i].resource, planned[i].state));
+    let tags: [sdk::ResourceTag; 5] = std::array::from_fn(|i| {
+        sdk::tag(&raw mut resources[i], planned[i].kind, planned[i].extent)
+    });
+    let viewport = sdk::viewport(0);
+    let set_tags = core(host.core.set_tag_for_frame);
+    let set = unsafe { set_tags(token, &viewport, tags.as_ptr(), count, command) };
+    if set == sdk::OK { OK } else { FEATURE_FAILED }
+}
+
+unsafe extern "C" fn prepare(pointer: Handle, command: Handle, frame: *const Frame) -> i32 {
     let Some(session) = (unsafe { session(pointer) }) else {
         return INVALID;
     };
     let host = session.host();
-    let checked = unsafe { (platform.frame)(host.native, frame) };
+    let checked = unsafe { rsf_core_fg12_frame(frame, host.native_device_raw()) };
     if checked != OK {
         return checked;
     }
@@ -516,7 +561,11 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_prepare(
         if command.is_null() {
             return INVALID;
         }
-        let result = unsafe { (platform.command)(host.native, command) };
+        let native_command = unsafe { host.alias(command) };
+        if native_command.is_null() {
+            return INVALID;
+        }
+        let result = unsafe { rsf_core_fg12_command(native_command, host.native_device_raw()) };
         if result != OK {
             return result;
         }
@@ -540,11 +589,10 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_prepare(
     } else {
         1
     };
-    if before.status.effective_mode != mode {
-        let request = session.request(mode, generated, before.options.dynamic_target_fps);
-        if unsafe { (platform.options)(host.native, &request) } != OK {
-            return FEATURE_FAILED;
-        }
+    if before.status.effective_mode != mode
+        && session.set_options(mode, generated, before.options.dynamic_target_fps) != OK
+    {
+        return FEATURE_FAILED;
     }
     let staged_frames = if enabled && before.options.mode == RSF_FG_FIXED {
         generated
@@ -575,15 +623,14 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_prepare(
     let reset = before.order.reset_for(record);
     // The SR side may already have set this frame's shared constants.
     let apply = !token.common[0];
-    let result =
-        unsafe { (platform.constants)(host.native, handle, frame, reset.into(), apply.into()) };
+    let result = unsafe { set_constants(host, handle, frame, reset, apply) };
     if result != OK {
         return result;
     }
     if apply {
         token.common[0] = true;
     }
-    if unsafe { (platform.tags)(host.native, handle, command, frame) } != OK {
+    if unsafe { set_tags(host, handle, command, frame) } != OK {
         return FEATURE_FAILED;
     }
     drop(frames);
@@ -597,17 +644,11 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_prepare(
     }
 }
 
-pub(super) unsafe extern "C" fn rsf_core_slhost_session_after(
-    pointer: Handle,
-    platform: &Platform,
-) -> i32 {
-    unsafe { session(pointer) }.map_or(INVALID, |session| poll(session, platform))
+unsafe extern "C" fn after_present(pointer: Handle) -> i32 {
+    unsafe { session(pointer) }.map_or(INVALID, poll)
 }
 
-pub(super) unsafe extern "C" fn rsf_core_slhost_session_status(
-    pointer: Handle,
-    out: *mut Status,
-) -> i32 {
+unsafe extern "C" fn status(pointer: Handle, out: *mut Status) -> i32 {
     let Some(session) = (unsafe { session(pointer) }) else {
         return INVALID;
     };
@@ -618,10 +659,7 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_status(
     OK
 }
 
-pub(super) unsafe extern "C" fn rsf_core_slhost_session_retirement(
-    pointer: Handle,
-    out: *mut Retirement,
-) -> i32 {
+unsafe extern "C" fn retirement(pointer: Handle, out: *mut Retirement) -> i32 {
     let Some(session) = (unsafe { session(pointer) }) else {
         return INVALID;
     };
@@ -636,31 +674,46 @@ pub(super) unsafe extern "C" fn rsf_core_slhost_session_retirement(
     OK
 }
 
-pub(super) unsafe extern "C" fn rsf_core_slhost_session_destroy(
-    pointer: Handle,
-    platform: &Platform,
-) {
+unsafe extern "C" fn destroy(pointer: Handle) {
     if !pointer.is_null() {
-        release(
-            unsafe { Box::from_raw(pointer.cast::<Session>()) },
-            platform,
-        );
+        release(unsafe { Box::from_raw(pointer.cast::<Session>()) });
     }
 }
 
-pub(super) unsafe extern "C" fn rsf_core_slhost_session_abort(pointer: Handle, id: u64) -> i32 {
+unsafe extern "C" fn abort_frame(pointer: Handle, id: u64) -> i32 {
     let Some(session) = (unsafe { session(pointer) }) else {
         return INVALID;
     };
     if id == 0 {
         return INVALID;
     }
-    let result = abort_for(session.host(), id);
+    let result = abort(session.host(), id);
     if result != OK {
         return result;
     }
     session.copied.abort();
     OK
+}
+
+static PROVIDER: Provider = Provider {
+    struct_size: size_of::<Provider>() as u32,
+    create: Some(create),
+    configure: Some(configure),
+    begin_frame: Some(begin_frame),
+    marker: Some(marker),
+    prepare: Some(prepare),
+    after_present: Some(after_present),
+    status: Some(status),
+    retirement: Some(retirement),
+    destroy: Some(destroy),
+    abort_frame: Some(abort_frame),
+    destroy_checked: None,
+};
+
+/// The DLSS-G generation provider.
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_generation_dlss() -> *const Provider {
+    &PROVIDER
 }
 
 #[cfg(test)]

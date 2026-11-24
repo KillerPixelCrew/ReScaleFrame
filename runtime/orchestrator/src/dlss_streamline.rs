@@ -712,7 +712,7 @@ unsafe fn rsf_core_dlss_streamline_evaluate(
     };
     let entries = session.entries;
     let token = if shared {
-        unsafe { crate::streamline_host::rsf_core_slhost_token(host.cast(), source) }
+        unsafe { crate::streamline_host::rsf_streamline_host_token(host.cast(), source) }
     } else {
         match entries.get_new_frame_token {
             Some(token) => {

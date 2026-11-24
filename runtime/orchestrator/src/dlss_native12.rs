@@ -301,7 +301,7 @@ impl DeviceRegistration {
         let token = match self.route {
             Route::BorrowedEngine => engine_token,
             Route::Shared(host) => unsafe {
-                crate::streamline_host::rsf_core_slhost_token(host.as_ptr().cast(), frame_id)
+                crate::streamline_host::rsf_streamline_host_token(host.as_ptr().cast(), frame_id)
             },
             Route::Owned => {
                 let token = self.entries.get_new_frame_token.expect("core entry");

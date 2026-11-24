@@ -17,7 +17,6 @@ entry points and the public Streamline host ABI 2.
 | Keep Reflex and DLSS-G state coherent after a partial configuration failure. | `streamline_host/generation.rs` publishes accepted effective Reflex mode and checks mode and interval from the host before the equality shortcut. The regression rejects new DLSS-G options after successful Reflex configuration and reapplies the previously accepted request. |
 | Represent an empty Streamline token slot once. | `streamline_host.rs` stores six optional tokens with required nonnull handles. Explicit abort, complete required markers and ordered Present retirement all take the slot. |
 | Keep one flag for a successfully prepared DLSS-G history. | `streamline_host/generation.rs` uses the shared optional last interpolated source for reset and activity decisions. The successfully consumed source watermark remains separate. |
-| Borrow the boxed host for non-owning FFI tests. | `streamline_host/tests.rs` passes mutable borrows in the ring retirement, PCL profile and generation reload tests. |
 
 ## Native inventory at the initial port
 
@@ -118,10 +117,10 @@ and without Streamline. Linking, CTest and device runs remain pending.
 
 ## D3D12 Streamline host native leaf
 
-`dlss_generation.cpp` is deleted. `streamline_host/native.rs` now implements the 25-entry
-startup table, the 24-entry platform table, the DLSS-G provider, the 22 public
-`rsf_streamline_host_*` entries and `rsf_streamline_common_set`. The Rust owner in
-`streamline_host.rs` is unchanged and still calls every leaf under its own locks.
+`dlss_generation.cpp` is deleted. The C++-reference pass merged the former `streamline_host/native.rs`
+leaves (a 25-entry startup table and a 24-entry platform table) back into one owner, as the C++
+had it: `streamline_host.rs` holds the interposer, its entries, the graphics objects and the frame
+state and calls the SDK directly; `startup.rs` opens it and `generation.rs` is the DLSS-G provider.
 
 | Former native piece | Rust replacement |
 | --- | --- |
