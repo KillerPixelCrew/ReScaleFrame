@@ -2,7 +2,8 @@
 //! What the Vulkan device fixtures share: the loader, the device choice and memory allocation.
 use super::TestResult;
 use crate::sys::rsf_vk_get_proc;
-use ash::vk;
+use crate::vulkan_fg_copy::COLOR_RANGE;
+use ash::vk::{self, Handle as _};
 pub(super) use rsf_test_support::Library;
 use std::{ffi::CStr, ffi::c_char};
 
@@ -66,6 +67,101 @@ pub(super) fn create_device(
         .enabled_extension_names(extensions);
     let device = unsafe { instance.create_device(physical, &info, None) }?;
     Ok((physical, device, family))
+}
+
+/// The loader's and the instance's proc-address entries as the SR setup's C callbacks. The x64
+/// system and C ABIs use the same Vulkan calling convention.
+pub(super) fn procs(
+    entry: &ash::Entry,
+    instance: &ash::Instance,
+) -> (rsf_vk_get_proc, rsf_vk_get_proc) {
+    unsafe {
+        (
+            Some(std::mem::transmute(
+                entry.static_fn().get_instance_proc_addr,
+            )),
+            Some(std::mem::transmute(instance.fp_v1_0().get_device_proc_addr)),
+        )
+    }
+}
+
+/// A 2D single-sample image on device-local memory. The image is recorded in `images` before its
+/// memory is allocated, so the owner frees it even when a later step fails.
+pub(super) fn create_image(
+    device: &ash::Device,
+    memory: &vk::PhysicalDeviceMemoryProperties,
+    images: &mut Vec<(vk::Image, vk::DeviceMemory)>,
+    extent: vk::Extent3D,
+    format: vk::Format,
+    usage: vk::ImageUsageFlags,
+) -> TestResult<vk::Image> {
+    let info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .format(format)
+        .extent(extent)
+        .mip_levels(1)
+        .array_layers(1)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .usage(usage);
+    let image = unsafe { device.create_image(&info, None) }?;
+    images.push((image, vk::DeviceMemory::null()));
+    let req = unsafe { device.get_image_memory_requirements(image) };
+    let backing = allocate(device, memory, req, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
+    images
+        .last_mut()
+        .ok_or("missing Vulkan image allocation")?
+        .1 = backing;
+    unsafe { device.bind_image_memory(image, backing, 0) }?;
+    Ok(image)
+}
+
+/// A whole-image layout transition with full memory access on both sides.
+pub(super) fn transition(
+    device: &ash::Device,
+    cmd: vk::CommandBuffer,
+    image: u64,
+    from: vk::ImageLayout,
+    to: vk::ImageLayout,
+) {
+    let access = vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE;
+    let barrier = vk::ImageMemoryBarrier::default()
+        .old_layout(from)
+        .new_layout(to)
+        .src_access_mask(if from == vk::ImageLayout::UNDEFINED {
+            vk::AccessFlags::empty()
+        } else {
+            access
+        })
+        .dst_access_mask(access)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(vk::Image::from_raw(image))
+        .subresource_range(COLOR_RANGE);
+    let stages = vk::PipelineStageFlags::ALL_COMMANDS;
+    unsafe {
+        device.cmd_pipeline_barrier(
+            cmd,
+            stages,
+            stages,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[barrier],
+        )
+    };
+}
+
+/// Clears an image that is in `TRANSFER_DST_OPTIMAL`.
+pub(super) fn fill(device: &ash::Device, cmd: vk::CommandBuffer, image: u64, value: [f32; 4]) {
+    unsafe {
+        device.cmd_clear_color_image(
+            cmd,
+            vk::Image::from_raw(image),
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &vk::ClearColorValue { float32: value },
+            &[COLOR_RANGE],
+        )
+    };
 }
 
 pub(super) fn allocate(

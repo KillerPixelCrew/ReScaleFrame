@@ -31,13 +31,6 @@ const UNDEFINED: vk::ImageLayout = vk::ImageLayout::UNDEFINED;
 const SRC: vk::ImageLayout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
 const DST: vk::ImageLayout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
 
-const RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
-    aspect_mask: vk::ImageAspectFlags::COLOR,
-    base_mip_level: 0,
-    level_count: 1,
-    base_array_layer: 0,
-    layer_count: 1,
-};
 const LAYERS: vk::ImageSubresourceLayers = vk::ImageSubresourceLayers {
     aspect_mask: vk::ImageAspectFlags::COLOR,
     mip_level: 0,
@@ -127,25 +120,17 @@ impl Gpu {
 
     fn image(&mut self, format: vk::Format, extra: vk::ImageUsageFlags) -> TestResult<Image> {
         let usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | extra;
-        let info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .format(format)
-            .extent(EXTENT)
-            .mip_levels(1)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .usage(usage);
-        let image = unsafe { self.device().create_image(&info, None) }?;
-        self.images.push((image, vk::DeviceMemory::null()));
-        let req = unsafe { self.device().get_image_memory_requirements(image) };
-        let memory = self.allocate(req, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
-        self.images
-            .last_mut()
-            .ok_or("missing Vulkan image allocation")?
-            .1 = memory;
-        unsafe { self.device().bind_image_memory(image, memory, 0) }?;
+        let device = self.device.as_ref().expect("open Vulkan device");
+        let image = vulkan_gpu::create_image(
+            device,
+            &self.memory,
+            &mut self.images,
+            EXTENT,
+            format,
+            usage,
+        )?;
         Ok(Image {
-            device: self.device().handle().as_raw() as *mut c_void,
+            device: device.handle().as_raw() as *mut c_void,
             image: image.as_raw(),
             format: format.as_raw() as u32,
             width: EXTENT.width,
@@ -217,32 +202,7 @@ impl Gpu {
         from: vk::ImageLayout,
         to: vk::ImageLayout,
     ) {
-        let memory = vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE;
-        let barrier = vk::ImageMemoryBarrier::default()
-            .old_layout(from)
-            .new_layout(to)
-            .src_access_mask(if from == UNDEFINED {
-                vk::AccessFlags::empty()
-            } else {
-                memory
-            })
-            .dst_access_mask(memory)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(vk::Image::from_raw(image.image))
-            .subresource_range(RANGE);
-        let stages = vk::PipelineStageFlags::ALL_COMMANDS;
-        unsafe {
-            self.device().cmd_pipeline_barrier(
-                cmd,
-                stages,
-                stages,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier],
-            )
-        };
+        vulkan_gpu::transition(self.device(), cmd, image.image, from, to);
     }
 
     fn upload(&self, cmd: vk::CommandBuffer, image: Image, offset: u64) {
@@ -262,16 +222,7 @@ impl Gpu {
     }
 
     fn fill(&self, cmd: vk::CommandBuffer, image: Image, value: [f32; 4]) {
-        let clear = vk::ClearColorValue { float32: value };
-        unsafe {
-            self.device().cmd_clear_color_image(
-                cmd,
-                vk::Image::from_raw(image.image),
-                DST,
-                &clear,
-                &[RANGE],
-            )
-        };
+        vulkan_gpu::fill(self.device(), cmd, image.image, value);
     }
 
     fn readback(&self, cmd: vk::CommandBuffer, image: Image, offset: u64) {
@@ -356,39 +307,7 @@ impl Fixture {
         setup.instance = gpu.instance.handle().as_raw() as *mut c_void;
         setup.physical_device = gpu.physical.as_raw() as *mut c_void;
         setup.device = gpu.device().handle().as_raw() as *mut c_void;
-        // The private C proc signature transports the Vulkan proc address on Windows x64.
-        setup.instance_proc = unsafe {
-            std::mem::transmute::<
-                unsafe extern "system" fn(
-                    ash::vk::Instance,
-                    *const i8,
-                )
-                    -> std::option::Option<unsafe extern "system" fn()>,
-                std::option::Option<
-                    unsafe extern "C" fn(
-                        *mut std::ffi::c_void,
-                        *const i8,
-                    )
-                        -> std::option::Option<unsafe extern "C" fn()>,
-                >,
-            >(gpu.entry.static_fn().get_instance_proc_addr)
-        };
-        setup.device_proc = unsafe {
-            std::mem::transmute::<
-                unsafe extern "system" fn(
-                    ash::vk::Device,
-                    *const i8,
-                )
-                    -> std::option::Option<unsafe extern "system" fn()>,
-                std::option::Option<
-                    unsafe extern "C" fn(
-                        *mut std::ffi::c_void,
-                        *const i8,
-                    )
-                        -> std::option::Option<unsafe extern "C" fn()>,
-                >,
-            >(gpu.instance.fp_v1_0().get_device_proc_addr)
-        };
+        (setup.instance_proc, setup.device_proc) = vulkan_gpu::procs(&gpu.entry, &gpu.instance);
         let mut record: Box<rsf_frame_record> = Box::new(unsafe { std::mem::zeroed() });
         record.output_width = W as u32;
         record.output_height = H as u32;

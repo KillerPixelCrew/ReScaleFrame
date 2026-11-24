@@ -176,25 +176,17 @@ impl Gpu {
         format: vk::Format,
         usage: vk::ImageUsageFlags,
     ) -> TestResult<Image> {
-        let info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .format(format)
-            .extent(extent)
-            .mip_levels(1)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .usage(usage);
-        let image = unsafe { self.device().create_image(&info, None) }?;
-        self.images.push((image, vk::DeviceMemory::null()));
-        let req = unsafe { self.device().get_image_memory_requirements(image) };
-        let memory = self.allocate(req, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
-        self.images
-            .last_mut()
-            .ok_or("missing Vulkan image allocation")?
-            .1 = memory;
-        unsafe { self.device().bind_image_memory(image, memory, 0) }?;
+        let device = self.device.as_ref().expect("open Vulkan device");
+        let image = vulkan_gpu::create_image(
+            device,
+            &self.memory,
+            &mut self.images,
+            extent,
+            format,
+            usage,
+        )?;
         Ok(Image {
-            device: self.device().handle().as_raw() as *mut c_void,
+            device: device.handle().as_raw() as *mut c_void,
             image: image.as_raw(),
             format: format.as_raw() as u32,
             width: extent.width,
@@ -229,43 +221,11 @@ impl Gpu {
     }
 
     fn transition(&self, image: Image, from: vk::ImageLayout, to: vk::ImageLayout) {
-        let access = vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE;
-        let barriers = [vk::ImageMemoryBarrier::default()
-            .old_layout(from)
-            .new_layout(to)
-            .src_access_mask(if from == UNDEFINED {
-                vk::AccessFlags::empty()
-            } else {
-                access
-            })
-            .dst_access_mask(access)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(vk::Image::from_raw(image.image))
-            .subresource_range(RANGE)];
-        unsafe {
-            self.device().cmd_pipeline_barrier(
-                self.commands,
-                ALL,
-                ALL,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &barriers,
-            )
-        };
+        vulkan_gpu::transition(self.device(), self.commands, image.image, from, to);
     }
 
     fn fill(&self, image: Image, value: [f32; 4]) {
-        unsafe {
-            self.device().cmd_clear_color_image(
-                self.commands,
-                vk::Image::from_raw(image.image),
-                DST,
-                &vk::ClearColorValue { float32: value },
-                &[RANGE],
-            );
-        }
+        vulkan_gpu::fill(self.device(), self.commands, image.image, value);
     }
 
     fn buffer_barrier(
@@ -331,33 +291,15 @@ impl Gpu {
     }
 
     fn setup(&self, backend: u32, directory: &CStr) -> Setup {
+        let (instance_proc, device_proc) = vulkan_gpu::procs(&self.entry, &self.instance);
         Setup {
             struct_size: size_of::<Setup>() as u32,
             abi_version: RSF_SRVK_ABI_VERSION,
             instance: raw(self.instance.handle()),
             physical_device: raw(self.physical),
             device: raw(self.device().handle()),
-            // The x64 system and C ABIs use the same Vulkan calling convention.
-            instance_proc: Some(unsafe {
-                std::mem::transmute::<
-                    vk::PFN_vkGetInstanceProcAddr,
-                    unsafe extern "C" fn(
-                        *mut std::ffi::c_void,
-                        *const i8,
-                    )
-                        -> std::option::Option<unsafe extern "C" fn()>,
-                >(self.entry.static_fn().get_instance_proc_addr)
-            }),
-            device_proc: Some(unsafe {
-                std::mem::transmute::<
-                    vk::PFN_vkGetDeviceProcAddr,
-                    unsafe extern "C" fn(
-                        *mut std::ffi::c_void,
-                        *const i8,
-                    )
-                        -> std::option::Option<unsafe extern "C" fn()>,
-                >(self.instance.fp_v1_0().get_device_proc_addr)
-            }),
+            instance_proc,
+            device_proc,
             backend,
             quality: 1,
             output_width: W as u32,
