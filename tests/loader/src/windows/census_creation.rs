@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
-use super::named;
+use super::{cast, named};
 use crate::sys::{RSF_CENSUS_ABI_VERSION, RSF_CENSUS_FLAG_NO_STATIC_SCAN, rsf_census_options};
 use rsf_test_support::wide_os;
 use std::ffi::{c_char, c_void};
-use std::mem::transmute;
 use windows_sys::Win32::{Foundation::FARPROC, System::LibraryLoader::LoadLibraryW};
 
 type Install = unsafe extern "C" fn(*const rsf_census_options) -> i32;
@@ -18,16 +17,10 @@ fn check_creation() -> Option<bool> {
     if module.is_null() {
         return None;
     }
-    let identity = named(module, c"fixture_creation_identity")?;
-    let raw = named(module, c"fixture_creation_raw")?;
-    let identity = unsafe {
-        transmute::<unsafe extern "system" fn() -> isize, unsafe extern "C" fn() -> u32>(identity)
-    };
-    let raw = unsafe {
-        transmute::<unsafe extern "system" fn() -> isize, unsafe extern "C" fn(u32) -> *mut c_void>(
-            raw,
-        )
-    };
+    let identity =
+        cast::<unsafe extern "C" fn() -> u32>(named(module, c"fixture_creation_identity")?);
+    let raw =
+        cast::<unsafe extern "C" fn(u32) -> *mut c_void>(named(module, c"fixture_creation_raw")?);
     let before_post_load = unsafe { identity() } == 15;
     let after_post_load = [
         c"CreateDXGIFactory",
