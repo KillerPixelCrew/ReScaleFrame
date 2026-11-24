@@ -25,7 +25,7 @@ use crate::sys::{
     RSF_PATCH_SOURCE, RSF_SHADER_PATCH_VERSION, rsf_patch_bytes, rsf_patch_counters,
     rsf_patch_output, rsf_patch_request, rsf_patch_root, rsf_patch_session, rsf_shader_patch_api,
 };
-use leaf::{CompileCall, Platform};
+use leaf::CompileCall;
 use pack::{Json, Pack, bytes, string, text};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -113,16 +113,12 @@ static OWNERS: Mutex<Owners> = Mutex::new(BTreeMap::new());
 // Distinguishes concurrent cache writers within this process.
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
-fn platform() -> &'static Platform {
-    #[cfg(not(test))]
-    {
-        &platform::PLATFORM
-    }
-    #[cfg(test)]
-    {
-        &tests::FAKE
-    }
-}
+// Production calls the compiler, reflection, device and MinHook leaves in platform.rs; unit tests
+// call same-named fakes.
+#[cfg(not(test))]
+use platform as native;
+#[cfg(test)]
+use tests::native;
 
 /// Admits a caller record by its leading `struct_size`, then its `abi_version`, before any
 /// reference covers the whole record. A short caller may supply only the size field.
@@ -465,7 +461,6 @@ unsafe fn errors(user: *mut c_void, data: *const c_void, size: usize) {
 
 /// Compiles `source` with the caller's inputs and includes from `files`.
 fn compile(
-    platform: &Platform,
     compiler: *mut c_void,
     r: &rsf_patch_request,
     files: &Files,
@@ -496,7 +491,7 @@ fn compile(
         code: Some(code),
         errors: Some(errors),
     };
-    let result = unsafe { (platform.compile)(&call) };
+    let result = unsafe { native::compile(&call) };
     match state.code {
         Some(code) if result >= 0 => Ok(code),
         _ => Err(Refusal {
@@ -513,12 +508,7 @@ fn compile(
 }
 
 /// Acquires, proves, builds or reuses one variant. Returns whether the cache supplied it.
-fn prepare_variant(
-    platform: &Platform,
-    s: &Session,
-    r: &rsf_patch_request,
-    output: &mut Vec<u8>,
-) -> Outcome<bool> {
+fn prepare_variant(s: &Session, r: &rsf_patch_request, output: &mut Vec<u8>) -> Outcome<bool> {
     let rules = &s.pack.rules;
     let Some(Json::Obj(sources)) = rules.get(b"sources") else {
         return Err(refuse(FORMAT, "source list"));
@@ -554,7 +544,7 @@ fn prepare_variant(
     }
     let root_name =
         root_name.ok_or_else(|| refuse(HASH, "root not allowlisted/acquired from engine"))?;
-    let proof = compile(platform, s.compiler, r, &originals, source)?;
+    let proof = compile(s.compiler, r, &originals, source)?;
     check(
         proof == stock,
         ORIGINAL,
@@ -590,14 +580,14 @@ fn prepare_variant(
         Vec::new()
     };
     if !output.is_empty() {
-        if reflection::admit(platform, rules, stock, output).is_ok() {
+        if reflection::admit(rules, stock, output).is_ok() {
             COUNTERS.cache_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(true);
         }
         output.clear();
     }
-    *output = compile(platform, s.compiler, r, &patched, &patched[root_name])?;
-    reflection::admit(platform, rules, stock, output)?;
+    *output = compile(s.compiler, r, &patched, &patched[root_name])?;
+    reflection::admit(rules, stock, output)?;
     COUNTERS.built.fetch_add(1, Ordering::Relaxed);
     if cached {
         // Publish only a completely written file, through a name no other writer uses.
@@ -643,7 +633,7 @@ unsafe extern "C" fn prepare(
             && (r.define_count == 0 || !r.defines.is_null());
         check(inputs, ARGUMENT, "compile inputs")?;
         let mut output = lock(&s.output);
-        let hit = prepare_variant(platform(), s, r, &mut output)?;
+        let hit = prepare_variant(s, r, &mut output)?;
         out.bytecode = raw(&output);
         out.cache_hit = u32::from(hit);
         Ok(())

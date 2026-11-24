@@ -367,14 +367,14 @@ struct O{float4 p:SV_Position;float v:TEXCOORD12;};O main(uint id:SV_VertexID){O
     )?;
 
     let mut request = super::request(&originals, source, c"vs_5_0", &[]);
-    let stock = compile(platform(), entry, &request, &originals, source).map_err(describe)?;
+    let stock = compile(entry, &request, &originals, source).map_err(describe)?;
     request.original_bytecode = raw(&stock);
     let mut result = output();
     session.prepare(&request, &mut result)?;
     let variant = bytes(result.bytecode).map_err(describe)?.to_vec();
     session.prepare(&request, &mut result)?;
     expect(result.cache_hit != 0, "verified cache hit")?;
-    let stock2 = compile(platform(), entry, &request, &originals, &twin).map_err(describe)?;
+    let stock2 = compile(entry, &request, &originals, &twin).map_err(describe)?;
     expect(
         stock2 == stock,
         "distinct source roots with identical original DXBC",
@@ -415,7 +415,7 @@ struct O{float4 p:SV_Position;float v:TEXCOORD12;};O main(uint id:SV_VertexID){O
     }
     let pixel_source = b"float4 main():SV_Target{return float4(0.25,0.3,0.4,1);}";
     let request = super::request(&originals, pixel_source, c"ps_5_0", &[]);
-    let pixel = compile(platform(), entry, &request, &originals, pixel_source).map_err(describe)?;
+    let pixel = compile(entry, &request, &originals, pixel_source).map_err(describe)?;
     let rewritten = rewrite_pixel(&pixel)?;
     counters(&api)?;
     if cpu_only {

@@ -6,7 +6,7 @@ use super::platform::{CONSTANT_SLOTS, CPU_WRITE, DYNAMIC_USAGE};
 #[cfg(test)]
 use super::tests::{CONSTANT_SLOTS, CPU_WRITE, DYNAMIC_USAGE};
 use super::{
-    ARGUMENT, COMPILE, COUNTERS, INTERNAL, OK, guarded, lock, platform, raw, sha256, wide_path,
+    ARGUMENT, COMPILE, COUNTERS, INTERNAL, OK, guarded, lock, native, raw, sha256, wide_path,
 };
 use crate::sys::rsf_patch_bytes;
 use std::cell::Cell;
@@ -86,7 +86,6 @@ pub(super) unsafe extern "C" fn attach(device: *mut c_void) -> i32 {
     if device.is_null() {
         return ARGUMENT;
     }
-    let p = platform();
     let mut hooks = lock(&HOOKS);
     let vtable = unsafe { *device.cast::<*const usize>() };
     let entries = SLOTS.map(|slot| unsafe { *vtable.add(slot) });
@@ -98,18 +97,18 @@ pub(super) unsafe extern "C" fn attach(device: *mut c_void) -> i32 {
             return OK;
         }
     } else {
-        if unsafe { (p.hooks_ready)() } == 0 {
+        if unsafe { native::hooks_ready() } == 0 {
             return INTERNAL;
         }
         for (i, (&entry, detour)) in entries.iter().zip(DETOURS).enumerate() {
             let mut original = ptr::null_mut();
             if unsafe {
-                (p.hook_create)(entry as *mut c_void, detour as *mut c_void, &mut original)
+                native::hook_create(entry as *mut c_void, detour as *mut c_void, &mut original)
             } == 0
             {
                 for &created in &entries[..i] {
                     // These hooks have never been enabled.
-                    unsafe { (p.hook_remove)(created as *mut c_void) };
+                    unsafe { native::hook_remove(created as *mut c_void) };
                 }
                 return INTERNAL;
             }
@@ -118,9 +117,9 @@ pub(super) unsafe extern "C" fn attach(device: *mut c_void) -> i32 {
         hooks.targets = entries;
     }
     for (i, &entry) in entries.iter().enumerate() {
-        if unsafe { (p.hook_enable)(entry as *mut c_void) } == 0 {
+        if unsafe { native::hook_enable(entry as *mut c_void) } == 0 {
             for &enabled in &entries[..i] {
-                unsafe { (p.hook_disable)(enabled as *mut c_void) };
+                unsafe { native::hook_disable(enabled as *mut c_void) };
             }
             // A detour already on another thread can still call its trampoline. Keep
             // every trampoline and retry these same targets on the next attach.
@@ -152,7 +151,7 @@ pub(super) unsafe extern "C" fn create_shader(
     let stage = unsafe { *target.cast::<u8>() };
     INTERNAL_CREATE.set(true);
     let result = if STAGES.contains(&stage) {
-        unsafe { (platform().create_shader)(device, u32::from(stage), code, shader) }
+        unsafe { native::create_shader(device, u32::from(stage), code, shader) }
     } else {
         E_INVALIDARG
     };
@@ -171,7 +170,7 @@ pub(super) unsafe extern "C" fn constant_buffer(
     if device.is_null() || out.is_null() || size == 0 || !size.is_multiple_of(16) || size > 65536 {
         return ARGUMENT;
     }
-    let created = unsafe { (platform().create_constant_buffer)(device, size, out) };
+    let created = unsafe { native::create_constant_buffer(device, size, out) };
     if created >= 0 { OK } else { INTERNAL }
 }
 
@@ -184,14 +183,13 @@ pub(super) unsafe extern "C" fn upload_constant(
     if context.is_null() || buffer.is_null() || bytes.data.is_null() {
         return ARGUMENT;
     }
-    let p = platform();
     let (mut width, mut usage, mut access) = (0, 0, 0);
-    unsafe { (p.buffer_desc)(buffer, &mut width, &mut usage, &mut access) };
+    unsafe { native::buffer_desc(buffer, &mut width, &mut usage, &mut access) };
     let writable = usage == DYNAMIC_USAGE && access & CPU_WRITE != 0;
     if bytes.size != width as usize || !writable {
         return ARGUMENT;
     }
-    if unsafe { (p.upload)(context, buffer, bytes) } != 0 {
+    if unsafe { native::upload(context, buffer, bytes) } != 0 {
         return INTERNAL;
     }
     OK
@@ -207,7 +205,7 @@ pub(super) unsafe extern "C" fn bind_constant(
     if context.is_null() || slot >= CONSTANT_SLOTS || !known {
         return ARGUMENT;
     }
-    unsafe { (platform().bind_constant)(context, stage, slot, buffer) };
+    unsafe { native::bind_constant(context, stage, slot, buffer) };
     OK
 }
 
@@ -229,7 +227,7 @@ pub(super) unsafe extern "C" fn dump(directory: *const u16) -> i32 {
             return INTERNAL;
         }
         let snapshot = lock(&INVENTORY).clone();
-        let disassemble = platform().disassemble;
+        let disassemble = native::disassemble;
         let mut report = String::new();
         use std::fmt::Write as _;
         for (hash, code) in snapshot {

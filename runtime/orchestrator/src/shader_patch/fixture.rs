@@ -190,7 +190,7 @@ fn compile_roots(pack: &[u8], files: &Files) -> Test<()> {
             &defines[..1]
         };
         let mut request = request(files, source, &target, defines);
-        let stock = compile(platform(), entry, &request, files, source).map_err(describe)?;
+        let stock = compile(entry, &request, files, source).map_err(describe)?;
         request.original_bytecode = raw(&stock);
         session
             .prepare(&request, &mut output())

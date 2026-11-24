@@ -66,7 +66,7 @@ unsafe extern "system" fn include_close(_: *mut c_void, _: *const c_void) -> HRE
     HRESULT(0)
 }
 
-unsafe fn compile(call: *const CompileCall) -> i32 {
+pub(super) unsafe fn compile(call: *const CompileCall) -> i32 {
     let call = unsafe { &*call };
     let Ok(source) = super::bytes(call.source) else {
         return E_INVALIDARG.0;
@@ -111,7 +111,7 @@ unsafe fn compile(call: *const CompileCall) -> i32 {
     output.status
 }
 
-unsafe fn reflect(code: rsf_patch_bytes, sink: *const ReflectionSink) -> i32 {
+pub(super) unsafe fn reflect(code: rsf_patch_bytes, sink: *const ReflectionSink) -> i32 {
     let sink = unsafe { &*sink };
     let result = (|| unsafe {
         let mut raw = ptr::null_mut();
@@ -194,7 +194,7 @@ unsafe fn reflect(code: rsf_patch_bytes, sink: *const ReflectionSink) -> i32 {
     if result.is_some() { 0 } else { -1 }
 }
 
-unsafe fn disassemble(code: rsf_patch_bytes, user: *mut c_void, text: Sink) -> i32 {
+pub(super) unsafe fn disassemble(code: rsf_patch_bytes, user: *mut c_void, text: Sink) -> i32 {
     let result = unsafe {
         D3DDisassemble(
             code.data,
@@ -209,7 +209,7 @@ unsafe fn disassemble(code: rsf_patch_bytes, user: *mut c_void, text: Sink) -> i
     0
 }
 
-unsafe fn create_shader(
+pub(super) unsafe fn create_shader(
     device: *mut c_void,
     stage: u32,
     code: rsf_patch_bytes,
@@ -234,7 +234,11 @@ unsafe fn create_shader(
     result.map_or_else(|error| error.code().0, |()| 0)
 }
 
-unsafe fn create_constant_buffer(device: *mut c_void, size: u32, buffer: *mut *mut c_void) -> i32 {
+pub(super) unsafe fn create_constant_buffer(
+    device: *mut c_void,
+    size: u32,
+    buffer: *mut *mut c_void,
+) -> i32 {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.unwrap();
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: size,
@@ -247,7 +251,12 @@ unsafe fn create_constant_buffer(device: *mut c_void, size: u32, buffer: *mut *m
         .map_or_else(|error| error.code().0, |()| 0)
 }
 
-unsafe fn buffer_desc(buffer: *mut c_void, width: *mut u32, usage: *mut u32, access: *mut u32) {
+pub(super) unsafe fn buffer_desc(
+    buffer: *mut c_void,
+    width: *mut u32,
+    usage: *mut u32,
+    access: *mut u32,
+) {
     let buffer = unsafe { ID3D11Buffer::from_raw_borrowed(&buffer) }.unwrap();
     let mut desc = D3D11_BUFFER_DESC::default();
     unsafe {
@@ -258,7 +267,11 @@ unsafe fn buffer_desc(buffer: *mut c_void, width: *mut u32, usage: *mut u32, acc
     }
 }
 
-unsafe fn upload(context: *mut c_void, buffer: *mut c_void, data: rsf_patch_bytes) -> i32 {
+pub(super) unsafe fn upload(
+    context: *mut c_void,
+    buffer: *mut c_void,
+    data: rsf_patch_bytes,
+) -> i32 {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }.unwrap();
     let buffer = unsafe { ID3D11Buffer::from_raw_borrowed(&buffer) }.unwrap();
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
@@ -272,7 +285,12 @@ unsafe fn upload(context: *mut c_void, buffer: *mut c_void, data: rsf_patch_byte
     if mapped.pData.is_null() { -1 } else { 0 }
 }
 
-unsafe fn bind_constant(context: *mut c_void, stage: u32, slot: u32, buffer: *mut c_void) {
+pub(super) unsafe fn bind_constant(
+    context: *mut c_void,
+    stage: u32,
+    slot: u32,
+    buffer: *mut c_void,
+) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&context) }.unwrap();
     // Option<ID3D11Buffer> is pointer-sized with null for None. Borrow the raw
     // pointer slot so the incoming COM reference is neither acquired nor released.
@@ -290,44 +308,32 @@ unsafe fn bind_constant(context: *mut c_void, stage: u32, slot: u32, buffer: *mu
     }
 }
 
-unsafe fn hooks_ready() -> i32 {
+pub(super) unsafe fn hooks_ready() -> i32 {
     i32::from(matches!(
         unsafe { MH_Initialize() },
         MH_OK | MH_ERROR_ALREADY_INITIALIZED
     ))
 }
-unsafe fn hook_create(target: *mut c_void, detour: *mut c_void, original: *mut *mut c_void) -> i32 {
+pub(super) unsafe fn hook_create(
+    target: *mut c_void,
+    detour: *mut c_void,
+    original: *mut *mut c_void,
+) -> i32 {
     i32::from(unsafe { MH_CreateHook(target, detour, original) } == MH_OK)
 }
-unsafe fn hook_enable(target: *mut c_void) -> i32 {
+pub(super) unsafe fn hook_enable(target: *mut c_void) -> i32 {
     i32::from(matches!(
         unsafe { MH_EnableHook(target) },
         MH_OK | MH_ERROR_ENABLED
     ))
 }
-unsafe fn hook_disable(target: *mut c_void) {
+pub(super) unsafe fn hook_disable(target: *mut c_void) {
     unsafe { MH_DisableHook(target) };
 }
-unsafe fn hook_remove(target: *mut c_void) {
+pub(super) unsafe fn hook_remove(target: *mut c_void) {
     unsafe { MH_RemoveHook(target) };
 }
 
 pub(super) const DYNAMIC_USAGE: u32 = D3D11_USAGE_DYNAMIC.0 as u32;
 pub(super) const CPU_WRITE: u32 = D3D11_CPU_ACCESS_WRITE.0 as u32;
 pub(super) const CONSTANT_SLOTS: u32 = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
-
-pub(super) static PLATFORM: Platform = Platform {
-    compile,
-    reflect,
-    disassemble,
-    create_shader,
-    create_constant_buffer,
-    buffer_desc,
-    upload,
-    bind_constant,
-    hooks_ready,
-    hook_create,
-    hook_enable,
-    hook_disable,
-    hook_remove,
-};

@@ -16,7 +16,7 @@ pub(super) const CONSTANT_SLOTS: u32 = 14;
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 
 /// Output is `target|defines|source` with each `#include "name"` line expanded.
-unsafe fn fake_compile(call: *const CompileCall) -> i32 {
+pub(super) unsafe fn fake_compile(call: *const CompileCall) -> i32 {
     let call = unsafe { &*call };
     let source = bytes(call.source).unwrap_or_default();
     let fail = |text: &[u8]| {
@@ -53,7 +53,7 @@ unsafe fn fake_compile(call: *const CompileCall) -> i32 {
 }
 
 /// Every shader has one position output; marker text adds facts.
-unsafe fn fake_reflect(code: rsf_patch_bytes, sink: *const ReflectionSink) -> i32 {
+pub(super) unsafe fn fake_reflect(code: rsf_patch_bytes, sink: *const ReflectionSink) -> i32 {
     let sink = unsafe { &*sink };
     let code = bytes(code).unwrap_or_default();
     let has = |marker: &[u8]| pack::find(code, marker, 0).is_some();
@@ -91,14 +91,14 @@ unsafe fn fake_reflect(code: rsf_patch_bytes, sink: *const ReflectionSink) -> i3
     0
 }
 
-unsafe fn fake_disassemble(code: rsf_patch_bytes, user: *mut c_void, text: Sink) -> i32 {
+pub(super) unsafe fn fake_disassemble(code: rsf_patch_bytes, user: *mut c_void, text: Sink) -> i32 {
     let asm = [b"asm:", bytes(code).unwrap_or_default()].concat();
     unsafe { (text.unwrap())(user, asm.as_ptr().cast(), asm.len()) };
     0
 }
 
 // The fake device method calls the hooked pixel entry point, as a driver vtable would.
-unsafe fn fake_create_shader(
+pub(super) unsafe fn fake_create_shader(
     device: *mut c_void,
     _: u32,
     code: rsf_patch_bytes,
@@ -107,12 +107,12 @@ unsafe fn fake_create_shader(
     unsafe { d3d11::DETOURS[1](device, code.data, code.size, ptr::null_mut(), out) }
 }
 
-unsafe fn fake_buffer(_: *mut c_void, _: u32, out: *mut *mut c_void) -> i32 {
+pub(super) unsafe fn fake_buffer(_: *mut c_void, _: u32, out: *mut *mut c_void) -> i32 {
     unsafe { *out = ptr::dangling_mut() };
     0
 }
 
-unsafe fn fake_desc(_: *mut c_void, width: *mut u32, usage: *mut u32, access: *mut u32) {
+pub(super) unsafe fn fake_desc(_: *mut c_void, width: *mut u32, usage: *mut u32, access: *mut u32) {
     unsafe {
         *width = 16;
         *usage = DYNAMIC_USAGE;
@@ -126,16 +126,16 @@ static DISABLED: AtomicUsize = AtomicUsize::new(0);
 static FAIL_ENABLE: AtomicUsize = AtomicUsize::new(0);
 static REMOVED: AtomicUsize = AtomicUsize::new(0);
 
-unsafe fn fake_upload(_: *mut c_void, _: *mut c_void, _: rsf_patch_bytes) -> i32 {
+pub(super) unsafe fn fake_upload(_: *mut c_void, _: *mut c_void, _: rsf_patch_bytes) -> i32 {
     UPLOADS.fetch_add(1, Ordering::Relaxed);
     0
 }
 
-unsafe fn fake_bind(_: *mut c_void, _: u32, _: u32, _: *mut c_void) {
+pub(super) unsafe fn fake_bind(_: *mut c_void, _: u32, _: u32, _: *mut c_void) {
     BINDS.fetch_add(1, Ordering::Relaxed);
 }
 
-unsafe fn fake_ready() -> i32 {
+pub(super) unsafe fn fake_ready() -> i32 {
     1
 }
 
@@ -150,7 +150,11 @@ unsafe extern "system" fn fake_original(
     7
 }
 
-unsafe fn fake_hook(target: *mut c_void, _: *mut c_void, original: *mut *mut c_void) -> i32 {
+pub(super) unsafe fn fake_hook(
+    target: *mut c_void,
+    _: *mut c_void,
+    original: *mut *mut c_void,
+) -> i32 {
     // An entry point numbered 99 refuses to be hooked.
     if target as usize == 99 {
         return 0;
@@ -159,33 +163,28 @@ unsafe fn fake_hook(target: *mut c_void, _: *mut c_void, original: *mut *mut c_v
     1
 }
 
-unsafe fn fake_enable(target: *mut c_void) -> i32 {
+pub(super) unsafe fn fake_enable(target: *mut c_void) -> i32 {
     i32::from(target as usize != FAIL_ENABLE.load(Ordering::Relaxed))
 }
 
-unsafe fn fake_disable(_: *mut c_void) {
+pub(super) unsafe fn fake_disable(_: *mut c_void) {
     DISABLED.fetch_add(1, Ordering::Relaxed);
 }
 
-unsafe fn fake_remove(_: *mut c_void) {
+pub(super) unsafe fn fake_remove(_: *mut c_void) {
     REMOVED.fetch_add(1, Ordering::Relaxed);
 }
 
-pub(super) static FAKE: Platform = Platform {
-    compile: fake_compile,
-    reflect: fake_reflect,
-    disassemble: fake_disassemble,
-    create_shader: fake_create_shader,
-    create_constant_buffer: fake_buffer,
-    buffer_desc: fake_desc,
-    upload: fake_upload,
-    bind_constant: fake_bind,
-    hooks_ready: fake_ready,
-    hook_create: fake_hook,
-    hook_enable: fake_enable,
-    hook_disable: fake_disable,
-    hook_remove: fake_remove,
-};
+// The fakes the owner calls in place of platform.rs, by the production names.
+pub(super) mod native {
+    pub(in crate::shader_patch) use super::{
+        fake_bind as bind_constant, fake_buffer as create_constant_buffer, fake_compile as compile,
+        fake_create_shader as create_shader, fake_desc as buffer_desc,
+        fake_disable as hook_disable, fake_disassemble as disassemble, fake_enable as hook_enable,
+        fake_hook as hook_create, fake_ready as hooks_ready, fake_reflect as reflect,
+        fake_remove as hook_remove, fake_upload as upload,
+    };
+}
 
 fn api() -> rsf_shader_patch_api {
     let mut api = rsf_shader_patch_api {

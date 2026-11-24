@@ -3,8 +3,8 @@
 //! the pack's declared bindings and interpolants may be added.
 
 use super::leaf::{
-    BindingRecord, ParameterRecord, Platform, RSF_PATCH_SIGNATURE_INPUT,
-    RSF_PATCH_SIGNATURE_OUTPUT, ReflectionSink,
+    BindingRecord, ParameterRecord, RSF_PATCH_SIGNATURE_INPUT, RSF_PATCH_SIGNATURE_OUTPUT,
+    ReflectionSink,
 };
 use super::pack::{Json, text, uint};
 use super::{Outcome, REFLECTION, check, raw, refuse};
@@ -107,7 +107,7 @@ unsafe fn on_parameter(user: *mut c_void, signature: u32, p: *const ParameterRec
     }
 }
 
-pub(crate) fn reflect(platform: &Platform, code: &[u8]) -> Option<Shader> {
+pub(crate) fn reflect(code: &[u8]) -> Option<Shader> {
     let mut shader = Shader::default();
     let sink = ReflectionSink {
         user: (&raw mut shader).cast(),
@@ -117,18 +117,13 @@ pub(crate) fn reflect(platform: &Platform, code: &[u8]) -> Option<Shader> {
         variable: Some(on_variable),
         parameter: Some(on_parameter),
     };
-    let reflect = platform.reflect;
+    let reflect = super::native::reflect;
     (unsafe { reflect(raw(code), &sink) } == 0).then_some(shader)
 }
 
 /// Checks a compiled variant against the stock shader it replaces.
-pub(crate) fn admit(
-    platform: &Platform,
-    rules: &Json,
-    stock: &[u8],
-    variant: &[u8],
-) -> Outcome<()> {
-    let (Some(a), Some(b)) = (reflect(platform, stock), reflect(platform, variant)) else {
+pub(crate) fn admit(rules: &Json, stock: &[u8], variant: &[u8]) -> Outcome<()> {
+    let (Some(a), Some(b)) = (reflect(stock), reflect(variant)) else {
         return Err(refuse(REFLECTION, "D3DReflect"));
     };
     compare(rules, &a, &b)
