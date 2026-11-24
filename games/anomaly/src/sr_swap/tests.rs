@@ -178,7 +178,7 @@ fn host(user: *mut c_void) -> &'static mut Host {
     unsafe { &mut *user.cast::<Host>() }
 }
 
-unsafe extern "C" fn read(
+pub(crate) unsafe extern "C" fn read(
     _: *mut c_void,
     address: *const c_void,
     output: *mut c_void,
@@ -192,7 +192,7 @@ unsafe extern "C" fn read(
     true
 }
 
-unsafe extern "C" fn write(
+pub(crate) unsafe extern "C" fn write(
     user: *mut c_void,
     address: *mut c_void,
     input: *const c_void,
@@ -216,7 +216,7 @@ unsafe extern "C" fn write(
     true
 }
 
-unsafe extern "C" fn make_twins(
+pub(crate) unsafe extern "C" fn make_twins(
     user: *mut c_void,
     request: *const Request,
     out: *mut Twins,
@@ -269,7 +269,7 @@ unsafe extern "C" fn make_twins(
     RSF_ANOMALY_SWAP_MAKE_CREATED
 }
 
-unsafe extern "C" fn drop_twins(user: *mut c_void) {
+pub(crate) unsafe extern "C" fn drop_twins(user: *mut c_void) {
     host(user).drops += 1;
 }
 
@@ -322,11 +322,11 @@ unsafe extern "C" fn upscale(user: *mut c_void, inputs: *const rsf_anomaly_swap_
     !host.fail_pass
 }
 
-unsafe extern "C" fn set_viewport(user: *mut c_void, width: u32, height: u32) {
+pub(crate) unsafe extern "C" fn set_viewport(user: *mut c_void, width: u32, height: u32) {
     host(user).viewports.push((width, height));
 }
 
-unsafe extern "C" fn upload_projection(user: *mut c_void, matrix: *const c_void) -> bool {
+pub(crate) unsafe extern "C" fn upload_projection(user: *mut c_void, matrix: *const c_void) -> bool {
     let host = host(user);
     let call = host.upload_calls;
     host.upload_calls += 1;
@@ -339,7 +339,7 @@ unsafe extern "C" fn upload_projection(user: *mut c_void, matrix: *const c_void)
     true
 }
 
-unsafe extern "C" fn set_mip_bias(user: *mut c_void, value: f32) -> bool {
+pub(crate) unsafe extern "C" fn set_mip_bias(user: *mut c_void, value: f32) -> bool {
     let host = host(user);
     let call = host.bias_calls;
     host.bias_calls += 1;
@@ -352,7 +352,7 @@ unsafe extern "C" fn set_mip_bias(user: *mut c_void, value: f32) -> bool {
     true
 }
 
-unsafe extern "C" fn correct_position_constant(
+pub(crate) unsafe extern "C" fn correct_position_constant(
     user: *mut c_void,
     constant: *mut c_void,
     x: f32,
@@ -372,18 +372,11 @@ struct Case {
     size: [u32; 2],
 }
 
-fn callbacks(host: *mut Host) -> Platform {
-    Platform {
-        user: host.cast(),
-        read,
-        write,
-        make_twins,
-        drop_twins,
-        set_viewport,
-        upload_projection,
-        set_mip_bias,
-        correct_position_constant,
-    }
+/// The fake engine host under the production names (`sr_swap::host`).
+pub(crate) mod swap_host {
+    pub(crate) use super::{
+        correct_position_constant, drop_twins, make_twins, read, set_mip_bias, set_viewport, upload_projection, write,
+    };
 }
 
 impl Drop for Case {
@@ -449,7 +442,7 @@ impl Case {
             engine,
             ..Host::default()
         }));
-        let swap = create(&layout(), callbacks(host));
+        let swap = create(&layout(), host.cast());
         assert!(!swap.is_null());
         unsafe { (*host).published = crate::sr_swap::view_of(swap) };
         let case = Self {
@@ -1099,8 +1092,8 @@ fn layout_and_platform_are_checked_at_creation() {
     let mut wide = layout();
     wide.backend_textures[0].count = MAX_CACHE_SLOTS + 1;
     let c = Case::new(true);
-    assert!(create(&wide, callbacks(c.host)).is_null());
-    let swap = create(&layout(), callbacks(c.host));
+    assert!(create(&wide, c.host.cast()).is_null());
+    let swap = create(&layout(), c.host.cast());
     assert!(!swap.is_null());
     crate::sr_swap::set_enabled(swap, true);
     assert!(crate::sr_swap::prepare(swap, Some(&c.facts())));

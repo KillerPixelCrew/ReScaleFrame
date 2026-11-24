@@ -227,20 +227,7 @@ fn address(rva: u32) -> Ptr {
 
 fn swap() -> *mut Handle {
     *SWAP.get_or_init(|| {
-        swap_owner::create(
-            rsf_anomaly_sr_engine_layout(),
-            swap_owner::Platform {
-                user: null_mut(),
-                read: swap_read,
-                write: swap_write,
-                make_twins,
-                drop_twins,
-                set_viewport,
-                upload_projection,
-                set_mip_bias,
-                correct_position_constant,
-            },
-        ) as usize
+        swap_owner::create(rsf_anomaly_sr_engine_layout(), null_mut()) as usize
     }) as *mut Handle
 }
 
@@ -259,16 +246,24 @@ fn context() -> Ptr {
 }
 
 // ---- the swap owner's host -----------------------------------------------------------------------------------------
+/// The swap owner's host (sr_swap's `host`); the context argument is the owner's null host pointer.
+#[cfg(not(test))]
+pub(crate) mod swap_host {
+    pub(crate) use super::{
+        correct_position_constant, drop_twins, make_twins, set_mip_bias, set_viewport, swap_read as read,
+        swap_write as write, upload_projection,
+    };
+}
 
-unsafe extern "C" fn swap_read(_: Ptr, address: *const c_void, output: Ptr, size: usize) -> bool {
+pub(crate) unsafe extern "C" fn swap_read(_: Ptr, address: *const c_void, output: Ptr, size: usize) -> bool {
     unsafe { c::copy(output, address, size) }
 }
 
-unsafe extern "C" fn swap_write(_: Ptr, address: Ptr, input: *const c_void, size: usize) -> bool {
+pub(crate) unsafe extern "C" fn swap_write(_: Ptr, address: Ptr, input: *const c_void, size: usize) -> bool {
     unsafe { c::copy(address, input, size) }
 }
 
-unsafe extern "C" fn make_twins(
+pub(crate) unsafe extern "C" fn make_twins(
     _: Ptr,
     request: *const rsf_anomaly_swap_request,
     out: *mut rsf_anomaly_swap_twins,
@@ -352,17 +347,17 @@ unsafe extern "C" fn make_twins(
     RSF_ANOMALY_SWAP_MAKE_CREATED
 }
 
-unsafe extern "C" fn drop_twins(_: Ptr) {
+pub(crate) unsafe extern "C" fn drop_twins(_: Ptr) {
     // Reference counts after our own views are gone. The engine's surface_get() before its generic_temp copy takes
     // references it never releases (stock leaks them on its own targets too), so this is diagnostic only.
     rsf_anomaly_sr_stage_retire_twins(unsafe { resources().as_mut() }, rsf_anomaly_sr_twin_refs);
 }
 
-unsafe extern "C" fn set_viewport(_: Ptr, width: u32, height: u32) {
+pub(crate) unsafe extern "C" fn set_viewport(_: Ptr, width: u32, height: u32) {
     unsafe { rsf_anomaly_sr_set_full_viewport(context(), width, height) };
 }
 
-unsafe extern "C" fn upload_projection(_: Ptr, matrix: *const c_void) -> bool {
+pub(crate) unsafe extern "C" fn upload_projection(_: Ptr, matrix: *const c_void) -> bool {
     let function = SET_PROJECTION.load(Ordering::Acquire);
     let Some(sr) = sr().filter(|_| function != 0) else {
         return false;
@@ -376,7 +371,7 @@ unsafe extern "C" fn upload_projection(_: Ptr, matrix: *const c_void) -> bool {
     }
 }
 
-unsafe extern "C" fn set_mip_bias(_: Ptr, value: f32) -> bool {
+pub(crate) unsafe extern "C" fn set_mip_bias(_: Ptr, value: f32) -> bool {
     let function = SET_MIP_BIAS.load(Ordering::Acquire);
     let Some(sr) = sr().filter(|_| function != 0) else {
         return false;
@@ -430,7 +425,7 @@ pub(crate) mod position {
     }
 }
 
-unsafe extern "C" fn correct_position_constant(_: Ptr, constant: Ptr, x: f32, y: f32) -> u32 {
+pub(crate) unsafe extern "C" fn correct_position_constant(_: Ptr, constant: Ptr, x: f32, y: f32) -> u32 {
     rsf_anomaly_sr_correct_position_constant(&POSITION_LAYOUT, constant as usize, x, y)
 }
 

@@ -7,7 +7,7 @@
 //! sampler mip bias. Every exit path restores them.
 //!
 //! This owner decides eligibility, keys the twins and sequences each transaction. The native leaf performs every
-//! guarded engine copy, the D3D11 work and the engine calls through `Platform`. All calls arrive on
+//! guarded engine copy, the D3D11 work and the engine calls (`host`). All calls arrive on
 //! the engine render thread under the SR stage guard.
 
 use crate::sys::*;
@@ -23,23 +23,15 @@ type Twins = rsf_anomaly_swap_twins;
 type Layout = rsf_anomaly_swap_layout;
 type View = rsf_anomaly_swap_view;
 
-/// The host's callbacks. read/write are guarded copies of engine memory; the rest are the D3D11 and engine calls the
-/// owner sequences: twin creation and release, the viewport, R_xforms::set_P, SetMipLODBias and the deferred
-/// position constant correction (0: clean refusal, 1: corrected, 2: incomplete rollback). The seam passes are the
-/// operation run_seam lends.
-#[derive(Clone, Copy)]
-pub(crate) struct Platform {
-    pub user: *mut c_void,
-    pub read: unsafe extern "C" fn(*mut c_void, *const c_void, *mut c_void, usize) -> bool,
-    pub write: unsafe extern "C" fn(*mut c_void, *mut c_void, *const c_void, usize) -> bool,
-    pub make_twins: unsafe extern "C" fn(*mut c_void, *const Request, *mut Twins) -> u32,
-    pub drop_twins: unsafe extern "C" fn(*mut c_void),
-    pub set_viewport: unsafe extern "C" fn(*mut c_void, u32, u32),
-    pub upload_projection: unsafe extern "C" fn(*mut c_void, *const c_void) -> bool,
-    pub set_mip_bias: unsafe extern "C" fn(*mut c_void, f32) -> bool,
-    pub correct_position_constant: unsafe extern "C" fn(*mut c_void, *mut c_void, f32, f32) -> u32,
-}
-/// X-Ray Fmatrix bytes: row-major storage, row vectors (clip = v * M).
+// The host the owner sequences: sr_stage/native.rs's swap leaves in production, the fake engine host under test. read
+// and write are guarded copies of engine memory; the rest are the D3D11 and engine calls: twin creation and release, the
+// viewport, R_xforms::set_P, SetMipLODBias and the deferred position constant correction (0: clean refusal, 1:
+// corrected, 2: incomplete rollback). Each takes the swap's host context first: a test case's fake engine, null in
+// production. The seam passes are the operation run_seam lends.
+#[cfg(not(test))]
+use crate::sr_stage::native::swap_host as host;
+#[cfg(test)]
+use tests::swap_host as host;/// X-Ray Fmatrix bytes: row-major storage, row vectors (clip = v * M).
 type Matrix = [f32; 16];
 
 const SLOTS: usize = RSF_ANOMALY_SWAP_SLOT_COUNT as usize;
@@ -263,7 +255,8 @@ impl RestoreState {
 struct Swap {
     view: View,
     layout: Layout,
-    platform: Platform,
+    /// The host's context for this swap (a test case's fake engine; null in production).
+    host: *mut c_void,
     enabled: bool,
     have_twins: bool,
     key: TwinKey,
@@ -278,14 +271,14 @@ struct Swap {
 }
 
 impl Swap {
-    fn new(layout: Layout, platform: Platform) -> Self {
+    fn new(layout: Layout, host: *mut c_void) -> Self {
         Self {
             view: View {
                 stage: 1,
                 ..View::default()
             },
             layout,
-            platform,
+            host,
             enabled: false,
             have_twins: false,
             key: TwinKey::default(),
@@ -304,8 +297,8 @@ impl Swap {
     fn read<T: Plain>(&self, address: Addr, value: &mut T) -> bool {
         // The leaf copies size_of::<T>() bytes from engine memory under its access guard into a live value.
         unsafe {
-            (self.platform.read)(
-                self.platform.user,
+            host::read(
+                self.host,
                 address.0,
                 (value as *mut T).cast(),
                 size_of::<T>(),
@@ -316,8 +309,8 @@ impl Swap {
     fn write<T: Plain>(&self, address: Addr, value: &T) -> bool {
         // The leaf copies size_of::<T>() bytes into engine memory under its access guard.
         unsafe {
-            (self.platform.write)(
-                self.platform.user,
+            host::write(
+                self.host,
                 address.0,
                 (value as *const T).cast(),
                 size_of::<T>(),
@@ -327,18 +320,18 @@ impl Swap {
 
     fn set_viewport(&mut self, width: u32, height: u32) {
         // The leaf sets the immediate context's viewport on the render thread.
-        unsafe { (self.platform.set_viewport)(self.platform.user, width, height) };
+        unsafe { host::set_viewport(self.host, width, height) };
         self.view.counters.viewports += 1;
     }
 
     fn upload_projection(&self, matrix: Addr) -> bool {
         // R_xforms::set_P(&RCache.xforms, matrix) under the leaf's exception guard.
-        unsafe { (self.platform.upload_projection)(self.platform.user, matrix.0) }
+        unsafe { host::upload_projection(self.host, matrix.0) }
     }
 
     fn set_mip_bias(&self, value: f32) -> bool {
         // dx10SamplerStateCache::SetMipLODBias under the leaf's exception guard.
-        unsafe { (self.platform.set_mip_bias)(self.platform.user, value) }
+        unsafe { host::set_mip_bias(self.host, value) }
     }
 
     // ---- state helpers ------------------------------------------------------------------------------------------------
@@ -594,7 +587,7 @@ impl Swap {
             let address = self.backend.at(offset).0;
             // Only the verified pointer span is cleared.
             if !unsafe {
-                (self.platform.write)(self.platform.user, address, zeros.as_ptr().cast(), len)
+                host::write(self.host, address, zeros.as_ptr().cast(), len)
             } {
                 return false;
             }
@@ -603,7 +596,7 @@ impl Swap {
             }
             let mut actual = [0xffu8; (MAX_CACHE_SLOTS * POINTER) as usize];
             (unsafe {
-                (self.platform.read)(self.platform.user, address, actual.as_mut_ptr().cast(), len)
+                host::read(self.host, address, actual.as_mut_ptr().cast(), len)
             }) && actual[..len] == zeros[..len]
         };
         let mut ok = clear(self.layout.backend_texture_list, POINTER as usize);
@@ -626,7 +619,7 @@ impl Swap {
             return;
         }
         // The leaf releases its own views and textures after the engine fields are restored.
-        unsafe { (self.platform.drop_twins)(self.platform.user) };
+        unsafe { host::drop_twins(self.host) };
         self.have_twins = false;
         self.view.twins = Twins::default();
         self.key = TwinKey::default();
@@ -1042,7 +1035,7 @@ impl Swap {
             let mut made = Twins::default();
             // The two records are borrowed only during native allocation.
             let result =
-                unsafe { (self.platform.make_twins)(self.platform.user, &request, &mut made) };
+                unsafe { host::make_twins(self.host, &request, &mut made) };
             match result {
                 RSF_ANOMALY_SWAP_MAKE_CREATED => {}
                 RSF_ANOMALY_SWAP_MAKE_FAILED => {
@@ -1215,7 +1208,7 @@ impl Swap {
         let (x, y) = (self.projection.x, self.projection.y);
         // The leaf corrects the engine's constant buffer under its exception guard.
         let result = unsafe {
-            (self.platform.correct_position_constant)(self.platform.user, constant, x, y)
+            host::correct_position_constant(self.host, constant, x, y)
         };
         if result == 1 {
             self.view.counters.position_corrected += 1;
@@ -1385,8 +1378,8 @@ fn with<R>(handle: *mut Handle, fallback: R, call: impl FnOnce(&mut Swap) -> R) 
     result
 }
 
-/// Null for a layout whose backend texture ranges exceed the cleared span. The platform's user outlives the handle.
-pub(crate) fn create(layout: &Layout, platform: Platform) -> *mut Handle {
+/// Null for a layout whose backend texture ranges exceed the cleared span. The host context outlives the handle.
+pub(crate) fn create(layout: &Layout, host: *mut c_void) -> *mut Handle {
     if layout
         .backend_textures
         .iter()
@@ -1394,7 +1387,7 @@ pub(crate) fn create(layout: &Layout, platform: Platform) -> *mut Handle {
     {
         return null_mut();
     }
-    let swap = Swap::new(*layout, platform);
+    let swap = Swap::new(*layout, host);
     let published = swap.view;
     Box::into_raw(Box::new(Handle { swap, published }))
 }
