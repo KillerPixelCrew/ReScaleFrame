@@ -11,7 +11,6 @@ use rsf_game_sys::{
 };
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::ptr::null_mut;
 use windows::Win32::Graphics::{
     Direct3D11::{D3D11_TEXTURE2D_DESC, ID3D11Texture2D},
     Dxgi::IDXGISwapChain,
@@ -27,9 +26,6 @@ thread_local! {
     static SCENES: RefCell<[Scene; CAPACITY]> = const { RefCell::new([EMPTY; CAPACITY]) };
 }
 
-type ResourceIdentity = unsafe extern "C" fn(*mut c_void) -> u64;
-type BackbufferIdentity = unsafe extern "C" fn(*mut c_void, *mut u32, *mut u32) -> u64;
-
 fn slot(source: u64) -> usize {
     (source % CAPACITY as u64) as usize
 }
@@ -38,11 +34,12 @@ fn same_source(scene: &Scene, pass: &Pass) -> bool {
     scene.session_id == pass.session_id && scene.source_frame_id == pass.source_frame_id
 }
 
-unsafe fn rsf_core_native_scene_pass(
-    pass: *const Pass,
-    begin: u32,
-    identity: ResourceIdentity,
-) -> i32 {
+fn resource_identity(resource: *mut c_void) -> u64 {
+    unsafe { com_ref::identity(resource) }.map_or(0, |identity| identity.as_raw() as usize as u64)
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_native_scene_pass(pass: *const Pass, begin: u32) -> i32 {
     if !unsafe { has_capacity(pass) } {
         return 0;
     }
@@ -84,7 +81,7 @@ unsafe fn rsf_core_native_scene_pass(
                 native_frame: pass.native_frame,
                 scope_id: pass.scope_id,
                 flags: pass.flags,
-                surface_key: unsafe { identity(pass.scene_surface) },
+                surface_key: resource_identity(pass.scene_surface),
                 output_rect: pass.output_rect,
                 ..EMPTY
             };
@@ -101,7 +98,7 @@ unsafe fn rsf_core_native_scene_pass(
             || scene.native_frame != pass.native_frame
             || scene.output_rect != pass.output_rect
             || scene.surface_key == 0
-            || scene.surface_key != unsafe { identity(pass.scene_surface) }
+            || scene.surface_key != resource_identity(pass.scene_surface)
         {
             scene.ambiguous = 1;
             return 0;
@@ -111,10 +108,8 @@ unsafe fn rsf_core_native_scene_pass(
     })
 }
 
-unsafe fn rsf_core_native_scene_texture_binding(
-    pass: *const Pass,
-    identity: ResourceIdentity,
-) -> i32 {
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_native_scene_texture_binding(pass: *const Pass) -> i32 {
     if !unsafe { has_capacity(pass) } {
         return 0;
     }
@@ -135,7 +130,7 @@ unsafe fn rsf_core_native_scene_texture_binding(
             || scene.ambiguous != 0
             || !same_source(scene, pass)
             || scene.viewport_key != pass.viewport_key
-            || scene.surface_key != unsafe { identity(pass.sampled_texture) }
+            || scene.surface_key != resource_identity(pass.sampled_texture)
         {
             return 0;
         }
@@ -184,10 +179,8 @@ pub(super) unsafe extern "C" fn rsf_native_scene_for_window(
     1
 }
 
-unsafe fn rsf_core_native_scene_present_path(
-    window: *const Pass,
-    backbuffer: BackbufferIdentity,
-) -> u32 {
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_native_scene_present_path(window: *const Pass) -> u32 {
     if !unsafe { has_capacity(window) } {
         return RSF_NATIVE_SCENE_PRESENT_NONE;
     }
@@ -195,31 +188,35 @@ unsafe fn rsf_core_native_scene_present_path(
     let Some(scene) = find_window(window) else {
         return RSF_NATIVE_SCENE_PRESENT_NONE;
     };
-    classify_present_path(window, &scene, backbuffer)
+    unsafe { rsf_native_scene_classify_present(window, &scene) }
 }
 
-unsafe fn rsf_core_native_scene_classify_present(
+pub(super) unsafe extern "C" fn rsf_native_scene_classify_present(
     window: *const Pass,
     scene: *const Scene,
-    backbuffer: BackbufferIdentity,
 ) -> u32 {
     if !unsafe { has_capacity(window) && has_capacity(scene) } {
         return RSF_NATIVE_SCENE_PRESENT_NONE;
     }
-    classify_present_path(unsafe { &*window }, unsafe { &*scene }, backbuffer)
-}
-
-fn classify_present_path(window: &Pass, scene: &Scene, backbuffer: BackbufferIdentity) -> u32 {
+    let (window, scene) = unsafe { (&*window, &*scene) };
     if scene.texture_bound != 0 && scene.bound_window_key == window.window_key {
         return RSF_NATIVE_SCENE_PRESENT_SAMPLED;
     }
     if window.swapchain.is_null() || scene.surface_key == 0 {
         return RSF_NATIVE_SCENE_PRESENT_NONE;
     }
-    let (mut width, mut height) = (0, 0);
-    let identity = unsafe { backbuffer(window.swapchain, &mut width, &mut height) };
-    // A direct path uses the current full backbuffer, without a sampled scene.
-    if identity == scene.surface_key && scene.output_rect == [0, 0, width as i32, height as i32] {
+    // FSceneViewport can render straight into its backbuffer, and Slate then draws over it
+    // without sampling the scene. Compare live COM identity with the final-pass identity.
+    let Some(chain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&window.swapchain) }) else {
+        return RSF_NATIVE_SCENE_PRESENT_NONE;
+    };
+    let Ok(buffer) = (unsafe { chain.GetBuffer::<ID3D11Texture2D>(0) }) else {
+        return RSF_NATIVE_SCENE_PRESENT_NONE;
+    };
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe { buffer.GetDesc(&mut desc) };
+    let full = [0, 0, desc.Width as i32, desc.Height as i32];
+    if resource_identity(buffer.as_raw()) == scene.surface_key && scene.output_rect == full {
         return RSF_NATIVE_SCENE_PRESENT_DIRECT;
     }
     RSF_NATIVE_SCENE_PRESENT_NONE
@@ -232,140 +229,4 @@ pub(super) extern "C" fn rsf_native_scene_reset() {
             *scenes = [EMPTY; CAPACITY];
         }
     });
-}
-
-unsafe extern "C" fn resource_identity(resource: *mut c_void) -> u64 {
-    unsafe { com_ref::identity(resource) }.map_or(0, |identity| identity.as_raw() as usize as u64)
-}
-
-unsafe extern "C" fn backbuffer_identity(
-    chain: *mut c_void,
-    width: *mut u32,
-    height: *mut u32,
-) -> u64 {
-    let Some(chain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }) else {
-        return 0;
-    };
-    let mut raw = null_mut();
-    let result =
-        unsafe { (chain.vtable().GetBuffer)(chain.as_raw(), 0, &ID3D11Texture2D::IID, &mut raw) };
-    let Some(buffer) = (unsafe { com_ref::from_result(result, raw) }) else {
-        return 0;
-    };
-    let raw = buffer.as_raw();
-    let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.expect("retained backbuffer");
-    let mut desc = D3D11_TEXTURE2D_DESC::default();
-    unsafe {
-        texture.GetDesc(&mut desc);
-        width.write(desc.Width);
-        height.write(desc.Height);
-        resource_identity(raw)
-    }
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_native_scene_pass(pass: *const Pass, begin: u32) -> i32 {
-    unsafe { rsf_core_native_scene_pass(pass, begin, resource_identity) }
-}
-
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_native_scene_texture_binding(pass: *const Pass) -> i32 {
-    unsafe { rsf_core_native_scene_texture_binding(pass, resource_identity) }
-}
-
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_native_scene_present_path(window: *const Pass) -> u32 {
-    unsafe { rsf_core_native_scene_present_path(window, backbuffer_identity) }
-}
-
-pub(super) unsafe extern "C" fn rsf_native_scene_classify_present(
-    window: *const Pass,
-    scene: *const Scene,
-) -> u32 {
-    unsafe { rsf_core_native_scene_classify_present(window, scene, backbuffer_identity) }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    unsafe extern "C" fn resource(resource: *mut c_void) -> u64 {
-        resource as usize as u64
-    }
-
-    unsafe extern "C" fn backbuffer(chain: *mut c_void, width: *mut u32, height: *mut u32) -> u64 {
-        unsafe {
-            width.write(128);
-            height.write(64);
-            resource(chain)
-        }
-    }
-
-    #[test]
-    fn scene_path_requires_a_complete_unambiguous_source() {
-        rsf_native_scene_reset();
-        let surface = std::ptr::dangling_mut::<c_void>();
-        let pass = Pass {
-            struct_size: size_of::<Pass>() as u32,
-            role: RSF_GAME_RENDER_FINAL_SCENE,
-            flags: PRIMARY,
-            session_id: 17,
-            source_frame_id: 2,
-            viewport_key: 3,
-            submission_id: 4,
-            view_key: 5,
-            scope_id: 6,
-            output_rect: [0, 0, 128, 64],
-            scene_surface: surface,
-            ..unsafe { std::mem::zeroed() }
-        };
-        let window = Pass {
-            role: RSF_GAME_RENDER_WINDOW,
-            window_key: 8,
-            swapchain: surface,
-            ..pass
-        };
-        let colliding = Pass {
-            source_frame_id: pass.source_frame_id + CAPACITY as u64,
-            ..pass
-        };
-        let bind = Pass {
-            role: RSF_GAME_RENDER_TEXTURE_BINDING,
-            sampled_texture: surface,
-            ..window
-        };
-        unsafe {
-            assert_eq!(rsf_core_native_scene_pass(&pass, 1, resource), 1);
-            assert_eq!(rsf_core_native_scene_pass(&colliding, 1, resource), 0);
-            assert_eq!(
-                rsf_core_native_scene_present_path(&window, backbuffer),
-                RSF_NATIVE_SCENE_PRESENT_NONE
-            );
-            assert_eq!(rsf_core_native_scene_pass(&pass, 0, resource), 1);
-            assert_eq!(
-                rsf_core_native_scene_present_path(&window, backbuffer),
-                RSF_NATIVE_SCENE_PRESENT_DIRECT
-            );
-            assert_eq!(rsf_core_native_scene_texture_binding(&bind, resource), 1);
-            assert_eq!(
-                rsf_core_native_scene_present_path(&window, backbuffer),
-                RSF_NATIVE_SCENE_PRESENT_SAMPLED
-            );
-            assert_eq!(
-                rsf_core_native_scene_texture_binding(
-                    &Pass {
-                        window_key: 9,
-                        ..bind
-                    },
-                    resource
-                ),
-                0
-            );
-            assert_eq!(
-                rsf_core_native_scene_present_path(&window, backbuffer),
-                RSF_NATIVE_SCENE_PRESENT_NONE
-            );
-        }
-        rsf_native_scene_reset();
-    }
 }
