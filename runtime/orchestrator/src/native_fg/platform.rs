@@ -51,28 +51,21 @@ pub(super) unsafe fn query_texture(object: Handle) -> Handle {
     unsafe { query::<IUnknown, ID3D11Texture2D>(object) }
 }
 
-pub(super) unsafe fn present_graphics(
-    device: *mut Handle,
-    queue: *mut Handle,
-    native: *mut Handle,
-) -> i32 {
+// The bridge's D3D12 device, queue and native device.
+pub(super) unsafe fn present_graphics() -> Option<(Handle, Handle, Handle)> {
     let mut graphics = rsf_streamline_graphics {
         struct_size: size_of::<rsf_streamline_graphics>() as u32,
         ..unsafe { std::mem::zeroed() }
     };
-    if unsafe { rsf_d3d11_present_graphics(&mut graphics) } == 0 {
-        return 0;
-    }
-    unsafe {
-        device.write(graphics.device);
-        queue.write(graphics.queue);
-        native.write(graphics.native_device);
-    }
-    1
+    (unsafe { rsf_d3d11_present_graphics(&mut graphics) } != 0).then_some((
+        graphics.device,
+        graphics.queue,
+        graphics.native_device,
+    ))
 }
 
-pub(super) unsafe fn host_token(host: Handle, source: u64) -> i32 {
-    i32::from(!unsafe { rsf_streamline_host_token(host.cast(), source) }.is_null())
+pub(super) unsafe fn host_token(host: Handle, source: u64) -> bool {
+    !unsafe { rsf_streamline_host_token(host.cast(), source) }.is_null()
 }
 
 pub(super) unsafe fn context_device(context: Handle) -> Handle {
@@ -80,18 +73,15 @@ pub(super) unsafe fn context_device(context: Handle) -> Handle {
         .map_or(null_mut(), Interface::into_raw)
 }
 
-pub(super) unsafe fn texture_info(texture: Handle, out: *mut TextureInfo) -> i32 {
+pub(super) unsafe fn texture_info(texture: Handle) -> TextureInfo {
     let mut desc = D3D11_TEXTURE2D_DESC::default();
-    unsafe {
-        borrow::<ID3D11Texture2D>(&texture).GetDesc(&mut desc);
-        out.write(TextureInfo {
-            width: desc.Width,
-            height: desc.Height,
-            format: desc.Format.0 as u32,
-            samples: desc.SampleDesc.Count,
-        });
+    unsafe { borrow::<ID3D11Texture2D>(&texture).GetDesc(&mut desc) };
+    TextureInfo {
+        width: desc.Width,
+        height: desc.Height,
+        format: desc.Format.0 as u32,
+        samples: desc.SampleDesc.Count,
     }
-    1
 }
 
 pub(super) unsafe fn fence_create(device11: Handle, device12: Handle) -> Handle {
@@ -129,8 +119,8 @@ pub(super) unsafe fn surface_create(
     }
 }
 
-pub(super) unsafe fn wait_fence(fence: Handle, value: u64, event: Handle) -> i32 {
-    i32::from(unsafe { crate::d3d12_fence::wait_fence(fence, value, event, 10_000) } >= 0)
+pub(super) unsafe fn wait_fence(fence: Handle, value: u64, event: Handle) -> bool {
+    unsafe { crate::d3d12_fence::wait_fence(fence, value, event, 10_000) >= 0 }
 }
 
 #[allow(clippy::too_many_arguments)]
