@@ -44,17 +44,21 @@ typedef struct rsf_anomaly_observer_camera {
     float view[16], projection[16];
 } rsf_anomaly_observer_camera;
 
-typedef struct rsf_anomaly_observer_platform {
-    // Returns an immutable refusal reason or null if the profile and all guards match.
-    const char* (*identify)(rsf_anomaly_observer_engine*);
-    bool (*enable_hooks)(const rsf_anomaly_observer_engine*);
-    bool (*disable_hooks)(void);
-    bool (*install_geometry)(const rsf_anomaly_observer_engine*);
-    bool (*disable_geometry)(void);
-    bool (*install_sr)(const rsf_anomaly_observer_engine*);
-    bool (*install_motion)(const rsf_anomaly_observer_engine*);
-    bool (*enable_input)(void);
-    bool (*disable_input)(void);
-    bool (*read_frame)(const rsf_anomaly_observer_engine*, rsf_anomaly_observer_frame*);
-    bool (*guarded_copy)(void*, const void*, size_t);
-} rsf_anomaly_observer_platform;
+// The C leaves native_observer.rs calls: the observer hook set, the stage installs and the guarded reads.
+#ifdef __cplusplus
+extern "C" {
+#endif
+// An immutable refusal reason, or null when the profile and all guards match.
+const char* rsf_anomaly_observer_native_identify(rsf_anomaly_observer_engine*);
+bool rsf_anomaly_observer_native_enable_hooks(const rsf_anomaly_observer_engine*);
+bool rsf_anomaly_observer_native_disable_hooks(void);
+bool rsf_anomaly_observer_native_install_geometry(const rsf_anomaly_observer_engine*);
+bool rsf_anomaly_observer_native_install_sr(const rsf_anomaly_observer_engine*);
+bool rsf_anomaly_observer_native_install_motion(const rsf_anomaly_observer_engine*);
+bool rsf_anomaly_observer_native_enable_input(void);
+bool rsf_anomaly_observer_native_disable_input(void);
+bool rsf_anomaly_observer_native_read_frame(const rsf_anomaly_observer_engine*, rsf_anomaly_observer_frame*);
+bool rsf_anomaly_observer_native_copy(void*, const void*, size_t);
+#ifdef __cplusplus
+}
+#endif

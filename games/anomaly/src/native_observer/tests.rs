@@ -10,7 +10,7 @@ static FG_ENDS: AtomicU32 = AtomicU32::new(0);
 static FG_RETIRE_READY: AtomicBool = AtomicBool::new(false);
 static TEARDOWN: Mutex<Vec<&str>> = Mutex::new(Vec::new());
 
-unsafe extern "C" fn sample_copy(out: *mut c_void, source: *const c_void, size: usize) -> bool {
+pub(crate) unsafe extern "C" fn sample_copy(out: *mut c_void, source: *const c_void, size: usize) -> bool {
     if source.addr() == 1 {
         return false;
     }
@@ -22,17 +22,13 @@ unsafe extern "C" fn sample_copy(out: *mut c_void, source: *const c_void, size: 
 #[test]
 fn camera_copy_refusal_keeps_the_last_complete_sample() {
     let observer = Observer::new(|| false, || true);
-    let platform = Platform {
-        guarded_copy: Some(sample_copy),
-        ..Platform::default()
-    };
     let view = [1.0; 16];
     let projection = [2.0; 16];
-    observer.camera(&platform, view.as_ptr(), projection.as_ptr());
+    observer.camera(view.as_ptr(), projection.as_ptr());
     assert_eq!(observer.observation().camera_updates, 1);
     assert_eq!(observer.observation().camera_finite, 1);
 
-    observer.camera(&platform, projection.as_ptr(), ptr::without_provenance(1));
+    observer.camera(projection.as_ptr(), ptr::without_provenance(1));
     let observation = observer.observation();
     assert_eq!(observation.camera_updates, 1);
     assert_eq!(observation.camera_finite, 0);
@@ -74,15 +70,15 @@ fn verified_profile_stays_with_the_hook_batch() {
     assert!(!unsafe { rsf_anomaly_observer_install(&engine, &bindings, check_selected_hooks) });
 }
 
-unsafe extern "C" fn disable_input() -> bool {
+pub(crate) unsafe extern "C" fn disable_input() -> bool {
     lock(&TEARDOWN).push("input");
     true
 }
-unsafe extern "C" fn disable_hooks() -> bool {
+pub(crate) unsafe extern "C" fn disable_hooks() -> bool {
     lock(&TEARDOWN).push("hooks");
     true
 }
-unsafe extern "C" fn disable_geometry() -> bool {
+pub(crate) unsafe extern "C" fn disable_geometry() -> bool {
     lock(&TEARDOWN).push("geometry");
     true
 }
@@ -97,14 +93,13 @@ fn retire_fg_inputs() -> bool {
 #[test]
 fn lifecycle_and_status_refuse_reentry_while_the_owner_is_locked() {
     let observer = Observer::new(|| false, || true);
-    let platform = Platform::default();
     let services: rsf_game_host_services = unsafe { std::mem::zeroed() };
     {
         let _control = lock(&observer.control);
-        assert_eq!(observer.prepare(&services, &platform), BUSY);
-        assert_eq!(observer.start(&platform), BUSY);
-        assert_eq!(observer.control(&platform, false), BUSY);
-        assert_eq!(observer.control(&platform, true), BUSY);
+        assert_eq!(observer.prepare(&services), BUSY);
+        assert_eq!(observer.start(), BUSY);
+        assert_eq!(observer.control(false), BUSY);
+        assert_eq!(observer.control(true), BUSY);
         assert!(observer.status().is_none());
     }
     assert_eq!(observer.status().unwrap().prepared, 0);
@@ -140,27 +135,21 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
         control.retirement = Retirement::Live;
     }
     observer.activity.store(ACTIVE, Ordering::Relaxed);
-    let platform = Platform {
-        disable_input: Some(disable_input),
-        disable_hooks: Some(disable_hooks),
-        disable_geometry: Some(disable_geometry),
-        ..Platform::default()
-    };
 
     assert!(observer.enter());
-    assert_eq!(observer.control(&platform, true), BUSY);
+    assert_eq!(observer.control(true), BUSY);
     let status = observer.status().unwrap();
     assert_eq!(status.active, 0);
     assert_eq!(status.prepared, 1);
     assert!(!observer.enter());
     observer.leave(); // A stock-only trampoline is still tracked.
     observer.leave();
-    assert_eq!(observer.control(&platform, true), BUSY);
+    assert_eq!(observer.control(true), BUSY);
     assert_eq!(*lock(&TEARDOWN), ["input"]);
 
     INPUT_IDLE.store(true, Ordering::Relaxed);
     FG_FRAME_OPEN.store(true, Ordering::Relaxed);
-    assert_eq!(observer.control(&platform, true), BUSY);
+    assert_eq!(observer.control(true), BUSY);
     assert_eq!(*lock(&TEARDOWN), ["input"]);
     assert!(!observer.enter());
     assert!(observer.end_before(false));
@@ -170,15 +159,15 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
     assert_eq!(FG_ENDS.load(Ordering::Relaxed), 1);
 
     MOTION_REFUSED.store(true, Ordering::Relaxed);
-    assert_eq!(observer.control(&platform, true), NATIVE_REFUSED);
+    assert_eq!(observer.control(true), NATIVE_REFUSED);
     assert_eq!(observer.status().unwrap().prepared, 1);
     assert_eq!(*lock(&TEARDOWN), ["input", "SR", "motion"]);
     MOTION_REFUSED.store(false, Ordering::Relaxed);
-    assert_eq!(observer.control(&platform, true), BUSY);
+    assert_eq!(observer.control(true), BUSY);
     assert_eq!(observer.status().unwrap().prepared, 1);
     FG_RETIRE_READY.store(true, Ordering::Relaxed);
-    assert_eq!(observer.control(&platform, true), OK);
-    assert_eq!(observer.control(&platform, true), OK);
+    assert_eq!(observer.control(true), OK);
+    assert_eq!(observer.control(true), OK);
     assert_eq!(observer.status().unwrap().prepared, 0);
     assert_eq!(
         *lock(&TEARDOWN),
@@ -197,7 +186,7 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
 static FRAME_READS: AtomicU32 = AtomicU32::new(0);
 static FG_SAMPLE: Mutex<Option<(u32, u32, u32)>> = Mutex::new(None);
 
-unsafe extern "C" fn read_frame(_: *const Engine, out: *mut Frame) -> bool {
+pub(crate) unsafe extern "C" fn read_frame(_: *const Engine, out: *mut Frame) -> bool {
     let reads = FRAME_READS.fetch_add(1, Ordering::Relaxed);
     // Write partial data on the second call to exercise the native fault case.
     unsafe {
@@ -218,12 +207,8 @@ fn observation_and_fg_share_one_guarded_source_frame_sample() {
         log: None,
         user: ptr::null_mut(),
     });
-    let platform = Platform {
-        read_frame: Some(read_frame),
-        ..Platform::default()
-    };
 
-    observer.render_begin(&platform);
+    observer.render_begin();
     let observed = observer.observation();
     assert_eq!(observed.render_frames, 1);
     assert_eq!(FRAME_READS.load(Ordering::Relaxed), 1);
@@ -232,7 +217,7 @@ fn observation_and_fg_share_one_guarded_source_frame_sample() {
         Some((observed.engine_frame, observed.width, observed.height))
     );
 
-    observer.render_begin(&platform);
+    observer.render_begin();
     let observed = observer.observation();
     assert_eq!(observed.render_frames, 2);
     assert_eq!(
@@ -270,4 +255,31 @@ pub(super) mod stages {
     pub(crate) fn ui_boundary() {}
     pub(crate) fn scope_frame() {}
     pub(crate) fn device_reset() {}
+}
+/// The C leaves under test: the stop test's teardown record, the camera test's refusing copy and the shared-source
+/// test's frame read. No test reaches the others.
+pub(super) mod leaves {
+    use super::*;
+    pub(crate) use super::{
+        disable_geometry, disable_hooks, disable_input, read_frame, sample_copy as guarded_copy,
+    };
+
+    pub(crate) unsafe fn identify(_: *mut Engine) -> *const c_char {
+        unreachable!("observer identity in a unit test")
+    }
+    pub(crate) unsafe fn enable_hooks(_: *const Engine) -> bool {
+        unreachable!("observer hooks in a unit test")
+    }
+    pub(crate) unsafe fn install_geometry(_: *const Engine) -> bool {
+        unreachable!("geometry install in a unit test")
+    }
+    pub(crate) unsafe fn install_sr(_: *const Engine) -> bool {
+        unreachable!("SR install in a unit test")
+    }
+    pub(crate) unsafe fn install_motion(_: *const Engine) -> bool {
+        unreachable!("motion install in a unit test")
+    }
+    pub(crate) unsafe fn enable_input() -> bool {
+        unreachable!("input slot in a unit test")
+    }
 }

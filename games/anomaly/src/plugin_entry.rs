@@ -1,17 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::native_observer::*;
-use crate::sys::rsf_anomaly_observer_platform as Platform;
 use rsf_game_sys::session::{Probe, publish_api};
 use rsf_game_sys::*;
-
-unsafe extern "C" {
-    fn rsf_anomaly_observer_native() -> *const Platform;
-}
-
-fn platform() -> &'static Platform {
-    // The linked adapter owns this immutable table.
-    unsafe { &*rsf_anomaly_observer_native() }
-}
 
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 
@@ -25,19 +15,19 @@ unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> rsf_detection {
 }
 
 unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> rsf_result {
-    unsafe { rsf_anomaly_observer_prepare(args, platform()) }
+    unsafe { rsf_anomaly_observer_prepare(args) }
 }
 
 unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_result {
-    unsafe { rsf_anomaly_observer_start(args, platform()) }
+    unsafe { rsf_anomaly_observer_start(args) }
 }
 
 unsafe extern "C" fn quiesce(args: *const rsf_game_control_args) -> rsf_result {
-    unsafe { rsf_anomaly_observer_quiesce(args, platform()) }
+    unsafe { rsf_anomaly_observer_quiesce(args) }
 }
 
 unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_result {
-    unsafe { rsf_anomaly_observer_stop(args, platform()) }
+    unsafe { rsf_anomaly_observer_stop(args) }
 }
 
 #[unsafe(no_mangle)]

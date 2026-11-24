@@ -5,8 +5,40 @@ mod report;
 #[cfg(test)]
 mod tests;
 
-// The Rust stages the native boundaries drive, called directly (the tests' fakes under test). The C
-// table (native_observer_platform.c) keeps only the C leaves: trampolines, hooks and guarded reads.
+// The C leaves of native_observer_platform.c (the observer hook set, the stage installs and the guarded reads) and
+// the Rust stages the native boundaries drive, called directly; the tests' fakes under test.
+#[cfg(not(test))]
+mod leaves {
+    use super::{Engine, Frame};
+    use std::ffi::{c_char, c_void};
+
+    unsafe extern "C" {
+        #[link_name = "rsf_anomaly_observer_native_identify"]
+        pub(super) fn identify(engine: *mut Engine) -> *const c_char;
+        #[link_name = "rsf_anomaly_observer_native_enable_hooks"]
+        pub(super) fn enable_hooks(engine: *const Engine) -> bool;
+        #[link_name = "rsf_anomaly_observer_native_disable_hooks"]
+        pub(super) fn disable_hooks() -> bool;
+        #[link_name = "rsf_anomaly_observer_native_install_geometry"]
+        pub(super) fn install_geometry(engine: *const Engine) -> bool;
+        #[link_name = "rsf_anomaly_geometry_disable_native"]
+        pub(super) fn disable_geometry() -> bool;
+        #[link_name = "rsf_anomaly_observer_native_install_sr"]
+        pub(super) fn install_sr(engine: *const Engine) -> bool;
+        #[link_name = "rsf_anomaly_observer_native_install_motion"]
+        pub(super) fn install_motion(engine: *const Engine) -> bool;
+        #[link_name = "rsf_anomaly_observer_native_enable_input"]
+        pub(super) fn enable_input() -> bool;
+        #[link_name = "rsf_anomaly_observer_native_disable_input"]
+        pub(super) fn disable_input() -> bool;
+        #[link_name = "rsf_anomaly_observer_native_read_frame"]
+        pub(super) fn read_frame(engine: *const Engine, out: *mut Frame) -> bool;
+        #[link_name = "rsf_anomaly_observer_native_copy"]
+        pub(super) fn guarded_copy(output: *mut c_void, input: *const c_void, size: usize) -> bool;
+    }
+}
+#[cfg(test)]
+use tests::leaves;
 #[cfg(not(test))]
 mod stages {
     pub(super) use crate::fg_stage::{
@@ -35,7 +67,7 @@ use crate::sys::{
     RSF_ANOMALY_OBSERVER_SCENE, RSF_ANOMALY_OBSERVER_TARGET_COPY, RSF_ANOMALY_OBSERVER_UI,
     rsf_anomaly_native_observation as Observation, rsf_anomaly_observer_binding as Binding,
     rsf_anomaly_observer_camera as Camera, rsf_anomaly_observer_engine as Engine,
-    rsf_anomaly_observer_frame as Frame, rsf_anomaly_observer_platform as Platform,
+    rsf_anomaly_observer_frame as Frame,
 };
 use rsf_game_sys::call_header::{validate, validate_abi};
 use rsf_game_sys::{
@@ -259,7 +291,7 @@ impl Observer {
         }
     }
 
-    fn prepare(&self, host: &rsf_game_host_services, platform: &Platform) -> rsf_result {
+    fn prepare(&self, host: &rsf_game_host_services) -> rsf_result {
         let Some(mut control) = self.try_control() else {
             return BUSY;
         };
@@ -270,7 +302,7 @@ impl Observer {
             return BUSY;
         }
         let mut engine = Engine::default();
-        let refusal = unsafe { (platform.identify.unwrap())(&mut engine) };
+        let refusal = unsafe { leaves::identify(&mut engine) };
         if !refusal.is_null() {
             // Admission returns only static string literals.
             control.reason = unsafe { CStr::from_ptr(refusal) };
@@ -285,7 +317,7 @@ impl Observer {
         OK
     }
 
-    fn start(&self, platform: &Platform) -> rsf_result {
+    fn start(&self) -> rsf_result {
         let Some(mut control) = self.try_control() else {
             return BUSY;
         };
@@ -296,7 +328,7 @@ impl Observer {
             return OK;
         }
         if !matches!(control.retirement, Retirement::Inactive | Retirement::Live) {
-            let result = self.quiesce_locked(&mut control, platform);
+            let result = self.quiesce_locked(&mut control);
             if result != OK {
                 return result;
             }
@@ -318,15 +350,15 @@ impl Observer {
         }
         let engine = &session.engine;
         control.retirement = Retirement::Live;
-        if !unsafe { (platform.enable_hooks.unwrap())(engine) } {
+        if !unsafe { leaves::enable_hooks(engine) } {
             control.reason = c"Guarded native detour installation refused.";
             return NATIVE_REFUSED;
         }
-        control.geometry_installed = unsafe { (platform.install_geometry.unwrap())(engine) };
+        control.geometry_installed = unsafe { leaves::install_geometry(engine) };
         let sr_refused =
-            crate::sr_stage::STAGE.selected() && !unsafe { (platform.install_sr.unwrap())(engine) };
-        let motion_refused = !unsafe { (platform.install_motion.unwrap())(engine) };
-        let input_enabled = unsafe { (platform.enable_input.unwrap())() };
+            crate::sr_stage::STAGE.selected() && !unsafe { leaves::install_sr(engine) };
+        let motion_refused = !unsafe { leaves::install_motion(engine) };
+        let input_enabled = unsafe { leaves::enable_input() };
         let geometry_installed = control.geometry_installed;
         if input_enabled {
             crate::overlay::resume();
@@ -337,7 +369,7 @@ impl Observer {
                 c"Native boundaries active; geometry identity hooks refused; observation does not establish temporal SR/FG execution."
             };
         } else {
-            let _ = self.quiesce_locked(&mut control, platform);
+            let _ = self.quiesce_locked(&mut control);
             control.reason = c"Input fact hook enable refused.";
         }
 
@@ -370,7 +402,7 @@ impl Observer {
         OK
     }
 
-    fn quiesce_locked(&self, control: &mut Control, platform: &Platform) -> rsf_result {
+    fn quiesce_locked(&self, control: &mut Control) -> rsf_result {
         if control.retirement == Retirement::Inactive {
             return OK;
         }
@@ -379,7 +411,7 @@ impl Observer {
             control.retirement = Retirement::Input;
         }
         if control.retirement == Retirement::Input {
-            if !unsafe { (platform.disable_input.unwrap())() } {
+            if !unsafe { leaves::disable_input() } {
                 return NATIVE_REFUSED;
             }
             control.retirement = Retirement::Overlay;
@@ -409,13 +441,13 @@ impl Observer {
             control.retirement = Retirement::ObserverHooks;
         }
         if control.retirement == Retirement::ObserverHooks {
-            if !unsafe { (platform.disable_hooks.unwrap())() } {
+            if !unsafe { leaves::disable_hooks() } {
                 return NATIVE_REFUSED;
             }
             control.retirement = Retirement::Geometry;
         }
         if control.retirement == Retirement::Geometry {
-            if control.geometry_installed && !unsafe { (platform.disable_geometry.unwrap())() } {
+            if control.geometry_installed && !unsafe { leaves::disable_geometry() } {
                 return NATIVE_REFUSED;
             }
             control.geometry_installed = false;
@@ -432,11 +464,11 @@ impl Observer {
         self.activity.load(Ordering::Acquire) == 0 && stages::input_idle()
     }
 
-    fn control(&self, platform: &Platform, stop: bool) -> rsf_result {
+    fn control(&self, stop: bool) -> rsf_result {
         let Some(mut control) = self.try_control() else {
             return BUSY;
         };
-        let result = self.quiesce_locked(&mut control, platform);
+        let result = self.quiesce_locked(&mut control);
         if result == OK && stop {
             if !self.idle() {
                 control.retirement = Retirement::Callbacks;
@@ -469,12 +501,12 @@ impl Observer {
         }
     }
 
-    fn render_begin(&self, platform: &Platform) {
+    fn render_begin(&self) {
         let Some(session) = self.session() else {
             return;
         };
         let mut frame = Frame::default();
-        let read = unsafe { (platform.read_frame.unwrap())(&session.engine, &mut frame) };
+        let read = unsafe { leaves::read_frame(&session.engine, &mut frame) };
         {
             let mut state = lock(&self.state);
             let o = &mut state.observation;
@@ -527,12 +559,12 @@ impl Observer {
         report::stages(session);
     }
 
-    fn camera(&self, platform: &Platform, view: *const f32, projection: *const f32) {
+    fn camera(&self, view: *const f32, projection: *const f32) {
         if view.is_null() || projection.is_null() {
             return;
         }
         let mut sample = Camera::default();
-        let copy = platform.guarded_copy.unwrap();
+        let copy = leaves::guarded_copy;
         let read = unsafe {
             copy(
                 sample.view.as_mut_ptr().cast(),
@@ -591,7 +623,6 @@ pub(crate) fn observe_window(report: impl FnOnce()) {
 #[cfg(feature = "native-entry")]
 pub(crate) unsafe fn rsf_anomaly_observer_prepare(
     args: *const rsf_game_sys::rsf_game_prepare_args,
-    platform: &Platform,
 ) -> rsf_result {
     let result = unsafe { validate(args) };
     if result != OK {
@@ -602,15 +633,14 @@ pub(crate) unsafe fn rsf_anomaly_observer_prepare(
     if result != OK {
         return result;
     }
-    OBSERVER.prepare(unsafe { &*host }, platform)
+    OBSERVER.prepare(unsafe { &*host })
 }
 
 pub(crate) unsafe fn rsf_anomaly_observer_start(
     args: *const rsf_game_start_args,
-    platform: &Platform,
 ) -> rsf_result {
     match unsafe { validate(args) } {
-        OK => OBSERVER.start(platform),
+        OK => OBSERVER.start(),
         error => error,
     }
 }
@@ -618,10 +648,9 @@ pub(crate) unsafe fn rsf_anomaly_observer_start(
 #[cfg(feature = "native-entry")]
 pub(crate) unsafe fn rsf_anomaly_observer_quiesce(
     args: *const rsf_game_sys::rsf_game_control_args,
-    platform: &Platform,
 ) -> rsf_result {
     match unsafe { validate(args) } {
-        OK => OBSERVER.control(platform, false),
+        OK => OBSERVER.control(false),
         error => error,
     }
 }
@@ -629,10 +658,9 @@ pub(crate) unsafe fn rsf_anomaly_observer_quiesce(
 #[cfg(feature = "native-entry")]
 pub(crate) unsafe fn rsf_anomaly_observer_stop(
     args: *const rsf_game_sys::rsf_game_control_args,
-    platform: &Platform,
 ) -> rsf_result {
     match unsafe { validate(args) } {
-        OK => OBSERVER.control(platform, true),
+        OK => OBSERVER.control(true),
         error => error,
     }
 }
@@ -698,16 +726,15 @@ extern "C" fn rsf_anomaly_observer_before(boundary: u32) -> bool {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_observer_after(
-    platform: &Platform,
     boundary: u32,
     view: *const f32,
     projection: *const f32,
     target: u32,
 ) {
     match boundary {
-        RSF_ANOMALY_OBSERVER_BEGIN => OBSERVER.render_begin(platform),
+        RSF_ANOMALY_OBSERVER_BEGIN => OBSERVER.render_begin(),
         RSF_ANOMALY_OBSERVER_END => OBSERVER.end_after(),
-        RSF_ANOMALY_OBSERVER_CAMERA => OBSERVER.camera(platform, view, projection),
+        RSF_ANOMALY_OBSERVER_CAMERA => OBSERVER.camera(view, projection),
         RSF_ANOMALY_OBSERVER_TARGET_COPY => match target {
             1 => OBSERVER.update(|o| o.pda_copies = o.pda_copies.wrapping_add(1)),
             2 => {

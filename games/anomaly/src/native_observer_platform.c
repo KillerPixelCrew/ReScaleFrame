@@ -12,7 +12,7 @@
 const char* rsf_anomaly_observer_identify(rsf_anomaly_observer_engine*, const rsf_anomaly_image_headers*,
     rsf_anomaly_guard_read_fn);
 bool rsf_anomaly_observer_before(uint32_t boundary);
-void rsf_anomaly_observer_after(const rsf_anomaly_observer_platform*, uint32_t boundary,
+void rsf_anomaly_observer_after(uint32_t boundary,
     const float* view, const float* projection, uint32_t target);
 void rsf_anomaly_observer_leave(void);
 typedef bool (*rsf_anomaly_observer_install_fn)(void*, uint32_t, const rsf_anomaly_hook_site*, size_t);
@@ -46,30 +46,6 @@ typedef struct invocation {
     uint32_t target;
 } invocation;
 
-static const char* identify(rsf_anomaly_observer_engine*);
-static bool enable_hooks(const rsf_anomaly_observer_engine*);
-static bool disable_hooks(void);
-static bool install_geometry(const rsf_anomaly_observer_engine*);
-static bool install_sr(const rsf_anomaly_observer_engine*);
-static bool install_motion(const rsf_anomaly_observer_engine*);
-static bool enable_input(void);
-static bool disable_input(void);
-static bool read_frame(const rsf_anomaly_observer_engine*, rsf_anomaly_observer_frame*);
-
-static const rsf_anomaly_observer_platform platform = {
-    .identify = identify,
-    .enable_hooks = enable_hooks,
-    .disable_hooks = disable_hooks,
-    .install_geometry = install_geometry,
-    .disable_geometry = rsf_anomaly_geometry_disable_native,
-    .install_sr = install_sr,
-    .install_motion = install_motion,
-    .enable_input = enable_input,
-    .disable_input = disable_input,
-    .read_frame = read_frame,
-    .guarded_copy = guarded_copy,
-};
-
 static void call_original(const invocation* call)
 {
     void* const original = trampolines[call->boundary];
@@ -99,7 +75,7 @@ static void run(const invocation* call, bool completes)
 {
     call_original(call);
     if (completes && completes_after(call->boundary)) {
-        rsf_anomaly_observer_after(&platform, call->boundary, call->view, call->projection, call->target);
+        rsf_anomaly_observer_after(call->boundary, call->view, call->projection, call->target);
     }
 }
 
@@ -166,7 +142,7 @@ static void reset_end(void* self)
     observe(&call);
 }
 
-static const char* identify(rsf_anomaly_observer_engine* out)
+const char* rsf_anomaly_observer_native_identify(rsf_anomaly_observer_engine* out)
 {
     return rsf_anomaly_observer_identify(out, &rsf_anomaly_guarded_image_headers, guarded_copy);
 }
@@ -182,7 +158,7 @@ static rsf_anomaly_observer_binding bind(void* replacement, uint32_t boundary)
     return binding;
 }
 
-static bool enable_hooks(const rsf_anomaly_observer_engine* engine)
+bool rsf_anomaly_observer_native_enable_hooks(const rsf_anomaly_observer_engine* engine)
 {
     if (rsf_anomaly_hooks_created(&hooks)) return rsf_anomaly_hooks_enable(&hooks);
     // MinHook takes code addresses as untyped pointers.
@@ -199,30 +175,30 @@ static bool enable_hooks(const rsf_anomaly_observer_engine* engine)
     return rsf_anomaly_observer_install(engine, bindings, install_hooks);
 }
 
-static bool disable_hooks(void) { return rsf_anomaly_hooks_disable(&hooks); }
+bool rsf_anomaly_observer_native_disable_hooks(void) { return rsf_anomaly_hooks_disable(&hooks); }
 
-static bool install_geometry(const rsf_anomaly_observer_engine* engine)
+bool rsf_anomaly_observer_native_install_geometry(const rsf_anomaly_observer_engine* engine)
 {
     return rsf_anomaly_geometry_install_native(engine->image, engine->build);
 }
-static bool install_sr(const rsf_anomaly_observer_engine* engine)
+bool rsf_anomaly_observer_native_install_sr(const rsf_anomaly_observer_engine* engine)
 {
     return rsf_anomaly_sr_install_native(engine->image, engine->build);
 }
-static bool install_motion(const rsf_anomaly_observer_engine* engine)
+bool rsf_anomaly_observer_native_install_motion(const rsf_anomaly_observer_engine* engine)
 {
     return rsf_anomaly_motion_install_native(engine->image, engine->build);
 }
-static bool enable_input(void) { return rsf_anomaly_slot_set(RSF_ANOMALY_INPUT_SLOT, true); }
-static bool disable_input(void) { return rsf_anomaly_slot_set(RSF_ANOMALY_INPUT_SLOT, false); }
+bool rsf_anomaly_observer_native_enable_input(void) { return rsf_anomaly_slot_set(RSF_ANOMALY_INPUT_SLOT, true); }
+bool rsf_anomaly_observer_native_disable_input(void) { return rsf_anomaly_slot_set(RSF_ANOMALY_INPUT_SLOT, false); }
 
-static bool read_frame(const rsf_anomaly_observer_engine* engine, rsf_anomaly_observer_frame* out)
+bool rsf_anomaly_observer_native_read_frame(const rsf_anomaly_observer_engine* engine, rsf_anomaly_observer_frame* out)
 {
     return rsf_anomaly_observer_read_frame(engine, guarded_copy, out);
 }
 
 
-const rsf_anomaly_observer_platform* rsf_anomaly_observer_native(void)
+bool rsf_anomaly_observer_native_copy(void* output, const void* input, size_t size)
 {
-    return &platform;
+    return guarded_copy(output, input, size);
 }
