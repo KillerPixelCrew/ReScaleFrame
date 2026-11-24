@@ -28,13 +28,14 @@ managed helper into the game's existing Mono scripting domain. It never initiali
 Mono/CLR runtime or another orchestrator.
 Vendor SDKs, graphics interoperability, settings and presentation remain in `runtime/`.
 
-`ReScaleFrame.Game.UnityMono.dll` currently recognizes only the exact researched Drag'n Wash
-x64 name and SHA256. Its current lifecycle prepares the native bridge and managed helper, then
-activates guarded hooks. Unsupported preparation refuses; quiesce/stop drain owned work. The
-initial scaffold refused all activation. Readiness still stays false. This exact allowlist
-is deliberate: executable metadata alone cannot prove another Unity game's adapter compatibility.
-The synthetic contract fixture validates C ABI guards and lifecycle refusal. It does not load
-Mono, install Harmony patches or touch a graphics device.
+`ReScaleFrame.Game.UnityMono.dll` recognized only the exact researched Drag'n Wash x64 name and
+SHA256 until 24 November 2026; it now discovers the player instead (see
+[the discovery section](#discovery-instead-of-a-pinned-build-24-november-2026)). Its lifecycle
+prepares the native bridge and managed helper, then activates guarded hooks. Unsupported
+preparation refuses; quiesce/stop drain owned work. Readiness still stays false. Compatibility is
+decided by the URP method contract the helper resolves in the running player, not by executable
+metadata. The synthetic contract fixture validates C ABI guards, refusal in a non-player process
+and lifecycle refusal. It does not load Mono, install Harmony patches or touch a graphics device.
 
 The Release scaffold was built with MSVC through the VS 2026 preset. The full repository gate
 passed with six expected environment/vendor skips, then Rust formatting and Clippy. The Unity
@@ -172,3 +173,40 @@ synthetic GPU checks, live activation and shared overlay controls separately fro
 Reflection makes managed discovery and adaptation easier. Working rendering still requires
 those execution, lifetime, convention and image checks. No item above has been runtime-tested
 by this investigation.
+
+## Discovery instead of a pinned build (24 November 2026)
+
+Steam build 26443382 replaced `DragNWash.exe` (SHA-256 `5fdfffe3…` became
+`cdf21fdc8f4c7f64702f77c5a745480f65a160a4aa7c4fefe0f90a489e2b1d94`, still 667,648 bytes), and the
+plugin, start-up and deploy script all refused because each matched the old hash. Following
+AGENTS.md Rule 4 the hash is now logged as evidence and every gate discovers what the adapter uses.
+
+A read-only comparison of the updated install with the
+[3 October evidence](evidence/drag-n-wash-static-20261003.json): `UnityPlayer.dll` (Unity
+6000.3.14f1, d68c3f99a318), `mono-2.0-bdwgc.dll`, URP Runtime/Config/2D, Core Runtime/Shared,
+`UnityEngine.CoreModule` and `UnityEngine.UIModule` have unchanged SHA-256. `Assembly-CSharp`
+(433,664 to 449,536 bytes), `Naelstrof.UnityScriptableSettings` and `globalgamemanagers.assets`
+changed. The adapter references no game-code type. The asset change replaced the recorded
+`WalkNWashLit` character-motion patch; `eng/deploy-unity-sr.ps1` reports and drops that record.
+
+| What | How it is found | Refusal |
+| --- | --- | --- |
+| Unity Mono player | `UnityPlayer.dll` and `MonoBleedingEdge/EmbedRuntime/mono-2.0-bdwgc.dll` beside the running executable (`src/discovery.rs`, used by `detect`, `rsf_unity_fg_start` and `rsf_unity_sr_start`) | `[UnitySR] Log` names the missing file; SR start returns 6, FG start 5, detection unknown |
+| Managed assemblies | `<name>_Data/Managed/UnityEngine.CoreModule.dll`, `Unity.RenderPipelines.Core.Runtime.dll`, `Unity.RenderPipelines.Universal.Runtime.dll` | as above |
+| Unity version | NUL-terminated string after the `<name>_Data/globalgamemanagers` serialized-file header: offset 48 from format 22, 20 before; the format is the big-endian word at offset 8. Both builds record `6000.3.14f1` at offset 48, format 22 | an unreadable or implausible string refuses; the value is never compared, only logged and passed as the vendor engine string |
+| Executable identity | file name compared with the probe's, case-insensitive; SHA-256 logged | the name must match; the hash gates nothing |
+| Mono embedding API | the 12 exports by name from the loaded `mono-2.0-bdwgc.dll` (`src/mono.rs`, unchanged) | "Required Mono embedding exports are missing." |
+| Script domain | `mono_domain_foreach` friendly name `Unity Child Domain`, else `Unity Root Domain` (unchanged) | "Unity Mono scripting domain is not available." |
+| Render-loop boundary | `RenderPipelineManager.DoRenderLoop_Internal` by name, with an IL body | `MissingMethodException` naming it |
+| 13 URP sites | `UrpAdapter.Contracts`: declaring type, name and full parameter types for `PostProcessPassRenderGraph.UpdateCameraResolution`, `.RenderSTP`, `.RenderPostProcessingRenderGraph`; `UniversalRenderPipeline.InitializeStackedCameraData`, `.InitializeAdditionalCameraData`, `.CreateCameraData`, `.ApplyAdaptivePerformance`; `TemporalAA.CalculateJitterMatrix` (with nested `JitterFunc`); `UniversalRenderer.OnAfterRendering`, `.OnRecordRenderGraph`, `.GetRenderPassInputs`; `DrawScreenSpaceUIPass.RenderOverlay`; `MotionVectorRenderPass.Render` | `MissingMethodException` or `TypeLoadException` naming the type and member, before any patch |
+| Fields and getters written | `UniversalCameraData.upscalingFilter`, `.imageScalingMode`, `.m_ProjectionMatrix`, `.antialiasing`, getter `isHDROutputActive`; `ScriptableRenderer.frameData` getter; enum names `STP`, `FSR`, `Upscaling` | `MissingFieldException`, `MissingMemberException` or `ArgumentException` naming it |
+| Graphics API | `SystemInfo.graphicsDeviceType` must be Direct3D12 (a capability; the Unity version beside it is only logged) | names the running API |
+| Character-motion pass | materials whose shader is named `WalkNWashLit` with a `ReScaleFrameMotion` pass, found at run time (`CharacterMotion.cs`) | absent pass: those renderers keep URP's own motion |
+| Deployment | the one `*.exe` with a `<name>_Data/Managed` directory, plus the files above; hash and `UnityPlayer.dll` product version recorded in `deployment.json` | names the missing file or the executable count |
+
+The CoreCLR contract fixture (`tests/unity-managed`, built against the updated install's
+`DragNWash_Data/Managed`, read only) matched all 13 sites and passed the packet layout, imported
+backbuffer and HUD-less checks. The Mono-runtime Harmony variant was not run because it executes
+the game's Mono. Not yet confirmed by a game run: live detection and start-up on build 26443382,
+the managed contract inside the player, and character motion, which needs the shader patch
+rebuilt from the new `globalgamemanagers.assets` with `scripts/patch-drag-n-wash-motion.py`.

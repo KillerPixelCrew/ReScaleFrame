@@ -2,7 +2,7 @@
 
 `rsf_game_unity_mono` builds `ReScaleFrame.Game.UnityMono.dll` through the existing game-plugin
 ABI. It is the shared plugin shell for reflection and Harmony adapters across Unity Mono games.
-Drag'n Wash is the first recognized build and URP RenderGraph validation case.
+Drag'n Wash is the first validated game and URP RenderGraph case.
 
 The plugin owns Unity discovery, engine hooks, camera/frame conventions and SR reinsertion.
 The shared orchestrator retains vendor SDKs, GPU interoperability and presentation. URP, HDRP
@@ -36,15 +36,23 @@ waits for completion before replacing the old swapchain.
 
 The behaviour recorded for these owners lives in their dated research notes
 (`docs/research/rust-unity-*.md`) and [the implementation tracker](../../docs/implementation.md).
-Detection currently requires the exact x64 Drag'n Wash executable name and SHA256. A different
-build remains unknown, including other Unity Mono games. Recognition only establishes identity.
-The initial adapter targets Unity 6000.3 URP RenderGraph on native D3D12. Its Mono helper uses
-Harmony after complete method-contract preflight; native packets retain GPU resources through
-Unity completion fences. Missing runtime services or unsupported players refuse preparation.
+No executable build is pinned (AGENTS.md Rule 4). `src/discovery.rs` recognizes the running x64
+process when `UnityPlayer.dll`, `MonoBleedingEdge/EmbedRuntime/mono-2.0-bdwgc.dll` and the
+`<name>_Data/Managed` CoreModule, URP Core and URP Runtime assemblies sit beside its executable,
+and reads the Unity version from the `<name>_Data/globalgamemanagers` header. A missing file
+refuses detection and start-up, and `[UnitySR] Log` names it. The executable SHA-256 and the
+Unity version are logged as evidence; the version is also the vendor engine string. Before any
+patch, the Mono helper resolves its 13 URP methods and the fields it writes by declaring type,
+name and parameter types, and refuses naming the first one missing. Its D3D12 check is a capability check, not a version.
+[Discovery evidence](../../docs/research/unity-mono-plugin.md#discovery-instead-of-a-pinned-build-24-november-2026).
+The adapter targets URP RenderGraph on native D3D12, researched on Unity 6000.3.14f1. Its Mono
+helper uses Harmony after complete method-contract preflight; native packets retain GPU resources
+through Unity completion fences. Missing runtime services or unsupported players refuse preparation.
 Normal loading uses the shared RSF shim, dropped alongside original game files.
 `rendering_ready` remains zero while broader scene, resize and hardware acceptance is pending.
 
-Native contract fixtures verify identity, ABI guards and inactive cleanup in a test process.
+Native contract fixtures verify that a non-player test process is refused, ABI guards and
+inactive cleanup; unit tests cover discovery on a synthetic player layout.
 The shipped-Mono fixture separately exercises managed packet layout, twelve URP method contracts
 and Harmony patch/unpatch. Native DX12 vendor readback and live game evidence are recorded in
 [the runtime notes](../../docs/research/unity-dx12-runtime-20261004.md).
@@ -76,9 +84,11 @@ before installing hooks. A successful compile against a newer SDK does not estab
 for that player. [Release build evidence](../../docs/releases/v0.1.1-drag-n-wash.md).
 
 For an explicitly requested local installation, `eng/deploy-unity-sr.ps1` defaults to
-Auto/Quality with FG Off, backs up owned RSF files and checks original-file hashes. Run deployment
-only against a closed game. It copies all FG runtime families even when the default is Off.
-The version carrier goes beside `DragNWash.exe`; runtime/plugin/helper/overlay live in `ReScaleFrame/`.
+Auto/Quality with FG Off, finds the one Unity Mono URP player executable in the directory, backs
+up owned RSF files and checks original-file hashes. It retakes that baseline on every deployment,
+so a game update is reported rather than refused, and verifies that the copy left it unchanged.
+Run deployment only against a closed game. It copies all FG runtime families even when the default is Off.
+The version carrier goes beside the player executable; runtime/plugin/helper/overlay live in `ReScaleFrame/`.
 The packager writes a Windows ZIP under `.local/packages` from Release outputs and the pinned
 vendor SDK directories. It excludes Unity SDK references, preferences, logs, backups and original
 game files. `-GameDirectory` remains an optional input for a verified deployment. Publishing the
@@ -88,4 +98,4 @@ settings over `[UnitySR]` defaults. [Current status](../../docs/current-status.m
 
 [Plugin design](../../docs/research/unity-mono-plugin.md) records the inspected methods, proposed
 bootstrap, semantic patch guards, native execution and lifecycle requirements.
-[First game evidence](../drag-n-wash/engine.json) keeps build identity separate from capability.
+[First game evidence](../drag-n-wash/engine.json) records the examined builds as evidence, separate from capability.

@@ -50,7 +50,7 @@ it does not prove that a particular ZIP received game or Claw acceptance.
 All native plugin APIs still report `rendering_ready = 0`. That conservative code-level
 flag is distinct from recorded user acceptance of individual deployed paths; it must not be
 rewritten in prose as either universal support or absence of all working rendering. Detection
-checks executable basename, x64 machine and exact SHA256. Other builds remain unknown.
+checks executable basename, x64 machine and exact SHA256 in the adapters not yet converted to AGENTS.md Rule 4; the Unity Mono plugin discovers the player instead and logs the hash as evidence.
 
 Evidence: [AC7 consumer session](research/ac7-consumer-session.md),
 [native renderer](research/ac7-native-renderer-refactor-20261001.md),
