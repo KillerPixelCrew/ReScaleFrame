@@ -9,7 +9,7 @@
 use rsf_game_sys::{RSF_GAME_INPUT_KEYBOARD, RSF_GAME_INPUT_MOUSE};
 use std::cell::Cell;
 #[cfg(windows)]
-use std::ffi::c_void;
+use std::ffi::{CStr, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 #[cfg(windows)]
@@ -19,21 +19,30 @@ use crate::engine_slots::{Exchange, INPUT, input_counter, slot_install};
 
 #[cfg(windows)]
 mod profile;
+#[cfg(all(windows, any(test, feature = "recorded-profiles")))]
+pub(crate) use profile::RECORDED;
+#[cfg(windows)]
+pub(crate) use profile::discovered;
 
 #[cfg(all(windows, feature = "fg-fixture", not(test)))]
 pub(crate) fn has_fixture_profile(build: usize) -> bool {
-    profile::for_build(build)
+    RECORDED
+        .get(build)
         .is_some_and(|profile| profile.sites[0].rva != 0 && profile.slot_rva != 0)
 }
 
 // ---- CInput::OnFrame admission ------------------------------------------------------------------
 
 #[cfg(windows)]
-struct InputProfile {
-    sites: [NativeSite; 3],
-    slot_rva: u32,
-    frame_code: *const std::ffi::c_char,
+pub(crate) struct InputProfile {
+    pub(crate) sites: [NativeSite; 3],
+    pub(crate) slot_rva: u32,
+    pub(crate) frame_code: *const std::ffi::c_char,
 }
+
+// SAFETY: frame_code points to a static C string that is never written through.
+#[cfg(windows)]
+unsafe impl Sync for InputProfile {}
 
 #[cfg(windows)]
 #[cfg_attr(test, allow(dead_code))]
@@ -45,9 +54,12 @@ pub(crate) fn rsf_anomaly_input_install(
     exchange: Exchange,
     reason: Option<&mut *const std::ffi::c_char>,
 ) -> bool {
-    let installed = profile::for_build(build)
-        .ok_or(c"unknown CInput build".as_ptr())
-        .and_then(|profile| install(image, &profile, counter_rva, replacement, exchange));
+    let installed = crate::discovery::records()
+        .get(build)
+        .ok_or(c"unknown CInput build")
+        .and_then(|records| records.input)
+        .map_err(CStr::as_ptr)
+        .and_then(|profile| install(image, profile, counter_rva, replacement, exchange));
     if let (Err(refusal), Some(reason)) = (installed, reason) {
         *reason = refusal;
     }

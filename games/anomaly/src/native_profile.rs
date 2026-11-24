@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MIT
-//! Exact Anomaly 1.5.3 DX11 profiles shared by startup, observation and fixtures.
-//! Evidence: docs/research/anomaly-native-hooks.md and anomaly-avx-profile.md.
-use crate::engine_guards::{NativeSite, UniqueGuard, site};
+//! The native observer profile: the eight detour sites and the device globals every stage reads.
+//! discovered builds it from the running executable's sites (crate::discovery); RECORDED keeps the
+//! two 1.5.3 DX11 builds' records for the tests and fixtures. Evidence: docs/research/anomaly-native-hooks.md
+//! and anomaly-avx-profile.md.
+use crate::discovery::{Found, Site};
+#[cfg(any(test, feature = "recorded-profiles"))]
+use crate::engine_guards::site;
+use crate::engine_guards::{NativeSite, UniqueGuard};
 use std::ffi::CStr;
 
 pub(crate) const HOOK_COUNT: usize = 8;
@@ -21,6 +26,7 @@ pub(crate) struct Profile {
 /// Engine functions both the geometry profile and the SR profile name, per build in PROFILES order: rmNear (a
 /// geometry detour, the SR H4 hook and the end of every first-person site) and the three r_dsgraph renders the
 /// geometry context hooks and the SR first-person sites share. A game update changes them here once.
+#[cfg(any(test, feature = "recorded-profiles"))]
 pub(crate) struct Engine {
     pub(crate) rm_near: NativeSite,
     pub(crate) rm_near_unique: UniqueGuard,
@@ -29,6 +35,7 @@ pub(crate) struct Engine {
     pub(crate) render_emissive: NativeSite,
 }
 
+#[cfg(any(test, feature = "recorded-profiles"))]
 pub(crate) const ENGINE: [Engine; 2] = [
     // Standard
     Engine {
@@ -52,7 +59,9 @@ pub(crate) const ENGINE: [Engine; 2] = [
 // C string literals. The records are never written through those pointers.
 unsafe impl Sync for Profile {}
 
-pub(crate) static PROFILES: [Profile; 2] = [
+/// The records of the two 1.5.3 DX11 builds discovery resolves today: test and fixture data.
+#[cfg(any(test, feature = "recorded-profiles"))]
+pub(crate) static RECORDED: [Profile; 2] = [
     // ---- Standard 1.5.3 DX11 ----
     Profile {
         label: c"standard",
@@ -183,12 +192,32 @@ pub(crate) static PROFILES: [Profile; 2] = [
     },
 ];
 
-pub(crate) fn find(executable: &[u8], hash: &[u8]) -> Option<usize> {
-    PROFILES.iter().position(|profile| {
-        profile
-            .executable
-            .to_bytes()
-            .eq_ignore_ascii_case(executable)
-            && profile.sha256.to_bytes().eq_ignore_ascii_case(hash)
-    })
+/// The observer profile of the discovered sites; the hash is evidence for logs only.
+pub(crate) fn discovered(
+    found: &Found,
+    executable: &'static CStr,
+    sha256: &'static CStr,
+    image_size: u32,
+) -> Profile {
+    Profile {
+        label: c"discovered",
+        executable,
+        sha256,
+        image_size,
+        device_width_rva: found.rva(Site::DeviceWidth),
+        device_height_rva: found.rva(Site::DeviceHeight),
+        device_frame_rva: found.rva(Site::DeviceFrame),
+        sites: [
+            Site::Begin,
+            Site::End,
+            Site::SetCacheXform,
+            Site::Render,
+            Site::RenderUi,
+            Site::RenderToTarget,
+            Site::ResetBegin,
+            Site::ResetEnd,
+        ]
+        .map(|site| found.site(site)),
+        guards: [Site::Render, Site::ResetBegin].map(|site| found.guard(site)),
+    }
 }

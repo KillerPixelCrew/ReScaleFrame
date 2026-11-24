@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Resolves the selected build's Rust-owned geometry and native profile facts.
-//! The native leaf passes only the build index and the mapped module.
+//! Resolves the admitted profile's Rust-owned geometry and native facts (crate::discovery).
+//! The native leaf passes only the profile index and the mapped module.
 
 use super::Layout;
 use crate::engine_guards::{NativeSite, UniqueGuard};
@@ -17,7 +17,7 @@ pub(super) struct Facts {
 
 #[cfg(windows)]
 pub(super) fn geometry(engine: Engine) -> Option<Facts> {
-    let profile = crate::geometry_profile::PROFILES.get(engine.build)?;
+    let profile = crate::discovery::geometry(engine.build)?;
     Some(Facts {
         sites: &profile.sites,
         layout_sites: &profile.layout_sites,
@@ -29,22 +29,16 @@ pub(super) fn geometry(engine: Engine) -> Option<Facts> {
 
 #[cfg(windows)]
 pub(super) fn image_size(engine: Engine) -> Option<u32> {
-    Some(
-        crate::native_profile::PROFILES
-            .get(engine.build)?
-            .image_size,
-    )
+    Some(crate::discovery::native(engine.build)?.image_size)
 }
 
 #[cfg(windows)]
 pub(super) fn layout(engine: Engine) -> Option<Layout> {
-    let geometry = crate::geometry_profile::PROFILES.get(engine.build)?;
+    let geometry = crate::discovery::geometry(engine.build)?;
     Some(Layout {
         phase: geometry.render_phase_rva,
         viewport: geometry.second_viewport_rva,
-        frame: crate::native_profile::PROFILES
-            .get(engine.build)?
-            .device_frame_rva,
+        frame: crate::discovery::native(engine.build)?.device_frame_rva,
         world: geometry.world_matrix_rva,
     })
 }

@@ -30,11 +30,11 @@ mod camera;
 mod capture_clock;
 #[cfg(windows)]
 mod com;
+#[cfg(windows)]
+mod discovery;
 mod engine_guards;
 #[cfg(windows)]
 mod engine_slots;
-#[cfg(windows)]
-mod executable;
 mod ffi;
 #[cfg(any(windows, test))]
 mod fg_inputs;

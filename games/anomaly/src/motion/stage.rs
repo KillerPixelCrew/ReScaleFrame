@@ -603,14 +603,14 @@ pub(crate) unsafe fn configure(ini: *const u16, log: rsf_game_log_fn) {
 pub(crate) fn install(image: Raw, build: usize) -> bool {
     let stage = Stage::get();
     let records = (
-        crate::native_profile::PROFILES.get(build),
+        crate::discovery::native(build),
         MotionProfile::of(build),
         native::Engine::of(build),
     );
     let (Some(native), Some(motion), Some(engine)) = records else {
         stage
             .log()
-            .text(c"Anomaly motion refused: no motion profile for the verified build.");
+            .text(c"Anomaly motion refused: its sites were not discovered (see the adapter log).");
         return false;
     };
     let selected = Build {

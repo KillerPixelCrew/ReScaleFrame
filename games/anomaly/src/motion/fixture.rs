@@ -3,7 +3,7 @@ mod foliage;
 mod mover;
 
 use super::*;
-use crate::motion_profile::{MotionProfile, PROFILES};
+use crate::motion_profile::{MotionProfile, RECORDED};
 use crate::native_geometry_abi::SOFTWARE_SKINNED;
 use crate::shader_loader::{SHADER_CONTRACT_CASES, run_frame_fixture};
 use crate::sys::RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC;
@@ -660,7 +660,7 @@ unsafe extern "C" fn rsf_anomaly_motion_contract(argc: c_int, argv: *const *cons
     } else {
         std::ptr::null()
     };
-    let [standard, avx] = PROFILES.each_ref().map(MotionProfile::frame_layout);
+    let [standard, avx] = RECORDED.each_ref().map(MotionProfile::frame_layout);
     let mut cases = MOTION_CASES
         .iter()
         .chain(SHADER_CONTRACT_CASES)

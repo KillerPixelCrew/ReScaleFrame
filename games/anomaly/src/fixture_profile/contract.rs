@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Consistency checks across the Rust-owned native, geometry, SR and motion profile records.
 use crate::engine_guards::{NativeSite, UniqueGuard};
-use crate::motion_profile::{MotionProfile, PROFILES as MOTION, SITE_CREATE_SHADER};
+use crate::motion_profile::{MotionProfile, RECORDED as MOTION, SITE_CREATE_SHADER};
 use crate::sr_profile::{FirstPersonSite, SITE_RM_NEAR, SITE_SUN_CASCADES};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::from_ref;
@@ -70,9 +70,9 @@ fn bank<T>(values: &[T]) -> Bank<T> {
 }
 
 fn project(build: usize) -> Profile {
-    let n = &crate::native_profile::PROFILES[build];
-    let g = &crate::geometry_profile::PROFILES[build];
-    let s = &crate::sr_profile::PROFILES[build];
+    let n = &crate::native_profile::RECORDED[build];
+    let g = &crate::geometry_profile::RECORDED[build];
+    let s = &crate::sr_profile::RECORDED[build];
     for (index, name) in [
         (
             GEOMETRY_RENDER_HUD,
@@ -141,32 +141,6 @@ fn project(build: usize) -> Profile {
                 g.sites[GEOMETRY_RM_NEAR].rva,
             ),
         ],
-    }
-}
-
-fn check_build_selection() {
-    // Independent fingerprints pinned by the two executable evidence records.
-    const STANDARD: &str = "C857B6F49D32C62245611B26106862A773185533856E8B858A7D7E849ED2FB4E";
-    const AVX: &str = "2032ACFC041E215508692EF4079EF504C7BBABF1793D5668084099F734B92F12";
-    let standard = STANDARD.to_ascii_lowercase();
-    let avx = AVX.to_ascii_lowercase();
-    for (name, hash, expected) in [
-        ("AnomalyDX11.exe", standard.as_str(), Some(0)),
-        ("anomalydx11.exe", STANDARD, Some(0)),
-        ("AnomalyDX11AVX.exe", avx.as_str(), Some(1)),
-        ("ANOMALYDX11AVX.EXE", AVX, Some(1)),
-        ("AnomalyDX11AVX.exe", STANDARD, None),
-        ("AnomalyDX11.exe", AVX, None),
-        ("AnomalyDX10AVX.exe", AVX, None),
-        ("AnomalyDX11.exe", &STANDARD[..63], None),
-        ("AnomalyDX11\u{c4}.exe", STANDARD, None),
-        ("", "", None),
-    ] {
-        assert_eq!(
-            crate::native_profile::find(name.as_bytes(), hash.as_bytes()),
-            expected,
-            "profile for {name:?}"
-        );
     }
 }
 
@@ -347,7 +321,7 @@ fn check_profiles(profiles: &[Profile; 2], slots: &[TargetSlot]) {
     assert!(standard.owners.iter().zip(avx.owners).all(|(&a, b)| a != b));
     for ((profile, canonical), motion) in profiles
         .iter()
-        .zip(&crate::native_profile::PROFILES)
+        .zip(&crate::native_profile::RECORDED)
         .zip(&MOTION)
     {
         assert_eq!(unsafe { CStr::from_ptr(profile.label) }, canonical.label);
@@ -425,7 +399,6 @@ extern "C" fn rsf_test_anomaly_profile_contract() -> i32 {
             })
             .collect();
         check_profiles(&profiles, &slots);
-        check_build_selection();
         println!("0 failure(s)");
         0
     });

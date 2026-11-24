@@ -11,9 +11,13 @@ license.workspace = true
 crate-type = ["staticlib", "rlib"]
 
 [features]
-fg-fixture = ["dep:rsf-test-support", "windows/Win32_Graphics_Dxgi"]
-input-hook-fixture = []
+# Tests and fixtures run on the two 1.5.3 builds' recorded profiles instead of discovering the running
+# executable's sites (src/discovery.rs). Every fixture feature enables it; the shipping plugin never does.
+recorded-profiles = []
+fg-fixture = ["recorded-profiles", "dep:rsf-test-support", "windows/Win32_Graphics_Dxgi"]
+input-hook-fixture = ["recorded-profiles"]
 overlay-device-fixture = [
+  "recorded-profiles",
   "dep:rsf-test-support",
   "windows/std",
   "windows/Win32_Devices_HumanInterfaceDevice",
@@ -21,17 +25,18 @@ overlay-device-fixture = [
   "windows/Win32_Graphics_Imaging",
   "windows/Win32_System_Com",
 ]
-motion-hooks-fixture = []
-motion-binder-fixture = []
+motion-hooks-fixture = ["recorded-profiles"]
+motion-binder-fixture = ["recorded-profiles"]
 motion-device-fixture = [
+  "recorded-profiles",
   "dep:rsf-test-support",
   "windows/Win32_Graphics_Direct3D_Fxc",
   "windows/Win32_Graphics_Dxgi",
   "windows-sys/Win32_System_Kernel",
 ]
 native-entry = []
-native-hook-fixture = []
-sr-fixtures = ["dep:rsf-test-support", "windows/Win32_Graphics_Dxgi"]
+native-hook-fixture = ["recorded-profiles"]
+sr-fixtures = ["recorded-profiles", "dep:rsf-test-support", "windows/Win32_Graphics_Dxgi"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }

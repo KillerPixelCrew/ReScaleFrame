@@ -72,8 +72,8 @@ unsafe extern "C" fn rsf_test_anomaly_geometry_profile_get(
     out: *mut TestProfile,
 ) -> bool {
     let (Some(geometry), Some(native)) = (
-        crate::geometry_profile::PROFILES.get(build),
-        crate::native_profile::PROFILES.get(build),
+        crate::geometry_profile::RECORDED.get(build),
+        crate::native_profile::RECORDED.get(build),
     ) else {
         return false;
     };

@@ -48,7 +48,7 @@ fn check(condition: bool, message: &'static str) -> Result<(), &'static str> {
 
 fn exercise(fixture: &Fixture) -> Result<(), &'static str> {
     // The flush site of the standard build; the launcher retargets it at its own function.
-    let flush_site = geometry_profile::PROFILES[0]
+    let flush_site = geometry_profile::RECORDED[0]
         .sites
         .iter()
         .position(|site| unsafe { CStr::from_ptr(site.name) } == c"CBackend::constants.flush")

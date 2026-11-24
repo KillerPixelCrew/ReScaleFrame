@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Motion MRT sites of the exact Anomaly 1.5.3 DX11 executables (design notes in motion_stage.h), in
-//! native_profile.rs build order. Data only: nothing here installs a hook. tools/anomaly_motion_evidence.py
-//! --verify [--exe avx] re-derives every value from the installed executable with a disassembler. All
+//! Motion MRT sites (design notes in motion_stage.h), built from the running executable's discovered sites
+//! (crate::discovery); the two 1.5.3 DX11 builds' records stay as RECORDED for the tests and fixtures. Data only:
+//! nothing here installs a hook. tools/anomaly_motion_evidence.py --verify [--exe avx] checks every discovered value
+//! against the installed executable with a disassembler. All
 //! functions are x64 __fastcall. Line numbers refer to xray-monolith 028ccf5.
 //!
 //! Detours (`sites`, expected = the first 16 bytes at the RVA, as the native sites):
@@ -36,7 +37,10 @@
 //!   CreateDomainShader +0x88), then `mov rcx, [rsi]; mov [rcx+10h], rax`: SHS::sh and SDS::sh are at
 //!   SHADER_OBJECT_OFFSET like SPS::ps/SVS::vs. Then D3DReflect and R_constant_table::parse with
 //!   RC_dest_hull 0x10 / RC_dest_domain 0x20.
-use crate::engine_guards::{NativeSite, UniqueGuard, site};
+use crate::discovery::{Found, Site, records};
+#[cfg(any(test, feature = "recorded-profiles"))]
+use crate::engine_guards::site;
+use crate::engine_guards::{NativeSite, UniqueGuard};
 use crate::shader_loader::{EngineShaderProfile, FrameLayout};
 use std::ffi::CStr;
 use windows_sys::w;
@@ -66,8 +70,8 @@ pub(crate) const ENGINE_COMPILER: *const u16 = w!("d3dcompiler_43.dll");
 
 /// Caller frame, relative to the caller's rsp at the call (= the detour's return-address slot + 8). These are
 /// the operands the engine's own D3DCompile call reads: pSrcData [rbp+13F0h], SrcDataLen [rbp+13F8h], defines
-/// lea [rbp+150h], pFunctionName [rbp+1400h], Flags [rbp+1410h], with rbp = rsp+100h. They depend on codegen,
-/// so each build states and proves its own.
+/// lea [rbp+150h], pFunctionName [rbp+1400h], Flags [rbp+1410h], with rbp = rsp+100h. They depend on codegen:
+/// the discovered shader_compile prologue and D3DCompile setup patterns fix every one of them byte for byte.
 pub(crate) struct CallerFrame {
     /// DWORD const* pSrcData (home slot of r8).
     pub(crate) source_offset: u32,
@@ -113,9 +117,9 @@ pub(crate) struct MotionProfile {
 unsafe impl Sync for MotionProfile {}
 
 impl MotionProfile {
-    /// The profile of build `index` (native_profile.rs order).
+    /// The motion record of profile `index` (crate::discovery::records), unless its sites refused.
     pub(crate) fn of(index: usize) -> Option<&'static Self> {
-        PROFILES.get(index)
+        records().get(index)?.motion.ok()
     }
 
     pub(crate) fn frame_layout(&self) -> FrameLayout {
@@ -156,9 +160,54 @@ const fn tess_site(
     }
 }
 
-// Each build states and proves its own shader_compile prologue and caller frame. Both builds currently share them;
-// only rip-relative and rel32 displacements differ.
-pub(crate) static PROFILES: [MotionProfile; 2] = [
+/// The caller frame the discovered prologue (`lea rbp,[rsp-13A0h]` after `sub rsp,14A0h`) and D3DCompile setup
+/// operands fix: rbp = rsp+100h and the [rbp+...] operands above.
+pub(crate) const FRAME: CallerFrame = CallerFrame {
+    source_offset: 0x14f0,
+    length_offset: 0x14f8,
+    entry_offset: 0x1500,
+    flags_offset: 0x1510,
+    defines_offset: 0x250,
+};
+
+/// The motion profile of the discovered sites.
+pub(crate) fn discovered(found: &Found) -> MotionProfile {
+    MotionProfile {
+        sites: [
+            Site::CreateShader,
+            Site::PhaseSceneBegin,
+            Site::PhaseSceneEnd,
+        ]
+        .map(|site| found.site(site)),
+        unique_guards: [found.guard(Site::CreateShader)],
+        shader_compile_rva: found.rva(Site::ShaderCompile),
+        shader_compile_prologue: found.code(Site::ShaderCompile),
+        create_shader_calls: [Site::CacheCall, Site::CompileCall].map(|site| found.site(site)),
+        frame: FRAME,
+        d3dcompile_setup_rva: found.rva(Site::CompileSetup),
+        d3dcompile_setup: found.code(Site::CompileSetup),
+        source_name_rva: found.rva(Site::SourceName),
+        tess_dispatch_rva: found.rva(Site::TessDispatch),
+        tess_dispatch: found.code(Site::TessDispatch),
+        tess_create_sites: [
+            (Site::HullCreate, Site::HullWrapper),
+            (Site::DomainCreate, Site::DomainWrapper),
+        ]
+        .map(|(create, wrapper)| {
+            tess_site(
+                found.name(create),
+                found.rva(create),
+                found.code(create),
+                found.rva(wrapper),
+                found.code(wrapper),
+            )
+        }),
+    }
+}
+
+/// The records of the two 1.5.3 DX11 builds, Standard then AVX: test and fixture data.
+#[cfg(any(test, feature = "recorded-profiles"))]
+pub(crate) static RECORDED: [MotionProfile; 2] = [
     // ---- Standard 1.5.3 DX11 (AnomalyDX11.exe) ----
     MotionProfile {
         sites: [
@@ -303,20 +352,20 @@ mod tests {
 
     #[test]
     fn profiles_follow_the_native_build_order() {
-        assert_eq!(PROFILES.len(), crate::native_profile::PROFILES.len());
-        for (index, motion) in PROFILES.iter().enumerate() {
+        assert_eq!(RECORDED.len(), crate::native_profile::RECORDED.len());
+        for (index, motion) in RECORDED.iter().enumerate() {
             assert!(std::ptr::eq(MotionProfile::of(index).unwrap(), motion));
             let layout = motion.frame_layout();
             assert_eq!(layout.call_length, 5);
             assert_eq!(layout.define_capacity, 128);
             assert_eq!(layout.calls[0], motion.create_shader_calls[0].rva);
         }
-        assert!(MotionProfile::of(PROFILES.len()).is_none());
+        assert!(MotionProfile::of(RECORDED.len()).is_none());
     }
 
     #[test]
     fn hex_guards_are_even_and_extend_their_sites() {
-        for profile in &PROFILES {
+        for profile in &RECORDED {
             for hex in [
                 profile.shader_compile_prologue,
                 profile.d3dcompile_setup,

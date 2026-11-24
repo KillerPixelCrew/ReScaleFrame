@@ -4,14 +4,12 @@
 use super::*;
 pub(super) use crate::adapter_options::register as register_options;
 use crate::engine_guards::{Image, guarded_copy};
-use crate::executable::running_build;
 pub(super) use crate::fg_stage::rsf_anomaly_fg_installed as fg_installed;
 use crate::fg_stage::rsf_anomaly_fg_set_overlay_sink;
 use crate::fg_stage::rsf_anomaly_fg_stage_input_received;
 use crate::input::rsf_anomaly_input_install;
 use crate::input::rsf_anomaly_input_received;
 use crate::native_hooks::{HookOps, MINHOOK};
-use crate::native_profile::PROFILES;
 use crate::overlay::{rsf_anomaly_overlay_present, rsf_anomaly_overlay_start};
 use crate::overlay_hooks::{install_input, rsf_anomaly_overlay_set_input_observer};
 use crate::sr_stage::native::rsf_anomaly_sr_depth_rva;
@@ -88,7 +86,7 @@ pub(super) unsafe fn input_hook(image: HMODULE, build: usize, reason: *mut *cons
         ) -> bool;
     }
     let reason = unsafe { reason.as_mut() };
-    let Some(profile) = PROFILES.get(build) else {
+    let Some(profile) = crate::discovery::native(build) else {
         if let Some(reason) = reason {
             *reason = c"unknown CInput build".as_ptr();
         }
@@ -189,21 +187,17 @@ unsafe fn enter(configuration: *const u16) -> u32 {
     if entry.started {
         return READY;
     }
-    let Ok(build) = running_build() else {
-        return BUILD_REFUSED;
-    };
     *lock(&LOG) = path
         .parent()
         .map(|directory| directory.join("ReScaleFrame.Anomaly.log"));
-    let profile = &PROFILES[build];
-    write_log(
-        format!(
-            "Anomaly executable {}: {} build profile selected by exact SHA-256.",
-            profile.executable.to_string_lossy(),
-            profile.label.to_string_lossy()
-        )
-        .as_bytes(),
-    );
+    // Discovery admits the executable; its hash is only logged.
+    let admitted = crate::discovery::admit();
+    for line in crate::discovery::report(0) {
+        write_log(line.as_bytes());
+    }
+    let Ok(build) = admitted else {
+        return BUILD_REFUSED;
+    };
     let observe = observe_selected(ini);
     // Overlay=1 is independent of Mode: it wires only the shared overlay, never SR or FG.
     let overlay = unsafe { crate::ini::read_int(ini.as_ptr(), w!("Overlay"), 0) } != 0;

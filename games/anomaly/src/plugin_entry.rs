@@ -7,10 +7,9 @@ const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 
 unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> rsf_detection {
     unsafe {
-        Probe::detect(probe, |probe| {
-            crate::native_profile::find(probe.executable.to_bytes(), probe.sha256.to_bytes())
-                .is_some()
-        })
+        // The probe describes this process: it is recognized when its native sites are discovered,
+        // whatever its name or hash.
+        Probe::detect(probe, |_| crate::discovery::admit().is_ok())
     }
 }
 

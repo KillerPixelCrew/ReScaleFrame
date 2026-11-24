@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::engine_slots::rsf_anomaly_slot_set;
-use crate::native_profile::PROFILES;
+use crate::native_profile::RECORDED as NATIVE;
 use crate::runtime_module::Module;
 use std::ffi::{CStr, c_char};
 use std::ptr::{copy_nonoverlapping, null_mut};
@@ -35,8 +35,8 @@ unsafe extern "C" fn rsf_anomaly_input_fixture(
         args.get(1)
             .is_some_and(|arg| !arg.is_null() && unsafe { CStr::from_ptr(*arg) } == c"avx"),
     );
-    let native = &PROFILES[build];
-    let Some(profile) = profile::for_build(build) else {
+    let native = &NATIVE[build];
+    let Some(profile) = RECORDED.get(build) else {
         return 1;
     };
     let path = if argc > 2 {
@@ -50,7 +50,7 @@ unsafe extern "C" fn rsf_anomaly_input_fixture(
     };
     let path = path.first().map_or(std::ptr::null(), std::ptr::from_ref);
     match contract(
-        &profile,
+        profile,
         native.image_size,
         native.device_frame_rva,
         read,

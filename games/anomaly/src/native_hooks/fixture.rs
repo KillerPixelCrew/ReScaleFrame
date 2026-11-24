@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::engine_guards::guarded_copy;
-use crate::motion_profile::{MotionProfile, PROFILES as MOTION};
-use crate::native_profile::{PROFILES, Profile};
-use crate::sr_profile::{self, PROFILES as SR, Profile as SrProfile};
+use crate::motion_profile::{MotionProfile, RECORDED as MOTION};
+use crate::native_profile::{Profile, RECORDED};
+use crate::sr_profile::{self, Profile as SrProfile, RECORDED as SR};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
@@ -357,7 +357,7 @@ unsafe extern "C" fn rsf_test_anomaly_native_hooks(target: Function, untouched: 
         copy_contract(page);
         executable_contract(target, untouched);
         mapping_contract(page);
-        for ((profile, motion), sr) in PROFILES.iter().zip(&MOTION).zip(&SR) {
+        for ((profile, motion), sr) in RECORDED.iter().zip(&MOTION).zip(&SR) {
             profile_contract(profile, motion, sr);
         }
         println!("Anomaly guarded native hooks: PASS");

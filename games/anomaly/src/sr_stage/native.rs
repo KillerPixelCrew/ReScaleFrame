@@ -15,7 +15,7 @@ use crate::native_geometry::rsf_anomaly_geometry_active;
 use crate::native_geometry::rsf_anomaly_geometry_set_near;
 use crate::native_geometry::{CONSTANT_BUFFER_DATA, CONSTANT_BUFFER_SIZE, CONSTANT_BUFFER_SLOTS};
 use crate::native_hooks::{self, HookSet, Site as HookSite};
-use crate::native_profile::{PROFILES as NATIVE, Profile as NativeProfile};
+use crate::native_profile::Profile as NativeProfile;
 use crate::runtime_module::rsf_anomaly_runtime_set_colour_transport;
 use crate::sr_d3d11::native::rsf_anomaly_sr_set_full_viewport;
 use crate::sr_d3d11::native::rsf_anomaly_sr_twin_refs;
@@ -31,10 +31,10 @@ use crate::sr_d3d11::targets::TwinBatchInfo;
 use crate::sr_d3d11::targets::rsf_anomaly_sr_twin_error_name;
 use crate::sr_d3d11::{StageResources, rsf_anomaly_sr_stage_depth};
 use crate::sr_profile::{
-    BACKEND_XFORMS_OFFSET, CRT_SURFACE_OFFSET, PROFILES as SR, Profile as SrProfile,
-    RENDER_TARGET_OFFSET, SAMPLER_MIP_LOD_BIAS_OFFSET, SITE_PHASE_BLUR, SITE_PHASE_COMBINE,
-    SITE_PHASE_SCENE_PREPARE, SITE_PHASE_SUNSHAFTS, SITE_POSITION_SETUP, SITE_SET_MIP_LOD_BIAS,
-    SITE_SET_P, SITE_SUN_CASCADES, WORLD_TARGETS, rsf_anomaly_sr_engine_layout,
+    BACKEND_XFORMS_OFFSET, CRT_SURFACE_OFFSET, Profile as SrProfile, RENDER_TARGET_OFFSET,
+    SAMPLER_MIP_LOD_BIAS_OFFSET, SITE_PHASE_BLUR, SITE_PHASE_COMBINE, SITE_PHASE_SCENE_PREPARE,
+    SITE_PHASE_SUNSHAFTS, SITE_POSITION_SETUP, SITE_SET_MIP_LOD_BIAS, SITE_SET_P,
+    SITE_SUN_CASCADES, WORLD_TARGETS, rsf_anomaly_sr_engine_layout,
 };
 use crate::sr_reconstruction::rsf_anomaly_sr_correct_position_constant;
 use crate::sr_swap::{self as swap_owner, Handle};
@@ -63,26 +63,30 @@ const _: () = {
     assert!(WORLD_TARGETS[0].offset == 0x3a8);
 };
 
-/// One admitted executable: the native_profile.rs index and its native and SR records. Stage::install borrows it as
-/// the opaque `build` the leaves receive.
+/// One admitted executable: its crate::discovery profile index and native and SR records. Stage::install borrows it
+/// as the opaque `build` the leaves receive.
 pub(crate) struct Build {
     pub(crate) index: usize,
     pub(crate) native: &'static NativeProfile,
     pub(crate) sr: &'static SrProfile,
 }
 
-pub(crate) static BUILDS: [Build; 2] = [
-    Build {
-        index: 0,
-        native: &NATIVE[0],
-        sr: &SR[0],
-    },
-    Build {
-        index: 1,
-        native: &NATIVE[1],
-        sr: &SR[1],
-    },
-];
+/// The records' builds, by profile index; `None` where the native or SR sites refused.
+pub(crate) fn builds() -> &'static [Option<Build>] {
+    static BUILDS: OnceLock<Vec<Option<Build>>> = OnceLock::new();
+    BUILDS.get_or_init(|| {
+        let records = crate::discovery::records();
+        (0..records.len())
+            .map(|index| {
+                Some(Build {
+                    index,
+                    native: crate::discovery::native(index)?,
+                    sr: crate::discovery::sr(index)?,
+                })
+            })
+            .collect()
+    })
+}
 
 // ---- engine state --------------------------------------------------------------------------------------------------
 // The exact build set_engine was given, with its image. Until then every read fails on the null image.
@@ -100,7 +104,7 @@ static SWAP: OnceLock<usize> = OnceLock::new();
 fn engine() -> Option<(usize, &'static Build)> {
     let image = IMAGE.load(Ordering::Acquire);
     let build = BUILD.load(Ordering::Acquire);
-    // The build is one of BUILDS or a fixture record that outlives the installed stage.
+    // The build is one of builds() or a fixture record that outlives the installed stage.
     (image != 0 && !build.is_null()).then(|| (image, unsafe { &*build }))
 }
 
@@ -777,7 +781,7 @@ pub(crate) unsafe fn rsf_anomaly_sr_stage_configure_native(
 
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn rsf_anomaly_sr_stage_install_build(image: Ptr, build: usize) -> bool {
-    let Some(selected) = BUILDS.get(build) else {
+    let Some(Some(selected)) = builds().get(build) else {
         return false;
     };
     let size = selected.native.image_size;
@@ -786,7 +790,7 @@ pub(crate) fn rsf_anomaly_sr_stage_install_build(image: Ptr, build: usize) -> bo
 }
 #[cfg(feature = "native-entry")]
 pub(crate) fn rsf_anomaly_sr_depth_rva(build: usize) -> u32 {
-    SR.get(build).map_or(0, |profile| profile.hw_base_zb_rva)
+    crate::discovery::sr(build).map_or(0, |profile| profile.hw_base_zb_rva)
 }
 
 // The C leaves: sr_stage_platform.c (guarded copy, SEH engine calls, the stage hook set and the position-binder

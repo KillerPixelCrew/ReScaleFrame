@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::native_profile::RECORDED;
 use std::sync::atomic::AtomicBool;
 
 static INPUT_IDLE: AtomicBool = AtomicBool::new(false);
@@ -43,14 +44,14 @@ fn verified_profile_stays_with_the_hook_batch() {
     let detours = std::array::from_fn(|i| ptr::without_provenance_mut(0x2000 + i));
     let trampolines = ptr::without_provenance_mut(0x4000);
     let (size, sites) = sites(1, &detours, trampolines).unwrap();
-    assert_eq!(size, PROFILES[1].image_size);
+    assert_eq!(size, RECORDED[1].image_size);
     assert!(sites.iter().enumerate().all(|(i, site)| {
-        site.rva == PROFILES[1].sites[i].rva
-            && site.expected == PROFILES[1].sites[i].expected
+        site.rva == RECORDED[1].sites[i].rva
+            && site.expected == RECORDED[1].sites[i].expected
             && site.replacement.addr() == 0x2000 + i
             && site.original.addr() == 0x4000 + i * size_of::<usize>()
     }));
-    assert!(super::sites(PROFILES.len(), &detours, trampolines).is_none());
+    assert!(super::sites(RECORDED.len(), &detours, trampolines).is_none());
 }
 
 const NO_ENGINE: Engine = Engine {

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-//! Exact Anomaly 1.5.3 DX11 geometry profiles shared by admission and the
-//! native hook leaf. Evidence: docs/research/anomaly-geometry-coverage.md,
-//! anomaly-avx-profile.md and tools/anomaly_geometry_evidence.py, which reads
-//! this file through tools/anomaly_profiles.py.
+//! The geometry profile shared by admission and the native hook leaf: built from the running
+//! executable's discovered sites (crate::discovery), with the two 1.5.3 DX11 builds' records kept as
+//! RECORDED for the tests and fixtures. Evidence: docs/research/anomaly-geometry-coverage.md,
+//! anomaly-avx-profile.md and tools/anomaly_geometry_evidence.py, which checks the discovered sites
+//! through tools/anomaly_profiles.py.
 // RTTI slot evidence; tools/anomaly_geometry_evidence.py --verify [--exe avx] re-derives every value per build.
 // Indices 0..9 are the lifecycle and visual-entry detours. 10..15 are the draw-time call site and the
 // view/projection context boundaries (see the "Context and draw-time sites" notes below). 16 is the detail (grass)
@@ -42,8 +43,10 @@
 // Detail rows live in `float4 array[61*4]`: four rows per instance, row 3 is (sun, sun, sun, hemi).
 // CSkeletonX subobject offsets are consumed by the Rust draw source setup.
 // Bone instance stride and transform offset are consumed by the Rust palette reader.
-use crate::engine_guards::{NativeSite, UniqueGuard, site};
-use crate::native_profile::ENGINE;
+use crate::discovery::{Found, Site};
+use crate::engine_guards::{NativeSite, UniqueGuard};
+#[cfg(any(test, feature = "recorded-profiles"))]
+use crate::{engine_guards::site, native_profile::ENGINE};
 
 pub(crate) const SITE_COUNT: usize = 17;
 pub(crate) const LAYOUT_COUNT: usize = 7;
@@ -64,8 +67,9 @@ pub(crate) struct Profile {
 // string literals. The records are never written through those pointers.
 unsafe impl Sync for Profile {}
 
-/// Indexed like the native build profiles: Standard, then AVX.
-pub(crate) static PROFILES: [Profile; 2] = [
+/// The records of the two 1.5.3 DX11 builds, Standard then AVX: test and fixture data.
+#[cfg(any(test, feature = "recorded-profiles"))]
+pub(crate) static RECORDED: [Profile; 2] = [
     // ---- Standard 1.5.3 DX11 ----
     Profile {
         sites: [
@@ -386,6 +390,64 @@ pub(crate) static PROFILES: [Profile; 2] = [
     },
 ];
 
+/// The geometry profile of the discovered sites, in the native leaf's detour order.
+pub(crate) fn discovered(found: &Found) -> Profile {
+    Profile {
+        sites: [
+            Site::ModelCreate,
+            Site::ModelCreateChild,
+            Site::ModelDuplicate,
+            Site::ModelDelete,
+            Site::VisualRender,
+            Site::ProgressiveRender,
+            Site::SkeletonStRender,
+            Site::SkeletonPmRender,
+            Site::TreeStRender,
+            Site::TreePmRender,
+            Site::ConstantsFlush,
+            Site::RenderHud,
+            Site::RenderSorted,
+            Site::RenderEmissive,
+            Site::RmNear,
+            Site::RmNormal,
+            Site::DetailRender,
+        ]
+        .map(|site| found.site(site)),
+        layout_sites: [
+            Site::SetW,
+            Site::BoneInstance,
+            Site::TransformR,
+            Site::PhaseCompare,
+            Site::SvpFrame,
+            Site::BufferFlush,
+            Site::TreePmLastLod,
+        ]
+        .map(|site| found.site(site)),
+        unique: [
+            Site::VisualRender,
+            Site::ProgressiveRender,
+            Site::TreeStRender,
+            Site::TreePmRender,
+            Site::RenderSorted,
+            Site::RenderEmissive,
+            Site::RmNear,
+            Site::RmNormal,
+            Site::SetW,
+        ]
+        .map(|site| found.guard(site)),
+        render_phase_rva: found.rva(Site::RenderPhase),
+        second_viewport_rva: found.rva(Site::SecondViewport),
+        world_matrix_rva: found.rva(Site::WorldMatrix),
+        vertex_constant_buffers_rva: found.rva(Site::VertexConstantBuffers),
+        hierarchy_vtables: [
+            Site::VisualVtable,
+            Site::KinematicsVtable,
+            Site::AnimatedVtable,
+            Site::LodVtable,
+        ]
+        .map(|site| found.rva(site)),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,7 +480,7 @@ mod tests {
             "CRender::rmNormal",
             "CDetailManager::Render",
         ];
-        for profile in &PROFILES {
+        for profile in &RECORDED {
             let names: Vec<_> = profile.sites.iter().map(name).collect();
             assert_eq!(names, ORDER);
         }
@@ -426,7 +488,7 @@ mod tests {
 
     #[test]
     fn unique_prefixes_extend_a_profiled_site() {
-        for profile in &PROFILES {
+        for profile in &RECORDED {
             for guard in &profile.unique {
                 let hex = unsafe { CStr::from_ptr(guard.expected_hex) }.to_bytes();
                 let bytes = decode_hex(hex).unwrap();
@@ -444,7 +506,7 @@ mod tests {
 
     #[test]
     fn every_fact_lies_inside_its_image() {
-        for (geometry, native) in PROFILES.iter().zip(&native_profile::PROFILES) {
+        for (geometry, native) in RECORDED.iter().zip(&native_profile::RECORDED) {
             let inside =
                 |rva: u32, bytes: u32| rva.checked_add(bytes).unwrap() <= native.image_size;
             for site in geometry.sites.iter().chain(&geometry.layout_sites) {

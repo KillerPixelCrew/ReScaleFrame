@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! SR render-resolution split profiles for both exact Anomaly 1.5.3 DX11 executables.
-//! Evidence: docs/research/anomaly-sr-seam.md and anomaly-avx-profile.md; tools/anomaly_sr_evidence.py re-checks
-//! every value against the installed executables, reading this file through tools/anomaly_profiles.py.
+//! SR render-resolution split profile, built from the running executable's discovered sites (crate::discovery); the
+//! two 1.5.3 DX11 builds' records stay as RECORDED for the tests and fixtures. Evidence: docs/research/anomaly-sr-seam.md
+//! and anomaly-avx-profile.md; tools/anomaly_sr_evidence.py checks every discovered value against the installed
+//! executables through tools/anomaly_profiles.py.
 // Every profiled value is checked by the evidence tools; Rust reads a subset.
 // Render-resolution split (SR Stage 0, docs/research/anomaly-sr-seam.md). One table per exact executable (native_profile.rs,
 // native_profile.rs order); the AVX table is documented in docs/research/anomaly-avx-profile.md.
@@ -98,8 +99,10 @@
 // R_xforms (r_backend_xform.h): m_w, m_invw, m_v, m_p, then derived matrices.
 // re-encoded with VEX moves (0x4a bytes up to the viewport lea instead of 0x46).
 
-use crate::engine_guards::{NativeSite, UniqueGuard, site};
-use crate::native_profile::ENGINE;
+use crate::discovery::{Found, Site};
+use crate::engine_guards::{NativeSite, UniqueGuard};
+#[cfg(any(test, feature = "recorded-profiles"))]
+use crate::{engine_guards::site, native_profile::ENGINE};
 use std::ffi::CStr;
 
 // ---- layout shared by both builds (documented above) ----
@@ -335,6 +338,7 @@ unsafe impl Sync for Profile {}
 unsafe impl Sync for TargetSlot {}
 unsafe impl Sync for WorldTarget {}
 
+#[cfg(any(test, feature = "recorded-profiles"))]
 const STANDARD_UNIQUE: [UniqueGuard; 7] = [
     UniqueGuard::new(c"CRender::render_sun_cascades", 0x815a30, c"48895c240848896c2410488974241848897c242041564883ec20488bd948"),
     UniqueGuard::new(c"CRenderTarget::phase_blur", 0x8f2590, c"48895c242055565741564157488bec4881"),
@@ -344,6 +348,7 @@ const STANDARD_UNIQUE: [UniqueGuard; 7] = [
     UniqueGuard::new(c"R_xforms::set_V", 0x83f970, c"48895c240848896c2410488974241857415641574883ec208b02"),
     UniqueGuard::new(c"CBackend::Invalidate", 0x842c50, c"48895c240848896c24104889742418574883ec2033ed488bd94889a9"),
 ];
+#[cfg(any(test, feature = "recorded-profiles"))]
 const AVX_UNIQUE: [UniqueGuard; 6] = [
     UniqueGuard::new(
         c"CRender::render_sun_cascades",
@@ -373,8 +378,128 @@ const AVX_UNIQUE: [UniqueGuard; 6] = [
     ),
 ];
 
-/// In native_profile.rs order (the build index Rust admits).
-pub(crate) static PROFILES: [Profile; 2] = [
+/// The SR profile of the discovered sites, in the stage's site order.
+pub(crate) fn discovered(found: &Found) -> Profile {
+    let first_person = |name, function, set_p: Site, near: Site| {
+        first_person(name, found.rva(function), found.rva(set_p), found.rva(near))
+    };
+    let unique = [
+        Site::SunCascades,
+        Site::PhaseBlur,
+        Site::RmNear,
+        Site::RmFar,
+        Site::SetP,
+        Site::SetV,
+        Site::Invalidate,
+    ]
+    .map(|site| found.guard(site));
+    Profile {
+        function_sites: [
+            Site::PhaseScenePrepare,
+            Site::PhaseCombine,
+            Site::PhaseSunshafts,
+            Site::PhaseBlur,
+            Site::RmNear,
+            Site::RmFar,
+            Site::SetP,
+            Site::SetV,
+            Site::SurfaceSet,
+            Site::SetMipLodBias,
+            Site::SetMaxAnisotropy,
+            Site::Invalidate,
+            Site::USetrt,
+            Site::ParticleRender,
+            Site::AccumPoint,
+            Site::SunCascades,
+            Site::PositionSetup,
+        ]
+        .map(|site| found.site(site)),
+        unique_guards: Box::leak(Box::new(unique)),
+        call_sites: [
+            Site::PrepareZCall,
+            Site::PrepareCall,
+            Site::CombineCall,
+            Site::SunshaftsCall,
+            Site::BlurCall,
+            Site::CascadesCall,
+        ]
+        .map(|site| found.site(site)),
+        first_person_sites: [
+            first_person(
+                c"r_dsgraph_render_hud (r__dsgraph_render.cpp:502-520)",
+                Site::RenderHud,
+                Site::HudSetP,
+                Site::HudNear,
+            ),
+            first_person(
+                c"r_dsgraph_render_hud_ui (r__dsgraph_render.cpp:538-583)",
+                Site::RenderHudUi,
+                Site::HudUiSetP,
+                Site::HudUiNear,
+            ),
+            first_person(
+                c"r_dsgraph_render_sorted (r__dsgraph_render.cpp:595-613)",
+                Site::RenderSorted,
+                Site::SortedSetP,
+                Site::SortedNear,
+            ),
+            first_person(
+                c"r_dsgraph_render_emissive (r__dsgraph_render.cpp:626-645)",
+                Site::RenderEmissive,
+                Site::EmissiveSetP,
+                Site::EmissiveNear,
+            ),
+            first_person(
+                c"CParticleEffect::Render HUD mode (ParticleEffect.cpp:599-611)",
+                Site::ParticleRender,
+                Site::ParticleSetP,
+                Site::ParticleNear,
+            ),
+            first_person(
+                c"CRenderTarget::accum_point HUD light (r4_rendertarget_accum_point.cpp:19-31)",
+                Site::AccumPoint,
+                Site::AccumSetP,
+                Site::AccumNear,
+            ),
+        ],
+        crender_vtable_rva: found.rva(Site::RendererVtable),
+        device_view_rva: found.rva(Site::DeviceView),
+        device_project_rva: found.rva(Site::DeviceProject),
+        device_full_transform_rva: found.rva(Site::DeviceFullTransform),
+        device_precache_frame_rva: found.rva(Site::DevicePrecacheFrame),
+        load_screen_registered_rva: found.rva(Site::LoadScreenRegistered),
+        hw_device_rva: found.rva(Site::HwDevice),
+        hw_context_rva: found.rva(Site::HwContext),
+        hw_swap_chain_rva: found.rva(Site::HwSwapChain),
+        hw_base_rt_rva: found.rva(Site::HwBaseRt),
+        hw_base_zb_rva: found.rva(Site::HwBaseZb),
+        render_implementation_rva: found.rva(Site::RenderImplementation),
+        render_options_word0_rva: found.rva(Site::OptionsWord0),
+        render_options_word3_rva: found.rva(Site::OptionsWord3),
+        sunshafts_mode_rva: found.rva(Site::SunshaftsMode),
+        sampler_cache_rva: found.rva(Site::SamplerCache),
+        user_mip_bias_rva: found.rva(Site::UserMipBias),
+        user_anisotropy_rva: found.rva(Site::UserAnisotropy),
+        ssao_set_viewport_rva: found.rva(Site::SsaoSetViewport),
+        ssao_viewport_rva: found.rva(Site::SsaoViewport),
+        ssao_viewport_guard_rva: found.rva(Site::SsaoViewportGuard),
+        ssao_set_viewport_code: found.code(Site::SsaoSetViewport),
+        backend_rva: found.rva(Site::Backend),
+        position_setup_vtable_rva: found.rva(Site::PositionSetupVtable),
+        get_constant_buffer_rva: found.rva(Site::GetCBuffer),
+        reconstruction_guards: [
+            Site::PositionSetup,
+            Site::GetCBuffer,
+            Site::BinderRegistration,
+            Site::ReflectedSize,
+        ]
+        .map(|site| found.guard(site)),
+    }
+}
+
+/// The records of the two 1.5.3 DX11 builds, Standard then AVX: test and fixture data.
+#[cfg(any(test, feature = "recorded-profiles"))]
+pub(crate) static RECORDED: [Profile; 2] = [
     // ---- Standard 1.5.3 DX11 ----
     Profile {
         function_sites: [

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Profile arguments shared by the native Anomaly fixture hosts.
-use crate::native_profile::PROFILES;
+use crate::native_profile::RECORDED;
 use std::ffi::{CStr, c_char};
 use std::slice;
 
@@ -19,7 +19,7 @@ pub(crate) unsafe extern "C" fn rsf_test_anomaly_select_build(
     let arguments = unsafe { slice::from_raw_parts(argv, argc as usize) };
     for &argument in &arguments[1..] {
         let argument = unsafe { CStr::from_ptr(argument) };
-        if let Some(index) = PROFILES
+        if let Some(index) = RECORDED
             .iter()
             .position(|profile| profile.label == argument)
         {

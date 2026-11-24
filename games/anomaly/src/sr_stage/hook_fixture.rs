@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! SR hook admission against synthetic images of the two production profiles. The C11 launcher lends the production
 //! leaf table and a real x64 target for the shared rmNear detour; the profile records are sr_profile.rs.
-use super::native::{BUILDS, Build, rsf_anomaly_sr_stage_configure_native};
+use super::native::{Build, builds, rsf_anomaly_sr_stage_configure_native};
 use super::{STAGE, rsf_anomaly_sr_stage_frame_end, rsf_anomaly_sr_stage_report};
 use crate::engine_guards::{NativeSite, UniqueGuard};
-use crate::sr_profile::{FirstPersonSite, PROFILES as SR};
+use crate::sr_profile::{FirstPersonSite, RECORDED as SR};
 use std::ffi::{CStr, c_char, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
@@ -173,7 +173,7 @@ impl Fixture<'_> {
 
     fn install(&mut self, size: u32, outside: bool) -> bool {
         LINES.with_borrow_mut(Vec::clear);
-        let selected = &BUILDS[self.build];
+        let selected = builds()[self.build].as_ref().expect("recorded build");
         let build = if outside {
             // A copy of the build whose first call site lies at the end of the image.
             let mut sr = *selected.sr;
@@ -315,14 +315,14 @@ unsafe extern "C" fn rsf_test_anomaly_sr_hooks(
 ) -> i32 {
     let result = std::panic::catch_unwind(|| {
         let build = unsafe { crate::fixture_profile::rsf_test_anomaly_select_build(argc, argv) };
-        let identity = &crate::native_profile::PROFILES[build];
+        let identity = &crate::native_profile::RECORDED[build];
         println!(
             "build profile: {} ({})",
             identity.label.to_string_lossy(),
             identity.executable.to_string_lossy()
         );
         // The launcher redirects the geometry producer's rmNear site, which shares its bytes with the SR record.
-        let geometry = &crate::geometry_profile::PROFILES[build].sites;
+        let geometry = &crate::geometry_profile::RECORDED[build].sites;
         let near = geometry
             .iter()
             .position(|site| unsafe { CStr::from_ptr(site.name) } == c"CRender::rmNear")
@@ -341,7 +341,7 @@ unsafe extern "C" fn rsf_test_anomaly_sr_hooks(
 fn guard_refusals(build: usize) -> i32 {
     let result = std::panic::catch_unwind(|| {
         let profile = &SR[build];
-        let image_size = crate::native_profile::PROFILES[build].image_size;
+        let image_size = crate::native_profile::RECORDED[build].image_size;
         let mut fixture = Fixture {
             image: vec![0; image_size as usize],
             functions: &profile.function_sites,

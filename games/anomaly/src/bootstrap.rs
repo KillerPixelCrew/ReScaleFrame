@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Anomaly's synchronous cold entry. The thin carrier calls `rsf_anomaly_start` with the absolute adapter INI before
-//! genuine DirectInput creation. This module selects the exact executable build, borrows the Runtime DLL the carrier
+//! genuine DirectInput creation. This module admits the executable by discovering its sites, borrows the Runtime DLL the carrier
 //! already loaded and starts Observe through the Runtime's stable plugin-session C ABI. This module owns the step
 //! order, refusals, retry state and adapter log. The stage calls are bootstrap/native.rs's (the tests' fakes under test).
 
@@ -12,9 +12,7 @@ use native as leaves;
 use tests as leaves;
 
 use crate::AMD64;
-use crate::executable::with_verified_build;
 use crate::lock;
-use crate::native_profile::PROFILES;
 #[cfg(test)]
 use rsf_game_sys::RSF_GAME_ABI_VERSION;
 #[cfg(test)]
@@ -59,7 +57,7 @@ struct Runtime {
     stop: Option<ControlFn>,
 }
 
-/// One accepted call: the NUL-terminated INI, the selected build and the requested modes.
+/// One accepted call: the NUL-terminated INI, the admitted profile index and the requested modes.
 struct Request<'a> {
     ini: &'a [u16],
     build: usize,
@@ -282,7 +280,9 @@ fn prepare_observation(entry: &mut Entry, request: &Request, prepare: PrepareFn)
     if unsafe { QueryPerformanceCounter(&mut counter) } == 0 || counter <= 0 {
         return RUNTIME_REFUSED;
     }
-    let profile = &PROFILES[request.build];
+    let Some(profile) = crate::discovery::native(request.build) else {
+        return PREPARE_REFUSED;
+    };
     let probe = Probe {
         machine: AMD64,
         executable: profile.executable,
@@ -291,10 +291,8 @@ fn prepare_observation(entry: &mut Entry, request: &Request, prepare: PrepareFn)
     let mut services = host_services(counter as u64, LOG_FN);
     services.session_id = counter as u64;
     write_log(b"Anomaly Observe cold startup; borrowing existing Runtime, before DirectInput/device creation.");
-    let prepared = with_session_options(plugin.terminated(), probe, &services, |options| {
-        with_verified_build(request.build, || unsafe {
-            prepare(options, &mut entry.session)
-        })
+    let prepared = with_session_options(plugin.terminated(), probe, &services, |options| unsafe {
+        prepare(options, &mut entry.session)
     });
     log_result("session prepare", prepared);
     if prepared != RSF_OK {

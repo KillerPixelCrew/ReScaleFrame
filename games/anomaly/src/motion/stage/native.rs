@@ -5,11 +5,10 @@ use super::abi::{DrawState, PositionViews, Raw};
 use crate::engine_guards::{guarded_copy, read_bytes};
 use crate::native_geometry_abi::NativeDrawFacts;
 use crate::native_hooks::{self, HookSet, Site, Target};
-use crate::native_profile::PROFILES as NATIVE;
 use crate::sr_profile::{
     BACKEND_RT_CHANGED_OFFSET, BACKEND_RT_OFFSET, BACKEND_XFORMS_OFFSET, BACKEND_ZB_OFFSET,
-    CRT_RTV_OFFSET, CRT_SURFACE_OFFSET, PROFILES as SR, RENDER_TARGET_OFFSET, TARGET_SLOTS,
-    XFORMS_PROJECT_OFFSET, XFORMS_VIEW_OFFSET,
+    CRT_RTV_OFFSET, CRT_SURFACE_OFFSET, RENDER_TARGET_OFFSET, TARGET_SLOTS, XFORMS_PROJECT_OFFSET,
+    XFORMS_VIEW_OFFSET,
 };
 use crate::sys::rsf_anomaly_motion_bind_layout as BindLayout;
 use std::ffi::c_void;
@@ -20,7 +19,7 @@ use windows::Win32::Graphics::Direct3D11::{D3D11_VIEWPORT, ID3D11DeviceContext_V
 /// The installed build's engine addresses, image-relative.
 #[derive(Clone, Copy)]
 pub(super) struct Engine {
-    build: usize,           // native_profile.rs build index, for the geometry view read
+    build: usize,           // crate::discovery profile index, for the geometry view read
     hw_device_rva: u32,     // HW.pDevice
     hw_context_rva: u32,    // HW.pContext
     backend_rva: u32,       // RCache (CBackend)
@@ -39,9 +38,12 @@ pub(super) const BIND_LAYOUT: BindLayout = BindLayout {
 };
 
 impl Engine {
-    /// The addresses of build `index` (native_profile.rs order, shared by sr_profile.rs).
+    /// The addresses of profile `index` (crate::discovery::records).
     pub(super) fn of(index: usize) -> Option<Self> {
-        let (native, sr) = (NATIVE.get(index)?, SR.get(index)?);
+        let (native, sr) = (
+            crate::discovery::native(index)?,
+            crate::discovery::sr(index)?,
+        );
         // CRenderTarget::rt_Position, the G-buffer position target the window follows.
         let position = &TARGET_SLOTS[0];
         if position.name != c"$user$position" {

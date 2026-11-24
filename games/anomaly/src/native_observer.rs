@@ -8,7 +8,7 @@ mod tests;
 // The native installs, the observer hook set and the guarded reads; the tests' fakes under test.
 #[cfg(not(test))]
 mod leaves {
-    use super::{Engine, Frame, HOOK_COUNT, PROFILES};
+    use super::{Engine, Frame, HOOK_COUNT};
     use crate::engine_guards::Image;
     pub(super) use crate::engine_guards::guarded_copy;
     use crate::native_hooks::{self, HookSet};
@@ -65,7 +65,7 @@ mod leaves {
     }
 
     pub(super) fn read_frame(engine: &Engine) -> Option<Frame> {
-        let profile = PROFILES.get(engine.build)?;
+        let profile = crate::discovery::native(engine.build)?;
         let image = Image::new(engine.image.cast(), profile.image_size, guarded_copy);
         Some(Frame {
             id: u32::from_le_bytes(image.copy(profile.device_frame_rva)?),
@@ -94,10 +94,9 @@ mod stages {
 use tests::stages;
 
 use crate::engine_guards::{Image, guarded_copy};
-use crate::executable::observer_build;
 use crate::lock;
 use crate::native_hooks::{Site, image_matches, read_guarded};
-use crate::native_profile::{HOOK_COUNT, PROFILES};
+use crate::native_profile::HOOK_COUNT;
 use crate::sys::{
     RSF_ANOMALY_OBSERVATION_ABI, RSF_ANOMALY_OBSERVER_BEGIN, RSF_ANOMALY_OBSERVER_CAMERA,
     RSF_ANOMALY_OBSERVER_END, RSF_ANOMALY_OBSERVER_RESET_BEGIN, RSF_ANOMALY_OBSERVER_RESET_END,
@@ -119,7 +118,7 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetModuleHandleW,
 };
 
-/// The running image and the exact build prepare() selected.
+/// The running image and the profile index discovery admitted.
 #[derive(Clone, Copy)]
 struct Engine {
     #[cfg_attr(test, allow(dead_code))]
@@ -135,14 +134,13 @@ struct Frame {
 }
 
 fn identify() -> Result<Engine, &'static CStr> {
-    let build = observer_build()?;
-    let profile = PROFILES
-        .get(build)
-        .ok_or(c"Native observer build index is out of range.")?;
+    let build = crate::discovery::admit()?;
+    let profile =
+        crate::discovery::native(build).ok_or(c"Native observer profile index is out of range.")?;
     let image = unsafe { GetModuleHandleW(ptr::null()) };
     // Hook-set installation adds a mapped-region check and an NT header extent check.
     if !image_matches(read_guarded, image, profile.image_size, usize::MAX) {
-        return Err(c"Running image size differs from the verified build.");
+        return Err(c"Running image size differs from the discovered image.");
     }
     let checked = Image::new(image.cast(), profile.image_size, guarded_copy);
     if !unsafe { checked.matches_sites(&profile.sites, &profile.guards) } {
@@ -157,7 +155,7 @@ fn sites(
     detours: &[*mut c_void; HOOK_COUNT],
     trampolines: *mut *mut c_void,
 ) -> Option<(u32, [Site; HOOK_COUNT])> {
-    let profile = PROFILES.get(build)?;
+    let profile = crate::discovery::native(build)?;
     let sites = std::array::from_fn(|index| {
         let site = &profile.sites[index];
         Site {
@@ -380,7 +378,13 @@ impl Observer {
         if !input_enabled {
             return NATIVE_REFUSED;
         }
-        let profile = &PROFILES[engine.build];
+        let Some(profile) = crate::discovery::native(engine.build) else {
+            return NATIVE_REFUSED;
+        };
+        // A feature whose sites were not found names them here; the others are installed.
+        for line in crate::discovery::report(engine.build).iter().skip(1) {
+            session.emit(line);
+        }
         let label = profile.label.to_string_lossy();
         let executable = profile.executable.to_string_lossy();
         let geometry = if geometry_installed {

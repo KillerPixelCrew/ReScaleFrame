@@ -61,7 +61,8 @@ pub(super) struct NativeSite {
     pub(super) expected: [u8; 16],
 }
 
-#[cfg(windows)]
+/// A recorded site: its name, RVA and first 16 bytes as hex.
+#[cfg(all(windows, any(test, feature = "recorded-profiles")))]
 pub(super) const fn site(name: &'static CStr, rva: u32, hex: &[u8; 32]) -> NativeSite {
     const fn digit(value: u8) -> u8 {
         match self::digit(value) {
@@ -90,7 +91,7 @@ pub(super) struct UniqueGuard {
     pub(super) expected_hex: *const c_char,
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, any(test, feature = "recorded-profiles")))]
 impl UniqueGuard {
     pub(super) const fn new(name: &'static CStr, rva: u32, expected: &'static CStr) -> Self {
         Self {
@@ -170,17 +171,37 @@ impl Image {
         !hex.is_null() && self.matches_hex(rva, unsafe { CStr::from_ptr(hex) }.to_bytes())
     }
 
-    fn matches_hex(&self, rva: u32, hex: &[u8]) -> bool {
-        let Some(address) = self.address(rva, hex.len() / 2) else {
-            return false;
-        };
-        let Some(expected) = decode_hex(hex) else {
+    fn matches_hex(&self, rva: u32, text: &[u8]) -> bool {
+        matches_text(text, |bytes| {
+            self.address(rva, bytes.len())
+                .is_some_and(|address| unsafe {
+                    (self.read)(bytes.as_mut_ptr().cast(), address.cast(), bytes.len())
+                })
+        })
+    }
+}
+
+/// Whether the bytes `read` copies match `text`: plain lowercase hex (a recorded guard), or
+/// discovery patterns with `??` wildcards separated by `|`, one per codegen. Each candidate is
+/// read once at its own length; text that does not parse matches nothing and reads nothing.
+pub(crate) fn matches_text(text: &[u8], mut read: impl FnMut(&mut [u8]) -> bool) -> bool {
+    if !text.contains(&b' ') {
+        let Some(expected) = decode_hex(text).filter(|bytes| !bytes.is_empty()) else {
             return false;
         };
         let mut bytes = vec![0u8; expected.len()];
-        let copied = unsafe { (self.read)(bytes.as_mut_ptr().cast(), address.cast(), bytes.len()) };
-        copied && bytes == expected
+        return read(&mut bytes) && bytes == expected;
     }
+    let Ok(text) = std::str::from_utf8(text) else {
+        return false;
+    };
+    text.split('|').any(|candidate| {
+        let Some(pattern) = rsf_game_sys::signature::Pattern::parse(candidate) else {
+            return false;
+        };
+        let mut bytes = vec![0u8; pattern.len()];
+        read(&mut bytes) && pattern.matches(&bytes)
+    })
 }
 
 pub(super) fn decode_hex(hex: &[u8]) -> Option<Vec<u8>> {
