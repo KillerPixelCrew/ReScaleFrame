@@ -12,7 +12,6 @@ use rsf_game_sys::{
 };
 use std::ffi::{CStr, CString, c_void};
 use std::fs;
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
@@ -535,11 +534,7 @@ struct SettingsFile {
 
 impl SettingsFile {
     fn missing() -> Result<Self, FixtureError> {
-        let directory: Vec<_> = std::env::temp_dir()
-            .as_os_str()
-            .encode_wide()
-            .chain([0])
-            .collect();
+        let directory = rsf_test_support::wide_os(std::env::temp_dir());
         let mut wide = [0; 260];
         require(
             unsafe { GetTempFileNameW(PCWSTR(directory.as_ptr()), w!("rsf"), 0, &mut wide) } != 0,

@@ -6,7 +6,6 @@ mod device;
 
 use rsf_game_sys::*;
 use std::ffi::{CStr, c_void};
-use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -41,7 +40,7 @@ impl Ini {
     fn new(prefix: &str, section: &str) -> Self {
         let path = std::env::temp_dir().join(format!("{prefix}_{}.ini", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let wide = path.as_os_str().encode_wide().chain([0]).collect();
+        let wide = rsf_test_support::wide_os(&path);
         Self {
             path,
             wide,

@@ -16,7 +16,6 @@ use rsf_game_sys::{
 };
 use std::{
     ffi::{CStr, CString, c_char, c_void},
-    os::windows::ffi::OsStrExt,
     ptr,
 };
 use windows::{
@@ -373,7 +372,7 @@ fn run(args: &Args) -> Result<i32> {
     let host_root = std::env::var_os("RSF_RDR2_HOST_ROOT");
     let host_ini = if let (Some(ini), Some(root)) = (host_ini, host_root) {
         let ini = crate::wide(&ini);
-        let root: Vec<_> = root.encode_wide().chain([0]).collect();
+        let root = crate::wide(&root);
         if ini.len() > 32768 || root.len() > 32768 {
             return Ok(2);
         }

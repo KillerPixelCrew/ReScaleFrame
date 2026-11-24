@@ -3,6 +3,7 @@
 #![cfg(windows)]
 
 use std::ffi::{CStr, OsStr};
+use std::os::windows::ffi::OsStrExt;
 use windows::Win32::Foundation::{
     E_POINTER, FreeLibrary, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, WPARAM,
 };
@@ -125,6 +126,11 @@ pub fn cpu_event(
         render_expected: 1,
         ..Default::default()
     }
+}
+
+/// `text` as the NUL-terminated UTF-16 a Win32 call takes.
+pub fn wide_os(text: impl AsRef<OsStr>) -> Vec<u16> {
+    text.as_ref().encode_wide().chain([0]).collect()
 }
 
 /// A Vulkan entry point (a `PFN_vk*` or `*const ()`) as the opaque function address the C resolver

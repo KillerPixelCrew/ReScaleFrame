@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::{bundles, contents, directory_argument, entry, root, utf8};
 use crate::sys::*;
-use rsf_test_support::{Window, frame_record, warp_swapchain};
+use rsf_test_support::{Window, frame_record, warp_swapchain, wide_os};
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::os::windows::ffi::OsStrExt;
 use std::{fs, path::Path, ptr};
 use windows::Win32::Foundation::GENERIC_READ;
 use windows::Win32::Graphics::Direct3D11::*;
@@ -60,7 +59,7 @@ fn warp(window: &Window) -> Option<(ID3D11Device, ID3D11DeviceContext, IDXGISwap
 
 fn png(bundle: &Path, name: &str) -> Vec<u8> {
     let path = bundle.join(name);
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let wide = wide_os(&path);
     unsafe {
         let factory: IWICImagingFactory = CoCreateInstance(
             &CLSID_WICImagingFactory,

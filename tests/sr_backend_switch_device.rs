@@ -7,7 +7,6 @@ use crate::sdk_module::SdkModule;
 use crate::sys::{RSF_FRAME_ASSEMBLY_ABI_VERSION, rsf_pipeline_camera_frame as Camera};
 use rsf_game_sys::RSF_DLSS_PIPELINE_ABI_VERSION;
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::os::windows::ffi::OsStrExt;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -44,7 +43,7 @@ impl Runtime {
         let path = std::env::current_exe()
             .ok()?
             .with_file_name("ReScaleFrame.Runtime.dll");
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        let wide = rsf_test_support::wide_os(&path);
         let dll = SdkModule::adopt_system(unsafe {
             LoadLibraryExW(
                 wide.as_ptr(),

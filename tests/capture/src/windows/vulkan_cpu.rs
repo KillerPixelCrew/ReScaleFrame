@@ -3,10 +3,9 @@ use super::{bundles, contents, entry, root, utf8};
 use crate::sys::*;
 use ash::vk;
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
-use rsf_test_support::frame_record;
+use rsf_test_support::{frame_record, wide_os};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};
-use std::os::windows::ffi::OsStrExt;
 use std::{fs, path::Path, ptr};
 use windows_sys::Win32::System::Environment::SetEnvironmentVariableW;
 
@@ -19,7 +18,7 @@ const FEATURE_FAILED: i32 = RSF_FIXTURE_BACKEND_FEATURE_FAILED;
 fn run(path: &Path, api: &rsf_fixture_vk_capture_api) -> i32 {
     let root = root(path, "vulkan-cpu");
     let legacy = root.join("legacy");
-    let legacy_wide: Vec<u16> = legacy.as_os_str().encode_wide().chain([0]).collect();
+    let legacy_wide = wide_os(&legacy);
     unsafe {
         SetEnvironmentVariableW(
             windows::core::w!("RSF_VULKAN_FRAME_CAPTURE_DIR").as_ptr(),

@@ -10,7 +10,6 @@ use rsf_game_sys::ffi_util::wide;
 use std::{
     ffi::{c_char, c_void},
     mem,
-    os::windows::ffi::OsStrExt,
     ptr::{self, null_mut},
     sync::OnceLock,
 };
@@ -351,6 +350,6 @@ extern "C" fn rsf_fixture_xess_interop() -> i32 {
     {
         return 13;
     }
-    let runtime: Vec<u16> = args[2].encode_wide().chain([0]).collect();
+    let runtime = rsf_test_support::wide_os(&args[2]);
     device(runtime.as_ptr(), args.len() == 4)
 }

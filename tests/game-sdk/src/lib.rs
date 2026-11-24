@@ -41,8 +41,8 @@ mod unity_sr_d3d12;
 #[cfg(feature = "vk-latency-fixtures")]
 mod vk_latency;
 
-use std::ffi::{CStr, OsStr};
-use std::os::windows::ffi::OsStrExt;
+use rsf_test_support::wide_os as wide;
+use std::ffi::CStr;
 use std::path::Path;
 use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE};
@@ -56,10 +56,6 @@ const ABI_MISMATCH: i32 = -2;
 const NOT_READY: i32 = -3;
 const BUSY: i32 = -4;
 const NATIVE_REFUSED: i32 = -5;
-
-fn wide(path: &OsStr) -> Vec<u16> {
-    path.encode_wide().chain([0]).collect()
-}
 
 struct Module(HMODULE);
 

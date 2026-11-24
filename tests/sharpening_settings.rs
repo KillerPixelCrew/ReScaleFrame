@@ -15,7 +15,6 @@ use crate::sys::{
 };
 use crate::sys::{rsf_overlay_intent as Intent, rsf_overlay_stats as Stats};
 use std::fs;
-use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::ptr;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -47,12 +46,7 @@ impl Ini {
         let directory =
             std::env::temp_dir().join(format!("rsf-sharpening-{}-{start}", std::process::id()));
         fs::create_dir(&directory)?;
-        let path = directory
-            .join("settings.ini")
-            .as_os_str()
-            .encode_wide()
-            .chain([0])
-            .collect();
+        let path = rsf_test_support::wide_os(directory.join("settings.ini"));
         Ok(Self { directory, path })
     }
 

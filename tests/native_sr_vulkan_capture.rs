@@ -7,9 +7,7 @@ use rsf_game_sys::rsf_frame_record;
 use std::{
     cell::Cell,
     ffi::{CStr, c_char, c_void},
-    fs,
-    os::windows::ffi::OsStrExt,
-    ptr,
+    fs, ptr,
 };
 use windows_sys::Win32::System::Environment::SetEnvironmentVariableW;
 
@@ -115,7 +113,7 @@ impl Drop for Capture {
 
 pub(super) fn run() -> TestResult {
     let directory = std::env::temp_dir().join(format!("rsf-srvk-contract-{}", std::process::id()));
-    let wide: Vec<u16> = directory.as_os_str().encode_wide().chain([0]).collect();
+    let wide = rsf_test_support::wide_os(&directory);
     unsafe {
         SetEnvironmentVariableW(
             windows::core::w!("RSF_VULKAN_FRAME_CAPTURE_DIR").as_ptr(),

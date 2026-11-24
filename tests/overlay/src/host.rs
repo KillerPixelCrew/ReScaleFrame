@@ -4,7 +4,6 @@ use crate::sys::*;
 use rsf_test_support::{d3d11_device, d3d11_swapchain};
 use std::cell::RefCell;
 use std::ffi::{CStr, c_char};
-use std::os::windows::ffi::OsStrExt;
 use std::path::absolute;
 use std::ptr::null_mut;
 use std::thread::sleep;
@@ -259,7 +258,7 @@ unsafe extern "C" fn present(_: Handle, raw: Handle) {
 
 fn panel_path() {
     if let Some(capture) = std::env::var_os("RSF_TEST_RENDERDOC_DLL") {
-        let capture: Vec<_> = capture.encode_wide().chain([0]).collect();
+        let capture = rsf_test_support::wide_os(&capture);
         check(
             unsafe { LoadLibraryW(PCWSTR(capture.as_ptr())) },
             "load optional RenderDoc",

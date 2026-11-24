@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Exercise the exported cold-start entry in foreign Windows processes.
-use rsf_test_support::Library;
+use rsf_test_support::{Library, wide_os as wide};
 use std::ffi::OsStr;
 use std::fs;
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, ExitCode};
 use std::ptr;
@@ -14,10 +13,6 @@ use windows::Win32::System::LibraryLoader::{
 use windows::core::PCWSTR;
 
 type Entry = unsafe extern "system" fn(*const u16) -> u32;
-
-fn wide(text: &OsStr) -> Vec<u16> {
-    text.encode_wide().chain([0]).collect()
-}
 
 fn refused_observe(dll: &OsStr, directory: &Path, check_invalid_ini: bool) -> Result<(), String> {
     let module = Library::open(
