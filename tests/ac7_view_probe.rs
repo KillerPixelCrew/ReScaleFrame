@@ -1,20 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Optional probe for the flat capture directory. Synthetic cases live in the AC7 crate.
 use crate::sys as view_abi;
+use crate::view::rsf_ac7_view_read;
 
-use std::ffi::{c_char, c_int, c_void};
-use view_abi::{
-    RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view, rsf_ac7_view_result,
-};
+use std::ffi::{c_char, c_int};
+use view_abi::{RSF_AC7_VIEW_ABI_VERSION, RSF_AC7_VIEW_BUFFER_BYTES, rsf_ac7_view};
 
 unsafe extern "C" {
     fn rsf_ac7_view_capture_read(directory: *const c_char, index: c_int, data: *mut u8) -> c_int;
-    fn rsf_ac7_view_read(
-        data: *const c_void,
-        size: u32,
-        abi: u32,
-        view: *mut rsf_ac7_view,
-    ) -> rsf_ac7_view_result;
 }
 
 fn check_inverse(view: &rsf_ac7_view) -> bool {
