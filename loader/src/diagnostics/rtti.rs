@@ -3,7 +3,7 @@
 use super::image::{Section, sidecar_section};
 use super::memory::{MemoryCache, Region, read, read_exact, readable_extent};
 use super::names::escape_unit;
-use super::sections::{Stream, rsf_dump_now_ms};
+use super::sections::{Stream, elapsed, rsf_dump_now_ms};
 use crate::sys::rsf_dump_image_info;
 use rsf_game_sys::pe32_plus::Mapped;
 use std::ffi::c_char;
@@ -461,7 +461,10 @@ pub(super) fn write_rtti(out: &mut Stream, image: &rsf_dump_image_info, budget_m
     if let Some(reason) = reason {
         let _ = write!(out, "\"reason\": \"{reason}\", ");
     }
-    let elapsed = (rsf_dump_now_ms() - started + 0.5) as u32;
-    let _ = writeln!(out, "\"budget_ms\": {budget}, \"elapsed_ms\": {elapsed}}},");
+    let _ = writeln!(
+        out,
+        "\"budget_ms\": {budget}, \"elapsed_ms\": {}}},",
+        elapsed(started)
+    );
     classes
 }

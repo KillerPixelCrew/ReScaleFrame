@@ -53,6 +53,15 @@ fn executable_span(base: usize) -> Option<(usize, usize)> {
     Some((address, size))
 }
 
+/// The module at module, or the executable when that is null.
+pub(super) fn module_base(module: *const c_void) -> usize {
+    if module.is_null() {
+        (unsafe { GetModuleHandleW(null()) }) as usize
+    } else {
+        module as usize
+    }
+}
+
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_measure_module_code(
     module: *const c_void,
@@ -61,12 +70,7 @@ pub(super) unsafe extern "C" fn rsf_measure_module_code(
     if output.is_null() {
         return INVALID_ARGUMENT;
     }
-    let base = if module.is_null() {
-        (unsafe { GetModuleHandleW(null()) }) as usize
-    } else {
-        module as usize
-    };
-    let Some((address, size)) = executable_span(base) else {
+    let Some((address, size)) = executable_span(module_base(module)) else {
         return NOT_A_PE;
     };
     let mut buffer = Vec::new();

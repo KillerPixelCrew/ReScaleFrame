@@ -70,7 +70,7 @@ pub(super) fn rsf_dump_now_ms() -> f64 {
     }
 }
 
-fn elapsed(start: f64) -> u32 {
+pub(super) fn elapsed(start: f64) -> u32 {
     (rsf_dump_now_ms() - start + 0.5) as u32
 }
 
@@ -132,6 +132,17 @@ fn thread_module(start: u64, modules: &[rsf_module_entry]) -> Option<(&rsf_modul
         let rva = start.checked_sub(module.base as u64)?;
         (rva < module.size as u64).then_some((module, rva))
     })
+}
+
+/// The part of a NUL-terminated UTF-16 path after its last backslash.
+pub(super) fn leaf(path: &[u16]) -> &[u16] {
+    let path = &path[..path
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(path.len())];
+    path.iter()
+        .rposition(|&unit| unit == u16::from(b'\\'))
+        .map_or(path, |i| &path[i + 1..])
 }
 
 pub(super) fn wide(out: &mut Stream, value: &[u16]) {
@@ -202,17 +213,8 @@ impl ThreadView<'_> {
             "{comma}\n    {{\"tid\": {tid}, \"dumping\": {dumping}, \"start_address\": \"{start:#x}\""
         );
         if let Some((owner, rva)) = thread_module(start, self.modules) {
-            let path = &owner.path[..owner
-                .path
-                .iter()
-                .position(|&unit| unit == 0)
-                .unwrap_or(owner.path.len())];
-            let leaf = path
-                .iter()
-                .rposition(|&unit| unit == u16::from(b'\\'))
-                .map_or(path, |i| &path[i + 1..]);
             out.emit(", \"start_module\": \"");
-            wide(out, leaf);
+            wide(out, leaf(&owner.path));
             let _ = write!(out, "\", \"start_rva\": \"{rva:#x}\"");
         }
         if let Some(thread) = &thread {

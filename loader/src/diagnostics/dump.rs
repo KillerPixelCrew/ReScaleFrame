@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::image::dump_image;
-use super::measure::{image, rsf_dump_poll_code, rsf_measure_module_code};
-use super::sections::{Stream, collect_modules, rsf_dump_now_ms};
+use super::measure::{image, module_base, rsf_dump_poll_code, rsf_measure_module_code};
+use super::sections::{Stream, collect_modules, leaf, rsf_dump_now_ms};
 use super::sidecar::write_sidecar;
 use crate::sys::*;
 use rsf_game_sys::pe32_plus::Mapped;
@@ -16,7 +16,6 @@ use windows_sys::Win32::{
         Diagnostics::Debug::{
             FlushInstructionCache, IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_DIRECTORY_ENTRY_IMPORT,
         },
-        LibraryLoader::GetModuleHandleW,
         Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect},
         Threading::GetCurrentProcess,
     },
@@ -77,14 +76,6 @@ unsafe fn copy_report(out: *mut rsf_dump_report, mut report: rsf_dump_report, le
     unsafe { ptr::copy_nonoverlapping((&raw const report).cast::<u8>(), out.cast(), copy_length) };
 }
 
-fn dump_base(module: *const c_void) -> usize {
-    if module.is_null() {
-        (unsafe { GetModuleHandleW(ptr::null()) }) as usize
-    } else {
-        module as usize
-    }
-}
-
 /// Writes `count` bytes at `rva` of the executable. `expected`, when given, must match the bytes
 /// there: a patch aimed at shifted code is far worse than no patch.
 #[unsafe(no_mangle)]
@@ -99,7 +90,7 @@ pub(super) unsafe extern "C" fn rsf_patch_code(
     if bytes.is_null() || count == 0 {
         return INVALID_ARGUMENT;
     }
-    let base = dump_base(ptr::null());
+    let base = module_base(ptr::null());
     let Some(headers) = Mapped::read(&mut image(base)) else {
         return NOT_A_PE;
     };
@@ -195,12 +186,7 @@ fn paths(
     let directory = unterminated(&directory);
     let explicit;
     let name = if options.output_name_utf8.is_null() {
-        let original = unterminated(module);
-        let begin = original
-            .iter()
-            .rposition(|&unit| unit == u16::from(b'\\'))
-            .map_or(0, |i| i + 1);
-        &original[begin..]
+        leaf(module)
     } else {
         explicit = convert::<PATH>(options.output_name_utf8)?;
         unterminated(&explicit)
@@ -239,7 +225,7 @@ unsafe extern "C" fn rsf_dump_module(
         size
     };
     let started_ms = rsf_dump_now_ms();
-    let base = dump_base(module);
+    let base = module_base(module);
     let Some(image) = Mapped::read(&mut image(base)) else {
         return NOT_A_PE;
     };
@@ -394,12 +380,7 @@ unsafe extern "C" fn rsf_write_module_list_impl(
     };
     unsafe { native.write_title.unwrap()(stream, label, count) };
     for module in &modules[..count] {
-        let path = unterminated(&module.path);
-        let begin = path
-            .iter()
-            .rposition(|&unit| unit == u16::from(b'\\'))
-            .map_or(0, |i| i + 1);
-        unsafe { native.write_leaf.unwrap()(stream, module.path[begin..].as_ptr()) };
+        unsafe { native.write_leaf.unwrap()(stream, leaf(&module.path).as_ptr()) };
     }
     unsafe { native.close.unwrap()(stream) }
 }
