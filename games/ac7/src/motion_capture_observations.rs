@@ -211,14 +211,16 @@ unsafe fn observe_shader(
     observations().retain_shader(identity, stage, data, constant_mask)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_shader_seen(
+/// The velocity-only shader observation the WARP fixture drives (the carrier fans shader creation out
+/// through rsf_ac7_motion_capture_shader).
+#[cfg(feature = "warp-fixture")]
+pub(crate) unsafe fn observe_velocity_shader(
     shader: *mut c_void,
     stage: u32,
     bytes: *const c_void,
     size: u32,
 ) {
-    // SAFETY: The velocity-only fixture lends the same creation callback byte span.
+    // SAFETY: The fixture lends the same creation callback byte span.
     unsafe { observe_shader(shader, stage, bytes, size, None) };
 }
 

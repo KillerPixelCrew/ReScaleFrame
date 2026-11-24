@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::motion_capture_observations::observe_velocity_shader;
 use crate::sys::rsf_frame_tap_geometry as Geometry;
 use crate::sys::rsf_observer_layout_element;
 use crate::velocity_pass_cache::rsf_ac7_velocity_layout_seen;
@@ -13,15 +14,6 @@ use std::ffi::{c_char, c_void};
 use std::ptr::{from_ref, null_mut};
 use windows::Win32::Graphics::{Direct3D::*, Direct3D11::*, Dxgi::Common::*};
 use windows::core::{BOOL, Interface, PCSTR, Result};
-
-unsafe extern "C" {
-    fn rsf_ac7_velocity_shader_seen(
-        shader: *mut c_void,
-        stage: u32,
-        bytes: *const c_void,
-        size: u32,
-    );
-}
 
 const VIEWPORT: D3D11_VIEWPORT = D3D11_VIEWPORT {
     TopLeftX: 0.,
@@ -71,7 +63,7 @@ impl Warp {
 
     fn observe<T: Interface>(&self, shader: &T, stage: u32, code: &[u8]) {
         unsafe {
-            rsf_ac7_velocity_shader_seen(
+            observe_velocity_shader(
                 shader.as_raw(),
                 stage,
                 code.as_ptr().cast(),

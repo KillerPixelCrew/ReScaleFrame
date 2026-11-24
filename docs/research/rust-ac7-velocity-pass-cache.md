@@ -16,7 +16,7 @@ carriers link it.
 
 | Public call | Caller |
 | --- | --- |
-| `rsf_ac7_velocity_shader_seen` | `on_shader_created`, every successful D3D11 shader creation, after the F9 observer |
+| `rsf_ac7_motion_capture_shader` | `on_shader_created`, every successful D3D11 shader creation; it feeds the F9 observer and the velocity cache |
 | `rsf_ac7_velocity_layout_seen` | `on_layout_created`, every successful input-layout creation, after the F9 observer |
 | `rsf_ac7_velocity_scope` | `on_native_scope`, every native render scope begin and end, after the F9 scope observer |
 | `rsf_ac7_velocity_geometry` | `on_geometry` for every frame-tap draw; only immediate-context draws proceed |
