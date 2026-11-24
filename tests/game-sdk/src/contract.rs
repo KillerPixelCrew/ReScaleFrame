@@ -22,8 +22,6 @@ struct Fixture {
 /// What a plugin's detection decides from the probe.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Recognition {
-    /// The executable name and its recorded SHA-256; another build is unknown.
-    Fingerprint,
     /// The executable name alone; prepare discovers whether this build is usable.
     Name,
     /// Discovery needs the game around the running process, which a fixture process is not, so
