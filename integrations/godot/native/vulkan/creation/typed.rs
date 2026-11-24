@@ -383,20 +383,17 @@ unsafe fn call_destroy_device(destroy: VkFunction, device: *mut c_void, allocato
     unsafe { destroy(handle(device), allocator.cast()) };
 }
 
-unsafe fn adapter(function: VkFunction, physical: *mut c_void, out: *mut VkAdapter) -> u32 {
+unsafe fn adapter(function: VkFunction, physical: *mut c_void) -> VkAdapter {
     let properties = unsafe {
         std::mem::transmute::<VkFunction, vk::PFN_vkGetPhysicalDeviceProperties>(function)
     };
     let mut value = vk::PhysicalDeviceProperties::default();
     unsafe { properties(handle(physical), &mut value) };
-    unsafe {
-        out.write(VkAdapter {
-            vendor: value.vendor_id,
-            device: value.device_id,
-            software: u32::from(value.device_type == vk::PhysicalDeviceType::CPU),
-        })
-    };
-    1
+    VkAdapter {
+        vendor: value.vendor_id,
+        device: value.device_id,
+        software: u32::from(value.device_type == vk::PhysicalDeviceType::CPU),
+    }
 }
 
 static LEAVES: VkCreationLeaves = VkCreationLeaves {

@@ -306,8 +306,7 @@ impl Creation {
     }
 
     /// `vkGetPhysicalDeviceProperties` of the created device's physical device through the owner
-    /// instance. Without the entry point, or when the leaf threw, no facts are kept rather than a
-    /// previous device's.
+    /// instance. Without the entry point no facts are kept rather than a previous device's.
     fn read_adapter(
         &self,
         leaves: &VkCreationLeaves,
@@ -316,7 +315,7 @@ impl Creation {
         let properties = self.binding().underlying.and_then(|underlying| {
             Self::resolve_with(underlying, self.owner(), c"vkGetPhysicalDeviceProperties")
         });
-        let adapter = properties.and_then(|properties| leaves.adapter(properties, physical_device));
+        let adapter = properties.map(|properties| leaves.adapter(properties, physical_device));
         let message = match adapter {
             Some(value) => format!(
                 "Vulkan device adapter vendor={:#x} device={:#x} software={}.",

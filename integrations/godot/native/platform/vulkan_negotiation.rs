@@ -142,7 +142,7 @@ pub(crate) struct VkCreationLeaves {
         unsafe fn(*mut c_void, *mut c_void, *mut c_void, Option<VkProc>, *const c_void) -> i32,
     pub(crate) latency_destroyed: unsafe fn(*mut c_void),
     pub(crate) destroy_device: unsafe fn(VkFunction, *mut c_void, *const c_void),
-    pub(crate) adapter: unsafe fn(VkFunction, *mut c_void, *mut VkAdapter) -> u32,
+    pub(crate) adapter: unsafe fn(VkFunction, *mut c_void) -> VkAdapter,
 }
 
 impl VkCreationLeaves {
@@ -312,15 +312,13 @@ impl VkCreationLeaves {
         unsafe { (self.destroy_device)(destroy, device, allocator) }
     }
 
-    /// `properties` is `vkGetPhysicalDeviceProperties`; `None` when the leaf threw.
+    /// `properties` is `vkGetPhysicalDeviceProperties`.
     pub(crate) fn adapter(
         &self,
         properties: VkFunction,
         physical_device: *mut c_void,
-    ) -> Option<VkAdapter> {
-        let mut adapter = VkAdapter::default();
-        (unsafe { (self.adapter)(properties, physical_device, &mut adapter) } != 0)
-            .then_some(adapter)
+    ) -> VkAdapter {
+        unsafe { (self.adapter)(properties, physical_device) }
     }
 }
 

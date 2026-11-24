@@ -43,8 +43,8 @@ thread_local! {
     static LATENCY: Cell<bool> = const { Cell::new(false) };
     static CREATED_DEVICE: Cell<usize> = const { Cell::new(DEVICE) };
     static RESULTS: RefCell<VecDeque<i32>> = const { RefCell::new(VecDeque::new()) };
-    /// The properties leaf's answer; `None` throws.
-    static ADAPTER: Cell<Option<VkAdapter>> = const { Cell::new(Some(NVIDIA)) };
+    /// The properties leaf's answer.
+    static ADAPTER: Cell<VkAdapter> = const { Cell::new(NVIDIA) };
 }
 
 const NVIDIA: VkAdapter = VkAdapter {
@@ -89,7 +89,7 @@ fn reset() {
     INTEROP.set(false);
     LATENCY.set(false);
     RESULTS.with_borrow_mut(VecDeque::clear);
-    ADAPTER.set(Some(NVIDIA));
+    ADAPTER.set(NVIDIA);
 }
 
 /// The create results in order; success once they run out.
@@ -373,15 +373,10 @@ unsafe fn destroy_device(destroy: VkFunction, device: *mut c_void, _: *const c_v
     record(format!("destroy_device {:#x}", device.addr()));
 }
 
-unsafe fn adapter(properties: VkFunction, physical: *mut c_void, output: *mut VkAdapter) -> u32 {
+unsafe fn adapter(properties: VkFunction, physical: *mut c_void) -> VkAdapter {
     assert_eq!(properties as usize, properties_marker as *const () as usize);
     record(format!("adapter {:#x}", physical.addr()));
-    let Some(value) = ADAPTER.get() else {
-        return 0;
-    };
-    // SAFETY: the owner's output.
-    unsafe { output.write(value) };
-    1
+    ADAPTER.get()
 }
 
 static LEAVES: VkCreationLeaves = VkCreationLeaves {
@@ -871,18 +866,15 @@ fn created_devices_replace_the_adapter_facts_and_failures_keep_them() {
     creation.stop();
     assert!(creation.begin(Some(underlying), false, None, ptr::null_mut()));
     assert_eq!(creation.adapter(), Some(NVIDIA));
-    // A software device, then one whose properties leaf threw, which keeps none.
+    // A software device replaces them.
     let software = VkAdapter {
         vendor: 0x10005,
         device: 0,
         software: 1,
     };
-    ADAPTER.set(Some(software));
+    ADAPTER.set(software);
     assert_eq!(creation.create_device(&LEAVES, &call), VK_SUCCESS);
     assert_eq!(creation.adapter(), Some(software));
-    ADAPTER.set(None);
-    assert_eq!(creation.create_device(&LEAVES, &call), VK_SUCCESS);
-    assert_eq!(creation.adapter(), None);
 }
 
 #[test]
