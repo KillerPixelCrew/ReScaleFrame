@@ -17,10 +17,14 @@ pub(crate) const STAGE_GEOMETRY: u32 = 1;
 pub(crate) const STAGE_HULL: u32 = 2;
 pub(crate) const STAGE_DOMAIN: u32 = 4;
 
-// Pipeline routes.
-pub(crate) const ROUTE_ADMITTED: u32 = 0;
-const ROUTE_SKIPPED: u32 = 1;
-pub(crate) const ROUTE_MISMATCHED: u32 = 2;
+/// Whether a draw's pipeline is captured.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    Admitted,
+    Skipped,
+    /// A partial tessellation pipeline, or tessellation with a native GS.
+    Mismatched,
+}
 
 // D3D11_PRIMITIVE_TOPOLOGY values. An N-point patch list is N plus PATCH_LIST_BASE.
 const TRIANGLE_LIST: u32 = 4;
@@ -71,7 +75,7 @@ pub(crate) struct StreamPlan {
     pub(crate) bounds: IndirectBounds,
     pub(crate) capacity: u32,
     pub(crate) built: u32,
-    pub(crate) zero_source: u32,
+    pub(crate) zero_source: bool,
 }
 
 /// The geometry, tessellation and pixel b13 cbuffer of velocity_geometry.rs,
@@ -129,16 +133,16 @@ pub(crate) fn draw_admitted(scope: &rsf_game_render_pass, draw: &rsf_frame_tap_g
 
 /// Tessellation needs both stages and no native GS. Without it only triangle lists and strips
 /// are captured; the patch topology is checked once the variant knows its control points.
-pub(crate) fn route(topology: u32, stages: u32) -> u32 {
+pub(crate) fn route(topology: u32, stages: u32) -> Route {
     let geometry = stages & STAGE_GEOMETRY != 0;
     let hull = stages & STAGE_HULL != 0;
     let domain = stages & STAGE_DOMAIN != 0;
     if hull != domain || (hull && geometry) {
-        ROUTE_MISMATCHED
+        Route::Mismatched
     } else if !hull && topology != TRIANGLE_LIST && topology != TRIANGLE_STRIP {
-        ROUTE_SKIPPED
+        Route::Skipped
     } else {
-        ROUTE_ADMITTED
+        Route::Admitted
     }
 }
 
@@ -213,7 +217,7 @@ pub(crate) fn plan(
         },
         capacity,
         built,
-        zero_source: u32::from(geometry || draw.kind == DRAW_AUTO),
+        zero_source: geometry || draw.kind == DRAW_AUTO,
     })
 }
 

@@ -484,7 +484,7 @@ impl Renderer {
             self.captured = Some(buffer);
         }
         let captured = self.captured.as_ref()?;
-        if plan.zero_source != 0 {
+        if plan.zero_source {
             if self
                 .stream
                 .as_ref()
@@ -793,10 +793,10 @@ impl Pipeline {
             | (u32::from(hull.is_some()) * STAGE_HULL)
             | (u32::from(domain.is_some()) * STAGE_DOMAIN);
         let route = route(topology, stages);
-        if route == ROUTE_MISMATCHED {
+        if route == Route::Mismatched {
             refused(c"incomplete tessellation pipeline or combined native GS/tessellation requires a matching route");
         }
-        (route == ROUTE_ADMITTED).then_some(Self {
+        (route == Route::Admitted).then_some(Self {
             geometry,
             hull,
             domain,

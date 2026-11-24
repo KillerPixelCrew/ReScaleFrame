@@ -65,19 +65,19 @@ fn draw_admission_checks_context_depth_samples_kind_and_count() {
 
 #[test]
 fn routes_follow_the_bound_stages_and_topology() {
-    assert_eq!(route(TRIANGLE_LIST, 0), ROUTE_ADMITTED);
-    assert_eq!(route(TRIANGLE_STRIP, STAGE_GEOMETRY), ROUTE_ADMITTED);
-    assert_eq!(route(1, 0), ROUTE_SKIPPED);
-    assert_eq!(route(PATCH_LIST_BASE + 3, STAGE_GEOMETRY), ROUTE_SKIPPED);
+    assert_eq!(route(TRIANGLE_LIST, 0), Route::Admitted);
+    assert_eq!(route(TRIANGLE_STRIP, STAGE_GEOMETRY), Route::Admitted);
+    assert_eq!(route(1, 0), Route::Skipped);
+    assert_eq!(route(PATCH_LIST_BASE + 3, STAGE_GEOMETRY), Route::Skipped);
     // Patch topology is checked by the plan once the variant knows its control points.
-    assert_eq!(route(1, STAGE_HULL | STAGE_DOMAIN), ROUTE_ADMITTED);
+    assert_eq!(route(1, STAGE_HULL | STAGE_DOMAIN), Route::Admitted);
     for stages in [
         STAGE_HULL,
         STAGE_DOMAIN,
         STAGE_GEOMETRY | STAGE_HULL | STAGE_DOMAIN,
         STAGE_GEOMETRY | STAGE_HULL,
     ] {
-        assert_eq!(route(TRIANGLE_LIST, stages), ROUTE_MISMATCHED);
+        assert_eq!(route(TRIANGLE_LIST, stages), Route::Mismatched);
     }
 }
 
@@ -95,7 +95,7 @@ fn direct_lists_count_instanced_vertices() {
     );
     assert_eq!(
         (made.capacity, made.built, made.zero_source),
-        (2048, 1200, 0)
+        (2048, 1200, false)
     );
     // Non-instanced kinds ignore the instance count.
     let made = plan(&draw(1, 300, 9, TRIANGLE_LIST), 0, 0, 1, 0).unwrap();
@@ -133,7 +133,7 @@ fn patches_need_their_topology_and_count_patches() {
             points: 3
         }
     );
-    assert_eq!((made.built, made.zero_source), (18, 0));
+    assert_eq!((made.built, made.zero_source), (18, false));
     // Indirect patches read the capacity as triangles of control points.
     let made = plan(&draw(6, 0, 0, PATCH_LIST_BASE + 1), stages, 9, 3, 1).unwrap();
     assert_eq!((made.bounds.vertices, made.bounds.records), (3, 9));
@@ -147,17 +147,17 @@ fn native_emission_and_draw_auto_use_the_output_bound_and_zero_source() {
         (made.bounds.records, made.bounds.packing, made.built),
         (180, PACK_EMITTED, 180)
     );
-    assert_eq!(made.zero_source, 1);
+    assert!(made.zero_source);
     let made = plan(&draw(DRAW_AUTO, 0, 0, TRIANGLE_LIST), 0, 99, 1, 0).unwrap();
     assert_eq!(
         (made.bounds.vertices, made.built, made.zero_source),
-        (99, 99, 1)
+        (99, 99, true)
     );
     // Indirect draws build up to the bound and read their exact count on the GPU.
     let made = plan(&draw(5, 0, 0, TRIANGLE_STRIP), 0, 12, 1, 0).unwrap();
     assert_eq!(
         (made.bounds.records, made.built, made.zero_source),
-        (36, 36, 0)
+        (36, 36, false)
     );
 }
 
