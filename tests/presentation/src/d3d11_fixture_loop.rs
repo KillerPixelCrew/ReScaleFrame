@@ -4,6 +4,7 @@ use crate::fixture_device::rsf_present_fixture_debug_errors;
 use crate::present_fixture_time::{frequency, milliseconds, stamp};
 use crate::sys::rsf_native_cpu_frame;
 use crate::sys::*;
+use rsf_game_sys::backend_result::INVALID_ARGUMENT;
 use std::time::Instant;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D12::ID3D12Device;
@@ -14,7 +15,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::Interface;
 
 const SESSION: u64 = 42;
-const INVALID_ARGUMENT: i32 = -1;
 
 fn event(id: u64, stage: u32) -> rsf_game_cpu_event {
     rsf_test_support::cpu_event(SESSION, id, stage, stamp(), frequency())

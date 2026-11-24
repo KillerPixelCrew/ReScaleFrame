@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
-use super::{ABI_MISMATCH, INVALID_ARGUMENT, NOT_READY, OK, wide};
+use super::wide;
 use crate::sys::*;
 use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION, RSF_CALLBACK_HOST_ABI_VERSION_V2, rsf_callback_host_setup,
     rsf_callback_host_setup_v2,
+};
+use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NOT_READY, RSF_OK,
 };
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_LATENCY_MODE, RSF_GAME_RENDER_FEEDBACK_CAMERA_JITTER_INVALID,
@@ -225,12 +228,12 @@ fn frontend_settings() -> rsf_render_settings {
         abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
         ..Default::default()
     };
-    assert_eq!(unsafe { rsf_render_settings_get(&mut settings) }, OK);
+    assert_eq!(unsafe { rsf_render_settings_get(&mut settings) }, RSF_OK);
     settings
 }
 
 fn apply(settings: &rsf_render_settings) {
-    assert_eq!(unsafe { rsf_render_settings_apply(settings) }, OK);
+    assert_eq!(unsafe { rsf_render_settings_apply(settings) }, RSF_OK);
 }
 
 fn sharpening_words(settings: &rsf_render_settings) -> [u32; 12] {
@@ -259,9 +262,12 @@ extern "C" fn rsf_test_render_frontend() -> i32 {
     };
     assert_eq!(
         unsafe { rsf_render_status_get(null_mut()) },
-        INVALID_ARGUMENT
+        RSF_ERROR_INVALID_ARGUMENT
     );
-    assert_eq!(unsafe { rsf_render_status_get(&mut status) }, NOT_READY);
+    assert_eq!(
+        unsafe { rsf_render_status_get(&mut status) },
+        RSF_ERROR_NOT_READY
+    );
     let scratch = Scratch::new("render-frontend");
     let directory = wide(scratch.0.as_os_str());
     let ini = scratch.path("ReScaleFrame.ini");
@@ -298,7 +304,7 @@ extern "C" fn rsf_test_render_frontend() -> i32 {
         depth_inverted: 1,
         ..Default::default()
     };
-    assert_eq!(unsafe { rsf_render_host_create(&setup, &mut host) }, OK);
+    assert_eq!(unsafe { rsf_render_host_create(&setup, &mut host) }, RSF_OK);
     let latency = rsf_game_latency_event {
         struct_size: size_of::<rsf_game_latency_event>() as u32,
         marker: RSF_GAME_LATENCY_MODE,
@@ -309,7 +315,7 @@ extern "C" fn rsf_test_render_frontend() -> i32 {
     };
     assert_eq!(
         unsafe { host.process_latency.expect("latency callback")(host.user, &latency) },
-        OK
+        RSF_OK
     );
     let settings = frontend_settings();
     assert_eq!(settings.sr_backend, RSF_SR_AUTO);
@@ -365,13 +371,13 @@ extern "C" fn rsf_test_render_frontend() -> i32 {
                 ..saved
             })
         },
-        INVALID_ARGUMENT
+        RSF_ERROR_INVALID_ARGUMENT
     );
     apply(&rsf_render_settings {
         fg_enabled: 0,
         ..saved
     });
-    assert_eq!(unsafe { rsf_render_status_get(&mut status) }, OK);
+    assert_eq!(unsafe { rsf_render_status_get(&mut status) }, RSF_OK);
     assert_eq!(
         (
             status.fg_requested,
@@ -394,7 +400,7 @@ extern "C" fn rsf_test_render_frontend() -> i32 {
                 ..saved
             })
         },
-        INVALID_ARGUMENT
+        RSF_ERROR_INVALID_ARGUMENT
     );
     assert_eq!(ini_value(w!("SRQuality")), 4);
     let mut untouched = [0u16; 64];
@@ -420,7 +426,7 @@ extern "C" fn rsf_test_render_frontend() -> i32 {
                 ..settings
             })
         },
-        INVALID_ARGUMENT
+        RSF_ERROR_INVALID_ARGUMENT
     );
     assert_eq!(ini_value(w!("FGGeneratedFrames")), 3);
 
@@ -431,7 +437,7 @@ extern "C" fn rsf_test_render_frontend() -> i32 {
         native_frame: 123,
     };
     unsafe { host.render_feedback.expect("feedback callback")(host.user, &feedback) };
-    assert_eq!(unsafe { rsf_render_status_get(&mut status) }, OK);
+    assert_eq!(unsafe { rsf_render_status_get(&mut status) }, RSF_OK);
     assert_eq!(status.native_frame, 123);
     assert_eq!(
         unsafe { CStr::from_ptr(status.reason.as_ptr()) },
@@ -439,7 +445,10 @@ extern "C" fn rsf_test_render_frontend() -> i32 {
     );
     assert_eq!(status.output_fps_valid, 0);
     status.abi_version += 1;
-    assert_eq!(unsafe { rsf_render_status_get(&mut status) }, ABI_MISMATCH);
+    assert_eq!(
+        unsafe { rsf_render_status_get(&mut status) },
+        RSF_ERROR_ABI_MISMATCH
+    );
     0
 }
 
@@ -454,7 +463,7 @@ extern "C" fn rsf_test_render_links() -> i32 {
     let (mut ticket, mut consumed) = (output, output);
     let source = (1 << 32) + 1;
     unsafe {
-        assert_eq!(rsf_render_links_create(42, 2, &mut links), OK);
+        assert_eq!(rsf_render_links_create(42, 2, &mut links), RSF_OK);
         assert!(!links.is_null());
         let mut short = rsf_render_link {
             struct_size: output.struct_size - 1,
@@ -462,7 +471,7 @@ extern "C" fn rsf_test_render_links() -> i32 {
         };
         assert_eq!(
             rsf_render_links_lookup(links, 100, 8, &mut short),
-            INVALID_ARGUMENT
+            RSF_ERROR_INVALID_ARGUMENT
         );
         let mut future = rsf_render_link {
             abi_version: output.abi_version + 1,
@@ -470,14 +479,20 @@ extern "C" fn rsf_test_render_links() -> i32 {
         };
         assert_eq!(
             rsf_render_links_bind(links, 100, source, 8, &mut future),
-            ABI_MISMATCH
+            RSF_ERROR_ABI_MISMATCH
         );
-        assert_eq!(rsf_render_links_release(links, &future), ABI_MISMATCH);
+        assert_eq!(
+            rsf_render_links_release(links, &future),
+            RSF_ERROR_ABI_MISMATCH
+        );
         assert_eq!(
             rsf_render_links_bind(links, 100, source, 8, &mut ticket),
-            OK
+            RSF_OK
         );
-        assert_eq!(rsf_render_links_lookup(links, 100, 8, &mut consumed), OK);
+        assert_eq!(
+            rsf_render_links_lookup(links, 100, 8, &mut consumed),
+            RSF_OK
+        );
         assert_eq!(
             (
                 consumed.session_id,
@@ -486,8 +501,8 @@ extern "C" fn rsf_test_render_links() -> i32 {
             ),
             (42, source, ticket.submission_id)
         );
-        assert_eq!(rsf_render_links_release(links, &ticket), OK);
-        assert_eq!(rsf_render_links_destroy(links), OK);
+        assert_eq!(rsf_render_links_release(links, &ticket), RSF_OK);
+        assert_eq!(rsf_render_links_destroy(links), RSF_OK);
     }
     0
 }

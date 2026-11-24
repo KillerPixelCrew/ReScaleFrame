@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
-use crate::{ABI_MISMATCH, BUSY, INVALID_ARGUMENT, NOT_READY, OK, sys::*};
+use crate::sys::*;
+use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH, RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NOT_READY, RSF_OK,
+};
 use std::ffi::{OsStr, c_char, c_void};
 use std::mem::offset_of;
 use std::ptr::{dangling_mut, null_mut};
@@ -51,29 +54,29 @@ fn check() -> i32 {
             value: 1,
         };
         assert!(
-            rsf_d3d11_host_capture_control(null_mut()) == INVALID_ARGUMENT,
+            rsf_d3d11_host_capture_control(null_mut()) == RSF_ERROR_INVALID_ARGUMENT,
             "Null capture control refused"
         );
         capture_control.struct_size -= 1;
         assert!(
-            rsf_d3d11_host_capture_control(&capture_control) == INVALID_ARGUMENT,
+            rsf_d3d11_host_capture_control(&capture_control) == RSF_ERROR_INVALID_ARGUMENT,
             "Short capture control refused"
         );
         capture_control.struct_size += 1;
         capture_control.abi_version += 1;
         assert!(
-            rsf_d3d11_host_capture_control(&capture_control) == ABI_MISMATCH,
+            rsf_d3d11_host_capture_control(&capture_control) == RSF_ERROR_ABI_MISMATCH,
             "Capture control version checked"
         );
         capture_control.abi_version -= 1;
         capture_control.value = 0;
         assert!(
-            rsf_d3d11_host_capture_control(&capture_control) == INVALID_ARGUMENT,
+            rsf_d3d11_host_capture_control(&capture_control) == RSF_ERROR_INVALID_ARGUMENT,
             "empty sequence request refused"
         );
         capture_control.value = 1;
         assert!(
-            rsf_d3d11_host_capture_control(&capture_control) == NOT_READY,
+            rsf_d3d11_host_capture_control(&capture_control) == RSF_ERROR_NOT_READY,
             "capture_control requires live host"
         );
 
@@ -104,97 +107,97 @@ fn check() -> i32 {
             ..std::mem::zeroed()
         };
         assert!(
-            rsf_d3d11_host_create(null_mut(), &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(null_mut(), &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Null setup refused"
         );
         setup.struct_size = offset_of!(rsf_d3d11_host_setup, depth_far_plane) as u32 - 1;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Short setup refused"
         );
         setup.struct_size = size_of_val(&setup) as u32 - 1;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Partial extension refused"
         );
         setup.struct_size = size_of_val(&setup) as u32;
         setup.abi_version += 1;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == ABI_MISMATCH,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_ABI_MISMATCH,
             "Setup ABI checked"
         );
         setup.abi_version -= 1;
         host.struct_size -= 1;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Short services refused"
         );
         host.struct_size += 1;
         host.abi_version += 1;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == ABI_MISMATCH,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_ABI_MISMATCH,
             "Services ABI checked"
         );
         host.abi_version -= 1;
         setup.depth_far_plane = 3;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Unknown far-plane convention refused"
         );
         setup.depth_far_plane = RSF_D3D11_HOST_DEPTH_FINITE;
         setup.colour_transport_default = 2;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Unknown colour transport default refused"
         );
         setup.colour_transport_default = 0; // existing callers preserve the enabled default
         setup.units_to_meters = f32::NAN;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Nonfinite units refused"
         );
         setup.units_to_meters = 1.0;
         setup.motion.scale_x = 0.0;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Zero decode scale refused"
         );
         setup.motion.scale_x = 1.0;
         setup.quality_choices = 0;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Empty capabilities refused"
         );
         setup.quality_choices = 1;
         setup.presentation_bridge = 1;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Cold presentation requires an adapter window filter before any hooks are installed"
         );
         setup.presentation_bridge = 4;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Unknown presentation mode refused"
         );
         setup.presentation_bridge = 0;
         setup.capabilities = 8;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Unknown capability refused"
         );
         setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "FG facts require presentation bridge"
         );
         setup.capabilities = RSF_D3D11_HOST_CAP_INPUT_TIMELINE;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Input timeline requires presentation bridge"
         );
         setup.capabilities = RSF_D3D11_HOST_CAP_RENDERED_SOURCE;
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == INVALID_ARGUMENT,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_ERROR_INVALID_ARGUMENT,
             "Rendered source requires presentation bridge"
         );
         setup.capabilities = 0;
@@ -278,19 +281,21 @@ fn check() -> i32 {
         inputs.role = RSF_GAME_RENDER_FG_INPUTS;
         let invalid_context = fake;
         assert!(
-            rsf_native_sr_capture_fg(invalid_context, &inputs, &setup.motion) == NOT_READY,
+            rsf_native_sr_capture_fg(invalid_context, &inputs, &setup.motion)
+                == RSF_ERROR_NOT_READY,
             "Unidentified FG lease refused before graphics dereference"
         );
         inputs.struct_size -= 1;
         assert!(
-            rsf_native_sr_capture_fg(invalid_context, &inputs, &setup.motion) == INVALID_ARGUMENT,
+            rsf_native_sr_capture_fg(invalid_context, &inputs, &setup.motion)
+                == RSF_ERROR_INVALID_ARGUMENT,
             "Short FG lease refused before graphics dereference"
         );
         let mut upstream = host;
         setup.struct_size = offset_of!(rsf_d3d11_host_setup, depth_far_plane) as u32;
         setup.depth_far_plane = 3; // Outside the advertised legacy record.
         assert!(
-            rsf_d3d11_host_create(&setup, &mut host) == OK,
+            rsf_d3d11_host_create(&setup, &mut host) == RSF_OK,
             "Graphics-free creation succeeds without SDK directories"
         );
         assert!(
@@ -306,16 +311,16 @@ fn check() -> i32 {
             "Only admitted host services published; no pacing or generation"
         );
         assert!(
-            rsf_d3d11_host_create(&setup, &mut upstream) == BUSY,
+            rsf_d3d11_host_create(&setup, &mut upstream) == RSF_ERROR_BUSY,
             "Second process owner refused"
         );
         assert!(
-            rsf_d3d11_host_set_active(cookie, 1) == INVALID_ARGUMENT,
+            rsf_d3d11_host_set_active(cookie, 1) == RSF_ERROR_INVALID_ARGUMENT,
             "Only the returned owner controls activation"
         );
         assert!(
-            rsf_d3d11_host_set_active(host.user, 1) == OK
-                && rsf_d3d11_host_set_active(host.user, 0) == OK,
+            rsf_d3d11_host_set_active(host.user, 1) == RSF_OK
+                && rsf_d3d11_host_set_active(host.user, 0) == RSF_OK,
             "Thread-safe activation and suspension"
         );
         let mut recovery = rsf_d3d11_reduced_frame {
@@ -325,36 +330,42 @@ fn check() -> i32 {
         };
         let unreadable = fake;
         assert!(
-            rsf_d3d11_host_reduced_frame(cookie, unreadable, &mut recovery) == INVALID_ARGUMENT,
+            rsf_d3d11_host_reduced_frame(cookie, unreadable, &mut recovery)
+                == RSF_ERROR_INVALID_ARGUMENT,
             "recovery validates host before graphics"
         );
         recovery.struct_size -= 1;
         assert!(
-            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery) == INVALID_ARGUMENT,
+            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery)
+                == RSF_ERROR_INVALID_ARGUMENT,
             "recovery validates size before graphics"
         );
         recovery.struct_size += 1;
         recovery.abi_version += 1;
         assert!(
-            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery) == ABI_MISMATCH,
+            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery)
+                == RSF_ERROR_ABI_MISMATCH,
             "independent recovery negotiation"
         );
         recovery.abi_version -= 1;
         recovery.operation = 5;
         assert!(
-            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery) == INVALID_ARGUMENT,
+            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery)
+                == RSF_ERROR_INVALID_ARGUMENT,
             "unknown recovery operation refused"
         );
         recovery.operation = 0;
         recovery.reserved = 1;
         assert!(
-            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery) == INVALID_ARGUMENT,
+            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery)
+                == RSF_ERROR_INVALID_ARGUMENT,
             "reserved recovery bits refused"
         );
         recovery.reserved = 0;
         recovery.owner = unreadable.cast();
         assert!(
-            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery) == NOT_READY,
+            rsf_d3d11_host_reduced_frame(host.user, unreadable, &mut recovery)
+                == RSF_ERROR_NOT_READY,
             "unconfigured recovery owner refused before resource reads"
         );
         let mut cleanup = rsf_d3d11_auxiliary_scope {
@@ -365,23 +376,23 @@ fn check() -> i32 {
             view_key: 1,
         };
         assert!(
-            rsf_d3d11_host_restore_auxiliaries(cookie, &cleanup) == INVALID_ARGUMENT,
+            rsf_d3d11_host_restore_auxiliaries(cookie, &cleanup) == RSF_ERROR_INVALID_ARGUMENT,
             "Auxiliary cleanup verifies host user"
         );
         cleanup.struct_size -= 1;
         assert!(
-            rsf_d3d11_host_restore_auxiliaries(host.user, &cleanup) == INVALID_ARGUMENT,
+            rsf_d3d11_host_restore_auxiliaries(host.user, &cleanup) == RSF_ERROR_INVALID_ARGUMENT,
             "Auxiliary cleanup verifies scope size"
         );
         cleanup.struct_size += 1;
         cleanup.abi_version += 1;
         assert!(
-            rsf_d3d11_host_restore_auxiliaries(host.user, &cleanup) == ABI_MISMATCH,
+            rsf_d3d11_host_restore_auxiliaries(host.user, &cleanup) == RSF_ERROR_ABI_MISMATCH,
             "Auxiliary cleanup verifies ABI before empty acknowledgement"
         );
         cleanup.abi_version -= 1;
         assert!(
-            rsf_d3d11_host_restore_auxiliaries(host.user, &cleanup) == NOT_READY,
+            rsf_d3d11_host_restore_auxiliaries(host.user, &cleanup) == RSF_ERROR_NOT_READY,
             "Unbound graphics owner cannot acknowledge empty cleanup"
         );
         let mut event = rsf_game_cpu_event {
@@ -421,16 +432,16 @@ fn check() -> i32 {
         early.camera.output_width = 64;
         early.camera.output_height = 64;
         assert!(
-            rsf_d3d11_host_set_active(host.user, 1) == OK,
+            rsf_d3d11_host_set_active(host.user, 1) == RSF_OK,
             "Activate for early planning refusal"
         );
         assert!(
-            host.process_upscale.unwrap()(host.user, fake, &early) == INVALID_ARGUMENT,
+            host.process_upscale.unwrap()(host.user, fake, &early) == RSF_ERROR_INVALID_ARGUMENT,
             "Foreign planning lease refused before graphics access"
         );
         early.session_id = host.session_id;
         assert!(
-            host.process_upscale.unwrap()(host.user, fake, &early) == NOT_READY,
+            host.process_upscale.unwrap()(host.user, fake, &early) == RSF_ERROR_NOT_READY,
             "Early loading-style planning must not consume a graphics context or bind an execution owner"
         );
         assert!(
@@ -440,7 +451,8 @@ fn check() -> i32 {
             "Refused cold planning publishes no invented size"
         );
         assert!(
-            host.process_upscale.unwrap()(host.user, null_mut(), null_mut()) == INVALID_ARGUMENT,
+            host.process_upscale.unwrap()(host.user, null_mut(), null_mut())
+                == RSF_ERROR_INVALID_ARGUMENT,
             "Null graphics lease refused"
         );
         assert!(
@@ -467,25 +479,25 @@ fn check() -> i32 {
         call.handled = 1;
         call.result.references = 123;
         assert!(
-            rsf_d3d11_host_dispatch_chain(cookie, &mut call) == INVALID_ARGUMENT
+            rsf_d3d11_host_dispatch_chain(cookie, &mut call) == RSF_ERROR_INVALID_ARGUMENT
                 && call.handled == 1,
             "Typed chain dispatch checks host before touching outputs"
         );
         call.struct_size -= 1;
         assert!(
-            rsf_d3d11_host_dispatch_chain(host.user, &mut call) == INVALID_ARGUMENT,
+            rsf_d3d11_host_dispatch_chain(host.user, &mut call) == RSF_ERROR_INVALID_ARGUMENT,
             "Short typed dispatch refused"
         );
         call.struct_size += 1;
         call.abi_version += 1;
         assert!(
-            rsf_d3d11_host_dispatch_chain(host.user, &mut call) == ABI_MISMATCH,
+            rsf_d3d11_host_dispatch_chain(host.user, &mut call) == RSF_ERROR_ABI_MISMATCH,
             "Typed dispatch ABI checked"
         );
         call.abi_version -= 1;
         call.method = 0;
         assert!(
-            rsf_d3d11_host_dispatch_chain(host.user, &mut call) == INVALID_ARGUMENT,
+            rsf_d3d11_host_dispatch_chain(host.user, &mut call) == RSF_ERROR_INVALID_ARGUMENT,
             "Unknown method cannot forward"
         );
         for method in RSF_D3D11_DISPATCH_RELEASE..=RSF_D3D11_DISPATCH_RESIZE_BUFFERS1 {
@@ -497,7 +509,7 @@ fn check() -> i32 {
                 ..std::mem::zeroed()
             };
             assert!(
-                rsf_d3d11_host_dispatch_chain(host.user, &mut call) == OK
+                rsf_d3d11_host_dispatch_chain(host.user, &mut call) == RSF_OK
                     && call.handled == 0
                     && call.result.references == 123,
                 "Every unowned typed method preserves result without argument or receiver dereference"
@@ -513,25 +525,25 @@ fn check() -> i32 {
             native_result: 123,
         };
         assert!(
-            rsf_d3d11_host_dispatch_present(cookie, &mut dispatch) == INVALID_ARGUMENT
+            rsf_d3d11_host_dispatch_present(cookie, &mut dispatch) == RSF_ERROR_INVALID_ARGUMENT
                 && dispatch.handled == 1
                 && dispatch.native_result == 123,
             "Present dispatch validates owner before outputs"
         );
         dispatch.struct_size -= 1;
         assert!(
-            rsf_d3d11_host_dispatch_present(host.user, &mut dispatch) == INVALID_ARGUMENT,
+            rsf_d3d11_host_dispatch_present(host.user, &mut dispatch) == RSF_ERROR_INVALID_ARGUMENT,
             "Short Present dispatch refused before receiver dereference"
         );
         dispatch.struct_size += 1;
         dispatch.abi_version += 1;
         assert!(
-            rsf_d3d11_host_dispatch_present(host.user, &mut dispatch) == ABI_MISMATCH,
+            rsf_d3d11_host_dispatch_present(host.user, &mut dispatch) == RSF_ERROR_ABI_MISMATCH,
             "Present dispatch ABI checked"
         );
         dispatch.abi_version -= 1;
         assert!(
-            rsf_d3d11_host_dispatch_present(host.user, &mut dispatch) == OK
+            rsf_d3d11_host_dispatch_present(host.user, &mut dispatch) == RSF_OK
                 && dispatch.handled == 0
                 && dispatch.native_result == 123
                 && dispatch.receiver == fake
@@ -546,27 +558,28 @@ fn check() -> i32 {
             token: 0,
         };
         assert!(
-            rsf_d3d11_host_creation_begin(cookie, &mut scope) == INVALID_ARGUMENT,
+            rsf_d3d11_host_creation_begin(cookie, &mut scope) == RSF_ERROR_INVALID_ARGUMENT,
             "Creation scope owner checked"
         );
         scope.struct_size -= 1;
         assert!(
-            rsf_d3d11_host_creation_begin(host.user, &mut scope) == INVALID_ARGUMENT,
+            rsf_d3d11_host_creation_begin(host.user, &mut scope) == RSF_ERROR_INVALID_ARGUMENT,
             "Short creation scope refused"
         );
         scope.struct_size += 1;
         scope.abi_version += 1;
         assert!(
-            rsf_d3d11_host_creation_begin(host.user, &mut scope) == ABI_MISMATCH,
+            rsf_d3d11_host_creation_begin(host.user, &mut scope) == RSF_ERROR_ABI_MISMATCH,
             "Creation scope ABI checked"
         );
         scope.abi_version -= 1;
         assert!(
-            rsf_d3d11_host_creation_begin(host.user, &mut scope) == NOT_READY && scope.token == 0,
+            rsf_d3d11_host_creation_begin(host.user, &mut scope) == RSF_ERROR_NOT_READY
+                && scope.token == 0,
             "Unscoped host preserves scope output without dereferencing native pointers"
         );
         assert!(
-            rsf_d3d11_host_creation_end(host.user, &scope, null_mut()) == NOT_READY,
+            rsf_d3d11_host_creation_end(host.user, &scope, null_mut()) == RSF_ERROR_NOT_READY,
             "Unscoped host cannot close another creation transaction"
         );
         let mut original_chain = fake;
@@ -579,25 +592,26 @@ fn check() -> i32 {
         };
         assert!(
             rsf_d3d11_host_wrap_native_swapchain(cookie, &native_creation_request)
-                == INVALID_ARGUMENT,
+                == RSF_ERROR_INVALID_ARGUMENT,
             "Only returned host owner wraps outer native creation"
         );
         native_creation_request.struct_size -= 1;
         assert!(
             rsf_d3d11_host_wrap_native_swapchain(host.user, &native_creation_request)
-                == INVALID_ARGUMENT,
+                == RSF_ERROR_INVALID_ARGUMENT,
             "Short outer creation call rejected before graphics access"
         );
         native_creation_request.struct_size += 1;
         native_creation_request.abi_version += 1;
         assert!(
             rsf_d3d11_host_wrap_native_swapchain(host.user, &native_creation_request)
-                == ABI_MISMATCH,
+                == RSF_ERROR_ABI_MISMATCH,
             "Outer creation call ABI checked"
         );
         native_creation_request.abi_version -= 1;
         assert!(
-            rsf_d3d11_host_wrap_native_swapchain(host.user, &native_creation_request) == NOT_READY
+            rsf_d3d11_host_wrap_native_swapchain(host.user, &native_creation_request)
+                == RSF_ERROR_NOT_READY
                 && original_chain == fake,
             "Host without outer-root bridge preserves native outputs before graphics access"
         );
@@ -607,28 +621,28 @@ fn check() -> i32 {
             swapchain: fake,
         };
         assert!(
-            rsf_d3d11_host_bind_presentation(cookie, &binding) == INVALID_ARGUMENT,
+            rsf_d3d11_host_bind_presentation(cookie, &binding) == RSF_ERROR_INVALID_ARGUMENT,
             "Presentation owner checked"
         );
         binding.struct_size -= 1;
         assert!(
-            rsf_d3d11_host_bind_presentation(host.user, &binding) == INVALID_ARGUMENT,
+            rsf_d3d11_host_bind_presentation(host.user, &binding) == RSF_ERROR_INVALID_ARGUMENT,
             "Presentation binding size checked"
         );
         binding.struct_size += 1;
         binding.abi_version += 1;
         assert!(
-            rsf_d3d11_host_bind_presentation(host.user, &binding) == ABI_MISMATCH,
+            rsf_d3d11_host_bind_presentation(host.user, &binding) == RSF_ERROR_ABI_MISMATCH,
             "Presentation binding ABI checked"
         );
         binding.abi_version -= 1;
         assert!(
-            rsf_d3d11_host_set_active(host.user, 0) == OK
-                && rsf_d3d11_host_bind_presentation(host.user, &binding) == NOT_READY,
+            rsf_d3d11_host_set_active(host.user, 0) == RSF_OK
+                && rsf_d3d11_host_bind_presentation(host.user, &binding) == RSF_ERROR_NOT_READY,
             "Suspended binding never dereferences graphics pointers"
         );
         assert!(
-            rsf_d3d11_host_set_active(host.user, 1) == OK,
+            rsf_d3d11_host_set_active(host.user, 1) == RSF_OK,
             "Restore active host"
         );
         let mut capture = rsf_d3d11_host_capture {
@@ -644,23 +658,23 @@ fn check() -> i32 {
             scale: 1.0,
         };
         assert!(
-            rsf_d3d11_host_capture_texture(cookie, fake, &capture) == INVALID_ARGUMENT,
+            rsf_d3d11_host_capture_texture(cookie, fake, &capture) == RSF_ERROR_INVALID_ARGUMENT,
             "Capture owner checked"
         );
         capture.struct_size -= 1;
         assert!(
-            rsf_d3d11_host_capture_texture(host.user, fake, &capture) == INVALID_ARGUMENT,
+            rsf_d3d11_host_capture_texture(host.user, fake, &capture) == RSF_ERROR_INVALID_ARGUMENT,
             "Capture size checked"
         );
         capture.struct_size += 1;
         capture.abi_version += 1;
         assert!(
-            rsf_d3d11_host_capture_texture(host.user, fake, &capture) == ABI_MISMATCH,
+            rsf_d3d11_host_capture_texture(host.user, fake, &capture) == RSF_ERROR_ABI_MISMATCH,
             "Capture ABI checked"
         );
         capture.abi_version -= 1;
         assert!(
-            rsf_d3d11_host_capture_texture(host.user, fake, &capture) == NOT_READY,
+            rsf_d3d11_host_capture_texture(host.user, fake, &capture) == RSF_ERROR_NOT_READY,
             "An armed request without a matching scene capture must not dereference graphics pointers"
         );
     }

@@ -2,6 +2,9 @@
 use super::{bundles, contents, entry, root, utf8};
 use crate::sys::*;
 use ash::vk;
+use rsf_game_sys::backend_result::{
+    FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED,
+};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
 use rsf_test_support::{frame_record, wide_os};
 use std::cell::UnsafeCell;
@@ -11,9 +14,6 @@ use windows_sys::Win32::System::Environment::SetEnvironmentVariableW;
 
 mod queue;
 use queue::{Queue, device_proc, instance_proc, submit};
-
-const NOT_READY: i32 = RSF_FIXTURE_BACKEND_NOT_READY;
-const FEATURE_FAILED: i32 = RSF_FIXTURE_BACKEND_FEATURE_FAILED;
 
 fn run(path: &Path, api: &rsf_fixture_vk_capture_api) -> i32 {
     let root = root(path, "vulkan-cpu");
@@ -74,31 +74,22 @@ fn run(path: &Path, api: &rsf_fixture_vk_capture_api) -> i32 {
         copy_source: 1,
     };
     unsafe {
-        assert_eq!(
-            create(&setup, ptr::null_mut()),
-            RSF_FIXTURE_BACKEND_INVALID_ARGUMENT
-        );
+        assert_eq!(create(&setup, ptr::null_mut()), INVALID_ARGUMENT);
         let short = rsf_input_dump_vk_setup {
             struct_size: 4,
             ..setup
         };
-        assert_eq!(
-            create(&short, &mut owner),
-            RSF_FIXTURE_BACKEND_INVALID_ARGUMENT
-        );
+        assert_eq!(create(&short, &mut owner), INVALID_ARGUMENT);
         assert!(owner.is_null());
         set(|q| q.missing_wait = true);
-        assert_eq!(
-            create(&setup, &mut owner),
-            RSF_FIXTURE_BACKEND_NOT_SUPPORTED
-        );
+        assert_eq!(create(&setup, &mut owner), NOT_SUPPORTED);
         assert!(owner.is_null());
         assert_eq!(facts().pools, 0);
         set(|q| {
             q.missing_wait = false;
             q.fail_fence = true;
         });
-        assert_eq!(create(&setup, &mut owner), RSF_FIXTURE_BACKEND_INIT_FAILED);
+        assert_eq!(create(&setup, &mut owner), INIT_FAILED);
         assert!(owner.is_null());
         assert_eq!(
             (facts().pools, facts().pool_destroys, facts().fence_destroys),
@@ -170,7 +161,7 @@ fn run(path: &Path, api: &rsf_fixture_vk_capture_api) -> i32 {
         };
         assert_eq!(
             snapshot(owner, &frame, &unsupported, c"unsupported".as_ptr()),
-            RSF_FIXTURE_BACKEND_INVALID_ARGUMENT
+            INVALID_ARGUMENT
         );
         assert_eq!(
             (facts().resets, facts().buffers, facts().submits),

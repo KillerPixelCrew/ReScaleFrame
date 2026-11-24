@@ -9,6 +9,7 @@ use crate::sys::*;
 use crate::sys::{
     rsf_dlss_frame, rsf_dlss_release_resources, rsf_dlss_share_host, rsf_dlss_shutdown,
 };
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT, NOT_READY};
 use rsf_game_sys::{RSF_D3D11_DISPATCH_RELEASE, rsf_d3d11_chain_dispatch};
 use rsf_test_support::Window;
 use std::ffi::{CStr, c_char};
@@ -25,10 +26,6 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, IUnknown, Interface, PCSTR, PCWSTR, s, w};
-
-const NOT_READY: i32 = -8;
-const INVALID_ARGUMENT: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
 
 static RENDERER_STARTUP_OBSERVED: AtomicBool = AtomicBool::new(false);
 

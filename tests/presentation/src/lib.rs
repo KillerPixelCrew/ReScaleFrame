@@ -15,8 +15,9 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
 
-#[cfg(feature = "ac7-render-scope")]
 use rsf_ac7_plugin as _;
+#[cfg(feature = "ac7-render-scope")]
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT};
 
 mod d3d11_bridge_sr;
 mod d3d11_device_checks;
@@ -59,8 +60,6 @@ use windows::core::{IUnknown, Interface};
 
 const SKIP: i32 = 77;
 const S_OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
 const OPEN_FAILED: i32 = -5;
 
 #[derive(Debug)]
@@ -185,7 +184,8 @@ fn surface_checks(device11: *mut c_void, device12: *mut c_void) -> Result<(), Fi
     let mut output = Surface(null_mut());
     setup.format = DXGI_FORMAT_R8G8B8A8_TYPELESS.0 as u32;
     require(
-        unsafe { rsf_shared_surface_create(device11, device12, &setup, &mut output.0) } == INVALID,
+        unsafe { rsf_shared_surface_create(device11, device12, &setup, &mut output.0) }
+            == INVALID_ARGUMENT,
         "typeless format must be refused",
     )?;
     setup.format = DXGI_FORMAT_R8G8B8A8_UNORM.0 as u32;
@@ -198,12 +198,13 @@ fn surface_checks(device11: *mut c_void, device12: *mut c_void) -> Result<(), Fi
     setup.abi_version = RSF_SHARED_SURFACE_ABI_VERSION;
     setup.width = 0;
     require(
-        unsafe { rsf_shared_surface_create(device11, device12, &setup, &mut output.0) } == INVALID,
+        unsafe { rsf_shared_surface_create(device11, device12, &setup, &mut output.0) }
+            == INVALID_ARGUMENT,
         "empty extent must be refused",
     )?;
     require(
         unsafe { rsf_shared_surface_create(null_mut(), device12, &setup, &mut output.0) }
-            == INVALID,
+            == INVALID_ARGUMENT,
         "null device must be refused",
     )?;
     unsafe {

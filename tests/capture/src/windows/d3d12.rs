@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{bundles, contents, directory_argument, entry, root, utf8};
 use crate::sys::*;
-use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, rsf_frame_record};
+use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, backend_result, rsf_frame_record};
 use rsf_test_support::d3d12::{buffer, committed, copy_location, footprint, transition};
 use rsf_test_support::frame_record;
 use std::ffi::{CStr, c_char, c_int};
@@ -174,10 +174,7 @@ fn run(path: &Path) -> i32 {
                 0
             );
         }
-        assert_eq!(
-            rsf_input_dump12_destroy(capture),
-            RSF_FIXTURE_BACKEND_NOT_READY
-        );
+        assert_eq!(rsf_input_dump12_destroy(capture), backend_result::NOT_READY);
         drop(source);
         let bundle = bundles(&root).next().unwrap();
         rsf_input_dump_complete(&frame, 0);

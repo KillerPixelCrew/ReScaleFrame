@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{ABI_MISMATCH, BUSY, NOT_READY, OK};
+use rsf_game_sys::{RSF_ERROR_ABI_MISMATCH, RSF_ERROR_BUSY, RSF_ERROR_NOT_READY, RSF_OK};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detect_game_fn, rsf_detection, rsf_game_control_args,
     rsf_game_hooks_api, rsf_game_host_services, rsf_game_plugin_api, rsf_game_prepare_args,
@@ -42,7 +42,7 @@ unsafe extern "C" fn rsf_test_session_prepare(
     result: *mut rsf_result,
 ) -> bool {
     if !unsafe { valid_args(args) } || unsafe { (*args).host.is_null() } {
-        unsafe { result.write(ABI_MISMATCH) };
+        unsafe { result.write(RSF_ERROR_ABI_MISMATCH) };
         return true;
     }
     let host = unsafe { (*args).host };
@@ -51,55 +51,55 @@ unsafe extern "C" fn rsf_test_session_prepare(
     if unsafe { (*host).session_id } == 2 {
         return false;
     }
-    unsafe { result.write(OK) };
+    unsafe { result.write(RSF_OK) };
     true
 }
 
 fn log_operation(operation: &CStr) -> rsf_result {
     // The fixture supplies a Rust log callback and retains its host through retirement.
     let Some(host) = (unsafe { HOST.load(Ordering::Acquire).as_ref() }) else {
-        return NOT_READY;
+        return RSF_ERROR_NOT_READY;
     };
     if let Some(log) = host.log {
         unsafe { log(host.user, operation.as_ptr()) };
     }
-    OK
+    RSF_OK
 }
 
 unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_result {
     if !unsafe { valid_args(args) } {
-        return ABI_MISMATCH;
+        return RSF_ERROR_ABI_MISMATCH;
     }
     log_operation(c"start")
 }
 
 unsafe extern "C" fn quiesce(args: *const rsf_game_control_args) -> rsf_result {
     if !unsafe { valid_args(args) } {
-        return ABI_MISMATCH;
+        return RSF_ERROR_ABI_MISMATCH;
     }
     let Some(host) = (unsafe { HOST.load(Ordering::Acquire).as_ref() }) else {
-        return NOT_READY;
+        return RSF_ERROR_NOT_READY;
     };
     let previous = QUIESCE_CALLS.fetch_add(1, Ordering::Relaxed);
     if matches!(host.session_id, 2 | 3) && previous == 0 {
-        BUSY
+        RSF_ERROR_BUSY
     } else {
-        OK
+        RSF_OK
     }
 }
 
 unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_result {
     if !unsafe { valid_args(args) } {
-        return ABI_MISMATCH;
+        return RSF_ERROR_ABI_MISMATCH;
     }
     let Some(host) = (unsafe { HOST.load(Ordering::Acquire).as_ref() }) else {
-        return NOT_READY;
+        return RSF_ERROR_NOT_READY;
     };
     let previous = STOP_CALLS.fetch_add(1, Ordering::Relaxed);
     if host.session_id == 2 && previous == 0 {
-        BUSY
+        RSF_ERROR_BUSY
     } else {
-        OK
+        RSF_OK
     }
 }
 
@@ -118,7 +118,7 @@ unsafe extern "C" fn rsf_test_session_query(
         || api.is_null()
         || (unsafe { api.cast::<u32>().read() } as usize) < size_of::<rsf_game_plugin_api>()
     {
-        return ABI_MISMATCH;
+        return RSF_ERROR_ABI_MISMATCH;
     }
     unsafe {
         (*api).abi_version = abi;
@@ -131,5 +131,5 @@ unsafe extern "C" fn rsf_test_session_query(
             status: Some(status),
         };
     }
-    OK
+    RSF_OK
 }

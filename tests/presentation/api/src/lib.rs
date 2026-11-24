@@ -20,8 +20,6 @@ type Query = unsafe extern "C" fn(*mut rsf_d3d11_present_api) -> i32;
 
 const SIZE: usize = size_of::<rsf_d3d11_present_api>();
 const VERSION: u32 = RSF_D3D11_PRESENT_API_VERSION;
-const INVALID_ARGUMENT: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
 
 // Refusal inputs contain arbitrary bytes in the function slots. Keep them raw.
 #[repr(C, align(8))]
@@ -64,17 +62,17 @@ fn require(condition: bool, message: &'static str) -> Check {
 
 fn refusal_contract(query: Query) -> Check {
     require(
-        unsafe { query(null_mut()) } == INVALID_ARGUMENT,
+        unsafe { query(null_mut()) } == RSF_ERROR_INVALID_ARGUMENT,
         "null query",
     )?;
     for size in [0, 1, 3, 4, 7, 8, SIZE as u32 - 1] {
         for version in [VERSION, u32::MAX] {
-            refuses(query, size, version, INVALID_ARGUMENT)?;
+            refuses(query, size, version, RSF_ERROR_INVALID_ARGUMENT)?;
         }
     }
     for version in [0, VERSION + 1, u32::MAX] {
         for size in [SIZE as u32, u32::MAX] {
-            refuses(query, size, version, ABI_MISMATCH)?;
+            refuses(query, size, version, RSF_ERROR_ABI_MISMATCH)?;
         }
     }
     Ok(())
@@ -113,8 +111,8 @@ fn guard_page_contract(query: Query) -> Check {
         "protect inaccessible function slots",
     )?;
     for (size, expected) in [
-        (SIZE as u32 - 1, INVALID_ARGUMENT),
-        (SIZE as u32, ABI_MISMATCH),
+        (SIZE as u32 - 1, RSF_ERROR_INVALID_ARGUMENT),
+        (SIZE as u32, RSF_ERROR_ABI_MISMATCH),
     ] {
         let header = [size, u32::MAX];
         unsafe { prefix.write(header) };

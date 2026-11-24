@@ -14,6 +14,7 @@ use crate::sys::{
 };
 use crate::vulkan_fg_copy::COLOR_RANGE as RANGE;
 use ash::vk::{self, Handle as _};
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT, NOT_COMPILED};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CPU_FRAME_BEGIN, rsf_frame_record, rsf_game_cpu_event,
 };
@@ -42,9 +43,6 @@ const BOTH: vk::ImageUsageFlags = vk::ImageUsageFlags::from_raw(
     vk::ImageUsageFlags::TRANSFER_SRC.as_raw() | vk::ImageUsageFlags::TRANSFER_DST.as_raw(),
 );
 const RGBA: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const NOT_COMPILED: i32 = -3;
 
 #[repr(C)]
 struct Calls {
@@ -475,19 +473,19 @@ fn fallback_case(gpu: &mut Gpu, api: &Calls) -> TestResult {
         let mut invalid = call;
         invalid.color.device = ptr::null_mut();
         check(
-            unsafe { (api.fallback)(&invalid) } == INVALID,
+            unsafe { (api.fallback)(&invalid) } == INVALID_ARGUMENT,
             "fallback rejects foreign image",
         )?;
         invalid = call;
         invalid.color.copy_source = 0;
         check(
-            unsafe { (api.fallback)(&invalid) } == INVALID,
+            unsafe { (api.fallback)(&invalid) } == INVALID_ARGUMENT,
             "fallback requires transfer-source usage",
         )?;
         invalid = call;
         invalid.output.image = invalid.color.image;
         check(
-            unsafe { (api.fallback)(&invalid) } == INVALID,
+            unsafe { (api.fallback)(&invalid) } == INVALID_ARGUMENT,
             "fallback rejects image alias",
         )?;
         check(
@@ -600,7 +598,7 @@ fn device_case(gpu: &mut Gpu, api: &Calls, directory: &CStr, backend: u32) -> Te
     for index in 1..=12 {
         if backend == RSF_SR_DLSS {
             check(
-                unsafe { (api.preset)(context, 99) } == INVALID,
+                unsafe { (api.preset)(context, 99) } == INVALID_ARGUMENT,
                 "unknown DLSS preset refused",
             )?;
             check(
@@ -668,15 +666,24 @@ fn device_case(gpu: &mut Gpu, api: &Calls, directory: &CStr, backend: u32) -> Te
         let evaluate = |frame: &Frame| unsafe { (api.evaluate)(context, commands, frame) };
         let device = frame.color.device;
         frame.color.device = ptr::null_mut();
-        check(evaluate(&frame) == INVALID, "foreign device image refusal")?;
+        check(
+            evaluate(&frame) == INVALID_ARGUMENT,
+            "foreign device image refusal",
+        )?;
         frame.color.device = device;
         if index > 1 {
             let valid_bias = frame.bias_current_color;
             frame.bias_current_color = frame.color;
-            check(evaluate(&frame) == INVALID, "wrong bias format refusal")?;
+            check(
+                evaluate(&frame) == INVALID_ARGUMENT,
+                "wrong bias format refusal",
+            )?;
             frame.bias_current_color = laid_out(bias, READ);
             frame.bias_current_color.device = ptr::null_mut();
-            check(evaluate(&frame) == INVALID, "foreign bias device refusal")?;
+            check(
+                evaluate(&frame) == INVALID_ARGUMENT,
+                "foreign bias device refusal",
+            )?;
             frame.bias_current_color = valid_bias;
         }
         let result = evaluate(&frame);
@@ -719,8 +726,8 @@ fn contract(api: &Calls, enabled: bool) -> TestResult {
     let mut fallback: Fallback = unsafe { std::mem::zeroed() };
     fallback.struct_size = size_of::<Fallback>() as u32 - 1;
     check(
-        unsafe { (api.fallback)(ptr::null()) } == INVALID
-            && unsafe { (api.fallback)(&fallback) } == INVALID,
+        unsafe { (api.fallback)(ptr::null()) } == INVALID_ARGUMENT
+            && unsafe { (api.fallback)(&fallback) } == INVALID_ARGUMENT,
         "fallback null/short ABI refusal",
     )?;
     fallback.struct_size += 1;
@@ -733,7 +740,7 @@ fn contract(api: &Calls, enabled: bool) -> TestResult {
     let mut fg = ptr::dangling_mut();
     let mut chain = 1;
     check(
-        unsafe { (api.fg_create)(ptr::null(), &mut fg, &mut chain) } == INVALID
+        unsafe { (api.fg_create)(ptr::null(), &mut fg, &mut chain) } == INVALID_ARGUMENT
             && fg.is_null()
             && chain == 0,
         "FG null setup refusal",
@@ -741,14 +748,17 @@ fn contract(api: &Calls, enabled: bool) -> TestResult {
     let mut short: FgSetup = unsafe { std::mem::zeroed() };
     short.struct_size = size_of::<FgSetup>() as u32 - 1;
     let mut create_fg = |call: &FgSetup| unsafe { (api.fg_create)(call, &mut fg, &mut chain) };
-    check(create_fg(&short) == INVALID, "FG short setup refusal")?;
+    check(
+        create_fg(&short) == INVALID_ARGUMENT,
+        "FG short setup refusal",
+    )?;
     short.struct_size += 1;
     short.abi_version = RSF_FGVK_ABI_VERSION + 1;
     check(create_fg(&short) == ABI_MISMATCH, "FG ABI mismatch refusal")?;
     short.abi_version = RSF_FGVK_ABI_VERSION;
     short.graphics.struct_size = size_of::<Setup>() as u32 - 1;
     check(
-        create_fg(&short) == INVALID,
+        create_fg(&short) == INVALID_ARGUMENT,
         "FG embedded graphics size refusal",
     )?;
     short.graphics.struct_size += 1;
@@ -761,19 +771,19 @@ fn contract(api: &Calls, enabled: bool) -> TestResult {
         unsafe { (api.fg_destroy)(ptr::null_mut()) } == 0
             && unsafe { (api.fg_drain)(ptr::null_mut()) } == 0
             && unsafe { (api.fg_prepare)(ptr::null_mut(), ptr::null_mut(), ptr::null()) }
-                == INVALID,
+                == INVALID_ARGUMENT,
         "FG null lifecycle contract",
     )?;
 
     let mut context = ptr::dangling_mut();
     check(
-        unsafe { (api.create)(ptr::null(), &mut context) } == INVALID && context.is_null(),
+        unsafe { (api.create)(ptr::null(), &mut context) } == INVALID_ARGUMENT && context.is_null(),
         "null setup refusal",
     )?;
     let mut short: Setup = unsafe { std::mem::zeroed() };
     short.struct_size = size_of::<Setup>() as u32 - 1;
     check(
-        unsafe { (api.create)(&short, &mut context) } == INVALID && context.is_null(),
+        unsafe { (api.create)(&short, &mut context) } == INVALID_ARGUMENT && context.is_null(),
         "short setup refusal",
     )?;
     short.struct_size += 1;
@@ -783,9 +793,11 @@ fn contract(api: &Calls, enabled: bool) -> TestResult {
         "ABI mismatch refusal",
     )?;
     check(
-        unsafe { (api.plan)(ptr::null_mut(), ptr::null_mut(), ptr::null_mut()) } == INVALID
-            && unsafe { (api.evaluate)(ptr::null_mut(), ptr::null_mut(), ptr::null()) } == INVALID
-            && unsafe { (api.preset)(ptr::null_mut(), 0) } == INVALID
+        unsafe { (api.plan)(ptr::null_mut(), ptr::null_mut(), ptr::null_mut()) }
+            == INVALID_ARGUMENT
+            && unsafe { (api.evaluate)(ptr::null_mut(), ptr::null_mut(), ptr::null()) }
+                == INVALID_ARGUMENT
+            && unsafe { (api.preset)(ptr::null_mut(), 0) } == INVALID_ARGUMENT
             && unsafe { (api.destroy)(ptr::null_mut()) } == 0,
         "null lifecycle contract",
     )?;

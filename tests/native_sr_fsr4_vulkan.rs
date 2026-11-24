@@ -7,6 +7,7 @@ use crate::sys::{
     RSF_SR_FSR4, RSF_SRVK_ABI_VERSION, RSF_SRVK_SPLIT_TRACKED_ABI_VERSION, rsf_fsr4vk_handoff,
 };
 use ash::vk::{self, Handle as _};
+use rsf_game_sys::backend_result::INVALID_ARGUMENT;
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
 use rsf_test_support::frame_record;
 use std::{
@@ -19,7 +20,6 @@ use crate::sys::{RSF_FSR4_BRIDGE_ABI_VERSION, rsf_fsr4_bridge_info};
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
-const INVALID: i32 = -1;
 
 fn open() -> Result<(Gpu, u32), i32> {
     let mut gpu = Gpu::open_instance(None, None, c"ReScaleFrame interop device fixture").map_err(
@@ -284,7 +284,7 @@ impl Run {
             let mut next = ptr::null_mut();
             frame.color.copy_source = 0;
             let capability = evaluate(&frame, &mut next);
-            if capability != INVALID
+            if capability != INVALID_ARGUMENT
                 || next != producer
                 || unsafe { (*state).splits } != before_splits
             {
@@ -299,7 +299,7 @@ impl Run {
                 };
                 frame.record = &other_view;
                 let view = evaluate(&frame, &mut next);
-                if view != INVALID
+                if view != INVALID_ARGUMENT
                     || next != producer
                     || unsafe { (*state).splits } != before_splits
                 {
@@ -310,13 +310,17 @@ impl Run {
             }
             let provider = evaluate(&frame, &mut next);
             if next != consumer {
-                return Err(if provider == 0 { INVALID } else { provider });
+                return Err(if provider == 0 {
+                    INVALID_ARGUMENT
+                } else {
+                    provider
+                });
             }
             if unsafe { api.destroy.unwrap()(owner) } != vk::Result::NOT_READY.as_raw() {
                 self.assertion = 22;
-                return Err(INVALID);
+                return Err(INVALID_ARGUMENT);
             }
-            if evaluate(&frame, &mut ptr::null_mut()) == INVALID {
+            if evaluate(&frame, &mut ptr::null_mut()) == INVALID_ARGUMENT {
                 self.duplicates += 1;
             }
             if provider != 0 {
@@ -335,14 +339,14 @@ impl Run {
             unsafe {
                 (*state).submit(gpu.queue, commands[0])?;
                 let submitted = api.submitted.unwrap();
-                if submitted(owner, consumer) != INVALID {
+                if submitted(owner, consumer) != INVALID_ARGUMENT {
                     self.assertion = 23;
-                    return Err(INVALID);
+                    return Err(INVALID_ARGUMENT);
                 }
                 check(submitted(owner, producer))?;
                 if api.destroy.unwrap()(owner) != vk::Result::NOT_READY.as_raw() {
                     self.assertion = 24;
-                    return Err(INVALID);
+                    return Err(INVALID_ARGUMENT);
                 }
                 check(submitted(owner, consumer))?;
                 device.device_wait_idle().map_err(vk::Result::as_raw)?;

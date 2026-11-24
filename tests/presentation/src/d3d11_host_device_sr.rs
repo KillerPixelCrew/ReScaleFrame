@@ -5,9 +5,10 @@ use rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION;
 use rsf_game_sys::rsf_d3d11_auxiliary_pass;
 use rsf_game_sys::rsf_dlss_pipeline_status;
 use rsf_game_sys::{
-    RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END, RSF_GAME_RENDER_AFTER_SIMULATION,
-    RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_RECONFIGURE,
-    RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_game_render_config,
+    RSF_ERROR_NOT_READY, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END,
+    RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY,
+    RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, RSF_OK,
+    rsf_game_render_config,
 };
 use std::ffi::OsString;
 use std::fs;
@@ -16,8 +17,6 @@ use std::path::{Path, PathBuf};
 use std::ptr::dangling_mut;
 use windows::core::PCWSTR;
 
-const OK: i32 = 0;
-const NOT_READY: i32 = -3;
 const DLSS: u32 = 1;
 // Result macros in the public dlss_pipeline.h.
 const PIPELINE_INVALID_ARGUMENT: i32 = -1;
@@ -116,7 +115,7 @@ unsafe fn run(
     pass.camera.jitter_pixels[0] = if source % 2 == 1 { 0.25 } else { -0.25 };
     if source == 4 {
         require(
-            unsafe { set_quality(api.user, 0) } == OK,
+            unsafe { set_quality(api.user, 0) } == RSF_OK,
             "switch Quality to Native",
         )?;
     }
@@ -132,13 +131,16 @@ unsafe fn run(
     let mut planning = pass;
     planning.flags |= RSF_GAME_RENDER_RECONFIGURE;
     require(
-        evaluate(&planning) == NOT_READY && evaluate(&planning) == NOT_READY,
+        evaluate(&planning) == RSF_ERROR_NOT_READY && evaluate(&planning) == RSF_ERROR_NOT_READY,
         "two unchanged plans",
     )?;
     if source > 1 {
         let mut no_camera = planning;
         no_camera.camera_valid = 0;
-        require(evaluate(&no_camera) == NOT_READY, "camera-less plan")?;
+        require(
+            evaluate(&no_camera) == RSF_ERROR_NOT_READY,
+            "camera-less plan",
+        )?;
         let mut cfg = rsf_game_render_config {
             struct_size: size_of::<rsf_game_render_config>() as u32,
             ..unsafe { std::mem::zeroed() }
@@ -187,7 +189,7 @@ unsafe fn run(
     if source == 1 {
         let original = unsafe { snapshot(r) }?;
         require(
-            recover(&mut recovery) == NOT_READY
+            recover(&mut recovery) == RSF_ERROR_NOT_READY
                 && recovery.token == 0
                 && recovery.result_flags == 0
                 && unsafe { rsf_native_cpu_read(host.session_id, source, &mut facts) } == 0
@@ -198,7 +200,7 @@ unsafe fn run(
     }
     let result = if ticketed {
         require(
-            recover(&mut recovery) == OK && recovery.token != 0,
+            recover(&mut recovery) == RSF_OK && recovery.token != 0,
             "reserve real reduced frame",
         )?;
         let mut wrong_token = recovery;
@@ -206,15 +208,15 @@ unsafe fn run(
         wrong_token.token += 1;
         require(
             unsafe { rsf_d3d11_host_reduced_frame(host.user, dangling_mut(), &mut wrong_token) }
-                == NOT_READY,
+                == RSF_ERROR_NOT_READY,
             "wrong token refused before access",
         )?;
         recovery.operation = RSF_D3D11_REDUCED_SEAL;
-        require(recover(&mut recovery) == OK, "seal live raster")?;
+        require(recover(&mut recovery) == RSF_OK, "seal live raster")?;
         let mut cancelled = recovery;
         cancelled.operation = RSF_D3D11_REDUCED_CANCEL;
         require(
-            recover(&mut cancelled) == NOT_READY,
+            recover(&mut cancelled) == RSF_ERROR_NOT_READY,
             "cannot cancel sealed frame",
         )?;
         let mut actual = raw;
@@ -228,7 +230,7 @@ unsafe fn run(
         };
         let result = unsafe { rsf_d3d11_host_upscale_auxiliaries(host.user, r.context, &temporal) };
         recovery.operation = RSF_D3D11_REDUCED_FINISH;
-        let mode = if result == OK {
+        let mode = if result == RSF_OK {
             RSF_D3D11_REDUCED_TEMPORAL_OUTPUT
         } else {
             RSF_D3D11_REDUCED_SPATIAL_OUTPUT
@@ -236,18 +238,18 @@ unsafe fn run(
         let required =
             RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED | RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED | mode;
         require(
-            recover(&mut recovery) == OK
+            recover(&mut recovery) == RSF_OK
                 && recovery.temporal_result == result
                 && recovery.result_flags & required == required
                 && recovery.result_flags & RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED == 0,
             "finish with the actual temporal receipt",
         )?;
-        require(recover(&mut recovery) == OK, "repeat finish")?;
+        require(recover(&mut recovery) == RSF_OK, "repeat finish")?;
         recovery.operation = RSF_D3D11_REDUCED_RETIRE;
         require(
-            recover(&mut recovery) == OK
+            recover(&mut recovery) == RSF_OK
                 && recovery.result_flags & RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED != 0
-                && recover(&mut recovery) == OK,
+                && recover(&mut recovery) == RSF_OK,
             "retire and repeat retirement",
         )?;
         println!(
@@ -272,7 +274,7 @@ unsafe fn run(
         };
         require(
             result == PIPELINE_EVALUATE_FAILED
-                && unsafe { rsf_dlss_pipeline_get_status(&mut cold) } == OK
+                && unsafe { rsf_dlss_pipeline_get_status(&mut cold) } == RSF_OK
                 && cold.frames_evaluated == 0
                 && cold.frames_refused == 1
                 && unsafe { rsf_native_cpu_read(host.session_id, source, &mut facts) } == 0
@@ -288,7 +290,7 @@ unsafe fn run(
             "real missing-depth refusal",
         )?;
     } else {
-        require(result == OK, "successful SR evaluation")?;
+        require(result == RSF_OK, "successful SR evaluation")?;
         let path = selected
             .first()
             .ok_or("assembled backend constants capture absent")?;
@@ -319,7 +321,7 @@ unsafe fn run(
     }
     if !failed_evaluation {
         require(
-            unsafe { cancel(host.session_id) } == OK,
+            unsafe { cancel(host.session_id) } == RSF_OK,
             "cancel fixture capture before Present",
         )?;
     }
@@ -327,7 +329,8 @@ unsafe fn run(
         planning = pass;
         planning.flags |= RSF_GAME_RENDER_RECONFIGURE;
         require(
-            evaluate(&planning) == NOT_READY && evaluate(&planning) == NOT_READY,
+            evaluate(&planning) == RSF_ERROR_NOT_READY
+                && evaluate(&planning) == RSF_ERROR_NOT_READY,
             "plans after evaluation preserve report",
         )?;
     }
@@ -335,9 +338,9 @@ unsafe fn run(
     require(presented >= 0, "Present actual application chain")?;
     let (mut published, mut backend) = (0, 0);
     require(
-        unsafe { status(api.user, &mut published, &mut backend) } == OK
+        unsafe { status(api.user, &mut published, &mut backend) } == RSF_OK
             && published == result
-            && backend == if result == OK { DLSS } else { 0 },
+            && backend == if result == RSF_OK { DLSS } else { 0 },
         "published report retains real evaluation",
     )?;
     if source == 1 {
@@ -349,12 +352,12 @@ unsafe fn run(
     unsafe { rsf_d3d11_host_fixture_cpu(host, source, RSF_GAME_CPU_FRAME_END, 0) };
     if source == 10 {
         require(
-            unsafe { set_quality(api.user, 1) } == OK
-                && evaluate(&planning) == NOT_READY
-                && evaluate(&planning) == NOT_READY
+            unsafe { set_quality(api.user, 1) } == RSF_OK
+                && evaluate(&planning) == RSF_ERROR_NOT_READY
+                && evaluate(&planning) == RSF_ERROR_NOT_READY
                 && unsafe { present(r.chain) } >= 0
-                && unsafe { status(api.user, &mut published, &mut backend) } == OK
-                && published == NOT_READY
+                && unsafe { status(api.user, &mut published, &mut backend) } == RSF_OK
+                && published == RSF_ERROR_NOT_READY
                 && backend == 0,
             "changed plan invalidates stale successful output",
         )?;
@@ -378,7 +381,7 @@ unsafe fn run_scenario(
         ..unsafe { std::mem::zeroed() }
     };
     require(
-        unsafe { rsf_dlss_pipeline_get_status(&mut before) } == OK
+        unsafe { rsf_dlss_pipeline_get_status(&mut before) } == RSF_OK
             && before.frames_evaluated == 8
             && before.frames_refused == 1,
         "expected eight evaluations and one provider refusal after source 10",
@@ -390,7 +393,7 @@ unsafe fn run_scenario(
         ..unsafe { std::mem::zeroed() }
     };
     require(
-        unsafe { rsf_dlss_pipeline_get_status(&mut after) } == OK
+        unsafe { rsf_dlss_pipeline_get_status(&mut after) } == RSF_OK
             && after.frames_evaluated == before.frames_evaluated
             && after.frames_refused == before.frames_refused,
         "spatial recovery must not change the SR evaluation or refusal counters",

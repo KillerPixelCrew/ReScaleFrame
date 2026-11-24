@@ -14,6 +14,7 @@ use crate::sys::{
     rsf_sharpening_options as Options,
 };
 use crate::sys::{rsf_overlay_intent as Intent, rsf_overlay_stats as Stats};
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT, OK};
 use std::fs;
 use std::path::PathBuf;
 use std::ptr;
@@ -21,10 +22,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use windows_sys::Win32::System::WindowsProgramming::{
     GetPrivateProfileSectionW, GetPrivateProfileStringW, WritePrivateProfileStringW,
 };
-
-const OK: i32 = 0;
-const INVALID_ARGUMENT: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
 
 #[repr(C)]
 struct Services {

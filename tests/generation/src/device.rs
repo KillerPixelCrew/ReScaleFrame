@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-use crate::session::{NOT_SUPPORTED, Raw};
+use crate::session::Raw;
 use crate::sys::*;
+use rsf_game_sys::backend_result::{NOT_COMPILED, NOT_SUPPORTED};
 use std::ffi::{c_char, c_int, c_ulong};
 use std::ptr::null_mut;
 use windows::Win32::{
@@ -13,7 +14,6 @@ use windows::Win32::{
 };
 use windows::core::{Interface, PCWSTR, Result};
 
-pub(super) const NOT_COMPILED: i32 = -3;
 pub(super) const SKIP: i32 = 77;
 pub(super) const WIDTH: u32 = 1920;
 pub(super) const HEIGHT: u32 = 1080;

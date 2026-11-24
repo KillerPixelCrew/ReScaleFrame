@@ -50,13 +50,6 @@ use windows_sys::Win32::System::LibraryLoader::{
     LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LoadLibraryExW,
 };
 
-const OK: i32 = 0;
-const INVALID_ARGUMENT: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const NOT_READY: i32 = -3;
-const BUSY: i32 = -4;
-const NATIVE_REFUSED: i32 = -5;
-
 struct Module(HMODULE);
 
 impl Module {

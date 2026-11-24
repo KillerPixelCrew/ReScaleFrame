@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::*;
+use rsf_game_sys::backend_result::{INVALID_ARGUMENT, NOT_READY, OK};
 use rsf_orchestrator::vulkan_latency_api::*;
 use std::ffi::{c_char, c_void};
 use std::ptr::{self, null, null_mut};
@@ -12,12 +13,6 @@ mod amd;
 #[path = "vk_streamline.rs"]
 mod streamline;
 
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const NOT_SUPPORTED: i32 = -7;
-const NOT_READY: i32 = -8;
-const FEATURE_FAILED: i32 = -9;
 type Event = rsf_game_cpu_event;
 
 static AMD_FIXTURE: AtomicBool = AtomicBool::new(false);
@@ -151,7 +146,7 @@ unsafe extern "C" fn fake_fgvk_backend(context: *const rsf_fgvk, backend: *mut u
         return NOT_READY;
     }
     if context.is_null() || backend.is_null() {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     unsafe { backend.write(RSF_FG_BACKEND_XESS) };
     OK

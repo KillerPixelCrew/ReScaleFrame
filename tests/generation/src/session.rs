@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::rsf_fg_retirement;
 use crate::sys::*;
+use rsf_game_sys::backend_result::{
+    FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED, OK,
+};
 use rsf_game_sys::{RSF_FRAME_SOURCE_RENDERED, RSF_SCREEN_FLIGHT, rsf_frame_record};
 use rsf_test_support::frame_record;
 use std::cell::Cell;
@@ -8,12 +11,6 @@ use std::ffi::c_void;
 use std::ptr::{null_mut, without_provenance_mut};
 
 pub(super) type Raw = *mut c_void;
-pub(super) const OK: i32 = 0;
-const INVALID: i32 = -1;
-pub(super) const INIT_FAILED: i32 = -6;
-pub(super) const NOT_SUPPORTED: i32 = -7;
-pub(super) const NOT_READY: i32 = -8;
-pub(super) const FEATURE_FAILED: i32 = -9;
 const SIMULATION_START: u32 = 0;
 const RENDER_SUBMIT_START: u32 = 2;
 const RENDER_SUBMIT_END: u32 = 3;
@@ -290,7 +287,7 @@ extern "C" fn rsf_test_fg_session() -> i32 {
         interpolate: 1,
         ..unsafe { std::mem::zeroed() }
     };
-    check!(unsafe { rsf_fg_session_prepare(live_session, null_mut(), &frame) } == INVALID);
+    check!(unsafe { rsf_fg_session_prepare(live_session, null_mut(), &frame) } == INVALID_ARGUMENT);
     record.input_qpc = 10;
     check!(unsafe { rsf_fg_session_prepare(live_session, null_mut(), &frame) } == 0);
     check!(unsafe { rsf_fg_session_prepare(live_session, null_mut(), &frame) } == NOT_READY);
@@ -299,7 +296,10 @@ extern "C" fn rsf_test_fg_session() -> i32 {
     check!(unsafe { rsf_fg_session_after_present(live_session, 1) } == 0);
     check!(unsafe { rsf_fg_session_begin(live_session, 1) } == NOT_READY);
     check!(unsafe { rsf_fg_session_begin(live_session, 2) } == 0);
-    check!(unsafe { rsf_fg_session_marker(live_session, 2, SIMULATION_START, 20, 0) } == INVALID);
+    check!(
+        unsafe { rsf_fg_session_marker(live_session, 2, SIMULATION_START, 20, 0) }
+            == INVALID_ARGUMENT
+    );
     check!(unsafe { rsf_fg_session_abort(live_session, 2) } == 0);
     let (after_abort_markers, after_abort_preparations) = (mocks().markers, mocks().preparations);
     record.frame_id = 2;
@@ -342,7 +342,7 @@ extern "C" fn rsf_test_fg_session() -> i32 {
     record.frame_id = 1;
     record.input_qpc = 10;
     update(|state| state.reserved_retirement = true);
-    check!(unsafe { rsf_fg_session_destroy(live_session) } == INVALID);
+    check!(unsafe { rsf_fg_session_destroy(live_session) } == INVALID_ARGUMENT);
     check!(mocks().physical == 1 && mocks().destroyed == 0);
     update(|state| state.reserved_retirement = false);
     update(|state| state.fail_retire = true);
@@ -395,18 +395,20 @@ extern "C" fn rsf_test_fg_session() -> i32 {
     check!(unsafe { rsf_frame_sequencer_begin(ledger, u64::MAX) } == 0);
     check!(unsafe { rsf_frame_sequencer_marker(ledger, u64::MAX, INPUT_SAMPLE, 100) } == 0);
     check!(
-        unsafe { rsf_frame_sequencer_marker(ledger, u64::MAX, SIMULATION_START, 99) } == INVALID
+        unsafe { rsf_frame_sequencer_marker(ledger, u64::MAX, SIMULATION_START, 99) }
+            == INVALID_ARGUMENT
     );
     check!(unsafe { rsf_frame_sequencer_finish(ledger, u64::MAX) } == NOT_READY);
     unsafe { rsf_frame_sequencer_destroy(ledger) };
     check!(unsafe { rsf_frame_sequencer_create(2, &mut ledger) } == 0);
-    check!(unsafe { rsf_frame_sequencer_begin_rendered(ledger, 1, 0) } == INVALID);
+    check!(unsafe { rsf_frame_sequencer_begin_rendered(ledger, 1, 0) } == INVALID_ARGUMENT);
     check!(unsafe { rsf_frame_sequencer_begin_rendered(ledger, 1, 100) } == 0);
     #[repr(C, align(8))]
     struct ShortState([u32; 2]);
     let mut short_state = ShortState([size_of::<u32>() as u32, 0xdeadbeef]);
     check!(
-        unsafe { rsf_frame_sequencer_get(ledger, 1, short_state.0.as_mut_ptr().cast()) } == INVALID
+        unsafe { rsf_frame_sequencer_get(ledger, 1, short_state.0.as_mut_ptr().cast()) }
+            == INVALID_ARGUMENT
     );
     check!(short_state.0[0] == size_of::<u32>() as u32 && short_state.0[1] == 0xdeadbeef);
     let mut rendered = rsf_sequence_state {
@@ -425,7 +427,7 @@ extern "C" fn rsf_test_fg_session() -> i32 {
     check!(unsafe { rsf_frame_sequencer_marker(ledger, 1, PRESENT_END, 104) } == 0);
     check!(unsafe { rsf_frame_sequencer_finish(ledger, 1) } == 0);
     check!(unsafe { rsf_frame_sequencer_begin_rendered(ledger, 2, 200) } == 0);
-    check!(unsafe { rsf_frame_sequencer_marker(ledger, 2, INPUT_SAMPLE, 201) } == INVALID);
+    check!(unsafe { rsf_frame_sequencer_marker(ledger, 2, INPUT_SAMPLE, 201) } == INVALID_ARGUMENT);
     check!(unsafe { rsf_frame_sequencer_finish(ledger, 2) } == NOT_READY);
     unsafe { rsf_frame_sequencer_destroy(ledger) };
     println!("FG switching, fallback, retirement, and CPU identity contracts passed");

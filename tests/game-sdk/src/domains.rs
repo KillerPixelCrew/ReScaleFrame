@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-use super::{Module, OK, run};
+use super::{Module, run};
+use rsf_game_sys::RSF_OK;
 use std::ffi::CStr;
 use std::path::Path;
 use std::ptr::null_mut;
@@ -102,6 +103,6 @@ extern "C" fn rsf_test_orchestrator_domains() -> i32 {
             };
             assert!(result != 0 && owner == adapter.0, "{name:?}");
         }
-        OK
+        RSF_OK
     })
 }

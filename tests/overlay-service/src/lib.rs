@@ -5,13 +5,12 @@ mod contract;
 mod device;
 
 use rsf_game_sys::*;
+use rsf_game_sys::{RSF_ERROR_INVALID_ARGUMENT, RSF_OK};
 use std::ffi::{CStr, c_void};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 // Cast macros in game_api.h cannot be emitted as Rust constants by bindgen.
-const OK: i32 = 0;
-const INVALID: i32 = -1;
 type Query = unsafe extern "C" fn(*mut rsf_overlay_api) -> i32;
 
 #[link(name = "kernel32")]
@@ -121,7 +120,7 @@ extern "C" fn rsf_test_overlay_no_sr(query: Query) -> i32 {
         abi_version: RSF_OVERLAY_API_VERSION,
         ..Default::default()
     };
-    checks.check(unsafe { query(&mut api) } == OK, "table");
+    checks.check(unsafe { query(&mut api) } == RSF_OK, "table");
     let (Some(configure), Some(get), Some(apply), Some(status_get)) = (
         api.configure,
         api.settings_get,
@@ -155,11 +154,11 @@ extern "C" fn rsf_test_overlay_no_sr(query: Query) -> i32 {
     let mut invalid = setup;
     invalid.defaults.sr_enabled = 1;
     checks.check(
-        unsafe { configure(&invalid) } == INVALID,
+        unsafe { configure(&invalid) } == RSF_ERROR_INVALID_ARGUMENT,
         "defaults may not enable SR when it is unavailable",
     );
     checks.check(
-        unsafe { configure(&setup) } == OK,
+        unsafe { configure(&setup) } == RSF_OK,
         "configure with no SR choices",
     );
 
@@ -168,7 +167,7 @@ extern "C" fn rsf_test_overlay_no_sr(query: Query) -> i32 {
         abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
         ..Default::default()
     };
-    checks.check(unsafe { get(&mut settings) } == OK, "settings");
+    checks.check(unsafe { get(&mut settings) } == RSF_OK, "settings");
     checks.check(
         settings.sr_enabled == 0 && settings.sr_backend == 1 && settings.sr_quality == 0,
         "saved SR keys replaced by the defaults",
@@ -207,7 +206,10 @@ extern "C" fn rsf_test_overlay_no_sr(query: Query) -> i32 {
         ),
     ];
     for (request, message) in &invalid {
-        checks.check(unsafe { apply(request) } == INVALID, message);
+        checks.check(
+            unsafe { apply(request) } == RSF_ERROR_INVALID_ARGUMENT,
+            message,
+        );
     }
     checks.check(
         CHANGED.load(Ordering::Relaxed) == 0 && ini.read("SR") == 1 && ini.read("SRBackend") == 4,
@@ -218,7 +220,7 @@ extern "C" fn rsf_test_overlay_no_sr(query: Query) -> i32 {
         ..settings
     };
     checks.check(
-        unsafe { apply(&request) } == OK && CHANGED.load(Ordering::Relaxed) == 1,
+        unsafe { apply(&request) } == RSF_OK && CHANGED.load(Ordering::Relaxed) == 1,
         "settings that do not involve SR still apply",
     );
     checks.check(
@@ -235,7 +237,7 @@ extern "C" fn rsf_test_overlay_no_sr(query: Query) -> i32 {
         abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
         ..Default::default()
     };
-    checks.check(unsafe { status_get(&mut status) } == OK, "status");
+    checks.check(unsafe { status_get(&mut status) } == RSF_OK, "status");
     checks.check(
         status.sr_enabled == 0
             && status.sr_requested_backend == 0

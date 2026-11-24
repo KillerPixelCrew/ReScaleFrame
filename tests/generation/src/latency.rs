@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-use crate::device::{self, NOT_COMPILED, SKIP, Window};
-use crate::session::{NOT_READY, NOT_SUPPORTED, OK, Raw};
+use crate::device::{self, SKIP, Window};
+use crate::session::Raw;
 use crate::sys::*;
 use crate::sys::{
     RSF_STREAMLINE_HOST_ABI_VERSION, rsf_streamline_graphics, rsf_streamline_host_setup,
 };
+use rsf_game_sys::backend_result::{NOT_COMPILED, NOT_READY, NOT_SUPPORTED, OK};
 use rsf_test_support::d3d12::transition_barrier;
 use std::ffi::{CStr, c_char, c_int};
 use std::ptr::null_mut;

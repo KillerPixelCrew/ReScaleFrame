@@ -7,6 +7,7 @@ use crate::sys::{
 };
 use crate::sys::{RSF_XESSVK_REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup};
 use ash::vk::{self, Handle as _};
+use rsf_game_sys::backend_result::{INVALID_ARGUMENT, MISSING_ENTRY_POINT, NOT_READY, OK};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
 use rsf_orchestrator::xess_sdk_abi::{
     XESS_QUALITY_SETTING_QUALITY, xess_2d_t, xess_quality_settings_t, xess_version_t,
@@ -19,10 +20,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 
 type Handle = *mut c_void;
 
-const OK: i32 = 0;
-const INVALID_ARGUMENT: i32 = -1;
-const MISSING_ENTRY_POINT: i32 = -5;
-const NOT_READY: i32 = -8;
 const XESS_SUCCESS: i32 = 0;
 const XESS_AUTOEXPOSURE: u32 = 1 << 8;
 const CONTEXT: Handle = 0x40 as Handle;

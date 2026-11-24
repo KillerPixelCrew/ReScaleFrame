@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Rendered-source provider transitions and their actual application receipts.
 use super::*;
+use rsf_game_sys::RSF_OK;
 
 #[derive(Clone, Copy)]
 enum Phase {
@@ -69,7 +70,7 @@ impl Scenario<'_> {
             .calls
             .settings_get
             .ok_or("overlay settings get callback")?;
-        require(unsafe { get(self.calls.user, settings) } == OK, label)
+        require(unsafe { get(self.calls.user, settings) } == RSF_OK, label)
     }
 
     fn apply(
@@ -81,7 +82,7 @@ impl Scenario<'_> {
             .calls
             .settings_apply
             .ok_or("overlay settings apply callback")?;
-        require(unsafe { apply(self.calls.user, settings) } == OK, label)
+        require(unsafe { apply(self.calls.user, settings) } == RSF_OK, label)
     }
 
     fn generation(&self) -> Result<u64, &'static str> {
@@ -91,7 +92,7 @@ impl Scenario<'_> {
             .ok_or("provider generation callback")?;
         let mut generation = 0;
         require(
-            unsafe { query(self.calls.user, &mut generation) } == OK,
+            unsafe { query(self.calls.user, &mut generation) } == RSF_OK,
             "read actual provider generation",
         )?;
         Ok(generation)
@@ -114,7 +115,7 @@ impl Scenario<'_> {
             .ok_or("provider switch result callback")?;
         let mut result = 0;
         require(
-            unsafe { query(self.calls.user, &mut result) } == OK,
+            unsafe { query(self.calls.user, &mut result) } == RSF_OK,
             "read actual provider switch result",
         )?;
         Ok(result)
@@ -239,7 +240,7 @@ fn run_scenario(fixture: &mut Scenario<'_>) -> Result<i32, &'static str> {
     if backend != RSF_FG_BACKEND_FSR3 || late.vendor.generated_callbacks == 0 {
         state.unavailable = true;
     } else {
-        state.verify(switch_result == OK, "late FSR switch must succeed");
+        state.verify(switch_result == RSF_OK, "late FSR switch must succeed");
         state.verify(
             generation > generation_before_late_enable,
             "late FSR switch must advance provider generation",

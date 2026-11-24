@@ -3,16 +3,12 @@
 use super::{require, rsf_d3d11_host_fixture_cpu};
 use crate::sys::*;
 use rsf_game_sys::{
-    RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END, RSF_GAME_RENDER_RECONFIGURE,
-    rsf_game_host_services, rsf_game_render_config, rsf_game_render_pass,
+    RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NOT_READY, RSF_GAME_CPU_FRAME_BEGIN,
+    RSF_GAME_CPU_FRAME_END, RSF_GAME_RENDER_RECONFIGURE, RSF_OK, rsf_game_host_services,
+    rsf_game_render_config, rsf_game_render_pass,
 };
 use std::ffi::c_void;
 use std::ptr::{dangling_mut, with_exposed_provenance, with_exposed_provenance_mut};
-
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const NOT_READY: i32 = -3;
-const BUSY: i32 = -4;
 
 type Raw = *mut c_void;
 
@@ -49,7 +45,7 @@ unsafe fn run_source(
     let mut planning = raster;
     planning.flags |= RSF_GAME_RENDER_RECONFIGURE;
     require(
-        unsafe { process(user, context, &planning) } == NOT_READY,
+        unsafe { process(user, context, &planning) } == RSF_ERROR_NOT_READY,
         "resource-only planning",
     )?;
     let mut plan = rsf_game_render_config {
@@ -81,7 +77,10 @@ unsafe fn run_source(
         surfaces: &raw,
         ..Default::default()
     };
-    require(recover(&mut recovery) == OK, "reserve resource-only frame")?;
+    require(
+        recover(&mut recovery) == RSF_OK,
+        "reserve resource-only frame",
+    )?;
 
     let mut wrong_session = raster;
     wrong_session.session_id += 1;
@@ -104,7 +103,7 @@ unsafe fn run_source(
         };
         require(
             unsafe { rsf_d3d11_host_reduced_frame(user, dangling_mut(), &mut refused) }
-                == NOT_READY,
+                == RSF_ERROR_NOT_READY,
             label,
         )?;
     }
@@ -129,14 +128,14 @@ unsafe fn run_source(
             .join()
     });
     require(
-        matches!(other, Ok(NOT_READY)),
+        matches!(other, Ok(RSF_ERROR_NOT_READY)),
         "foreign graphics thread refused",
     )?;
 
     if source == 12 {
         recovery.operation = RSF_D3D11_REDUCED_CANCEL;
         require(
-            recover(&mut recovery) == OK
+            recover(&mut recovery) == RSF_OK
                 && recovery.result_flags & RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED != 0
                 && recovery.result_flags & RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED == 0,
             "cancel an unused reservation",
@@ -144,20 +143,20 @@ unsafe fn run_source(
         recovery.operation = RSF_D3D11_REDUCED_RESERVE;
         recovery.token = 0;
         require(
-            recover(&mut recovery) == OK,
+            recover(&mut recovery) == RSF_OK,
             "reserve again after cancellation",
         )?;
     }
     recovery.operation = RSF_D3D11_REDUCED_SEAL;
-    require(recover(&mut recovery) == OK, "seal produced source")?;
+    require(recover(&mut recovery) == RSF_OK, "seal produced source")?;
     if source == 11 {
         require(
-            unsafe { process(user, context, &raster) } == INVALID,
+            unsafe { process(user, context, &raster) } == RSF_ERROR_INVALID_ARGUMENT,
             "camera-less pass refused for temporal SR",
         )?;
     } else {
         require(
-            unsafe { (callbacks.disable_sr)(callbacks.settings_user) } == OK,
+            unsafe { (callbacks.disable_sr)(callbacks.settings_user) } == RSF_OK,
             "disable SR after seal",
         )?;
         let mut temporal = raster;
@@ -172,34 +171,35 @@ unsafe fn run_source(
             surfaces: &auxiliary,
         };
         require(
-            unsafe { rsf_d3d11_host_upscale_auxiliaries(user, context, &request) } == NOT_READY,
+            unsafe { rsf_d3d11_host_upscale_auxiliaries(user, context, &request) }
+                == RSF_ERROR_NOT_READY,
             "temporal take cannot alter a frozen spatial repair",
         )?;
         temporal.flags |= RSF_GAME_RENDER_RECONFIGURE;
         require(
-            unsafe { process(user, context, &temporal) } == BUSY,
+            unsafe { process(user, context, &temporal) } == RSF_ERROR_BUSY,
             "planning blocked until the sealed transaction drains",
         )?;
     }
     recovery.operation = RSF_D3D11_REDUCED_FINISH;
-    recovery.temporal_result = OK;
+    recovery.temporal_result = RSF_OK;
     recovery.result_flags = u32::MAX;
     require(
-        recover(&mut recovery) == OK
+        recover(&mut recovery) == RSF_OK
             && recovery.result_flags & RSF_D3D11_REDUCED_SPATIAL_OUTPUT != 0
             && recovery.result_flags & RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED == 0
-            && recovery.temporal_result == NOT_READY,
+            && recovery.temporal_result == RSF_ERROR_NOT_READY,
         "spatial completion replaces caller result fields",
     )?;
     require(
-        unsafe { rsf_d3d11_host_set_active(user, 0) } == OK,
+        unsafe { rsf_d3d11_host_set_active(user, 0) } == RSF_OK,
         "suspend before retirement",
     )?;
     recovery.operation = RSF_D3D11_REDUCED_RETIRE;
     require(
-        recover(&mut recovery) == OK
+        recover(&mut recovery) == RSF_OK
             && recovery.result_flags & RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED != 0
-            && unsafe { rsf_d3d11_host_set_active(user, 1) } == OK,
+            && unsafe { rsf_d3d11_host_set_active(user, 1) } == RSF_OK,
         "retire the suspended owner and reactivate",
     )?;
     require(

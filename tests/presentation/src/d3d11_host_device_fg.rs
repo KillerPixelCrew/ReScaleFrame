@@ -3,7 +3,8 @@
 use super::*;
 use rsf_game_sys::RSF_D3D11_HOST_ABI_VERSION;
 use rsf_game_sys::{
-    RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS, rsf_d3d11_auxiliary_pass,
+    RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_RESTORE_CONTENTS, RSF_ERROR_BUSY,
+    RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NOT_READY, RSF_OK, rsf_d3d11_auxiliary_pass,
     rsf_d3d11_auxiliary_scope, rsf_d3d11_auxiliary_surface,
 };
 use rsf_game_sys::{
@@ -15,11 +16,6 @@ use rsf_game_sys::{
 };
 use std::ptr::{with_exposed_provenance, with_exposed_provenance_mut};
 use windows::Win32::Foundation::DXGI_STATUS_OCCLUDED;
-
-const OK: i32 = 0;
-const NOT_READY: i32 = -3;
-const BUSY: i32 = -4;
-const INVALID: i32 = -1;
 
 #[path = "d3d11_host_device_fg_phases.rs"]
 mod phases;
@@ -70,7 +66,7 @@ fn foreign_restore(user: Raw, cleanup: &rsf_d3d11_auxiliary_scope) -> bool {
             with_exposed_provenance(scope),
         )
     });
-    matches!(other.join(), Ok(NOT_READY))
+    matches!(other.join(), Ok(RSF_ERROR_NOT_READY))
 }
 
 #[unsafe(no_mangle)]
@@ -100,14 +96,15 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_check_empty_aux(
         surface_count: 0,
         surfaces: std::ptr::null(),
     };
-    let failure = if restore(&cleanup) != OK || restore(&cleanup) != OK {
+    let failure = if restore(&cleanup) != RSF_OK || restore(&cleanup) != RSF_OK {
         "verified owner acknowledges empty cleanup before preparation and on repeat"
-    } else if restore(&wrong_session) != NOT_READY {
+    } else if restore(&wrong_session) != RSF_ERROR_NOT_READY {
         "empty cleanup refuses a foreign session"
     } else if !foreign_restore(host.user, &cleanup) {
         "empty cleanup refuses a foreign graphics thread"
-    } else if unsafe { rsf_d3d11_host_upscale_auxiliaries(host.user, context, &invalid) } != INVALID
-        || restore(&cleanup) != OK
+    } else if unsafe { rsf_d3d11_host_upscale_auxiliaries(host.user, context, &invalid) }
+        != RSF_ERROR_INVALID_ARGUMENT
+        || restore(&cleanup) != RSF_OK
     {
         "failure before auxiliary preparation acknowledges no retained lease"
     } else {
@@ -139,7 +136,7 @@ unsafe fn check_cleanup(
         rsf_d3d11_host_upscale_auxiliaries(host.user, r.context, request)
     };
     state.verify(
-        result == OK,
+        result == RSF_OK,
         "warmed auxiliary transaction commits before cleanup checks",
     );
     for (wrong, label) in [
@@ -165,18 +162,18 @@ unsafe fn check_cleanup(
             "pending cleanup refuses foreign session",
         ),
     ] {
-        state.verify(restore(&wrong) == NOT_READY, label);
+        state.verify(restore(&wrong) == RSF_ERROR_NOT_READY, label);
     }
     state.verify(
         foreign_restore(host.user, &cleanup),
         "pending cleanup refuses foreign thread",
     );
     state.verify(
-        upscale(request) == BUSY,
+        upscale(request) == RSF_ERROR_BUSY,
         "refused cleanup leaves the original pending transaction owned",
     );
     state.verify(
-        restore(&cleanup) == OK && restore(&cleanup) == OK,
+        restore(&cleanup) == RSF_OK && restore(&cleanup) == RSF_OK,
         "successful cleanup and empty repeat acknowledge OK",
     );
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&r.output) }.unwrap();
@@ -201,11 +198,11 @@ unsafe fn check_cleanup(
         ..*request
     };
     state.verify(
-        upscale(&invalid) != OK,
+        upscale(&invalid) != RSF_OK,
         "second destination failure rolls back partially prepared auxiliary transaction",
     );
     state.verify(
-        restore(&cleanup) == OK && restore(&cleanup) == OK,
+        restore(&cleanup) == RSF_OK && restore(&cleanup) == RSF_OK,
         "rolled-back empty cleanup and repeat acknowledge OK",
     );
 }
@@ -354,10 +351,10 @@ unsafe fn run(
         unsafe { upscale(host.user, r.context, &sr_pass) }
     };
     if frame.reconstruct {
-        state.sr_evaluated += u64::from(sr_result == OK);
+        state.sr_evaluated += u64::from(sr_result == RSF_OK);
         if reinsertion {
             state.verify(
-                sr_result == OK,
+                sr_result == RSF_OK,
                 "warmed reduced SR must reinsert into native colour allocation",
             );
         }
@@ -514,7 +511,7 @@ unsafe fn run(
             "tagged current source must carry source QPC frequency",
         );
     }
-    if unsafe { pump() } != OK {
+    if unsafe { pump() } != RSF_OK {
         return Err("native message callback raised an exception");
     }
     // Keep the exact backbuffer/view lease alive through WINDOW end and the receipts.

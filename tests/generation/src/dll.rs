@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::*;
 use crate::sys::{RSF_FG_FIXED, RSF_FG_OFF, RSF_REFLEX_ON};
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT};
 use rsf_test_support::{qpc as now, qpc_frequency};
 use std::ffi::c_void;
 use std::mem::{align_of, size_of};
@@ -8,8 +9,6 @@ use std::ptr::{null, null_mut};
 
 const SIZE: usize = size_of::<rsf_d3d11_fg_api>();
 const VERSION: u32 = RSF_D3D11_FG_API_VERSION;
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
 type Query = unsafe extern "C" fn(*mut rsf_d3d11_fg_api) -> i32;
 
 #[repr(C, align(8))]
@@ -92,12 +91,12 @@ unsafe extern "C" fn rsf_test_d3d11_fg_api(
 
     let mut check = Check::default();
     check.that(
-        unsafe { query(null_mut()) } == INVALID,
+        unsafe { query(null_mut()) } == INVALID_ARGUMENT,
         "null query is INVALID_ARGUMENT",
     );
     for size in [0, 4, 8, (SIZE - 1) as u32] {
-        check.refusal(query, size, VERSION, INVALID);
-        check.refusal(query, size, u32::MAX, INVALID);
+        check.refusal(query, size, VERSION, INVALID_ARGUMENT);
+        check.refusal(query, size, u32::MAX, INVALID_ARGUMENT);
     }
     for version in [0, 2, 3, VERSION + 1, u32::MAX] {
         check.refusal(query, SIZE as u32, version, ABI_MISMATCH);

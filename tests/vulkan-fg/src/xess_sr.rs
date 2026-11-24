@@ -2,6 +2,7 @@
 use crate::sys::rsf_sharpening_options;
 use crate::sys::{RSF_SR_XESS, RSF_SRVK_ABI_VERSION, rsf_srvk_frame, rsf_srvk_setup};
 use crate::sys::{RSF_XESSVK_REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup};
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT, NOT_READY, OK};
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record};
 use rsf_test_support::{frame_record, sr_camera};
 use std::{
@@ -9,11 +10,6 @@ use std::{
     mem,
     ptr::{null, null_mut},
 };
-
-const OK: i32 = 0;
-const INVALID_ARGUMENT: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const NOT_READY: i32 = -8;
 
 type Handle = *mut c_void;
 use crate::xess_sr_gpu::Gpu;

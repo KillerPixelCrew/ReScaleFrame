@@ -5,6 +5,8 @@ use crate::sys::{
     RSF_DEPTH_SCALE_ABI_VERSION as ABI, rsf_depth_scale_frame as Frame,
     rsf_depth_scale_setup as Setup,
 };
+use rsf_game_sys::RSF_ERROR_BUSY;
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT};
 use std::ffi::{CStr, c_char};
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
 use windows::core::Interface;
@@ -16,10 +18,6 @@ unsafe extern "C" {
     fn rsf_depth_scale_restore(scale: Handle) -> i32;
     fn rsf_depth_scale_destroy(scale: Handle) -> i32;
 }
-
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
-const BUSY: i32 = -4;
 
 unsafe extern "C" fn log(_: Handle, message: *const c_char) {
     eprintln!("{}", unsafe { CStr::from_ptr(message) }.to_string_lossy());
@@ -145,7 +143,7 @@ fn render_identity(
         "identity prepare",
     )?;
     check(
-        unsafe { rsf_depth_scale_prepare(pass, frame) } == BUSY,
+        unsafe { rsf_depth_scale_prepare(pass, frame) } == RSF_ERROR_BUSY,
         "overlapping preparation refused",
     )?;
     check(
@@ -161,7 +159,7 @@ fn render_identity(
         "all 256 stencil values and packed depths survive",
     )?;
     check(
-        unsafe { rsf_depth_scale_commit(pass) } == BUSY,
+        unsafe { rsf_depth_scale_commit(pass) } == RSF_ERROR_BUSY,
         "double commit refused",
     )?;
     let mut current_dsv = None;
@@ -229,7 +227,8 @@ fn run(gpu: &Device) -> TestResult {
         log_user: ptr::null_mut(),
     };
     check(
-        unsafe { rsf_depth_scale_create(context, &setup, &mut raw) } == INVALID && raw.is_null(),
+        unsafe { rsf_depth_scale_create(context, &setup, &mut raw) } == INVALID_ARGUMENT
+            && raw.is_null(),
         "short setup refused",
     )?;
     setup.struct_size += 1;
@@ -244,7 +243,7 @@ fn run(gpu: &Device) -> TestResult {
     unsafe { gpu.device.CreateDeferredContext(0, Some(&mut deferred)) }?;
     let deferred = deferred.ok_or("null deferred context")?;
     check(
-        unsafe { rsf_depth_scale_create(deferred.as_raw(), &setup, &mut raw) } == INVALID
+        unsafe { rsf_depth_scale_create(deferred.as_raw(), &setup, &mut raw) } == INVALID_ARGUMENT
             && raw.is_null(),
         "deferred context refused",
     )?;
@@ -293,12 +292,12 @@ fn run(gpu: &Device) -> TestResult {
         jitter_pixels: [0.0; 2],
     };
     check(
-        unsafe { rsf_depth_scale_commit(raw) } == INVALID,
+        unsafe { rsf_depth_scale_commit(raw) } == INVALID_ARGUMENT,
         "commit requires prepared image",
     )?;
     frame.struct_size -= 1;
     check(
-        unsafe { rsf_depth_scale_prepare(raw, &frame) } == INVALID,
+        unsafe { rsf_depth_scale_prepare(raw, &frame) } == INVALID_ARGUMENT,
         "short frame refused",
     )?;
     frame.struct_size += 1;
@@ -310,13 +309,13 @@ fn run(gpu: &Device) -> TestResult {
     frame.abi_version = ABI;
     frame.source_rect[2] = 17;
     check(
-        unsafe { rsf_depth_scale_prepare(raw, &frame) } == INVALID,
+        unsafe { rsf_depth_scale_prepare(raw, &frame) } == INVALID_ARGUMENT,
         "out-of-bounds source refused",
     )?;
     frame.source_rect[2] = 16;
     frame.jitter_pixels[0] = f32::NAN;
     check(
-        unsafe { rsf_depth_scale_prepare(raw, &frame) } == INVALID,
+        unsafe { rsf_depth_scale_prepare(raw, &frame) } == INVALID_ARGUMENT,
         "nonfinite sampling refused",
     )?;
     frame.jitter_pixels[0] = 0.0;
@@ -374,7 +373,10 @@ fn run(gpu: &Device) -> TestResult {
     })
     .join()
     .map_err(|_| "wrong-thread fixture panicked")?;
-    check(refused == [BUSY; 4], "foreign thread operations refused")?;
+    check(
+        refused == [RSF_ERROR_BUSY; 4],
+        "foreign thread operations refused",
+    )?;
     check(
         unsafe { rsf_depth_scale_restore(raw) } == 0 && read()? == original,
         "scaled restore",

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
-use super::{ABI_MISMATCH, INVALID_ARGUMENT, Module, NATIVE_REFUSED, NOT_READY, OK, run};
+use super::{Module, run};
 use crate::sys::{RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation as Observation};
 use rsf_game_sys::*;
+use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED,
+    RSF_ERROR_NOT_READY, RSF_OK,
+};
 use std::ffi::CStr;
 use std::path::Path;
 use std::ptr::{null, null_mut};
@@ -29,11 +33,20 @@ fn plugin(module: &Module) {
     let query = entry(module);
     let version = RSF_GAME_ABI_VERSION;
     let mut api: rsf_game_plugin_api = unsafe { std::mem::zeroed() };
-    assert_eq!(unsafe { query(version, null_mut()) }, INVALID_ARGUMENT);
-    assert_eq!(unsafe { query(version, &mut api) }, INVALID_ARGUMENT);
+    assert_eq!(
+        unsafe { query(version, null_mut()) },
+        RSF_ERROR_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { query(version, &mut api) },
+        RSF_ERROR_INVALID_ARGUMENT
+    );
     api.struct_size = size_of_val(&api) as u32;
-    assert_eq!(unsafe { query(version + 1, &mut api) }, ABI_MISMATCH);
-    assert_eq!(unsafe { query(version, &mut api) }, OK);
+    assert_eq!(
+        unsafe { query(version + 1, &mut api) },
+        RSF_ERROR_ABI_MISMATCH
+    );
+    assert_eq!(unsafe { query(version, &mut api) }, RSF_OK);
     assert!(!api.info.id.is_null());
     assert_eq!(unsafe { CStr::from_ptr(api.info.id) }, c"anomaly");
     assert_eq!(api.info.rendering_ready, 0);
@@ -90,7 +103,7 @@ fn lifecycle(module: &Module) {
     let version = RSF_GAME_ABI_VERSION;
     let mut api: rsf_game_plugin_api = unsafe { std::mem::zeroed() };
     api.struct_size = size_of_val(&api) as u32;
-    assert_eq!(unsafe { query(version, &mut api) }, OK);
+    assert_eq!(unsafe { query(version, &mut api) }, RSF_OK);
     let hooks = api.hooks;
     let prepare = hooks.prepare.expect("prepare");
     let start = hooks.start.expect("start");
@@ -98,26 +111,29 @@ fn lifecycle(module: &Module) {
     let quiesce = hooks.quiesce.expect("quiesce");
     let stop = hooks.stop.expect("stop");
 
-    assert_eq!(unsafe { observe(null_mut()) }, INVALID_ARGUMENT);
+    assert_eq!(unsafe { observe(null_mut()) }, RSF_ERROR_INVALID_ARGUMENT);
     let mut observation = Observation {
         struct_size: size_of::<Observation>() as u32 - 1,
         abi_version: RSF_ANOMALY_OBSERVATION_ABI,
         ..Default::default()
     };
-    assert_eq!(unsafe { observe(&mut observation) }, INVALID_ARGUMENT);
+    assert_eq!(
+        unsafe { observe(&mut observation) },
+        RSF_ERROR_INVALID_ARGUMENT
+    );
     observation.struct_size += 1;
     observation.abi_version += 1;
-    assert_eq!(unsafe { observe(&mut observation) }, ABI_MISMATCH);
+    assert_eq!(unsafe { observe(&mut observation) }, RSF_ERROR_ABI_MISMATCH);
     observation.abi_version -= 1;
-    assert_eq!(unsafe { observe(&mut observation) }, OK);
+    assert_eq!(unsafe { observe(&mut observation) }, RSF_OK);
     assert_eq!(observation.active, 0);
     assert_eq!(observation.render_frames, 0);
     assert_eq!(observation.resets, 0);
     assert_eq!(observation.camera_finite, 0);
 
-    assert_eq!(unsafe { prepare(null()) }, INVALID_ARGUMENT);
-    assert_eq!(unsafe { start(null()) }, INVALID_ARGUMENT);
-    assert_eq!(unsafe { status(null_mut()) }, INVALID_ARGUMENT);
+    assert_eq!(unsafe { prepare(null()) }, RSF_ERROR_INVALID_ARGUMENT);
+    assert_eq!(unsafe { start(null()) }, RSF_ERROR_INVALID_ARGUMENT);
+    assert_eq!(unsafe { status(null_mut()) }, RSF_ERROR_INVALID_ARGUMENT);
     let mut renderer = rsf_game_renderer_status {
         struct_size: size_of::<rsf_game_renderer_status>() as u32,
         abi_version: version,
@@ -126,7 +142,7 @@ fn lifecycle(module: &Module) {
         rendering_ready: 0,
         reason: null(),
     };
-    assert_eq!(unsafe { status(&mut renderer) }, OK);
+    assert_eq!(unsafe { status(&mut renderer) }, RSF_OK);
     assert_eq!(
         (renderer.active, renderer.prepared, renderer.rendering_ready),
         (0, 0, 0)
@@ -136,29 +152,32 @@ fn lifecycle(module: &Module) {
         struct_size: size_of::<rsf_game_start_args>() as u32,
         abi_version: version,
     };
-    assert_eq!(unsafe { start(&start_args) }, NOT_READY);
+    assert_eq!(unsafe { start(&start_args) }, RSF_ERROR_NOT_READY);
     let host = rsf_game_sys::session::host_services(0, None);
     let mut prepare_args = rsf_game_prepare_args {
         struct_size: size_of::<rsf_game_prepare_args>() as u32,
         abi_version: version,
         host: &raw const host,
     };
-    assert_eq!(unsafe { prepare(&prepare_args) }, NATIVE_REFUSED);
-    assert_eq!(unsafe { status(&mut renderer) }, OK);
+    assert_eq!(unsafe { prepare(&prepare_args) }, RSF_ERROR_NATIVE_REFUSED);
+    assert_eq!(unsafe { status(&mut renderer) }, RSF_OK);
     assert_eq!((renderer.active, renderer.prepared), (0, 0));
     prepare_args.abi_version += 1;
-    assert_eq!(unsafe { prepare(&prepare_args) }, ABI_MISMATCH);
+    assert_eq!(unsafe { prepare(&prepare_args) }, RSF_ERROR_ABI_MISMATCH);
     prepare_args.abi_version -= 1;
     let mut short_host = host;
     short_host.struct_size -= 1;
     prepare_args.host = &raw const short_host;
-    assert_eq!(unsafe { prepare(&prepare_args) }, INVALID_ARGUMENT);
+    assert_eq!(
+        unsafe { prepare(&prepare_args) },
+        RSF_ERROR_INVALID_ARGUMENT
+    );
     let control = rsf_game_control_args {
         struct_size: size_of::<rsf_game_control_args>() as u32,
         abi_version: version,
     };
-    assert_eq!(unsafe { quiesce(&control) }, OK);
-    assert_eq!(unsafe { stop(&control) }, OK);
+    assert_eq!(unsafe { quiesce(&control) }, RSF_OK);
+    assert_eq!(unsafe { stop(&control) }, RSF_OK);
     println!("Anomaly foreign-process admission: PASS");
 }
 

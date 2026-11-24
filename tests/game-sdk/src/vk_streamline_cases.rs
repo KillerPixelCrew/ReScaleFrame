@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, FEATURE_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED, OK,
+};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 
 unsafe extern "C" fn wsi_callback(user: *mut c_void) -> i32 {
@@ -329,13 +332,13 @@ fn legacy_tokens() -> rsf_latencyvk_setup {
             user: null_mut(),
         };
         assert!(
-            rsf_slvk_invoke(null()) == INVALID && rsf_slvk_invoke(&lease) == NOT_READY,
+            rsf_slvk_invoke(null()) == INVALID_ARGUMENT && rsf_slvk_invoke(&lease) == NOT_READY,
             "no SDK lease before initialization"
         );
         let mut malformed = lease;
         malformed.struct_size -= 1;
         assert!(
-            rsf_slvk_invoke(&malformed) == INVALID,
+            rsf_slvk_invoke(&malformed) == INVALID_ARGUMENT,
             "short SDK lease refused"
         );
         malformed = lease;
@@ -347,17 +350,17 @@ fn legacy_tokens() -> rsf_latencyvk_setup {
         malformed = lease;
         malformed.callback = None;
         assert!(
-            rsf_slvk_invoke(&malformed) == INVALID,
+            rsf_slvk_invoke(&malformed) == INVALID_ARGUMENT,
             "null SDK callback refused"
         );
         malformed = lease;
         malformed.session_id = 0;
         assert!(
-            rsf_slvk_invoke(&malformed) == INVALID,
+            rsf_slvk_invoke(&malformed) == INVALID_ARGUMENT,
             "partial frame identity refused"
         );
         assert!(
-            rsf_latencyvk_initialize(null()) == INVALID,
+            rsf_latencyvk_initialize(null()) == INVALID_ARGUMENT,
             "null setup refused"
         );
         let mut setup = rsf_latencyvk_setup {
@@ -367,7 +370,7 @@ fn legacy_tokens() -> rsf_latencyvk_setup {
             project_id: c"synthetic".as_ptr(),
         };
         assert!(
-            rsf_latencyvk_initialize(&setup) == INVALID,
+            rsf_latencyvk_initialize(&setup) == INVALID_ARGUMENT,
             "short setup refused"
         );
         setup.struct_size = size_of_val(&setup) as u32;
@@ -386,7 +389,7 @@ fn legacy_tokens() -> rsf_latencyvk_setup {
             "legacy latency ABI does not load SR or FG"
         );
         assert!(
-            rsf_latencyvk_options(3, 0) == INVALID,
+            rsf_latencyvk_options(3, 0) == INVALID_ARGUMENT,
             "unknown mode refused"
         );
         assert!(rsf_latencyvk_options(1, 12345) == OK, "options queued");
@@ -418,7 +421,7 @@ fn legacy_tokens() -> rsf_latencyvk_setup {
             "keyboard/mouse cannot spoof controller or deprecated markers"
         );
         assert!(
-            rsf_latencyvk_input(1, 4, 0xc124) == INVALID && marker_count() == before_input,
+            rsf_latencyvk_input(1, 4, 0xc124) == INVALID_ARGUMENT && marker_count() == before_input,
             "an unrelated window message cannot partially emit a controller marker"
         );
         assert!(
@@ -428,7 +431,7 @@ fn legacy_tokens() -> rsf_latencyvk_setup {
             "controller sampled once per source"
         );
         assert!(
-            rsf_latencyvk_input(1, 0, 0xc124) == INVALID,
+            rsf_latencyvk_input(1, 0, 0xc124) == INVALID_ARGUMENT,
             "foreign Windows message refused"
         );
         assert!(
@@ -583,7 +586,7 @@ fn shared_features() {
         let mut invalid_setup = shared;
         invalid_setup.struct_size -= 1;
         assert!(
-            rsf_slvk_initialize(&invalid_setup) == INVALID,
+            rsf_slvk_initialize(&invalid_setup) == INVALID_ARGUMENT,
             "short shared SDK setup refused"
         );
         invalid_setup = shared;
@@ -595,7 +598,7 @@ fn shared_features() {
         invalid_setup = shared;
         invalid_setup.features = 4;
         assert!(
-            rsf_slvk_initialize(&invalid_setup) == INVALID,
+            rsf_slvk_initialize(&invalid_setup) == INVALID_ARGUMENT,
             "unknown shared SDK features refused"
         );
         assert!(
@@ -715,11 +718,12 @@ fn keyed_sources(setup: &rsf_latencyvk_setup) {
         execution.role = RSF_GAME_RENDER_PRESENT;
         let short_execution = Short(4);
         assert!(
-            rsf_latencyvk_execution(ptr::from_ref(&short_execution.0).cast(), 1) == INVALID,
+            rsf_latencyvk_execution(ptr::from_ref(&short_execution.0).cast(), 1)
+                == INVALID_ARGUMENT,
             "size-only execution prefix is refused without reading its body"
         );
         assert!(
-            rsf_latencyvk_execution(null(), 1) == INVALID
+            rsf_latencyvk_execution(null(), 1) == INVALID_ARGUMENT
                 && rsf_latencyvk_execution(&execution, 1) == NOT_READY,
             "explicit Present cannot invent a missing submission"
         );

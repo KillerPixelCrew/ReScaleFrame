@@ -2,6 +2,7 @@
 //! Hardware fixture for the bidirectional GL/D3D12 handoff on the current WGL context.
 use super::{FixtureError, log, require};
 use crate::sys::*;
+use rsf_game_sys::backend_result::OK;
 use rsf_test_support::d3d12::{copy_location, transition};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::transmute;
@@ -15,7 +16,6 @@ use windows::core::{Interface, s, w};
 const FRAMEBUFFER: u32 = 0x8d40;
 const COLOR_ATTACHMENT0: u32 = 0x8ce0;
 const FRAMEBUFFER_COMPLETE: u32 = 0x8cd5;
-const OK: i32 = 0;
 
 unsafe extern "system" fn debug_gl(
     _: u32,

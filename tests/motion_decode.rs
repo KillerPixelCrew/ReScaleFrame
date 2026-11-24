@@ -2,6 +2,7 @@
 // Verify stored Unreal-biased examples, pre-decode sentinel checks and optional validity.
 use super::*;
 use crate::sys::{RSF_MOTION_DECODE_ABI_VERSION as ABI, rsf_motion_decode_setup as Setup};
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT};
 use rsf_game_sys::rsf_motion_decode_params as Params;
 use std::ffi::{CStr, c_char};
 use windows::core::Interface;
@@ -23,8 +24,6 @@ unsafe extern "C" {
 const SCALE: f32 = 0.499 * 0.5;
 const BIAS: f32 = 32767.0 / 65535.0;
 const SENTINEL: f32 = -1000.0;
-const INVALID_ARGUMENT: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
 const SHADER_FAILED: i32 = -3;
 const SOURCE_MISMATCH: i32 = -5;
 

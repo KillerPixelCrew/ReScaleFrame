@@ -6,6 +6,7 @@ use super::{
     log, require,
 };
 use crate::sys::*;
+use rsf_game_sys::backend_result::{INVALID_ARGUMENT, OK};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_RESET, RSF_SCREEN_FLIGHT, rsf_camera_frame,
     rsf_game_render_pass,
@@ -25,8 +26,6 @@ use windows::Win32::{
 };
 use windows::core::{PCWSTR, w};
 
-const OK: i32 = 0;
-const INVALID: i32 = -1;
 const SCENARIOS: [(u32, u32, u32, u32); 13] = [
     (0, 0, 1280, 720),
     (2, 0, 1280, 720),
@@ -247,7 +246,7 @@ impl Pipeline {
     fn verify_menus(&self, frame: &mut u64) -> Result<(), FixtureError> {
         unsafe {
             require(
-                rsf_gl_pipeline_present(self.0, 0, 0) == INVALID,
+                rsf_gl_pipeline_present(self.0, 0, 0) == INVALID_ARGUMENT,
                 "menu needs an input frame ID",
             )?;
             for _ in 0..32 {

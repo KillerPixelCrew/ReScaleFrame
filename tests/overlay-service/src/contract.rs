@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
-use super::{Checks, INVALID, Ini, OK, Query};
+use super::{Checks, Ini, Query};
 use rsf_game_sys::*;
+use rsf_game_sys::{
+    RSF_ERROR_ABI_MISMATCH, RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NOT_READY, RSF_OK,
+};
 use std::ffi::{CStr, c_void};
 use std::os::windows::fs::OpenOptionsExt;
 use std::ptr::{null, null_mut};
-
-const ABI_MISMATCH: i32 = -2;
-const NOT_READY: i32 = -3;
-const BUSY: i32 = -4;
 
 type Apply = unsafe extern "C" fn(*const rsf_render_settings) -> i32;
 type Diagnostics = unsafe extern "C" fn(*mut rsf_overlay_diagnostics) -> i32;
@@ -41,7 +40,7 @@ unsafe extern "C" fn changed(user: *mut c_void, applied: *const rsf_render_setti
     }
     let mut snapshot = settings_header();
     context.checks.check(
-        unsafe { context.api.settings_get.unwrap()(&mut snapshot) } == OK
+        unsafe { context.api.settings_get.unwrap()(&mut snapshot) } == RSF_OK
             && snapshot.sr_backend == applied.sr_backend
             && snapshot.fg_enabled == applied.fg_enabled,
         "settings_changed can read the newly published request",
@@ -52,7 +51,7 @@ unsafe extern "C" fn changed(user: *mut c_void, applied: *const rsf_render_setti
         ..applied
     };
     context.checks.check(
-        unsafe { context.api.settings_apply.unwrap()(&nested) } == BUSY,
+        unsafe { context.api.settings_apply.unwrap()(&nested) } == RSF_ERROR_BUSY,
         "settings_changed receives BUSY for a nested write",
     );
 }
@@ -72,18 +71,18 @@ fn table(query: Query, name_resolves: bool, checks: &mut Checks) -> Option<rsf_o
     let mut expected = sentinel.0;
     let ptr = sentinel.0.as_mut_ptr().cast();
     checks.check(
-        unsafe { query(null_mut()) } == INVALID,
+        unsafe { query(null_mut()) } == RSF_ERROR_INVALID_ARGUMENT,
         "null table refused",
     );
     checks.check(
-        unsafe { query(ptr) } == INVALID,
+        unsafe { query(ptr) } == RSF_ERROR_INVALID_ARGUMENT,
         "short table refused before version",
     );
     checks.check(sentinel.0 == expected, "short refusal wrote nothing");
     sentinel.0[0..4].copy_from_slice(&length.to_ne_bytes());
     expected[0..4].copy_from_slice(&length.to_ne_bytes());
     checks.check(
-        unsafe { query(ptr) } == ABI_MISMATCH,
+        unsafe { query(ptr) } == RSF_ERROR_ABI_MISMATCH,
         "version mismatch refused",
     );
     checks.check(sentinel.0 == expected, "version refusal wrote nothing");
@@ -94,7 +93,7 @@ fn table(query: Query, name_resolves: bool, checks: &mut Checks) -> Option<rsf_o
         ..Default::default()
     };
     checks.check(
-        unsafe { query(&mut api) } == OK
+        unsafe { query(&mut api) } == RSF_OK
             && api.struct_size == length
             && api.abi_version == RSF_OVERLAY_API_VERSION,
         "table filled",
@@ -118,14 +117,17 @@ fn table(query: Query, name_resolves: bool, checks: &mut Checks) -> Option<rsf_o
 fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, checks: &mut Checks) {
     let configure = api.configure.unwrap();
     let empty = [0u16];
-    checks.check(unsafe { configure(null()) } == INVALID, "null setup");
+    checks.check(
+        unsafe { configure(null()) } == RSF_ERROR_INVALID_ARGUMENT,
+        "null setup",
+    );
     let invalid = [
         (
             rsf_overlay_service_setup {
                 struct_size: setup.struct_size - 4,
                 ..setup
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "short setup",
         ),
         (
@@ -133,7 +135,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 abi_version: RSF_OVERLAY_API_VERSION + 1,
                 ..setup
             },
-            ABI_MISMATCH,
+            RSF_ERROR_ABI_MISMATCH,
             "setup version",
         ),
         (
@@ -141,7 +143,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 configuration_path: empty.as_ptr(),
                 ..setup
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "empty path",
         ),
         (
@@ -149,7 +151,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 configuration_section: null(),
                 ..setup
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "missing section",
         ),
         (
@@ -157,7 +159,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 sr_backend_choices: 1,
                 ..setup
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "SR backend bit 0 is not a backend",
         ),
         (
@@ -165,7 +167,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 sr_quality_choices: 0,
                 ..setup
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "SR backends without any quality",
         ),
         (
@@ -177,7 +179,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 },
                 ..setup
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "no SR but defaults enable SR",
         ),
         (
@@ -185,7 +187,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 latency_choices: 1 << RSF_REFLEX_ON,
                 ..setup
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "latency without Off",
         ),
         (
@@ -193,7 +195,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 fg_backend_choices: 1 << 2,
                 ..setup
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "unknown FG provider",
         ),
         (
@@ -204,7 +206,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 },
                 ..setup
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "defaults outside choices",
         ),
         (
@@ -215,7 +217,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 },
                 ..setup
             },
-            ABI_MISMATCH,
+            RSF_ERROR_ABI_MISMATCH,
             "defaults version",
         ),
         (
@@ -223,7 +225,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 option_count: RSF_OVERLAY_SERVICE_OPTION_LIMIT + 1,
                 ..setup
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "too many adapter options",
         ),
         (
@@ -231,7 +233,7 @@ fn setup_refusals(api: &rsf_overlay_api, setup: rsf_overlay_service_setup, check
                 option_changed: None,
                 ..setup
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "editable options require acknowledgement",
         ),
     ];
@@ -275,27 +277,27 @@ extern "C" fn rsf_test_overlay_contract(
     };
     let get_capture = api.capture.unwrap();
     checks.check(
-        unsafe { get(&mut settings) } == NOT_READY,
+        unsafe { get(&mut settings) } == RSF_ERROR_NOT_READY,
         "settings before configure",
     );
     checks.check(
-        unsafe { status_get(&mut status) } == NOT_READY,
+        unsafe { status_get(&mut status) } == RSF_ERROR_NOT_READY,
         "status before configure",
     );
     checks.check(
-        unsafe { api.present.unwrap()(null_mut(), null_mut()) } == INVALID,
+        unsafe { api.present.unwrap()(null_mut(), null_mut()) } == RSF_ERROR_INVALID_ARGUMENT,
         "present null chain",
     );
     checks.check(
-        unsafe { set_visible(1) == NOT_READY && toggle() == NOT_READY },
+        unsafe { set_visible(1) == RSF_ERROR_NOT_READY && toggle() == RSF_ERROR_NOT_READY },
         "visibility before start",
     );
     checks.check(
-        unsafe { notify(null_mut(), RSF_OVERLAY_NOTIFY_RESIZE) } == NOT_READY,
+        unsafe { notify(null_mut(), RSF_OVERLAY_NOTIFY_RESIZE) } == RSF_ERROR_NOT_READY,
         "notify before configure",
     );
     checks.check(
-        unsafe { get_capture(&mut capture) } == OK
+        unsafe { get_capture(&mut capture) } == RSF_OK
             && capture.started == 0
             && capture.visible == 0
             && capture.captured == 0,
@@ -303,7 +305,7 @@ extern "C" fn rsf_test_overlay_contract(
     );
     capture.struct_size = 4;
     checks.check(
-        unsafe { get_capture(&mut capture) } == INVALID,
+        unsafe { get_capture(&mut capture) } == RSF_ERROR_INVALID_ARGUMENT,
         "short capture refused",
     );
     checks.check(unsafe { visible() } == 0, "not visible before start");
@@ -365,16 +367,19 @@ extern "C" fn rsf_test_overlay_contract(
     };
     setup_refusals(&api, setup, &mut checks);
     checks.check(
-        unsafe { get(&mut settings) } == NOT_READY,
+        unsafe { get(&mut settings) } == RSF_ERROR_NOT_READY,
         "refused setups did not configure",
     );
     checks.check(
-        unsafe { configure(&setup) } == OK,
+        unsafe { configure(&setup) } == RSF_OK,
         "configure at the adapter option limit",
     );
-    checks.check(unsafe { configure(&setup) } == BUSY, "second configure");
     checks.check(
-        unsafe { get(&mut settings) } == OK,
+        unsafe { configure(&setup) } == RSF_ERROR_BUSY,
+        "second configure",
+    );
+    checks.check(
+        unsafe { get(&mut settings) } == RSF_OK,
         "settings after configure",
     );
     checks.check(
@@ -398,7 +403,7 @@ extern "C" fn rsf_test_overlay_contract(
                 generated_frames: 2,
                 ..settings
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "generated above adapter maximum",
         ),
         (
@@ -407,7 +412,7 @@ extern "C" fn rsf_test_overlay_contract(
                 fg_backend: RSF_FG_BACKEND_DLSS,
                 ..settings
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "FG provider outside choices",
         ),
         (
@@ -415,7 +420,7 @@ extern "C" fn rsf_test_overlay_contract(
                 latency: RSF_REFLEX_BOOST,
                 ..settings
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "latency outside choices",
         ),
         (
@@ -423,7 +428,7 @@ extern "C" fn rsf_test_overlay_contract(
                 sr_backend: 4,
                 ..settings
             },
-            INVALID,
+            RSF_ERROR_INVALID_ARGUMENT,
             "SR backend outside choices",
         ),
         (
@@ -431,16 +436,19 @@ extern "C" fn rsf_test_overlay_contract(
                 abi_version: 1,
                 ..settings
             },
-            ABI_MISMATCH,
+            RSF_ERROR_ABI_MISMATCH,
             "settings version",
         ),
     ];
     for (request, result, message) in &invalid {
         checks.check(unsafe { apply(request) } == *result, message);
     }
-    checks.check(unsafe { apply(null()) } == INVALID, "null settings");
     checks.check(
-        unsafe { guarded(apply) } == INVALID,
+        unsafe { apply(null()) } == RSF_ERROR_INVALID_ARGUMENT,
+        "null settings",
+    );
+    checks.check(
+        unsafe { guarded(apply) } == RSF_ERROR_INVALID_ARGUMENT,
         "short settings at guard page refused without reading the tail",
     );
     checks.check(
@@ -460,7 +468,7 @@ extern "C" fn rsf_test_overlay_contract(
     };
     callback.reenter = true;
     checks.check(
-        unsafe { apply(&request) } == OK,
+        unsafe { apply(&request) } == RSF_OK,
         "outer apply succeeds with reentrant callback",
     );
     checks.check(
@@ -487,7 +495,7 @@ extern "C" fn rsf_test_overlay_contract(
     );
     let mut reread = settings_header();
     checks.check(
-        unsafe { get(&mut reread) } == OK && reread.sr_backend == 3 && reread.fg_enabled == 1,
+        unsafe { get(&mut reread) } == RSF_OK && reread.sr_backend == 3 && reread.fg_enabled == 1,
         "get reflects apply",
     );
     let mut fg = rsf_native_fg_status {
@@ -515,11 +523,11 @@ extern "C" fn rsf_test_overlay_contract(
         ..reread
     };
     checks.check(
-        unsafe { apply(&sharpen) } == OK,
+        unsafe { apply(&sharpen) } == RSF_OK,
         "sharpening applies and saves",
     );
     checks.check(
-        unsafe { get(&mut reread) } == OK
+        unsafe { get(&mut reread) } == RSF_OK
             && reread.sharpening_sharpness == 0.75
             && reread.sharpening_mode == 2
             && ini.read("SharpeningMode") == 2
@@ -531,7 +539,7 @@ extern "C" fn rsf_test_overlay_contract(
         ..sharpen
     };
     checks.check(
-        unsafe { apply(&invalid_sharpening) } == INVALID,
+        unsafe { apply(&invalid_sharpening) } == RSF_ERROR_INVALID_ARGUMENT,
         "invalid sharpening refused",
     );
 
@@ -548,13 +556,13 @@ extern "C" fn rsf_test_overlay_contract(
         tail: 0xfeed_face,
     };
     checks.check(
-        unsafe { apply(&extended.value) } == OK
+        unsafe { apply(&extended.value) } == RSF_OK
             && callback.changed == 3
             && callback.last.struct_size == size_of::<rsf_render_settings>() as u32,
         "larger request accepted and callback receives the runtime size",
     );
     checks.check(
-        unsafe { get(&mut extended.value) } == OK
+        unsafe { get(&mut extended.value) } == RSF_OK
             && extended.value.struct_size == size_of::<rsf_render_settings>() as u32
             && extended.tail == 0xfeed_face,
         "get writes only the known settings prefix",
@@ -572,12 +580,12 @@ extern "C" fn rsf_test_overlay_contract(
             ..sharpen
         };
         checks.check(
-            unsafe { apply(&request) } == NOT_READY,
+            unsafe { apply(&request) } == RSF_ERROR_NOT_READY,
             "save failure refused",
         );
         drop(blocked);
         checks.check(
-            unsafe { get(&mut reread) } == OK
+            unsafe { get(&mut reread) } == RSF_OK
                 && reread.sr_backend == 3
                 && reread.fg_enabled == 1
                 && callback.changed == 3
@@ -594,7 +602,7 @@ extern "C" fn rsf_test_overlay_contract(
             && fg.requested.frame_limit_us == 8333,
         "FG options forwarded to presentation owner",
     );
-    checks.check(unsafe { status_get(&mut status) } == OK, "status");
+    checks.check(unsafe { status_get(&mut status) } == RSF_OK, "status");
     checks.check(
         status.sr_enabled == 1
             && status.sr_requested_backend == 3
@@ -614,22 +622,22 @@ extern "C" fn rsf_test_overlay_contract(
     );
     status.abi_version = 1;
     checks.check(
-        unsafe { status_get(&mut status) } == ABI_MISMATCH,
+        unsafe { status_get(&mut status) } == RSF_ERROR_ABI_MISMATCH,
         "status version",
     );
     checks.check(
-        unsafe { notify(null_mut(), 99) } == INVALID,
+        unsafe { notify(null_mut(), 99) } == RSF_ERROR_INVALID_ARGUMENT,
         "unknown notify reason",
     );
     checks.check(
         unsafe {
-            notify(null_mut(), RSF_OVERLAY_NOTIFY_RESIZE) == OK
-                && notify(null_mut(), RSF_OVERLAY_NOTIFY_DEVICE_RESET) == OK
+            notify(null_mut(), RSF_OVERLAY_NOTIFY_RESIZE) == RSF_OK
+                && notify(null_mut(), RSF_OVERLAY_NOTIFY_DEVICE_RESET) == RSF_OK
         },
         "resize and reset notifications",
     );
     checks.check(
-        unsafe { set_visible(1) } == NOT_READY,
+        unsafe { set_visible(1) } == RSF_ERROR_NOT_READY,
         "configured but not started",
     );
     let mut diagnostics = rsf_overlay_diagnostics {
@@ -637,12 +645,12 @@ extern "C" fn rsf_test_overlay_contract(
         ..Default::default()
     };
     checks.check(
-        unsafe { diagnostics_get(&mut diagnostics) } == OK
+        unsafe { diagnostics_get(&mut diagnostics) } == RSF_OK
             && diagnostics.started == 0
             && diagnostics.presents == 0
             && diagnostics.apply_attempts == 12
             && diagnostics.apply_refused == 9
-            && diagnostics.last_apply_result == NOT_READY,
+            && diagnostics.last_apply_result == RSF_ERROR_NOT_READY,
         "diagnostics count short, reentrant and failed writes",
     );
     if checks.failures != 0 || callback.checks.failures != 0 {

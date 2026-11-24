@@ -3,6 +3,7 @@ use crate::sys::{
     RSF_FG_BACKEND_ALL as ALL, RSF_FG_BACKEND_AUTO as AUTO, RSF_FG_BACKEND_DLSS as DLSS,
     RSF_FG_BACKEND_FSR3 as FSR3, RSF_FG_BACKEND_XESS as XESS, rsf_fg_choice,
 };
+use rsf_game_sys::backend_result::{FEATURE_FAILED, NOT_SUPPORTED, OK};
 use std::ptr::null;
 use windows_sys::Win32::Storage::FileSystem::{DeleteFileW, GetTempFileNameW, GetTempPathW};
 use windows_sys::Win32::System::WindowsProgramming::WritePrivateProfileStringW;
@@ -17,9 +18,6 @@ unsafe extern "C" {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_test_fg_choice(default_backend: unsafe extern "C" fn(u32, u32) -> u32) -> i32 {
-    const OK: i32 = 0;
-    const NOT_SUPPORTED: i32 = -7;
-    const FEATURE_FAILED: i32 = -9;
     let mut directory = [0_u16; 260];
     let mut path = [0_u16; 260];
     unsafe {

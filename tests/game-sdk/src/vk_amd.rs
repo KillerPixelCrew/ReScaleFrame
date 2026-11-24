@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use ash::vk::{self, Handle as _};
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED, OK};
 use std::ffi::CStr;
 use std::sync::atomic::AtomicU64;
 use std::time::Instant;
@@ -203,12 +204,18 @@ pub(super) fn run() -> i32 {
     };
     // The fixture owns every packet and Vulkan node for the synchronous calls.
     unsafe {
-        assert_eq!(rsf_latencyvk_require_device(null(), &mut required), INVALID);
+        assert_eq!(
+            rsf_latencyvk_require_device(null(), &mut required),
+            INVALID_ARGUMENT
+        );
         let short = rsf_latencyvk_device_query {
             struct_size: query.struct_size - 1,
             ..query
         };
-        assert_eq!(rsf_latencyvk_require_device(&short, &mut required), INVALID);
+        assert_eq!(
+            rsf_latencyvk_require_device(&short, &mut required),
+            INVALID_ARGUMENT
+        );
         let wrong = rsf_latencyvk_device_query {
             abi_version: 99,
             ..query
@@ -250,7 +257,10 @@ pub(super) fn run() -> i32 {
         let cyclic_ptr = (&raw mut cyclic).cast();
         cyclic.p_next = cyclic_ptr;
         query.features = cyclic_ptr;
-        assert_eq!(rsf_latencyvk_require_device(&query, &mut required), INVALID);
+        assert_eq!(
+            rsf_latencyvk_require_device(&query, &mut required),
+            INVALID_ARGUMENT
+        );
         assert_eq!(
             (required.extension_count, required.features, cyclic.p_next),
             (0, cyclic_ptr, cyclic_ptr)
@@ -276,7 +286,7 @@ pub(super) fn run() -> i32 {
             struct_size: 4,
             ..created
         };
-        assert_eq!(rsf_latencyvk_device_created(&short), INVALID);
+        assert_eq!(rsf_latencyvk_device_created(&short), INVALID_ARGUMENT);
         VENDOR.store(0x8086, Relaxed);
         assert_eq!(rsf_latencyvk_device_created(&created), NOT_SUPPORTED);
         VENDOR.store(AMD, Relaxed);

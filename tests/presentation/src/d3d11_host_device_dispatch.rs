@@ -11,7 +11,6 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_INVALID_CALL, DXGI_PRESENT_PARAMETERS, DXGI_PRESENT_TEST,
 };
 
-const OK: i32 = 0;
 const INVALID_CALL: i32 = DXGI_ERROR_INVALID_CALL.0;
 
 fn chain_request(receiver: Raw, method: u32) -> rsf_d3d11_chain_dispatch {
@@ -45,7 +44,7 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_check_unadmitted(
     held_references: u32,
 ) -> i32 {
     let mut call = chain_request(inner, RSF_D3D11_DISPATCH_RELEASE);
-    if unsafe { rsf_d3d11_host_dispatch_chain(user, &mut call) } != OK
+    if unsafe { rsf_d3d11_host_dispatch_chain(user, &mut call) } != RSF_OK
         || call.handled == 0
         || held_references.checked_sub(1) != Some(unsafe { call.result.references })
     {
@@ -54,7 +53,7 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_check_unadmitted(
     for method in RSF_D3D11_DISPATCH_PRESENT..=RSF_D3D11_DISPATCH_RESIZE_BUFFERS1 {
         call.method = method;
         call.handled = 0;
-        if unsafe { rsf_d3d11_host_dispatch_chain(user, &mut call) } != OK
+        if unsafe { rsf_d3d11_host_dispatch_chain(user, &mut call) } != RSF_OK
             || call.handled == 0
             || unsafe { call.result.hresult } != INVALID_CALL
         {
@@ -62,14 +61,14 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_check_unadmitted(
         }
     }
     let mut present = present_request(inner);
-    if unsafe { rsf_d3d11_host_dispatch_present(user, &mut present) } != OK
+    if unsafe { rsf_d3d11_host_dispatch_present(user, &mut present) } != RSF_OK
         || present.handled == 0
         || present.native_result != INVALID_CALL
     {
         return fail("unadmitted facade remains handled with failure");
     }
     present.flags = DXGI_PRESENT_TEST.0;
-    if unsafe { rsf_d3d11_host_dispatch_present(user, &mut present) } != OK
+    if unsafe { rsf_d3d11_host_dispatch_present(user, &mut present) } != RSF_OK
         || present.handled == 0
         || present.native_result != INVALID_CALL
     {
@@ -87,7 +86,7 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_check_outer(
     let mut alias = present_request(outer);
     alias.handled = 1;
     alias.native_result = 123;
-    if unsafe { rsf_d3d11_host_dispatch_present(user, &mut alias) } != OK
+    if unsafe { rsf_d3d11_host_dispatch_present(user, &mut alias) } != RSF_OK
         || alias.handled != 0
         || alias.native_result != 123
     {
@@ -95,7 +94,7 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_check_outer(
     }
     alias.receiver = dangling_mut();
     alias.handled = 1;
-    if unsafe { rsf_d3d11_host_dispatch_present(user, &mut alias) } != OK
+    if unsafe { rsf_d3d11_host_dispatch_present(user, &mut alias) } != RSF_OK
         || alias.handled != 0
         || alias.native_result != 123
     {
@@ -107,7 +106,7 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_check_outer(
     for method in RSF_D3D11_DISPATCH_RELEASE..=RSF_D3D11_DISPATCH_RESIZE_BUFFERS1 {
         call.method = method;
         call.result.references = 123;
-        if unsafe { rsf_d3d11_host_dispatch_chain(user, &mut call) } != OK
+        if unsafe { rsf_d3d11_host_dispatch_chain(user, &mut call) } != RSF_OK
             || call.handled != 0
             || unsafe { call.result.references } != 123
             || unsafe { references.read() } != original_references
@@ -132,7 +131,7 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_check_inner(user: Raw, inner: Raw) -
     };
     let native_status = |call: &mut rsf_d3d11_chain_dispatch| {
         let status = unsafe { rsf_d3d11_host_dispatch_chain(user, call) };
-        (status == OK && call.handled != 0).then_some(unsafe { call.result.hresult })
+        (status == RSF_OK && call.handled != 0).then_some(unsafe { call.result.hresult })
     };
     if native_status(&mut call) != Some(INVALID_CALL) {
         return fail("Present1 preserves dirty-region refusal");

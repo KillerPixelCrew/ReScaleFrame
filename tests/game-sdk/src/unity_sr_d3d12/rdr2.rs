@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{HEIGHT, Result, WIDTH, check, enabled, gpu::*};
-use crate::{BUSY, sys::*};
+use crate::sys::*;
+use rsf_game_sys::RSF_ERROR_BUSY;
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
     RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_LATENCY_SLEEP, RSF_GAME_RENDER_FINAL_SCENE,
@@ -97,7 +98,7 @@ pub(super) fn fill_slots(
     }
     pass.native_frame = 4;
     check(
-        unsafe { upscale(host.user, gpu.list.as_raw(), pass) } == BUSY,
+        unsafe { upscale(host.user, gpu.list.as_raw(), pass) } == RSF_ERROR_BUSY,
         "fourth unsubmitted recording did not return BUSY",
     )?;
     eprintln!(

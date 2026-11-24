@@ -5,6 +5,7 @@ use crate::sys::{
     RSF_FULLSCREEN_PASS_ABI_VERSION as ABI, rsf_fullscreen_draw as Draw,
     rsf_fullscreen_setup as Setup,
 };
+use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT};
 use windows::Win32::Foundation::RECT;
 use windows::core::Interface;
 
@@ -21,8 +22,6 @@ unsafe extern "C" {
     fn rsf_fullscreen_pass_destroy(pass: Handle);
 }
 
-const INVALID: i32 = -1;
-const ABI_MISMATCH: i32 = -2;
 const SHADER_FAILED: i32 = -3;
 const COPY: u32 = 0;
 const PREMULTIPLIED: u32 = 2;
@@ -260,7 +259,10 @@ fn run(gpu: &Device, pass: &Pass) -> TestResult {
     ] {
         let status =
             unsafe { rsf_fullscreen_pass_draw(pass, ctx.as_raw(), target, source, &params) };
-        check(status == INVALID, "invalid fullscreen argument refused")?;
+        check(
+            status == INVALID_ARGUMENT,
+            "invalid fullscreen argument refused",
+        )?;
     }
     Ok(())
 }

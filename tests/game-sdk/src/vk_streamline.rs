@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use rsf_game_sys::backend_result::{FEATURE_FAILED, INVALID_ARGUMENT, OK};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicI32, AtomicUsize};
 use windows_sys::Win32::{
@@ -117,7 +118,7 @@ pub(super) fn xell_sleep(context: *mut rsf_fgvk) -> i32 {
     if verify(XELL_SLEEP.pause()) {
         OK
     } else {
-        INVALID
+        INVALID_ARGUMENT
     }
 }
 pub(super) fn xell_marker(frame: u64, kind: u32) -> i32 {
@@ -159,7 +160,7 @@ extern "C" fn sdk_shutdown_checked() -> i32 {
     if SHUTDOWN_ALLOWED.load(Relaxed) {
         OK
     } else {
-        INVALID
+        INVALID_ARGUMENT
     }
 }
 extern "C" fn sdk_module() -> *mut c_void {
@@ -191,7 +192,7 @@ extern "C" fn sdk_set_reflex_interval(mode: i32, interval: u32) -> i32 {
         (mode == 1 && interval == 12345)
             || (XELL_MODE.load(Relaxed) == 1 && mode == 0 && interval == 0),
     ) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     OPTIONS.fetch_add(1, Relaxed);
     OK
@@ -218,7 +219,7 @@ extern "C" fn sdk_token_matches(token: usize, index: u32) -> i32 {
 extern "C" fn sdk_reflex_sleep() -> i32 {
     check_registration();
     if !verify(REFLEX_SLEEP.pause()) {
-        return INVALID;
+        return INVALID_ARGUMENT;
     }
     SLEPT.fetch_add(1, Relaxed);
     OK
@@ -227,7 +228,7 @@ extern "C" fn sdk_marker_for_token(token: usize, kind: u32) -> i32 {
     check_registration();
     let Some(frame) = token_index(token) else {
         verify(false);
-        return INVALID;
+        return INVALID_ARGUMENT;
     };
     MARKERS.lock().unwrap().push(Marker { frame, kind });
     OK

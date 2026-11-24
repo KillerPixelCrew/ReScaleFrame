@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::{Checks, Ini, OK, Query};
+use super::{Checks, Ini, Query};
 use rsf_game_sys::*;
+use rsf_game_sys::{RSF_ERROR_NOT_READY, RSF_OK};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::{thread, time::Duration};
 
@@ -13,7 +14,6 @@ use native::{Graphics, StartError};
 
 type Handle = *mut c_void;
 const SR_NOTE: &CStr = c"FSR4 building shaders (3s); DLSS keeps running";
-const NOT_READY: i32 = -3;
 
 struct Adapter {
     window: Handle,
@@ -91,12 +91,12 @@ fn capture_header() -> rsf_overlay_capture {
 fn test_foreign(api: &rsf_overlay_api, checks: &mut Checks, chain: Handle) {
     let mut drawn = 7;
     checks.check(
-        unsafe { api.present.unwrap()(chain, &mut drawn) } == NOT_READY && drawn == 0,
+        unsafe { api.present.unwrap()(chain, &mut drawn) } == RSF_ERROR_NOT_READY && drawn == 0,
         "window filter refuses another chain",
     );
     let mut occurrence = capture_header();
     checks.check(
-        unsafe { api.capture.unwrap()(&mut occurrence) } == OK && occurrence.started == 0,
+        unsafe { api.capture.unwrap()(&mut occurrence) } == RSF_OK && occurrence.started == 0,
         "refused chain did not start the panel",
     );
 }
@@ -110,7 +110,7 @@ impl Device<'_> {
     fn frame(&self) -> Option<u32> {
         let mut drawn = 2;
         self.gpu.clear().ok()?;
-        (unsafe { self.api.present.unwrap()(self.gpu.chain.as_raw(), &mut drawn) } == OK
+        (unsafe { self.api.present.unwrap()(self.gpu.chain.as_raw(), &mut drawn) } == RSF_OK
             && self.gpu.submit())
         .then_some(drawn)
     }
@@ -131,7 +131,8 @@ impl Device<'_> {
     fn visible(&self, visible: u32) -> bool {
         thread::sleep(Duration::from_millis(300));
         unsafe {
-            self.api.set_visible.unwrap()(visible) == OK && self.api.visible.unwrap()() == visible
+            self.api.set_visible.unwrap()(visible) == RSF_OK
+                && self.api.visible.unwrap()() == visible
         }
     }
 }
@@ -163,7 +164,7 @@ extern "C" fn rsf_test_overlay_device(query: Query) -> i32 {
         abi_version: RSF_OVERLAY_API_VERSION,
         ..Default::default()
     };
-    if unsafe { query(&mut api) } != OK {
+    if unsafe { query(&mut api) } != RSF_OK {
         checks.check(false, "query");
         return 1;
     }
@@ -219,7 +220,10 @@ extern "C" fn rsf_test_overlay_device(query: Query) -> i32 {
         option_label: Some(option_label),
         ..Default::default()
     };
-    checks.check(unsafe { api.configure.unwrap()(&setup) } == OK, "configure");
+    checks.check(
+        unsafe { api.configure.unwrap()(&setup) } == RSF_OK,
+        "configure",
+    );
     let foreign = device
         .gpu
         .with_foreign_chain(|foreign| test_foreign(&api, &mut checks, foreign.as_raw()));
@@ -229,7 +233,7 @@ extern "C" fn rsf_test_overlay_device(query: Query) -> i32 {
     let get_capture = api.capture.unwrap();
     let mut capture = capture_header();
     checks.check(
-        unsafe { get_capture(&mut capture) } == OK
+        unsafe { get_capture(&mut capture) } == RSF_OK
             && capture.started != 0
             && capture.visible == 0
             && capture.captured == 0,
@@ -237,7 +241,7 @@ extern "C" fn rsf_test_overlay_device(query: Query) -> i32 {
     );
     checks.check(device.visible(1), "open panel");
     checks.check(
-        unsafe { get_capture(&mut capture) } == OK
+        unsafe { get_capture(&mut capture) } == RSF_OK
             && capture.visible != 0
             && capture.captured == (RSF_OVERLAY_CAPTURE_MOUSE | RSF_OVERLAY_CAPTURE_KEYBOARD),
         "open panel captures mouse and keyboard",
@@ -263,7 +267,7 @@ extern "C" fn rsf_test_overlay_device(query: Query) -> i32 {
         ..Default::default()
     };
     checks.check(
-        unsafe { get_status(&mut status) } == OK,
+        unsafe { get_status(&mut status) } == RSF_OK,
         "status while open",
     );
     checks.check(
@@ -297,7 +301,7 @@ extern "C" fn rsf_test_overlay_device(query: Query) -> i32 {
 
     checks.check(device.visible(0), "close panel");
     checks.check(
-        unsafe { get_capture(&mut capture) } == OK
+        unsafe { get_capture(&mut capture) } == RSF_OK
             && capture.started != 0
             && capture.visible == 0
             && capture.captured == 0,
@@ -312,25 +316,25 @@ extern "C" fn rsf_test_overlay_device(query: Query) -> i32 {
 
     let notify = api.notify.unwrap();
     checks.check(
-        unsafe { notify(chain, RSF_OVERLAY_NOTIFY_RESIZE) } == OK,
+        unsafe { notify(chain, RSF_OVERLAY_NOTIFY_RESIZE) } == RSF_OK,
         "resize notification",
     );
     checks.check(device.gpu.resize(800, 450), "ResizeBuffers");
     checks.check(device.visible(1), "reopen after resize");
     device.frames(3, Some(1), &mut checks, "open panel draws after resize");
     checks.check(
-        unsafe { get_status(&mut status) } == OK
+        unsafe { get_status(&mut status) } == RSF_OK
             && status.output_width == 800
             && status.output_height == 450,
         "status follows resized chain",
     );
 
     checks.check(
-        unsafe { notify(chain, RSF_OVERLAY_NOTIFY_DEVICE_RESET) } == OK,
+        unsafe { notify(chain, RSF_OVERLAY_NOTIFY_DEVICE_RESET) } == RSF_OK,
         "device reset notification",
     );
     checks.check(
-        unsafe { get_capture(&mut capture) } == OK
+        unsafe { get_capture(&mut capture) } == RSF_OK
             && capture.started == 0
             && capture.captured == 0
             && unsafe { api.visible.unwrap()() } == 0,
@@ -338,14 +342,14 @@ extern "C" fn rsf_test_overlay_device(query: Query) -> i32 {
     );
     device.frames(2, None, &mut checks, "frame after reset");
     checks.check(
-        unsafe { get_capture(&mut capture) } == OK && capture.started != 0,
+        unsafe { get_capture(&mut capture) } == RSF_OK && capture.started != 0,
         "panel restarted on next Present",
     );
     checks.check(device.visible(1), "open after restart");
     device.frames(3, Some(1), &mut checks, "restarted panel draws");
     checks.check(device.visible(0), "close after restart");
     checks.check(
-        unsafe { notify(chain, RSF_OVERLAY_NOTIFY_DEVICE_RESET) } == OK,
+        unsafe { notify(chain, RSF_OVERLAY_NOTIFY_DEVICE_RESET) } == RSF_OK,
         "final release",
     );
     if checks.failures != 0 {

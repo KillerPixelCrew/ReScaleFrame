@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::device::{self, HEIGHT, SKIP, WIDTH, Window};
-use crate::session::{
-    FEATURE_FAILED, INIT_FAILED, NOT_READY, OK, Raw, rsf_fg_session_create, rsf_fg_session_destroy,
-    rsf_fg_session_select,
-};
+use crate::session::{Raw, rsf_fg_session_create, rsf_fg_session_destroy, rsf_fg_session_select};
 use crate::sys::*;
+use rsf_game_sys::backend_result::{FEATURE_FAILED, INIT_FAILED, NOT_READY, OK};
 use std::ffi::{c_char, c_int};
 use std::ptr::{from_mut, null, null_mut};
 use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW;

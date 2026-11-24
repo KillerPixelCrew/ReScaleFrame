@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::rsf_fg_retirement;
+use rsf_game_sys::backend_result::{INVALID_ARGUMENT, NOT_READY, OK};
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of};
@@ -12,9 +13,6 @@ use windows::core::{GUID, HRESULT, IUnknown_Vtbl, Interface};
 
 type Raw = *mut c_void;
 
-const OK: i32 = 0;
-const INVALID: i32 = -1;
-const NOT_READY: i32 = -8;
 const DEVICE_FAILED: i32 = -9;
 const STALE: i32 = -10;
 
@@ -213,7 +211,7 @@ fn check_fence_failure(queue_removed: bool) {
     let mut pending = 0;
     unsafe {
         check!(rsf_fg_leases_create(2, &mut lease) == OK);
-        check!(rsf_fg_leases_acquire(lease, 2, 1, resources.as_ptr(), 2) == INVALID);
+        check!(rsf_fg_leases_acquire(lease, 2, 1, resources.as_ptr(), 2) == INVALID_ARGUMENT);
         check!(
             resource.refs.get() == 1
                 && other.refs.get() == 1
@@ -221,14 +219,16 @@ fn check_fence_failure(queue_removed: bool) {
                 && foreign.refs.get() == 1
         );
         other.device.set(null_mut());
-        check!(rsf_fg_leases_acquire(lease, 2, 1, resources.as_ptr(), 2) == INVALID);
+        check!(rsf_fg_leases_acquire(lease, 2, 1, resources.as_ptr(), 2) == INVALID_ARGUMENT);
         check!(resource.refs.get() == 1 && other.refs.get() == 1 && device.refs.get() == 1);
         resources[1] = resource.raw();
         check!(rsf_fg_leases_acquire(lease, 2, 1, resources.as_ptr(), 2) == OK);
-        check!(rsf_fg_leases_submit(lease, 2, foreign_fence.raw(), 1) == INVALID);
+        check!(rsf_fg_leases_submit(lease, 2, foreign_fence.raw(), 1) == INVALID_ARGUMENT);
         check!(rsf_fg_leases_seal(lease, 2, &retirement(foreign_fence.raw(), 1)) == NOT_READY);
         check!(rsf_fg_leases_submit(lease, 2, queue.raw(), 1) == OK);
-        check!(rsf_fg_leases_seal(lease, 2, &retirement(foreign_fence.raw(), 1)) == INVALID);
+        check!(
+            rsf_fg_leases_seal(lease, 2, &retirement(foreign_fence.raw(), 1)) == INVALID_ARGUMENT
+        );
         check!(foreign_fence.refs.get() == 1 && device.refs.get() == 1 && foreign.refs.get() == 1);
         check!(rsf_fg_leases_seal(lease, 2, &retirement(vendor.raw(), 1)) == OK);
         check!(rsf_fg_leases_acquire(lease, 3, 1, resources.as_ptr(), 1) == OK);

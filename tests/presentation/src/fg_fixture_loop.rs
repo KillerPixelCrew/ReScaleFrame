@@ -7,6 +7,7 @@ use crate::fg_fixture_focus::*;
 use crate::present_fixture_time;
 use crate::sys::rsf_fg_fixture_submission;
 use crate::sys::*;
+use rsf_game_sys::backend_result::NOT_SUPPORTED;
 use std::ffi::CStr;
 use std::ptr::null_mut;
 use std::sync::{
@@ -22,7 +23,6 @@ use windows::Win32::System::Threading::WaitForSingleObject;
 use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW};
 use windows::core::Interface;
 
-const NOT_SUPPORTED: i32 = -7;
 const RSF_LATENCY_SIMULATION_START: u32 = 0;
 const RSF_LATENCY_SIMULATION_END: u32 = 1;
 const RSF_LATENCY_RENDER_SUBMIT_START: u32 = 2;
