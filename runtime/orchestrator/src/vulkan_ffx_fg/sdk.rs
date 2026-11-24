@@ -12,9 +12,7 @@
 // replacement table change after publication, so they are UnsafeCell fields
 // and every later step takes a shared reference.
 use super::startup::{self, CoreEntries, Platform, WsiEntries};
-use super::{
-    BGRA8, FEATURE_FAILED, Frame, Handle, INIT_FAILED, Image, OK, Ops, RGBA8, Record, Setup,
-};
+use super::{BGRA8, FEATURE_FAILED, Frame, Handle, INIT_FAILED, Image, OK, RGBA8, Record, Setup};
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_create, rsf_core_capture_vk_destroy,
     rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize, rsf_core_capture_vk_provider,
@@ -25,7 +23,7 @@ use crate::sys::{rsf_vk_function, rsf_vk_get_proc};
 use crate::vulkan_fg_copy::ImageCopy;
 use crate::vulkan_fg_copy::{Barrier, rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy};
 use crate::vulkan_fg_resources::device::{
-    DEVICE_PLATFORM, Device, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory,
+    Device, rsf_core_vkfg_device_destroy, rsf_core_vkfg_device_memory,
     rsf_core_vkfg_device_wait_timing, rsf_core_vkfg_load_device,
 };
 use crate::vulkan_fg_wsi::{
@@ -587,7 +585,7 @@ unsafe extern "C" fn allocate(
     .cast()
 }
 
-unsafe extern "C" fn close(native: Handle) {
+pub(super) unsafe extern "C" fn close(native: Handle) {
     if !native.is_null() {
         drop(unsafe { Box::from_raw(native.cast::<Native>()) });
     }
@@ -709,7 +707,7 @@ unsafe extern "C" fn bind_wsi(native: Handle, entries: &WsiEntries) {
     leaf.native_destroy = typed!(destroy, Option<vk::PFN_vkDestroySwapchainKHR>);
 }
 
-unsafe extern "C" fn open(
+pub(super) unsafe extern "C" fn open(
     setup: *const Setup,
     host: &'static Host,
     module: Handle,
@@ -744,7 +742,7 @@ unsafe extern "C" fn open(
     }
 }
 
-unsafe extern "C" fn set_wsi(native: Handle, enabled: u32) -> i32 {
+pub(super) unsafe extern "C" fn set_wsi(native: Handle, enabled: u32) -> i32 {
     let leaf = unsafe { leaf(native) };
     let on = enabled != 0;
     let dispatch = WsiDispatch {
@@ -760,7 +758,7 @@ unsafe extern "C" fn set_wsi(native: Handle, enabled: u32) -> i32 {
     unsafe { bound!(leaf.wsi_dispatch)(&dispatch) }
 }
 
-unsafe extern "C" fn create_swapchain(
+pub(super) unsafe extern "C" fn create_swapchain(
     native: Handle,
     chain: *mut u64,
     has_context: *mut u32,
@@ -799,7 +797,7 @@ unsafe extern "C" fn create_swapchain(
     result(created, INIT_FAILED)
 }
 
-unsafe extern "C" fn query_swapchain(native: Handle) -> i32 {
+pub(super) unsafe extern "C" fn query_swapchain(native: Handle) -> i32 {
     let leaf = unsafe { leaf(native) };
     let functions = leaf.functions.get();
     let queried = unsafe {
@@ -821,7 +819,7 @@ unsafe extern "C" fn query_swapchain(native: Handle) -> i32 {
     OK
 }
 
-unsafe extern "C" fn create_effect(native: Handle, has_context: *mut u32) -> i32 {
+pub(super) unsafe extern "C" fn create_effect(native: Handle, has_context: *mut u32) -> i32 {
     let leaf = unsafe { leaf(native) };
     let graphics = &leaf.setup.graphics;
     let info = unsafe {
@@ -870,7 +868,7 @@ unsafe extern "C" fn create_effect(native: Handle, has_context: *mut u32) -> i32
     result(created, INIT_FAILED)
 }
 
-unsafe extern "C" fn query_provider(native: Handle) -> i32 {
+pub(super) unsafe extern "C" fn query_provider(native: Handle) -> i32 {
     let leaf = unsafe { leaf(native) };
     let mut provider = ffxQueryGetProviderVersion {
         header: header(
@@ -898,12 +896,12 @@ unsafe fn destroy_context(leaf: &Native, context: *mut ffxContext) -> i32 {
     OK
 }
 
-unsafe extern "C" fn destroy_effect(native: Handle) -> i32 {
+pub(super) unsafe extern "C" fn destroy_effect(native: Handle) -> i32 {
     let leaf = unsafe { leaf(native) };
     unsafe { destroy_context(leaf, leaf.effect.get()) }
 }
 
-unsafe extern "C" fn destroy_chain(native: Handle) {
+pub(super) unsafe extern "C" fn destroy_chain(native: Handle) {
     let leaf = unsafe { leaf(native) };
     let chain = leaf.chain();
     if !chain.is_null()
@@ -921,18 +919,18 @@ unsafe extern "C" fn destroy_chain(native: Handle) {
     unsafe { leaf.chain.get().write(ptr::null_mut()) };
 }
 
-unsafe extern "C" fn destroy_swapchain(native: Handle) -> i32 {
+pub(super) unsafe extern "C" fn destroy_swapchain(native: Handle) -> i32 {
     let leaf = unsafe { leaf(native) };
     unsafe { destroy_context(leaf, leaf.swapchain.get()) }
 }
 
-unsafe extern "C" fn images(native: Handle, count: *mut u32, output: *mut u64) -> i32 {
+pub(super) unsafe extern "C" fn images(native: Handle, count: *mut u32, output: *mut u64) -> i32 {
     let leaf = unsafe { leaf(native) };
     let images = bound!(leaf.functions().pOutGetSwapchainImagesKHR);
     unsafe { images(leaf.sdk_device(), leaf.chain(), count, output.cast()) }
 }
 
-unsafe extern "C" fn acquire(
+pub(super) unsafe extern "C" fn acquire(
     native: Handle,
     timeout: u64,
     semaphore: u64,
@@ -957,7 +955,11 @@ unsafe extern "C" fn acquire(
     result
 }
 
-unsafe extern "C" fn prepare(native: Handle, commands: Handle, frame: *const Frame) -> i32 {
+pub(super) unsafe extern "C" fn prepare(
+    native: Handle,
+    commands: Handle,
+    frame: *const Frame,
+) -> i32 {
     let leaf = unsafe { leaf(native) };
     // The owner admitted this frame and its record for the call.
     let frame = unsafe { &*frame };
@@ -1011,17 +1013,17 @@ fn command_buffer(commands: Handle) -> vk::CommandBuffer {
     vk::CommandBuffer::from_raw(commands as usize as u64)
 }
 
-unsafe extern "C" fn barrier(native: Handle, commands: Handle, plan: *const Barrier) {
+pub(super) unsafe extern "C" fn barrier(native: Handle, commands: Handle, plan: *const Barrier) {
     let leaf = unsafe { leaf(native) };
     unsafe { rsf_core_vkfg_record_barrier(bound!(leaf.barrier), command_buffer(commands), &*plan) };
 }
 
-unsafe extern "C" fn copy(native: Handle, commands: Handle, plan: *const ImageCopy) {
+pub(super) unsafe extern "C" fn copy(native: Handle, commands: Handle, plan: *const ImageCopy) {
     let leaf = unsafe { leaf(native) };
     unsafe { rsf_core_vkfg_record_copy(bound!(leaf.copy), command_buffer(commands), &*plan) };
 }
 
-unsafe extern "C" fn configure(
+pub(super) unsafe extern "C" fn configure(
     native: Handle,
     enabled: u32,
     color: u64,
@@ -1073,7 +1075,7 @@ unsafe extern "C" fn configure(
     result(configured, FEATURE_FAILED)
 }
 
-unsafe extern "C" fn present(
+pub(super) unsafe extern "C" fn present(
     native: Handle,
     info: *const c_void,
     frame: u64,
@@ -1103,17 +1105,17 @@ unsafe extern "C" fn wait_for_presents(native: *mut c_void) -> i32 {
     unsafe { bound!(leaf.sdk.dispatch)(leaf.swapchain.get(), &mut wait.header) as i32 }
 }
 
-unsafe extern "C" fn drain(native: Handle) -> i32 {
+pub(super) unsafe extern "C" fn drain(native: Handle) -> i32 {
     let leaf = unsafe { leaf(native) };
     unsafe { rsf_core_vkfg_drain(&leaf.setup, wait_for_presents, native, bound!(leaf.idle)) }
 }
 
-unsafe extern "C" fn capture_wants(native: Handle, frame: u64) -> u32 {
+pub(super) unsafe extern "C" fn capture_wants(native: Handle, frame: u64) -> u32 {
     let leaf = unsafe { leaf(native) };
     u32::from(unsafe { rsf_core_capture_vk_wants(leaf.capture, frame) } != 0)
 }
 
-unsafe extern "C" fn capture_record(
+pub(super) unsafe extern "C" fn capture_record(
     native: Handle,
     commands: Handle,
     image: *const Image,
@@ -1137,12 +1139,12 @@ unsafe extern "C" fn capture_record(
     };
 }
 
-unsafe extern "C" fn capture_flush(native: Handle) {
+pub(super) unsafe extern "C" fn capture_flush(native: Handle) {
     let leaf = unsafe { leaf(native) };
     unsafe { rsf_core_capture_vk_flush(leaf.capture, 0, ptr::null_mut()) };
 }
 
-unsafe extern "C" fn fence_timing(native: Handle, frame: u64) {
+pub(super) unsafe extern "C" fn fence_timing(native: Handle, frame: u64) {
     let leaf = unsafe { leaf(native) };
     let stage = if frame == 0 {
         ptr::null()
@@ -1154,30 +1156,20 @@ unsafe extern "C" fn fence_timing(native: Handle, frame: u64) {
     unsafe { rsf_core_vkfg_device_wait_timing(&mut *leaf.gpu, stage, frame) };
 }
 
-pub(super) static OPS: Ops = Ops {
-    open,
-    close,
-    set_wsi,
-    create_swapchain,
-    query_swapchain,
-    create_effect,
-    query_provider,
-    destroy_effect,
-    destroy_chain,
-    destroy_swapchain,
-    images,
-    acquire,
-    prepare,
-    barrier,
-    copy,
-    configure,
-    present,
-    drain,
-    capture_wants,
-    capture_record,
-    capture_flush,
-    fence_timing,
-    timing_begin: rsf_core_vk_timing_begin,
-    timing_end: rsf_core_vk_timing_end,
-    resources: &DEVICE_PLATFORM,
-};
+/// The SDK leaf's steps the owner calls. Unit tests call fakes instead, so these are unused there.
+#[cfg_attr(test, allow(unused_imports, dead_code))]
+pub(super) mod leaf {
+    pub(in crate::vulkan_ffx_fg) use super::{
+        acquire, barrier, capture_flush, capture_record, capture_wants, close, configure, copy,
+        create_effect, create_swapchain, destroy_chain, destroy_effect, destroy_swapchain, drain,
+        fence_timing, images, open, prepare, present, query_provider, query_swapchain, set_wsi,
+    };
+    use crate::vulkan_fg_resources::{Platform as Resources, device::DEVICE_PLATFORM};
+    pub(in crate::vulkan_ffx_fg) use crate::vulkan_timing::{
+        rsf_core_vk_timing_begin as timing_begin, rsf_core_vk_timing_end as timing_end,
+    };
+
+    pub(in crate::vulkan_ffx_fg) fn resources() -> &'static Resources {
+        &DEVICE_PLATFORM
+    }
+}

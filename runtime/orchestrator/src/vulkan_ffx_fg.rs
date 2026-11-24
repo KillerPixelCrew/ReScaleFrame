@@ -20,14 +20,13 @@ use crate::sys::{
     rsf_fgvk_status as Status,
 };
 use crate::sys::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as Image};
-use crate::vulkan_fg_copy::{BarrierFn, CopyFn, SHADER_READ, record_shader_read_copy};
+use crate::vulkan_fg_copy::{SHADER_READ, record_shader_read_copy};
 use crate::vulkan_fg_frames::FRAME_SLOTS as RSF_FGVK_FRAME_SLOTS;
 use crate::vulkan_fg_frames::FrameSlot as Recording;
 use crate::vulkan_fg_frames::Timeline as RecordingTimeline;
 use crate::vulkan_fg_frames::*;
 use crate::vulkan_fg_resources::Fences;
 use crate::vulkan_fg_resources::Image as PrivateImage;
-use crate::vulkan_fg_resources::Platform as Resources;
 use crate::vulkan_fg_resources::{
     rsf_core_vkfg_ensure_image, rsf_core_vkfg_fence_submission, rsf_core_vkfg_prepare_fences,
     rsf_core_vkfg_release_fences, rsf_core_vkfg_release_image,
@@ -37,7 +36,7 @@ use rsf_game_sys::rsf_frame_record as Record;
 #[cfg(test)]
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION};
 use sdk::Host;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -94,46 +93,12 @@ impl Swapchain {
     }
 }
 
-/// Steps of the SDK leaf. sdk::OPS is the production table; the unit tests
-/// below substitute fakes. Status-returning steps report rsf_backend_result and
-/// WSI steps return the VkResult unchanged.
-struct Ops {
-    open: unsafe extern "C" fn(
-        *const Setup,
-        &'static Host,
-        Handle,
-        u32,
-        u32,
-        *mut Handle,
-        *mut Handle,
-    ) -> i32,
-    close: unsafe extern "C" fn(Handle),
-    set_wsi: unsafe extern "C" fn(Handle, u32) -> i32,
-    create_swapchain: unsafe extern "C" fn(Handle, *mut u64, *mut u32) -> i32,
-    query_swapchain: unsafe extern "C" fn(Handle) -> i32,
-    create_effect: unsafe extern "C" fn(Handle, *mut u32) -> i32,
-    query_provider: unsafe extern "C" fn(Handle) -> i32,
-    destroy_effect: unsafe extern "C" fn(Handle) -> i32,
-    destroy_chain: unsafe extern "C" fn(Handle),
-    destroy_swapchain: unsafe extern "C" fn(Handle) -> i32,
-    images: unsafe extern "C" fn(Handle, *mut u32, *mut u64) -> i32,
-    acquire: unsafe extern "C" fn(Handle, u64, u64, u64, *mut u32, u64) -> i32,
-    prepare: unsafe extern "C" fn(Handle, Handle, *const Frame) -> i32,
-    barrier: BarrierFn,
-    copy: CopyFn,
-    configure: unsafe extern "C" fn(Handle, u32, u64, u64, *const c_char) -> i32,
-    present: unsafe extern "C" fn(Handle, *const c_void, u64, *mut u64) -> i32,
-    drain: unsafe extern "C" fn(Handle) -> i32,
-    capture_wants: unsafe extern "C" fn(Handle, u64) -> u32,
-    capture_record:
-        unsafe extern "C" fn(Handle, Handle, *const Image, *const Record, *const c_char),
-    capture_flush: unsafe extern "C" fn(Handle),
-    fence_timing: unsafe extern "C" fn(Handle, u64),
-    timing_begin: unsafe extern "C" fn() -> i64,
-    timing_end: unsafe extern "C" fn(*const c_char, u64, i64),
-    resources: &'static Resources,
-}
-
+// The SDK leaf's steps: sdk.rs in production, the unit tests' fakes with the same names. Status-
+// returning steps report rsf_backend_result and WSI steps return the VkResult unchanged.
+#[cfg(not(test))]
+use sdk::leaf;
+#[cfg(test)]
+use tests as leaf;
 /// The process-wide WSI route. The corrected SDK keeps one WSI dispatch table
 /// whose hooks carry no user pointer, so one owner holds the route from
 /// admission until its native leaf is closed. A hook borrows the published
@@ -224,26 +189,24 @@ fn presented(result: i32) -> bool {
 /// Nested diagnostics scope. The native leaf writes nothing unless the
 /// opt-in Vulkan timing file is configured.
 struct Timing {
-    ops: &'static Ops,
     stage: &'static CStr,
     frame: u64,
     start: i64,
 }
 
 impl Timing {
-    fn new(ops: &'static Ops, stage: &'static CStr, frame: u64) -> Self {
+    fn new(stage: &'static CStr, frame: u64) -> Self {
         Self {
-            ops,
             stage,
             frame,
-            start: unsafe { (ops.timing_begin)() },
+            start: leaf::timing_begin(),
         }
     }
 }
 
 impl Drop for Timing {
     fn drop(&mut self) {
-        unsafe { (self.ops.timing_end)(self.stage.as_ptr(), self.frame, self.start) };
+        unsafe { leaf::timing_end(self.stage.as_ptr(), self.frame, self.start) };
     }
 }
 
@@ -267,7 +230,6 @@ impl Default for Slot {
 // generation callback runs inside the native present call and takes a copy
 // of the configured source from the route without borrowing this owner.
 pub(crate) struct Owner {
-    ops: &'static Ops,
     host: &'static Host,
     native: Handle,
     module: Option<SdkModule>,
@@ -291,9 +253,8 @@ pub(crate) struct Owner {
 }
 
 impl Owner {
-    fn new(ops: &'static Ops, host: &'static Host, setup: &Setup, swapchain: Swapchain) -> Self {
+    fn new(host: &'static Host, setup: &Setup, swapchain: Swapchain) -> Self {
         Self {
-            ops,
             host,
             native: ptr::null_mut(),
             module: None,
@@ -333,7 +294,6 @@ impl Owner {
     }
 
     fn initialize(&mut self, setup: &Setup) -> i32 {
-        let ops = self.ops;
         // One owner holds the WSI route before the module is loaded.
         if !route().admit(self.id(), self.device.addr()) {
             return NOT_SUPPORTED;
@@ -351,7 +311,7 @@ impl Owner {
         let library = module.as_ptr();
         self.module = Some(module);
         let opened = unsafe {
-            (ops.open)(
+            leaf::open(
                 setup,
                 self.host,
                 library,
@@ -367,7 +327,7 @@ impl Owner {
         if self.native.is_null() || self.resources.is_null() {
             return INIT_FAILED;
         }
-        if unsafe { (ops.set_wsi)(self.native, 1) } != OK {
+        if unsafe { leaf::set_wsi(self.native, 1) } != OK {
             return INIT_FAILED;
         }
         self.wsi_registered = true;
@@ -375,7 +335,7 @@ impl Owner {
         // inside swapchain-context creation and failure cleanup.
         route().publish(self.id(), self.native.expose_provenance());
         let mut context = 0;
-        let created = unsafe { (ops.create_swapchain)(self.native, &mut self.chain, &mut context) };
+        let created = unsafe { leaf::create_swapchain(self.native, &mut self.chain, &mut context) };
         self.context = context != 0;
         if created != OK {
             return created;
@@ -383,12 +343,12 @@ impl Owner {
         if !self.context || self.chain == 0 {
             return INIT_FAILED;
         }
-        let queried = unsafe { (ops.query_swapchain)(self.native) };
+        let queried = unsafe { leaf::query_swapchain(self.native) };
         if queried != OK {
             return queried;
         }
         let mut context = 0;
-        let created = unsafe { (ops.create_effect)(self.native, &mut context) };
+        let created = unsafe { leaf::create_effect(self.native, &mut context) };
         self.effect = context != 0;
         if created != OK {
             return created;
@@ -396,7 +356,7 @@ impl Owner {
         if !self.effect {
             return INIT_FAILED;
         }
-        let provider = unsafe { (ops.query_provider)(self.native) };
+        let provider = unsafe { leaf::query_provider(self.native) };
         if provider != OK {
             return provider;
         }
@@ -406,11 +366,11 @@ impl Owner {
     }
 
     fn wants(&self, frame: u64) -> bool {
-        unsafe { (self.ops.capture_wants)(self.native, frame) != 0 }
+        unsafe { leaf::capture_wants(self.native, frame) != 0 }
     }
 
     fn capture(&self, commands: Handle, image: &Image, record: &Record, role: &CStr) {
-        unsafe { (self.ops.capture_record)(self.native, commands, image, record, role.as_ptr()) };
+        unsafe { leaf::capture_record(self.native, commands, image, record, role.as_ptr()) };
     }
 
     fn valid_record<'a>(&self, frame: &'a Frame) -> Option<&'a Record> {
@@ -449,7 +409,7 @@ impl Owner {
     unsafe fn images(&self, count: *mut u32, output: *mut u64) -> i32 {
         unsafe {
             bounded_swapchain_images(count, output, |count, images| {
-                (self.ops.images)(self.native, count, images)
+                leaf::images(self.native, count, images)
             })
         }
     }
@@ -458,8 +418,7 @@ impl Owner {
         let Some(record) = self.valid_record(frame) else {
             return INVALID_ARGUMENT;
         };
-        let ops = self.ops;
-        let _timing = Timing::new(ops, c"ffx_prepare_total", record.frame_id);
+        let _timing = Timing::new(c"ffx_prepare_total", record.frame_id);
         if !self.enabled && !self.wants(record.frame_id) {
             return OK;
         }
@@ -470,14 +429,14 @@ impl Owner {
         if rsf_core_fgvk_can_prepare(&slot.state) == 0 {
             return NOT_READY;
         }
-        unsafe { (ops.fence_timing)(self.native, record.frame_id) };
+        unsafe { leaf::fence_timing(self.native, record.frame_id) };
         let fences = rsf_core_vkfg_prepare_fences(
-            ops.resources,
+            leaf::resources(),
             self.resources,
             &mut slot.state,
             &mut slot.fences,
         );
-        unsafe { (ops.fence_timing)(self.native, 0) };
+        unsafe { leaf::fence_timing(self.native, 0) };
         if fences != OK {
             return fences;
         }
@@ -486,7 +445,7 @@ impl Owner {
         // owns that recording even when it never becomes an accepted FG input.
         slot.state.recorded_prepare = 1;
         if self.enabled {
-            if unsafe { (ops.prepare)(self.native, commands, frame) } != OK {
+            if unsafe { leaf::prepare(self.native, commands, frame) } != OK {
                 return FEATURE_FAILED;
             }
             slot.state.prepared = 1;
@@ -505,7 +464,6 @@ impl Owner {
         if !self.enabled && !self.wants(record.frame_id) {
             return OK;
         }
-        let ops = self.ops;
         let (device, width, height) = (self.device, self.width, self.height);
         let input = &frame.hudless;
         let slot = &mut self.slots[slot_index(record.frame_id)];
@@ -521,7 +479,7 @@ impl Owner {
             return INVALID_ARGUMENT;
         }
         if rsf_core_vkfg_ensure_image(
-            ops.resources,
+            leaf::resources(),
             self.resources,
             &mut slot.color,
             width,
@@ -535,8 +493,8 @@ impl Owner {
         slot.state.recorded_hudless = 1;
         unsafe {
             record_shader_read_copy(
-                ops.barrier,
-                ops.copy,
+                leaf::barrier,
+                leaf::copy,
                 self.native,
                 commands,
                 input.image,
@@ -571,7 +529,7 @@ impl Owner {
             }
             if plan.fences & bit != 0 {
                 rsf_core_vkfg_fence_submission(
-                    self.ops.resources,
+                    leaf::resources(),
                     self.resources,
                     &mut slot.state,
                     &slot.fences,
@@ -601,7 +559,7 @@ impl Owner {
         };
         let enabled = record.is_some();
         if unsafe {
-            (self.ops.configure)(
+            leaf::configure(
                 self.native,
                 u32::from(enabled),
                 color,
@@ -622,8 +580,7 @@ impl Owner {
 
     fn present(&mut self, info: *const c_void, chain: u64, source: &PresentSource) -> i32 {
         let source_frame = source.frame(self.timeline.last_prepared.frame_id);
-        let ops = self.ops;
-        let _timing = Timing::new(ops, c"ffx_present_total", source_frame);
+        let _timing = Timing::new(c"ffx_present_total", source_frame);
         if chain == 0 || chain != self.chain {
             return VK_INITIALIZATION_FAILED;
         }
@@ -646,7 +603,7 @@ impl Owner {
             return VK_INITIALIZATION_FAILED;
         }
         let result = unsafe {
-            (ops.present)(
+            leaf::present(
                 self.native,
                 info,
                 source_frame,
@@ -660,7 +617,7 @@ impl Owner {
             // of an earlier asynchronous present. Every configured source needs
             // its consumer fence, whatever that result is.
             rsf_core_vkfg_fence_submission(
-                ops.resources,
+                leaf::resources(),
                 self.resources,
                 &mut slot.state,
                 &slot.fences,
@@ -703,10 +660,10 @@ impl Owner {
         if self.unsubmitted() {
             return NOT_READY;
         }
-        if unsafe { (self.ops.drain)(self.native) } != OK {
+        if unsafe { leaf::drain(self.native) } != OK {
             return NOT_READY;
         }
-        unsafe { (self.ops.capture_flush)(self.native) };
+        unsafe { leaf::capture_flush(self.native) };
         OK
     }
 
@@ -741,9 +698,9 @@ impl Owner {
             // Keep the provider and WSI route live for this unproven SDK allocation.
             return NOT_READY;
         }
-        let (ops, native) = (self.ops, self.native);
+        let native = self.native;
         if self.effect {
-            if unsafe { (ops.destroy_effect)(native) } != OK {
+            if unsafe { leaf::destroy_effect(native) } != OK {
                 return FEATURE_FAILED;
             }
             self.effect = false;
@@ -753,11 +710,11 @@ impl Owner {
             }
         }
         if self.chain != 0 {
-            unsafe { (ops.destroy_chain)(native) };
+            unsafe { leaf::destroy_chain(native) };
             self.chain = 0;
         }
         if self.context {
-            if unsafe { (ops.destroy_swapchain)(native) } != OK {
+            if unsafe { leaf::destroy_swapchain(native) } != OK {
                 return FEATURE_FAILED;
             }
             self.context = false;
@@ -772,18 +729,18 @@ impl Owner {
             return NOT_READY;
         }
         if self.wsi_registered {
-            let cleared = unsafe { (ops.set_wsi)(native, 0) };
+            let cleared = unsafe { leaf::set_wsi(native, 0) };
             if !matches!(cleared, OK | WSI_FOREIGN_DEVICE) {
                 return FEATURE_FAILED;
             }
             self.wsi_registered = false;
         }
         for slot in &mut self.slots {
-            rsf_core_vkfg_release_image(ops.resources, self.resources, &mut slot.color);
-            rsf_core_vkfg_release_fences(ops.resources, self.resources, &mut slot.fences);
+            rsf_core_vkfg_release_image(leaf::resources(), self.resources, &mut slot.color);
+            rsf_core_vkfg_release_fences(leaf::resources(), self.resources, &mut slot.fences);
         }
         // Keep admission through module unload, after the WSI table no longer points at the host.
-        unsafe { (ops.close)(native) };
+        unsafe { leaf::close(native) };
         self.native = ptr::null_mut();
         self.module = None;
         route().release(self.id());
@@ -816,8 +773,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_create_sdk(
     output: *mut *mut Owner,
     chain: *mut u64,
 ) -> i32 {
-    let leaf = unsafe { host.as_ref() }.map(|host| (&sdk::OPS, host));
-    unsafe { create(leaf, setup, output, chain) }
+    unsafe { create(host.as_ref(), setup, output, chain) }
 }
 
 /// The provider entry: the production host when CMake found the FidelityFX Vulkan headers (the
@@ -837,9 +793,9 @@ pub(crate) unsafe extern "C" fn rsf_ffxgvk_create(
     unsafe { rsf_core_ffxgvk_create_sdk(host, setup, output, chain) }
 }
 
-/// `leaf` is None in the disabled build.
+/// `host` is None in the disabled build.
 unsafe fn create(
-    leaf: Option<(&'static Ops, &'static Host)>,
+    host: Option<&'static Host>,
     setup: *const Setup,
     output: *mut *mut Owner,
     chain: *mut u64,
@@ -887,7 +843,7 @@ unsafe fn create(
             return INVALID_ARGUMENT;
         }
     }
-    let Some((ops, host)) = leaf else {
+    let Some(host) = host else {
         return NOT_COMPILED;
     };
     let Some(swapchain) =
@@ -895,7 +851,7 @@ unsafe fn create(
     else {
         return NOT_SUPPORTED;
     };
-    let owner = allocate_handle(Owner::new(ops, host, setup, swapchain));
+    let owner = allocate_handle(Owner::new(host, setup, swapchain));
     if owner.is_null() {
         return INIT_FAILED;
     }
@@ -938,7 +894,7 @@ pub(crate) unsafe extern "C" fn rsf_ffxgvk_acquire(
 ) -> i32 {
     match unsafe { live(owner) } {
         Some(owner) if !index.is_null() => unsafe {
-            (owner.ops.acquire)(
+            leaf::acquire(
                 owner.native,
                 timeout,
                 semaphore,
@@ -1121,7 +1077,9 @@ mod tests {
     use super::*;
     use crate::sys::rsf_vk_function;
     use crate::vulkan_fg_copy::{Barrier, ImageCopy};
+    use crate::vulkan_fg_resources::Platform as Resources;
     use std::cell::RefCell;
+    use std::ffi::c_char;
 
     const OUT_OF_DATE: i32 = -1_000_001_004;
     const NATIVE: usize = 0x40;
@@ -1166,7 +1124,7 @@ mod tests {
         if failed { FEATURE_FAILED } else { OK }
     }
 
-    unsafe extern "C" fn open(
+    pub(super) unsafe extern "C" fn open(
         _: *const Setup,
         _: &'static Host,
         _: Handle,
@@ -1193,65 +1151,76 @@ mod tests {
         ptr::without_provenance_mut(NATIVE + 2)
     }
     unsafe extern "C" fn unload(_: Handle) {}
-    unsafe extern "C" fn close(native: Handle) {
+    pub(super) unsafe extern "C" fn close(native: Handle) {
         assert_eq!(native.addr(), NATIVE);
         // The hooks are already refused, and admission outlives the native
         // close so no successor can register while it unloads.
         assert!(routed(DEVICE).is_null() && route().owner != 0 && route().closing);
         calls(|c| c.closes += 1);
     }
-    unsafe extern "C" fn set_wsi(_: Handle, _: u32) -> i32 {
+    pub(super) unsafe extern "C" fn set_wsi(_: Handle, _: u32) -> i32 {
         OK
     }
-    unsafe extern "C" fn create_swapchain(_: Handle, chain: *mut u64, context: *mut u32) -> i32 {
+    pub(super) unsafe extern "C" fn create_swapchain(
+        _: Handle,
+        chain: *mut u64,
+        context: *mut u32,
+    ) -> i32 {
         unsafe {
             chain.write(3);
             context.write(1);
         }
         OK
     }
-    unsafe extern "C" fn create_effect(_: Handle, context: *mut u32) -> i32 {
+    pub(super) unsafe extern "C" fn create_effect(_: Handle, context: *mut u32) -> i32 {
         unsafe { context.write(1) };
         OK
     }
-    unsafe extern "C" fn step(_: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn step(_: Handle) -> i32 {
         OK
     }
-    unsafe extern "C" fn query_provider(_: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn query_provider(_: Handle) -> i32 {
         if calls(|c| c.fail_provider) {
             INIT_FAILED
         } else {
             OK
         }
     }
-    unsafe extern "C" fn destroy_effect(_: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn destroy_effect(_: Handle) -> i32 {
         calls(|c| {
             c.effects_destroyed += u32::from(!c.fail_effect_destroy);
             fail(c.fail_effect_destroy)
         })
     }
-    unsafe extern "C" fn destroy_chain(_: Handle) {
+    pub(super) unsafe extern "C" fn destroy_chain(_: Handle) {
         calls(|c| c.chains_destroyed += 1);
     }
-    unsafe extern "C" fn destroy_swapchain(_: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn destroy_swapchain(_: Handle) -> i32 {
         calls(|c| {
             c.swapchains_destroyed += u32::from(!c.fail_swapchain_destroy);
             fail(c.fail_swapchain_destroy)
         })
     }
-    unsafe extern "C" fn images(_: Handle, count: *mut u32, _: *mut u64) -> i32 {
+    pub(super) unsafe extern "C" fn images(_: Handle, count: *mut u32, _: *mut u64) -> i32 {
         unsafe { count.write(3) };
         OK
     }
-    unsafe extern "C" fn acquire(_: Handle, _: u64, _: u64, _: u64, _: *mut u32, _: u64) -> i32 {
+    pub(super) unsafe extern "C" fn acquire(
+        _: Handle,
+        _: u64,
+        _: u64,
+        _: u64,
+        _: *mut u32,
+        _: u64,
+    ) -> i32 {
         OK
     }
-    unsafe extern "C" fn prepare(_: Handle, _: Handle, _: *const Frame) -> i32 {
+    pub(super) unsafe extern "C" fn prepare(_: Handle, _: Handle, _: *const Frame) -> i32 {
         OK
     }
-    unsafe extern "C" fn barrier(_: Handle, _: Handle, _: *const Barrier) {}
-    unsafe extern "C" fn copy(_: Handle, _: Handle, _: *const ImageCopy) {}
-    unsafe extern "C" fn configure(
+    pub(super) unsafe extern "C" fn barrier(_: Handle, _: Handle, _: *const Barrier) {}
+    pub(super) unsafe extern "C" fn copy(_: Handle, _: Handle, _: *const ImageCopy) {}
+    pub(super) unsafe extern "C" fn configure(
         _: Handle,
         enabled: u32,
         _: u64,
@@ -1261,23 +1230,28 @@ mod tests {
         calls(|c| c.configures.push(if enabled == 0 { 0 } else { frame }));
         OK
     }
-    unsafe extern "C" fn present(_: Handle, _: *const c_void, _: u64, count: *mut u64) -> i32 {
+    pub(super) unsafe extern "C" fn present(
+        _: Handle,
+        _: *const c_void,
+        _: u64,
+        count: *mut u64,
+    ) -> i32 {
         calls(|c| {
             c.presents += 1;
             unsafe { count.write(u64::from(c.presents)) };
             c.present_result
         })
     }
-    unsafe extern "C" fn drain(_: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn drain(_: Handle) -> i32 {
         calls(|c| {
             c.drains += 1;
             if c.fail_drain { NOT_READY } else { OK }
         })
     }
-    unsafe extern "C" fn wants(_: Handle, _: u64) -> u32 {
+    pub(super) unsafe extern "C" fn wants(_: Handle, _: u64) -> u32 {
         0
     }
-    unsafe extern "C" fn record(
+    pub(super) unsafe extern "C" fn record(
         _: Handle,
         _: Handle,
         _: *const Image,
@@ -1285,12 +1259,12 @@ mod tests {
         _: *const c_char,
     ) {
     }
-    unsafe extern "C" fn flush(_: Handle) {}
-    unsafe extern "C" fn fence_timing(_: Handle, _: u64) {}
-    unsafe extern "C" fn timing_begin() -> i64 {
+    pub(super) unsafe extern "C" fn flush(_: Handle) {}
+    pub(super) unsafe extern "C" fn fence_timing(_: Handle, _: u64) {}
+    pub(super) extern "C" fn timing_begin() -> i64 {
         0
     }
-    unsafe extern "C" fn timing_end(_: *const c_char, _: u64, _: i64) {}
+    pub(super) unsafe extern "C" fn timing_end(_: *const c_char, _: u64, _: i64) {}
 
     unsafe extern "C" fn local_types(_: Handle) -> u32 {
         1
@@ -1385,33 +1359,15 @@ mod tests {
         wsi_call: scope,
         queue_present,
     };
-    static OPS: Ops = Ops {
-        open,
-        close,
-        set_wsi,
-        create_swapchain,
-        query_swapchain: step,
-        create_effect,
-        query_provider,
-        destroy_effect,
-        destroy_chain,
-        destroy_swapchain,
-        images,
-        acquire,
-        prepare,
-        barrier,
-        copy,
-        configure,
-        present,
-        drain,
-        capture_wants: wants,
-        capture_record: record,
-        capture_flush: flush,
-        fence_timing,
-        timing_begin,
-        timing_end,
-        resources: &RESOURCES,
+    // The owner calls these fakes by the production step names.
+    pub(super) use self::{
+        flush as capture_flush, record as capture_record, step as query_swapchain,
+        wants as capture_wants,
     };
+
+    pub(super) fn resources() -> &'static Resources {
+        &RESOURCES
+    }
 
     unsafe extern "C" fn proc_address(_: *mut c_void, _: *const c_char) -> rsf_vk_function {
         None
@@ -1467,7 +1423,7 @@ mod tests {
         let mut setup = *setup;
         setup.create_info = ptr::from_ref(&info).cast();
         let (mut owner, mut chain) = (ptr::null_mut(), 0);
-        let result = unsafe { super::create(Some((&OPS, &HOST)), &setup, &mut owner, &mut chain) };
+        let result = unsafe { super::create(Some(&HOST), &setup, &mut owner, &mut chain) };
         (result, owner, chain)
     }
 
