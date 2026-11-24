@@ -6,7 +6,7 @@ use std::io::Write;
 
 #[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_vk_fsr3_open(runtime: Handle) -> i32 {
-    unsafe { rsf_core_fsr3_open(&platform_win32::SR, runtime) }
+    unsafe { rsf_core_fsr3_open(runtime) }
 }
 
 #[unsafe(no_mangle)]
@@ -17,16 +17,7 @@ pub(super) unsafe extern "C" fn rsf_vk_fsr3_plan(
     render_width: *mut u32,
     render_height: *mut u32,
 ) -> i32 {
-    unsafe {
-        rsf_core_fsr3_plan(
-            &platform_win32::SR,
-            width,
-            height,
-            quality,
-            render_width,
-            render_height,
-        )
-    }
+    unsafe { rsf_core_fsr3_plan(width, height, quality, render_width, render_height) }
 }
 
 #[unsafe(no_mangle)]
@@ -47,7 +38,7 @@ pub(super) unsafe extern "C" fn rsf_vk_fsr3_create(
         width,
         height,
     };
-    unsafe { rsf_core_fsr3_create(&platform_win32::SR, &request, result) }
+    unsafe { rsf_core_fsr3_create(&request, result) }
 }
 
 #[unsafe(no_mangle)]
@@ -86,7 +77,7 @@ pub(super) unsafe extern "C" fn rsf_vk_fsr3_swapchain_create(
         info,
         queue_family,
     };
-    unsafe { rsf_core_fsr3_swapchain_create(&platform_win32::FG, &request, result) }
+    unsafe { rsf_core_fsr3_swapchain_create(&request, result) }
 }
 
 #[unsafe(no_mangle)]
@@ -193,7 +184,7 @@ pub(super) unsafe extern "C" fn rsf_vk_fsr3_fg_create(
         height,
         back_buffer_format,
     };
-    unsafe { rsf_core_fsr3_fg_create(&platform_win32::FG, &request, result) }
+    unsafe { rsf_core_fsr3_fg_create(&request, result) }
 }
 
 #[unsafe(no_mangle)]

@@ -22,6 +22,11 @@ mod exports;
 #[cfg(not(test))]
 #[path = "platform.rs"]
 mod platform_win32;
+// Production calls the SDK leaves in platform.rs; unit tests call same-named fakes.
+#[cfg(not(test))]
+use platform_win32 as leaf;
+#[cfg(test)]
+use tests as leaf;
 /// The pinned FidelityFX SDK 1.1.4 Vulkan records (generate-bindings.py), shared with the Runtime.
 pub mod sdk_abi;
 
@@ -237,20 +242,6 @@ struct Native {
     _private: [u8; 0],
 }
 
-/// Matches `rsf_fsr3sr_platform`.
-#[repr(C)]
-struct Platform {
-    resolve: unsafe extern "C" fn(Handle, *const c_char) -> Handle,
-    allocate: unsafe extern "C" fn() -> *mut Native,
-    release: unsafe extern "C" fn(*mut Native),
-    bind_vulkan: unsafe extern "C" fn(Handle) -> u32,
-    create: unsafe extern "C" fn(*mut Native, Handle, *const Request) -> i32,
-    plan: unsafe extern "C" fn(Handle, u32, u32, u32, *mut u32, *mut u32) -> i32,
-    evaluate: unsafe extern "C" fn(*mut Native, Handle, *const Frame, f32) -> i32,
-    has_effect: unsafe extern "C" fn(*const Native) -> u32,
-    destroy: unsafe extern "C" fn(*mut Native, Handle) -> i32,
-}
-
 const _: () = {
     assert!(size_of::<Image>() == 24);
     assert!(size_of::<Frame>() == 184);
@@ -278,40 +269,9 @@ struct FgNative {
     _private: [u8; 0],
 }
 
-/// Matches `rsf_fsr3fg_platform`.
-#[repr(C)]
-struct FgPlatform {
-    wsi_allocate: unsafe extern "C" fn() -> *mut WsiNative,
-    wsi_release: unsafe extern "C" fn(*mut WsiNative),
-    wsi_create: unsafe extern "C" fn(*mut WsiNative, Handle, *const WsiRequest, *mut Vk) -> i32,
-    wsi_query: unsafe extern "C" fn(*mut WsiNative, Handle) -> i32,
-    wsi_complete: unsafe extern "C" fn(*const WsiNative) -> u32,
-    wsi_has_context: unsafe extern "C" fn(*const WsiNative) -> u32,
-    wsi_destroy: unsafe extern "C" fn(*mut WsiNative, Handle) -> i32,
-    wsi_wait: unsafe extern "C" fn(*mut WsiNative, Handle) -> i32,
-    wsi_register_ui: unsafe extern "C" fn(*mut WsiNative, Handle, *const FgFrame) -> i32,
-    wsi_recreate: unsafe extern "C" fn(*mut WsiNative, Handle, *const u8, *mut Vk) -> i32,
-    wsi_get_images: unsafe extern "C" fn(*mut WsiNative, Handle, Vk, *mut u32, *mut Vk) -> i32,
-    wsi_acquire: unsafe extern "C" fn(*mut WsiNative, Handle, Vk, u64, Vk, Vk, *mut u32) -> i32,
-    wsi_present: unsafe extern "C" fn(*mut WsiNative, Handle, *const c_void) -> i32,
-    wsi_destroy_chain: unsafe extern "C" fn(*mut WsiNative, Handle, Vk) -> i32,
-    wsi_last_present_count: unsafe extern "C" fn(*mut WsiNative, Vk) -> u64,
-    fg_allocate: unsafe extern "C" fn() -> *mut FgNative,
-    fg_release: unsafe extern "C" fn(*mut FgNative),
-    fg_bind_vulkan: unsafe extern "C" fn() -> u32,
-    fg_create: unsafe extern "C" fn(*mut FgNative, Handle, *const FgRequest) -> i32,
-    fg_has_effect: unsafe extern "C" fn(*const FgNative) -> u32,
-    fg_destroy: unsafe extern "C" fn(*mut FgNative, Handle) -> i32,
-    fg_disable: unsafe extern "C" fn(*mut FgNative, Handle, Vk) -> i32,
-    fg_configure: unsafe extern "C" fn(*mut FgNative, Handle, *const FgFrame, Vk) -> i32,
-    fg_prepare: unsafe extern "C" fn(*mut FgNative, Handle, *const FgFrame, f32) -> i32,
-    fg_generate: unsafe extern "C" fn(*mut FgNative, Handle, *const FgFrame) -> i32,
-}
-
 /// The exported `rsf_vk_fsr3_context`. The host serializes calls on one
 /// context and retires its Vulkan work before destruction.
 struct Context {
-    ops: &'static Platform,
     native: NonNull<Native>,
 }
 
@@ -328,8 +288,8 @@ fn rsf_core_fsr3_sdk() -> *const Sdk {
 /// runtime or a missing export. Missing exports leave the bridge unbound.
 ///
 /// # Safety
-/// `ops` is the static platform table; `runtime` is null or a loaded module.
-unsafe fn rsf_core_fsr3_open(ops: *const Platform, runtime: Handle) -> i32 {
+/// `runtime` is null or a loaded module.
+unsafe fn rsf_core_fsr3_open(runtime: Handle) -> i32 {
     if runtime.is_null() {
         return -1;
     }
@@ -337,12 +297,9 @@ unsafe fn rsf_core_fsr3_open(ops: *const Platform, runtime: Handle) -> i32 {
     if let Some(bound) = SDK.get() {
         return same(bound);
     }
-    let Some(ops) = (unsafe { ops.as_ref() }) else {
-        return -1;
-    };
     let mut entries = [ptr::null_mut(); EXPORTS.len()];
     for (entry, name) in entries.iter_mut().zip(EXPORTS) {
-        *entry = unsafe { (ops.resolve)(runtime, name.as_ptr()) };
+        *entry = unsafe { leaf::resolve(runtime, name.as_ptr()) };
         if entry.is_null() {
             return -2;
         }
@@ -368,9 +325,8 @@ unsafe fn rsf_core_fsr3_open(ops: *const Platform, runtime: Handle) -> i32 {
 /// Returns the SDK result, or -1 without a bound query or output slots.
 ///
 /// # Safety
-/// `ops` is the static platform table; non-null outputs must be writable.
+/// Non-null outputs must be writable.
 unsafe fn rsf_core_fsr3_plan(
-    ops: *const Platform,
     display_width: u32,
     display_height: u32,
     quality: u32,
@@ -383,11 +339,8 @@ unsafe fn rsf_core_fsr3_plan(
     if render_width.is_null() || render_height.is_null() {
         return -1;
     }
-    let Some(ops) = (unsafe { ops.as_ref() }) else {
-        return -1;
-    };
     unsafe {
-        (ops.plan)(
+        leaf::plan(
             sdk.query,
             display_width,
             display_height,
@@ -405,12 +358,8 @@ unsafe fn rsf_core_fsr3_plan(
 /// loader or the buffer-requirements entry is absent, or the SDK result.
 ///
 /// # Safety
-/// `ops` is the static platform table; `request` and `result` are null or valid.
-unsafe fn rsf_core_fsr3_create(
-    ops: *const Platform,
-    request: *const Request,
-    result: *mut *mut Context,
-) -> i32 {
+/// `request` and `result` are null or valid.
+unsafe fn rsf_core_fsr3_create(request: *const Request, result: *mut *mut Context) -> i32 {
     let Some(sdk) = SDK.get() else {
         return -1;
     };
@@ -427,25 +376,22 @@ unsafe fn rsf_core_fsr3_create(
     {
         return -1;
     }
-    let Some(ops) = (unsafe { ops.as_ref() }) else {
-        return -1;
-    };
-    let Some(native) = NonNull::new(unsafe { (ops.allocate)() }) else {
+    let Some(native) = NonNull::new(unsafe { leaf::allocate() }) else {
         return -2;
     };
-    let Some(context) = try_box(Context { ops, native }) else {
-        unsafe { (ops.release)(native.as_ptr()) };
+    let Some(context) = try_box(Context { native }) else {
+        unsafe { leaf::release(native.as_ptr()) };
         return -2;
     };
     let failed = |code: i32| {
-        unsafe { (ops.release)(native.as_ptr()) };
+        unsafe { leaf::release(native.as_ptr()) };
         code
     };
-    let vulkan = unsafe { (ops.bind_vulkan)(request.device) };
+    let vulkan = unsafe { leaf::bind_vulkan(request.device) };
     if vulkan & VULKAN_READY != VULKAN_READY {
         return failed(-3);
     }
-    let code = unsafe { (ops.create)(native.as_ptr(), sdk.create, request) };
+    let code = unsafe { leaf::create(native.as_ptr(), sdk.create, request) };
     if code != 0 {
         return failed(code);
     }
@@ -470,7 +416,7 @@ unsafe fn rsf_core_fsr3_evaluate(context: *mut Context, frame: *const Frame) -> 
         return -2;
     }
     unsafe {
-        (context.ops.evaluate)(
+        leaf::evaluate(
             context.native.as_ptr(),
             dispatch,
             frame,
@@ -493,9 +439,9 @@ unsafe fn rsf_core_fsr3_destroy(context: *mut Context) -> i32 {
     };
     let destroy = SDK.get().expect("live SR context has a bound SDK").destroy;
     let native = owner.native.as_ptr();
-    let effect = unsafe { (owner.ops.has_effect)(native) } != 0;
+    let effect = unsafe { leaf::has_effect(native) } != 0;
     let code = if effect {
-        unsafe { (owner.ops.destroy)(native, destroy) }
+        unsafe { leaf::destroy(native, destroy) }
     } else {
         0
     };
@@ -503,7 +449,7 @@ unsafe fn rsf_core_fsr3_destroy(context: *mut Context) -> i32 {
         return code;
     }
     unsafe {
-        (owner.ops.release)(native);
+        leaf::release(native);
         drop(Box::from_raw(context));
     }
     0
@@ -518,7 +464,6 @@ unsafe fn rsf_core_fsr3_destroy(context: *mut Context) -> i32 {
 /// calls on linked owners; all access goes through raw pointers because the
 /// two owners point at each other.
 struct Swapchain {
-    ops: &'static FgPlatform,
     native: NonNull<WsiNative>,
     device: Handle,
     chain: Vk,
@@ -532,7 +477,6 @@ struct Swapchain {
 /// `chain` and `swapchain` are set together after a successful proxy
 /// configure and cleared together only after a successful disable.
 struct FgContext {
-    ops: &'static FgPlatform,
     native: NonNull<FgNative>,
     width: u32,
     height: u32,
@@ -543,7 +487,7 @@ struct FgContext {
 /// # Safety
 /// `swapchain` is a live owner.
 unsafe fn has_context(swapchain: *mut Swapchain) -> bool {
-    unsafe { ((*swapchain).ops.wsi_has_context)((*swapchain).native.as_ptr()) != 0 }
+    unsafe { leaf::wsi_has_context((*swapchain).native.as_ptr()) != 0 }
 }
 
 /// Creates the SDK presentation context and queries its replacement table.
@@ -556,10 +500,9 @@ unsafe fn has_context(swapchain: *mut Swapchain) -> bool {
 /// releasing the underlying device.
 ///
 /// # Safety
-/// `ops` is the static platform table; `request` is valid with a null or
+/// `request` is valid with a null or
 /// readable `info`; `result` is null or writable.
 unsafe fn rsf_core_fsr3_swapchain_create(
-    ops: *const FgPlatform,
     request: *const WsiRequest,
     result: *mut *mut Swapchain,
 ) -> i32 {
@@ -572,36 +515,32 @@ unsafe fn rsf_core_fsr3_swapchain_create(
     if result.is_null() || !unsafe { request.admitted() } {
         return -1;
     }
-    let Some(ops) = (unsafe { ops.as_ref() }) else {
-        return -1;
-    };
     unsafe { result.write(ptr::null_mut()) };
-    let Some(native) = NonNull::new(unsafe { (ops.wsi_allocate)() }) else {
+    let Some(native) = NonNull::new(unsafe { leaf::wsi_allocate() }) else {
         return -2;
     };
     let Some(owner) = try_box(Swapchain {
-        ops,
         native,
         device: request.device,
         chain: 0,
         active_fg: ptr::null_mut(),
         cleanup_only: false,
     }) else {
-        unsafe { (ops.wsi_release)(native.as_ptr()) };
+        unsafe { leaf::wsi_release(native.as_ptr()) };
         return -2;
     };
     let owner = Box::into_raw(owner);
     // Copies the two pointers so the SDK can still write through `owner`.
     let failed = move |code: i32| {
         unsafe {
-            (ops.wsi_release)(native.as_ptr());
+            leaf::wsi_release(native.as_ptr());
             drop(Box::from_raw(owner));
         }
         code
     };
     // The SDK writes the created chain through the owner's slot.
     let code = unsafe {
-        (ops.wsi_create)(
+        leaf::wsi_create(
             native.as_ptr(),
             sdk.create,
             request,
@@ -611,10 +550,10 @@ unsafe fn rsf_core_fsr3_swapchain_create(
     if code != 0 {
         return failed(code);
     }
-    let code = unsafe { (ops.wsi_query)(native.as_ptr(), sdk.query) };
-    if code != 0 || unsafe { (ops.wsi_complete)(native.as_ptr()) } == 0 {
+    let code = unsafe { leaf::wsi_query(native.as_ptr(), sdk.query) };
+    if code != 0 || unsafe { leaf::wsi_complete(native.as_ptr()) } == 0 {
         let error = if code != 0 { code } else { -3 };
-        if unsafe { (ops.wsi_destroy)(native.as_ptr(), sdk.destroy) } == 0 {
+        if unsafe { leaf::wsi_destroy(native.as_ptr(), sdk.destroy) } == 0 {
             return failed(error);
         }
         unsafe {
@@ -661,8 +600,7 @@ unsafe fn rsf_core_fsr3_swapchain_recreate(
         if disabled != 0 {
             return VK_ERROR_INITIALIZATION_FAILED;
         }
-        let code =
-            ((*value).ops.wsi_recreate)((*value).native.as_ptr(), (*value).device, info, chain);
+        let code = leaf::wsi_recreate((*value).native.as_ptr(), (*value).device, info, chain);
         if code == 0 {
             (*value).chain = chain.read();
         }
@@ -687,7 +625,7 @@ unsafe fn rsf_core_fsr3_swapchain_get_images(
         if (*value).cleanup_only {
             return VK_ERROR_INITIALIZATION_FAILED;
         }
-        ((*value).ops.wsi_get_images)(
+        leaf::wsi_get_images(
             (*value).native.as_ptr(),
             (*value).device,
             chain,
@@ -716,7 +654,7 @@ unsafe fn rsf_core_fsr3_swapchain_acquire(
         if (*value).cleanup_only {
             return VK_ERROR_INITIALIZATION_FAILED;
         }
-        ((*value).ops.wsi_acquire)(
+        leaf::wsi_acquire(
             (*value).native.as_ptr(),
             (*value).device,
             chain,
@@ -744,7 +682,7 @@ unsafe fn rsf_core_fsr3_swapchain_present(
         if (*value).cleanup_only {
             return VK_ERROR_INITIALIZATION_FAILED;
         }
-        ((*value).ops.wsi_present)((*value).native.as_ptr(), queue, info)
+        leaf::wsi_present((*value).native.as_ptr(), queue, info)
     }
 }
 
@@ -768,7 +706,7 @@ unsafe fn rsf_core_fsr3_swapchain_prepare_destroy(value: *mut Swapchain, chain: 
         if !fg.is_null() && (*fg).chain == chain {
             return fg_disable(fg);
         }
-        ((*value).ops.wsi_wait)((*value).native.as_ptr(), dispatch)
+        leaf::wsi_wait((*value).native.as_ptr(), dispatch)
     }
 }
 
@@ -790,8 +728,7 @@ unsafe fn rsf_core_fsr3_swapchain_destroy_chain(value: *mut Swapchain, chain: Vk
     }
     // Preparation succeeded for a nonzero chain, so the owner is live.
     unsafe {
-        let code =
-            ((*value).ops.wsi_destroy_chain)((*value).native.as_ptr(), (*value).device, chain);
+        let code = leaf::wsi_destroy_chain((*value).native.as_ptr(), (*value).device, chain);
         if code != 0 {
             return code;
         }
@@ -810,7 +747,7 @@ unsafe fn rsf_core_fsr3_swapchain_last_present_count(value: *mut Swapchain, chai
     if value.is_null() || chain == 0 || unsafe { (*value).cleanup_only } {
         return 0;
     }
-    unsafe { ((*value).ops.wsi_last_present_count)((*value).native.as_ptr(), chain) }
+    unsafe { leaf::wsi_last_present_count((*value).native.as_ptr(), chain) }
 }
 
 /// Disables the linked interpolation, drains the current chain and releases
@@ -833,14 +770,14 @@ unsafe fn rsf_core_fsr3_swapchain_destroy(value: *mut Swapchain) -> i32 {
         let destroy = SDK.get().expect("live swapchain has a bound SDK").destroy;
         let native = (*value).native.as_ptr();
         let code = if has_context(value) {
-            ((*value).ops.wsi_destroy)(native, destroy)
+            leaf::wsi_destroy(native, destroy)
         } else {
             0
         };
         if code != 0 {
             return code;
         }
-        ((*value).ops.wsi_release)(native);
+        leaf::wsi_release(native);
         drop(Box::from_raw(value));
     }
     0
@@ -854,12 +791,8 @@ unsafe fn rsf_core_fsr3_swapchain_destroy(value: *mut Swapchain) -> i32 {
 /// without the Vulkan loader, or the SDK result.
 ///
 /// # Safety
-/// `ops` is the static platform table; `request` and `result` are null or valid.
-unsafe fn rsf_core_fsr3_fg_create(
-    ops: *const FgPlatform,
-    request: *const FgRequest,
-    result: *mut *mut FgContext,
-) -> i32 {
+/// `request` and `result` are null or valid.
+unsafe fn rsf_core_fsr3_fg_create(request: *const FgRequest, result: *mut *mut FgContext) -> i32 {
     let Some(sdk) = SDK.get() else {
         return -1;
     };
@@ -875,31 +808,27 @@ unsafe fn rsf_core_fsr3_fg_create(
     {
         return -1;
     }
-    let Some(ops) = (unsafe { ops.as_ref() }) else {
-        return -1;
-    };
-    let Some(native) = NonNull::new(unsafe { (ops.fg_allocate)() }) else {
+    let Some(native) = NonNull::new(unsafe { leaf::fg_allocate() }) else {
         return -2;
     };
     let Some(owner) = try_box(FgContext {
-        ops,
         native,
         width: request.width,
         height: request.height,
         chain: 0,
         swapchain: ptr::null_mut(),
     }) else {
-        unsafe { (ops.fg_release)(native.as_ptr()) };
+        unsafe { leaf::fg_release(native.as_ptr()) };
         return -2;
     };
     let failed = |code: i32| {
-        unsafe { (ops.fg_release)(native.as_ptr()) };
+        unsafe { leaf::fg_release(native.as_ptr()) };
         code
     };
-    if unsafe { (ops.fg_bind_vulkan)() } == 0 {
+    if unsafe { leaf::fg_bind_vulkan() } == 0 {
         return failed(-3);
     }
-    let code = unsafe { (ops.fg_create)(native.as_ptr(), create, request) };
+    let code = unsafe { leaf::fg_create(native.as_ptr(), create, request) };
     if code != 0 {
         return failed(code);
     }
@@ -928,23 +857,23 @@ unsafe fn fg_disable(context: *mut FgContext) -> i32 {
             return 0;
         }
         let native = (*context).native.as_ptr();
-        if ((*context).ops.fg_has_effect)(native) == 0 {
+        if leaf::fg_has_effect(native) == 0 {
             return -1;
         }
         let swapchain = (*context).swapchain;
         if swapchain.is_null() || !has_context(swapchain) || (*swapchain).chain != chain {
             return -1;
         }
-        let code = ((*context).ops.fg_disable)(native, sdk.configure, chain);
+        let code = leaf::fg_disable(native, sdk.configure, chain);
         if code != 0 {
             return code;
         }
         let presenter = (*swapchain).native.as_ptr();
-        let waited = ((*swapchain).ops.wsi_wait)(presenter, sdk.dispatch);
+        let waited = leaf::wsi_wait(presenter, sdk.dispatch);
         if waited != 0 {
             return waited;
         }
-        let cleared = ((*swapchain).ops.wsi_register_ui)(presenter, sdk.configure, ptr::null());
+        let cleared = leaf::wsi_register_ui(presenter, sdk.configure, ptr::null());
         if cleared != 0 {
             return cleared;
         }
@@ -1011,10 +940,9 @@ unsafe fn rsf_core_fsr3_fg_evaluate(context: *mut FgContext, frame: *const FgFra
                 return disabled;
             }
         }
-        let ops = (*context).ops;
         let native = (*context).native.as_ptr();
         let chain = if direct { 0 } else { (*swapchain).chain };
-        let code = (ops.fg_configure)(native, sdk.configure, frame, chain);
+        let code = leaf::fg_configure(native, sdk.configure, frame, chain);
         if code != 0 {
             return code;
         }
@@ -1023,14 +951,14 @@ unsafe fn rsf_core_fsr3_fg_evaluate(context: *mut FgContext, frame: *const FgFra
             (*context).swapchain = swapchain;
             (*swapchain).active_fg = context;
         }
-        let code = (ops.fg_prepare)(native, sdk.dispatch, frame, frame_time_ms(record.delta_ms));
+        let code = leaf::fg_prepare(native, sdk.dispatch, frame, frame_time_ms(record.delta_ms));
         if code != 0 {
             return code;
         }
         if direct {
-            return (ops.fg_generate)(native, sdk.dispatch, frame);
+            return leaf::fg_generate(native, sdk.dispatch, frame);
         }
-        ((*swapchain).ops.wsi_register_ui)((*swapchain).native.as_ptr(), sdk.configure, frame)
+        leaf::wsi_register_ui((*swapchain).native.as_ptr(), sdk.configure, frame)
     }
 }
 
@@ -1065,18 +993,17 @@ unsafe fn rsf_core_fsr3_fg_destroy(context: *mut FgContext) -> i32 {
         if disabled != 0 {
             return disabled;
         }
-        let ops = (*context).ops;
         let native = (*context).native.as_ptr();
         let destroy = SDK.get().expect("live FG context has a bound SDK").destroy;
-        let code = if (ops.fg_has_effect)(native) != 0 {
-            (ops.fg_destroy)(native, destroy)
+        let code = if leaf::fg_has_effect(native) != 0 {
+            leaf::fg_destroy(native, destroy)
         } else {
             0
         };
         if code != 0 {
             return code;
         }
-        (ops.fg_release)(native);
+        leaf::fg_release(native);
         drop(Box::from_raw(context));
     }
     0
@@ -1107,7 +1034,7 @@ mod tests {
         MARK[index..].as_ptr().cast_mut().cast()
     }
 
-    unsafe extern "C" fn resolve(module: Handle, name: *const c_char) -> Handle {
+    pub(super) unsafe extern "C" fn resolve(module: Handle, name: *const c_char) -> Handle {
         let name = unsafe { CStr::from_ptr(name) };
         if module as usize == MISSING_CONFIGURE && name == c"ffxConfigure" {
             return ptr::null_mut();
@@ -1116,17 +1043,17 @@ mod tests {
         mark(index + 1)
     }
 
-    unsafe extern "C" fn allocate() -> *mut Native {
+    pub(super) unsafe extern "C" fn allocate() -> *mut Native {
         LIVE.fetch_add(1, Ordering::SeqCst);
         Box::into_raw(Box::new(Fake { effect: false })).cast()
     }
 
-    unsafe extern "C" fn release(native: *mut Native) {
+    pub(super) unsafe extern "C" fn release(native: *mut Native) {
         LIVE.fetch_sub(1, Ordering::SeqCst);
         drop(unsafe { Box::from_raw(native.cast::<Fake>()) });
     }
 
-    unsafe extern "C" fn bind_vulkan(device: Handle) -> u32 {
+    pub(super) unsafe extern "C" fn bind_vulkan(device: Handle) -> u32 {
         match device as usize {
             NO_LOADER => 0,
             NO_BUFFER_REQUIREMENTS => VULKAN_LOADER,
@@ -1134,7 +1061,7 @@ mod tests {
         }
     }
 
-    unsafe extern "C" fn create(
+    pub(super) unsafe extern "C" fn create(
         native: *mut Native,
         create: Handle,
         request: *const Request,
@@ -1147,7 +1074,7 @@ mod tests {
         0
     }
 
-    unsafe extern "C" fn plan(
+    pub(super) unsafe extern "C" fn plan(
         query: Handle,
         width: u32,
         height: u32,
@@ -1163,7 +1090,7 @@ mod tests {
         0
     }
 
-    unsafe extern "C" fn evaluate(
+    pub(super) unsafe extern "C" fn evaluate(
         _: *mut Native,
         dispatch: Handle,
         _: *const Frame,
@@ -1175,11 +1102,11 @@ mod tests {
         0
     }
 
-    unsafe extern "C" fn has_effect(native: *const Native) -> u32 {
+    pub(super) unsafe extern "C" fn has_effect(native: *const Native) -> u32 {
         u32::from(unsafe { &*native.cast::<Fake>() }.effect)
     }
 
-    unsafe extern "C" fn destroy(native: *mut Native, destroy: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn destroy(native: *mut Native, destroy: Handle) -> i32 {
         assert_eq!(destroy, mark(2));
         if FAIL_DESTROY.load(Ordering::SeqCst) {
             return 5;
@@ -1187,18 +1114,6 @@ mod tests {
         unsafe { &mut *native.cast::<Fake>() }.effect = false;
         0
     }
-
-    static PLATFORM: Platform = Platform {
-        resolve,
-        allocate,
-        release,
-        bind_vulkan,
-        create,
-        plan,
-        evaluate,
-        has_effect,
-        destroy,
-    };
 
     fn image(format: i32) -> Image {
         Image {
@@ -1286,7 +1201,7 @@ mod tests {
         unsafe { &mut *native.cast_mut().cast::<FakeFg>() }
     }
 
-    unsafe extern "C" fn wsi_allocate() -> *mut WsiNative {
+    pub(super) unsafe extern "C" fn wsi_allocate() -> *mut WsiNative {
         LIVE_WSI.fetch_add(1, Ordering::SeqCst);
         Box::into_raw(Box::new(FakeWsi {
             context: false,
@@ -1295,12 +1210,12 @@ mod tests {
         .cast()
     }
 
-    unsafe extern "C" fn wsi_release(native: *mut WsiNative) {
+    pub(super) unsafe extern "C" fn wsi_release(native: *mut WsiNative) {
         LIVE_WSI.fetch_sub(1, Ordering::SeqCst);
         drop(unsafe { Box::from_raw(native.cast::<FakeWsi>()) });
     }
 
-    unsafe extern "C" fn wsi_create(
+    pub(super) unsafe extern "C" fn wsi_create(
         native: *mut WsiNative,
         create: Handle,
         request: *const WsiRequest,
@@ -1316,7 +1231,7 @@ mod tests {
         code
     }
 
-    unsafe extern "C" fn wsi_query(native: *mut WsiNative, query: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn wsi_query(native: *mut WsiNative, query: Handle) -> i32 {
         assert_eq!(query, mark(3));
         let code = step("wsi_query");
         if code == 0 {
@@ -1325,15 +1240,15 @@ mod tests {
         code
     }
 
-    unsafe extern "C" fn wsi_complete(native: *const WsiNative) -> u32 {
+    pub(super) unsafe extern "C" fn wsi_complete(native: *const WsiNative) -> u32 {
         u32::from(wsi(native).complete)
     }
 
-    unsafe extern "C" fn wsi_has_context(native: *const WsiNative) -> u32 {
+    pub(super) unsafe extern "C" fn wsi_has_context(native: *const WsiNative) -> u32 {
         u32::from(wsi(native).context)
     }
 
-    unsafe extern "C" fn wsi_destroy(native: *mut WsiNative, destroy: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn wsi_destroy(native: *mut WsiNative, destroy: Handle) -> i32 {
         assert_eq!(destroy, mark(2));
         let code = step("wsi_destroy");
         if code == 0 {
@@ -1342,12 +1257,12 @@ mod tests {
         code
     }
 
-    unsafe extern "C" fn wsi_wait(_: *mut WsiNative, dispatch: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn wsi_wait(_: *mut WsiNative, dispatch: Handle) -> i32 {
         assert_eq!(dispatch, mark(4));
         step("wsi_wait")
     }
 
-    unsafe extern "C" fn wsi_register_ui(
+    pub(super) unsafe extern "C" fn wsi_register_ui(
         _: *mut WsiNative,
         configure: Handle,
         frame: *const FgFrame,
@@ -1360,7 +1275,7 @@ mod tests {
         })
     }
 
-    unsafe extern "C" fn wsi_recreate(
+    pub(super) unsafe extern "C" fn wsi_recreate(
         _: *mut WsiNative,
         device: Handle,
         _: *const u8,
@@ -1372,7 +1287,7 @@ mod tests {
         code
     }
 
-    unsafe extern "C" fn wsi_get_images(
+    pub(super) unsafe extern "C" fn wsi_get_images(
         _: *mut WsiNative,
         _: Handle,
         _: Vk,
@@ -1383,7 +1298,7 @@ mod tests {
         step("wsi_get_images")
     }
 
-    unsafe extern "C" fn wsi_acquire(
+    pub(super) unsafe extern "C" fn wsi_acquire(
         _: *mut WsiNative,
         _: Handle,
         _: Vk,
@@ -1396,33 +1311,37 @@ mod tests {
         step("wsi_acquire")
     }
 
-    unsafe extern "C" fn wsi_present(_: *mut WsiNative, _: Handle, _: *const c_void) -> i32 {
+    pub(super) unsafe extern "C" fn wsi_present(
+        _: *mut WsiNative,
+        _: Handle,
+        _: *const c_void,
+    ) -> i32 {
         step("wsi_present")
     }
 
-    unsafe extern "C" fn wsi_destroy_chain(_: *mut WsiNative, _: Handle, _: Vk) -> i32 {
+    pub(super) unsafe extern "C" fn wsi_destroy_chain(_: *mut WsiNative, _: Handle, _: Vk) -> i32 {
         step("wsi_destroy_chain")
     }
 
-    unsafe extern "C" fn wsi_last_present_count(_: *mut WsiNative, chain: Vk) -> u64 {
+    pub(super) unsafe extern "C" fn wsi_last_present_count(_: *mut WsiNative, chain: Vk) -> u64 {
         chain + 1
     }
 
-    unsafe extern "C" fn fg_allocate() -> *mut FgNative {
+    pub(super) unsafe extern "C" fn fg_allocate() -> *mut FgNative {
         LIVE_FG.fetch_add(1, Ordering::SeqCst);
         Box::into_raw(Box::new(FakeFg { effect: false })).cast()
     }
 
-    unsafe extern "C" fn fg_release(native: *mut FgNative) {
+    pub(super) unsafe extern "C" fn fg_release(native: *mut FgNative) {
         LIVE_FG.fetch_sub(1, Ordering::SeqCst);
         drop(unsafe { Box::from_raw(native.cast::<FakeFg>()) });
     }
 
-    unsafe extern "C" fn fg_bind_vulkan() -> u32 {
+    pub(super) unsafe extern "C" fn fg_bind_vulkan() -> u32 {
         u32::from(step("fg_bind_vulkan") == 0)
     }
 
-    unsafe extern "C" fn fg_create(
+    pub(super) unsafe extern "C" fn fg_create(
         native: *mut FgNative,
         create: Handle,
         _: *const FgRequest,
@@ -1435,11 +1354,11 @@ mod tests {
         code
     }
 
-    unsafe extern "C" fn fg_has_effect(native: *const FgNative) -> u32 {
+    pub(super) unsafe extern "C" fn fg_has_effect(native: *const FgNative) -> u32 {
         u32::from(fg(native).effect)
     }
 
-    unsafe extern "C" fn fg_destroy(native: *mut FgNative, destroy: Handle) -> i32 {
+    pub(super) unsafe extern "C" fn fg_destroy(native: *mut FgNative, destroy: Handle) -> i32 {
         assert_eq!(destroy, mark(2));
         let code = step("fg_destroy");
         if code == 0 {
@@ -1448,13 +1367,17 @@ mod tests {
         code
     }
 
-    unsafe extern "C" fn fg_disable(_: *mut FgNative, configure: Handle, chain: Vk) -> i32 {
+    pub(super) unsafe extern "C" fn fg_disable(
+        _: *mut FgNative,
+        configure: Handle,
+        chain: Vk,
+    ) -> i32 {
         assert_eq!(configure, mark(5));
         assert_ne!(chain, 0);
         step("fg_disable")
     }
 
-    unsafe extern "C" fn fg_configure(
+    pub(super) unsafe extern "C" fn fg_configure(
         _: *mut FgNative,
         configure: Handle,
         _: *const FgFrame,
@@ -1468,7 +1391,7 @@ mod tests {
         })
     }
 
-    unsafe extern "C" fn fg_prepare(
+    pub(super) unsafe extern "C" fn fg_prepare(
         _: *mut FgNative,
         dispatch: Handle,
         _: *const FgFrame,
@@ -1479,38 +1402,14 @@ mod tests {
         step("fg_prepare")
     }
 
-    unsafe extern "C" fn fg_generate(_: *mut FgNative, dispatch: Handle, _: *const FgFrame) -> i32 {
+    pub(super) unsafe extern "C" fn fg_generate(
+        _: *mut FgNative,
+        dispatch: Handle,
+        _: *const FgFrame,
+    ) -> i32 {
         assert_eq!(dispatch, mark(4));
         step("fg_generate")
     }
-
-    static FG_PLATFORM: FgPlatform = FgPlatform {
-        wsi_allocate,
-        wsi_release,
-        wsi_create,
-        wsi_query,
-        wsi_complete,
-        wsi_has_context,
-        wsi_destroy,
-        wsi_wait,
-        wsi_register_ui,
-        wsi_recreate,
-        wsi_get_images,
-        wsi_acquire,
-        wsi_present,
-        wsi_destroy_chain,
-        wsi_last_present_count,
-        fg_allocate,
-        fg_release,
-        fg_bind_vulkan,
-        fg_create,
-        fg_has_effect,
-        fg_destroy,
-        fg_disable,
-        fg_configure,
-        fg_prepare,
-        fg_generate,
-    };
 
     /// A `VkSwapchainCreateInfoKHR`-sized buffer; index 12 is `oldSwapchain`.
     type Info = [u64; 13];
@@ -1563,20 +1462,16 @@ mod tests {
     /// Before Open every SDK-dependent FG/WSI entry refuses and null owners
     /// take their documented results, with no leaf call.
     fn fg_wsi_unbound() {
-        let ops = &raw const FG_PLATFORM;
         let info: Info = [0; 13];
         let (mut swapchain, mut context) = (ptr::null_mut(), ptr::null_mut());
         let (mut chain, mut count) = (0, 0);
         let none = ptr::null_mut::<Swapchain>();
         unsafe {
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
                 -1
             );
-            assert_eq!(
-                rsf_core_fsr3_fg_create(ops, &fg_request(8), &mut context),
-                -1
-            );
+            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(8), &mut context), -1);
             assert_eq!(
                 rsf_core_fsr3_fg_evaluate(context, &fg_frame(none, 1.0, R8G8B8A8_UNORM)),
                 -1
@@ -1616,7 +1511,6 @@ mod tests {
     /// pass-throughs, direct and proxy evaluation, the pairing and its checked
     /// disable/drain/UI-release order, and retention on every failure.
     fn fg_wsi_bound() {
-        let ops = &raw const FG_PLATFORM;
         let mut info: Info = [0; 13];
         let sentinel = NonNull::<Swapchain>::dangling().as_ptr();
         let mut swapchain = sentinel;
@@ -1626,20 +1520,12 @@ mod tests {
             // Refusals before `result` is cleared.
             info[12] = 0x99;
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
                 -1
             );
             info[12] = 0;
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0), &mut swapchain),
-                -1
-            );
-            assert_eq!(
-                rsf_core_fsr3_swapchain_create(
-                    ptr::null(),
-                    &wsi_request(&info, 0x30),
-                    &mut swapchain
-                ),
+                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0), &mut swapchain),
                 -1
             );
             assert_eq!(swapchain, sentinel);
@@ -1648,20 +1534,20 @@ mod tests {
             // the context after a failed or incomplete query.
             fail_next("wsi_create", 9);
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
                 9
             );
             assert!(swapchain.is_null());
             assert_eq!(take_log(), ["wsi_create"]);
             fail_next("wsi_query", 4);
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
                 4
             );
             assert_eq!(take_log(), ["wsi_create", "wsi_query", "wsi_destroy"]);
             INCOMPLETE.store(true, Ordering::SeqCst);
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
                 -3
             );
             INCOMPLETE.store(false, Ordering::SeqCst);
@@ -1671,7 +1557,7 @@ mod tests {
             fail_next("wsi_query", 4);
             fail_next("wsi_destroy", 11);
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
                 4
             );
             assert!(!swapchain.is_null());
@@ -1689,7 +1575,7 @@ mod tests {
             assert_eq!(LIVE_WSI.load(Ordering::SeqCst), 0);
 
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
                 0
             );
             assert_eq!(take_log(), ["wsi_create", "wsi_query"]);
@@ -1741,30 +1627,14 @@ mod tests {
             );
 
             // Interpolation creation refusals leave `result` unwritten.
-            assert_eq!(
-                rsf_core_fsr3_fg_create(ops, &fg_request(0), &mut context),
-                -1
-            );
-            assert_eq!(
-                rsf_core_fsr3_fg_create(ptr::null(), &fg_request(8), &mut context),
-                -1
-            );
+            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(0), &mut context), -1);
             fail_next("fg_bind_vulkan", 1);
-            assert_eq!(
-                rsf_core_fsr3_fg_create(ops, &fg_request(8), &mut context),
-                -3
-            );
+            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(8), &mut context), -3);
             fail_next("fg_create", 7);
-            assert_eq!(
-                rsf_core_fsr3_fg_create(ops, &fg_request(8), &mut context),
-                7
-            );
+            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(8), &mut context), 7);
             assert!(context.is_null());
             assert_eq!(LIVE_FG.load(Ordering::SeqCst), 0);
-            assert_eq!(
-                rsf_core_fsr3_fg_create(ops, &fg_request(8), &mut context),
-                0
-            );
+            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(8), &mut context), 0);
             let fg = context;
             assert_eq!(
                 take_log(),
@@ -1809,10 +1679,7 @@ mod tests {
                 ["fg_configure_proxy", "fg_prepare", "wsi_register_ui"]
             );
             let mut contender = ptr::null_mut();
-            assert_eq!(
-                rsf_core_fsr3_fg_create(ops, &fg_request(8), &mut contender),
-                0
-            );
+            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(8), &mut contender), 0);
             assert_eq!(take_log(), ["fg_bind_vulkan", "fg_create"]);
             assert_eq!(rsf_core_fsr3_fg_evaluate(contender, &proxy), -2);
             assert_eq!(rsf_core_fsr3_fg_destroy(contender), 0);
@@ -1908,17 +1775,13 @@ mod tests {
     // One sequence: the SDK binding is process-wide.
     #[test]
     fn binds_once_then_owns_sr_fg_and_wsi() {
-        let ops = &raw const PLATFORM;
         let (mut width, mut height) = (0, 0);
         let mut context = ptr::null_mut();
         unsafe {
             // Unbound: every SDK-dependent entry refuses with -1.
             assert!(rsf_core_fsr3_sdk().read().module.is_null());
-            assert_eq!(
-                rsf_core_fsr3_plan(ops, 8, 8, 2, &mut width, &mut height),
-                -1
-            );
-            assert_eq!(rsf_core_fsr3_create(ops, &request(1, 8), &mut context), -1);
+            assert_eq!(rsf_core_fsr3_plan(8, 8, 2, &mut width, &mut height), -1);
+            assert_eq!(rsf_core_fsr3_create(&request(1, 8), &mut context), -1);
             assert_eq!(
                 rsf_core_fsr3_evaluate(ptr::null_mut(), &frame(1.0, R8_UNORM)),
                 -1
@@ -1926,51 +1789,39 @@ mod tests {
             assert_eq!(rsf_core_fsr3_destroy(ptr::null_mut()), 0);
             fg_wsi_unbound();
 
-            assert_eq!(rsf_core_fsr3_open(ops, ptr::null_mut()), -1);
-            assert_eq!(rsf_core_fsr3_open(ops, MISSING_CONFIGURE as Handle), -2);
+            assert_eq!(rsf_core_fsr3_open(ptr::null_mut()), -1);
+            assert_eq!(rsf_core_fsr3_open(MISSING_CONFIGURE as Handle), -2);
             assert!(rsf_core_fsr3_sdk().read().module.is_null());
-            assert_eq!(rsf_core_fsr3_open(ptr::null(), 0x1000 as Handle), -1);
-            assert_eq!(rsf_core_fsr3_open(ops, 0x1000 as Handle), 0);
-            assert_eq!(rsf_core_fsr3_open(ptr::null(), 0x1000 as Handle), 0);
-            assert_eq!(rsf_core_fsr3_open(ops, 0x3000 as Handle), -2);
+            assert_eq!(rsf_core_fsr3_open(0x1000 as Handle), 0);
+            assert_eq!(rsf_core_fsr3_open(0x3000 as Handle), -2);
             let bound = rsf_core_fsr3_sdk().read();
             assert_eq!(bound.module as usize, 0x1000);
             assert_eq!(bound.configure, mark(5));
 
-            assert_eq!(
-                rsf_core_fsr3_plan(ops, 8, 8, 2, &mut width, ptr::null_mut()),
-                -1
-            );
-            assert_eq!(rsf_core_fsr3_plan(ops, 8, 6, 2, &mut width, &mut height), 0);
+            assert_eq!(rsf_core_fsr3_plan(8, 8, 2, &mut width, ptr::null_mut()), -1);
+            assert_eq!(rsf_core_fsr3_plan(8, 6, 2, &mut width, &mut height), 0);
             assert_eq!((width, height), (4, 3));
 
             // Refusals leave the output slot unwritten and free partial owners.
-            assert_eq!(rsf_core_fsr3_create(ops, &request(1, 0), &mut context), -1);
-            assert_eq!(rsf_core_fsr3_create(ops, ptr::null(), &mut context), -1);
+            assert_eq!(rsf_core_fsr3_create(&request(1, 0), &mut context), -1);
+            assert_eq!(rsf_core_fsr3_create(ptr::null(), &mut context), -1);
+            assert_eq!(rsf_core_fsr3_create(&request(1, 8), ptr::null_mut()), -1);
             assert_eq!(
-                rsf_core_fsr3_create(ops, &request(1, 8), ptr::null_mut()),
-                -1
-            );
-            assert_eq!(
-                rsf_core_fsr3_create(ptr::null(), &request(1, 8), &mut context),
-                -1
-            );
-            assert_eq!(
-                rsf_core_fsr3_create(ops, &request(NO_LOADER, 8), &mut context),
+                rsf_core_fsr3_create(&request(NO_LOADER, 8), &mut context),
                 -3
             );
             assert_eq!(
-                rsf_core_fsr3_create(ops, &request(NO_BUFFER_REQUIREMENTS, 8), &mut context),
+                rsf_core_fsr3_create(&request(NO_BUFFER_REQUIREMENTS, 8), &mut context),
                 -3
             );
             assert_eq!(
-                rsf_core_fsr3_create(ops, &request(1, SDK_REFUSES), &mut context),
+                rsf_core_fsr3_create(&request(1, SDK_REFUSES), &mut context),
                 7
             );
             assert!(context.is_null());
             assert_eq!(LIVE.load(Ordering::SeqCst), 0);
 
-            assert_eq!(rsf_core_fsr3_create(ops, &request(1, 8), &mut context), 0);
+            assert_eq!(rsf_core_fsr3_create(&request(1, 8), &mut context), 0);
             assert!(!context.is_null());
             assert_eq!(rsf_core_fsr3_evaluate(context, ptr::null()), -1);
             assert_eq!(rsf_core_fsr3_evaluate(context, &frame(1.0, 37)), -2);

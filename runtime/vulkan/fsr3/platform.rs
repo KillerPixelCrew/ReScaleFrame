@@ -29,7 +29,7 @@ macro_rules! sdk_proc {
     };
 }
 
-unsafe extern "C" fn resolve(module: Handle, name: *const c_char) -> Handle {
+pub(super) unsafe fn resolve(module: Handle, name: *const c_char) -> Handle {
     unsafe { GetProcAddress(module, name) }
 }
 
@@ -142,25 +142,34 @@ struct FgCapsule {
     height: u32,
 }
 
-fn allocate<T: Default, Opaque>() -> *mut Opaque {
+fn boxed<T: Default, Opaque>() -> *mut Opaque {
     try_box(T::default()).map_or(ptr::null_mut(), |value| Box::into_raw(value).cast())
 }
 
-unsafe extern "C" fn release<T, Opaque>(owner: *mut Opaque) {
+unsafe fn unbox<T, Opaque>(owner: *mut Opaque) {
     drop(unsafe { Box::from_raw(owner.cast::<T>()) });
 }
 
-unsafe extern "C" fn sr_allocate() -> *mut Native {
-    allocate::<SrCapsule, _>()
+pub(super) unsafe fn allocate() -> *mut Native {
+    boxed::<SrCapsule, _>()
 }
-unsafe extern "C" fn wsi_allocate() -> *mut WsiNative {
-    allocate::<WsiCapsule, _>()
+pub(super) unsafe fn release(owner: *mut Native) {
+    unsafe { unbox::<SrCapsule, _>(owner) }
 }
-unsafe extern "C" fn fg_allocate() -> *mut FgNative {
-    allocate::<FgCapsule, _>()
+pub(super) unsafe fn wsi_allocate() -> *mut WsiNative {
+    boxed::<WsiCapsule, _>()
+}
+pub(super) unsafe fn wsi_release(owner: *mut WsiNative) {
+    unsafe { unbox::<WsiCapsule, _>(owner) }
+}
+pub(super) unsafe fn fg_allocate() -> *mut FgNative {
+    boxed::<FgCapsule, _>()
+}
+pub(super) unsafe fn fg_release(owner: *mut FgNative) {
+    unsafe { unbox::<FgCapsule, _>(owner) }
 }
 
-unsafe extern "C" fn sr_bind(device: Handle) -> u32 {
+pub(super) unsafe fn bind_vulkan(device: Handle) -> u32 {
     if !bind_loader() {
         return 0;
     }
@@ -174,15 +183,11 @@ unsafe extern "C" fn sr_bind(device: Handle) -> u32 {
         }
 }
 
-unsafe extern "C" fn fg_bind() -> u32 {
+pub(super) unsafe fn fg_bind_vulkan() -> u32 {
     u32::from(bind_loader())
 }
 
-unsafe extern "C" fn sr_create(
-    owner: *mut Native,
-    address: Handle,
-    request: *const Request,
-) -> i32 {
+pub(super) unsafe fn create(owner: *mut Native, address: Handle, request: *const Request) -> i32 {
     let owner = owner.cast::<SrCapsule>();
     unsafe {
         let request = &*request;
@@ -206,7 +211,7 @@ unsafe extern "C" fn sr_create(
     }
 }
 
-unsafe extern "C" fn sr_plan(
+pub(super) unsafe fn plan(
     address: Handle,
     display_width: u32,
     display_height: u32,
@@ -225,7 +230,7 @@ unsafe extern "C" fn sr_plan(
     unsafe { sdk_proc!(address, PfnFfxQuery)(ptr::null_mut(), &mut request.header) as i32 }
 }
 
-unsafe extern "C" fn sr_evaluate(
+pub(super) unsafe fn evaluate(
     owner: *mut Native,
     address: Handle,
     frame: *const Frame,
@@ -265,11 +270,11 @@ unsafe extern "C" fn sr_evaluate(
     }
 }
 
-unsafe extern "C" fn sr_has_effect(owner: *const Native) -> u32 {
+pub(super) unsafe fn has_effect(owner: *const Native) -> u32 {
     u32::from(!unsafe { (*owner.cast::<SrCapsule>()).effect }.is_null())
 }
 
-unsafe extern "C" fn sr_destroy(owner: *mut Native, address: Handle) -> i32 {
+pub(super) unsafe fn destroy(owner: *mut Native, address: Handle) -> i32 {
     unsafe {
         sdk_proc!(address, PfnFfxDestroyContext)(
             &raw mut (*owner.cast::<SrCapsule>()).effect,
@@ -278,7 +283,7 @@ unsafe extern "C" fn sr_destroy(owner: *mut Native, address: Handle) -> i32 {
     }
 }
 
-unsafe extern "C" fn wsi_create(
+pub(super) unsafe fn wsi_create(
     owner: *mut WsiNative,
     address: Handle,
     request: *const WsiRequest,
@@ -313,7 +318,7 @@ unsafe extern "C" fn wsi_create(
     }
 }
 
-unsafe extern "C" fn wsi_query(owner: *mut WsiNative, address: Handle) -> i32 {
+pub(super) unsafe fn wsi_query(owner: *mut WsiNative, address: Handle) -> i32 {
     let owner = owner.cast::<WsiCapsule>();
     unsafe {
         (*owner).functions.header = header(FFX_API_QUERY_DESC_TYPE_FGSWAPCHAIN_FUNCTIONS_VK);
@@ -324,7 +329,7 @@ unsafe extern "C" fn wsi_query(owner: *mut WsiNative, address: Handle) -> i32 {
     }
 }
 
-unsafe extern "C" fn wsi_complete(owner: *const WsiNative) -> u32 {
+pub(super) unsafe fn wsi_complete(owner: *const WsiNative) -> u32 {
     let ops = unsafe { &(*owner.cast::<WsiCapsule>()).functions };
     u32::from(
         ops.pOutCreateSwapchainFFXAPI.is_some()
@@ -335,11 +340,11 @@ unsafe extern "C" fn wsi_complete(owner: *const WsiNative) -> u32 {
     )
 }
 
-unsafe extern "C" fn wsi_has_context(owner: *const WsiNative) -> u32 {
+pub(super) unsafe fn wsi_has_context(owner: *const WsiNative) -> u32 {
     u32::from(!unsafe { (*owner.cast::<WsiCapsule>()).context }.is_null())
 }
 
-unsafe extern "C" fn wsi_destroy(owner: *mut WsiNative, address: Handle) -> i32 {
+pub(super) unsafe fn wsi_destroy(owner: *mut WsiNative, address: Handle) -> i32 {
     unsafe {
         sdk_proc!(address, PfnFfxDestroyContext)(
             &raw mut (*owner.cast::<WsiCapsule>()).context,
@@ -348,7 +353,7 @@ unsafe extern "C" fn wsi_destroy(owner: *mut WsiNative, address: Handle) -> i32 
     }
 }
 
-unsafe extern "C" fn wsi_wait(owner: *mut WsiNative, address: Handle) -> i32 {
+pub(super) unsafe fn wsi_wait(owner: *mut WsiNative, address: Handle) -> i32 {
     let wait = ffxDispatchDescFrameGenerationSwapChainWaitForPresentsVK {
         header: header(FFX_API_DISPATCH_DESC_TYPE_FGSWAPCHAIN_WAIT_FOR_PRESENTS_VK),
     };
@@ -360,7 +365,11 @@ unsafe extern "C" fn wsi_wait(owner: *mut WsiNative, address: Handle) -> i32 {
     }
 }
 
-unsafe extern "C" fn wsi_ui(owner: *mut WsiNative, address: Handle, frame: *const FgFrame) -> i32 {
+pub(super) unsafe fn wsi_register_ui(
+    owner: *mut WsiNative,
+    address: Handle,
+    frame: *const FgFrame,
+) -> i32 {
     let mut ui = ffxConfigureDescFrameGenerationSwapChainRegisterUiResourceVK {
         header: header(FFX_API_CONFIGURE_DESC_TYPE_FGSWAPCHAIN_REGISTERUIRESOURCE_VK),
         ..Default::default()
@@ -383,7 +392,7 @@ fn vk_handle<T>(handle: Vk) -> *mut T {
     ptr::with_exposed_provenance_mut(handle as usize)
 }
 
-unsafe extern "C" fn wsi_recreate(
+pub(super) unsafe fn wsi_recreate(
     owner: *mut WsiNative,
     device: Handle,
     request: *const u8,
@@ -404,7 +413,7 @@ unsafe extern "C" fn wsi_recreate(
     }
 }
 
-unsafe extern "C" fn wsi_images(
+pub(super) unsafe fn wsi_get_images(
     owner: *mut WsiNative,
     device: Handle,
     chain: Vk,
@@ -422,7 +431,7 @@ unsafe extern "C" fn wsi_images(
     }
 }
 
-unsafe extern "C" fn wsi_acquire(
+pub(super) unsafe fn wsi_acquire(
     owner: *mut WsiNative,
     device: Handle,
     chain: Vk,
@@ -449,7 +458,7 @@ unsafe extern "C" fn wsi_acquire(
     }
 }
 
-unsafe extern "C" fn wsi_present(owner: *mut WsiNative, queue: Handle, info: *const c_void) -> i32 {
+pub(super) unsafe fn wsi_present(owner: *mut WsiNative, queue: Handle, info: *const c_void) -> i32 {
     unsafe {
         let Some(present) = (*owner.cast::<WsiCapsule>()).functions.pOutQueuePresentKHR else {
             return super::VK_ERROR_INITIALIZATION_FAILED;
@@ -458,7 +467,7 @@ unsafe extern "C" fn wsi_present(owner: *mut WsiNative, queue: Handle, info: *co
     }
 }
 
-unsafe extern "C" fn wsi_destroy_chain(owner: *mut WsiNative, device: Handle, chain: Vk) -> i32 {
+pub(super) unsafe fn wsi_destroy_chain(owner: *mut WsiNative, device: Handle, chain: Vk) -> i32 {
     let owner = owner.cast::<WsiCapsule>();
     unsafe {
         let Some(destroy) = (*owner).functions.pOutDestroySwapchainFFXAPI else {
@@ -474,7 +483,7 @@ unsafe extern "C" fn wsi_destroy_chain(owner: *mut WsiNative, device: Handle, ch
     0
 }
 
-unsafe extern "C" fn wsi_count(owner: *mut WsiNative, chain: Vk) -> u64 {
+pub(super) unsafe fn wsi_last_present_count(owner: *mut WsiNative, chain: Vk) -> u64 {
     unsafe {
         (*owner.cast::<WsiCapsule>())
             .functions
@@ -483,7 +492,7 @@ unsafe extern "C" fn wsi_count(owner: *mut WsiNative, chain: Vk) -> u64 {
     .map_or(0, |count| unsafe { count(vk_handle(chain)) })
 }
 
-unsafe extern "C" fn fg_create(
+pub(super) unsafe fn fg_create(
     owner: *mut FgNative,
     address: Handle,
     request: *const FgRequest,
@@ -525,11 +534,11 @@ unsafe extern "C" fn fg_create(
     }
 }
 
-unsafe extern "C" fn fg_has_effect(owner: *const FgNative) -> u32 {
+pub(super) unsafe fn fg_has_effect(owner: *const FgNative) -> u32 {
     u32::from(!unsafe { (*owner.cast::<FgCapsule>()).effect }.is_null())
 }
 
-unsafe extern "C" fn fg_destroy(owner: *mut FgNative, address: Handle) -> i32 {
+pub(super) unsafe fn fg_destroy(owner: *mut FgNative, address: Handle) -> i32 {
     unsafe {
         sdk_proc!(address, PfnFfxDestroyContext)(
             &raw mut (*owner.cast::<FgCapsule>()).effect,
@@ -555,7 +564,7 @@ unsafe extern "C" fn generate_on_present(
     }
 }
 
-unsafe extern "C" fn fg_disable(owner: *mut FgNative, address: Handle, chain: Vk) -> i32 {
+pub(super) unsafe fn fg_disable(owner: *mut FgNative, address: Handle, chain: Vk) -> i32 {
     let config = ffxConfigureDescFrameGeneration {
         header: header(FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION),
         swapChain: vk_handle(chain),
@@ -578,7 +587,7 @@ unsafe fn rect(owner: *const FgCapsule) -> FfxApiRect2D {
     }
 }
 
-unsafe extern "C" fn fg_configure(
+pub(super) unsafe fn fg_configure(
     owner: *mut FgNative,
     address: Handle,
     frame: *const FgFrame,
@@ -606,7 +615,7 @@ unsafe extern "C" fn fg_configure(
     unsafe { sdk_proc!(address, PfnFfxConfigure)(&raw mut (*owner).effect, &config.header) as i32 }
 }
 
-unsafe extern "C" fn fg_prepare(
+pub(super) unsafe fn fg_prepare(
     owner: *mut FgNative,
     address: Handle,
     frame: *const FgFrame,
@@ -652,7 +661,7 @@ unsafe extern "C" fn fg_prepare(
     }
 }
 
-unsafe extern "C" fn fg_generate(
+pub(super) unsafe fn fg_generate(
     owner: *mut FgNative,
     address: Handle,
     frame: *const FgFrame,
@@ -674,43 +683,3 @@ unsafe extern "C" fn fg_generate(
     command.outputs[0] = resource(&frame.output, true);
     unsafe { sdk_proc!(address, PfnFfxDispatch)(&raw mut (*owner).effect, &command.header) as i32 }
 }
-
-pub(super) static SR: Platform = Platform {
-    resolve,
-    allocate: sr_allocate,
-    release: release::<SrCapsule, Native>,
-    bind_vulkan: sr_bind,
-    create: sr_create,
-    plan: sr_plan,
-    evaluate: sr_evaluate,
-    has_effect: sr_has_effect,
-    destroy: sr_destroy,
-};
-
-pub(super) static FG: FgPlatform = FgPlatform {
-    wsi_allocate,
-    wsi_release: release::<WsiCapsule, WsiNative>,
-    wsi_create,
-    wsi_query,
-    wsi_complete,
-    wsi_has_context,
-    wsi_destroy,
-    wsi_wait,
-    wsi_register_ui: wsi_ui,
-    wsi_recreate,
-    wsi_get_images: wsi_images,
-    wsi_acquire,
-    wsi_present,
-    wsi_destroy_chain,
-    wsi_last_present_count: wsi_count,
-    fg_allocate,
-    fg_release: release::<FgCapsule, FgNative>,
-    fg_bind_vulkan: fg_bind,
-    fg_create,
-    fg_has_effect,
-    fg_destroy,
-    fg_disable,
-    fg_configure,
-    fg_prepare,
-    fg_generate,
-};

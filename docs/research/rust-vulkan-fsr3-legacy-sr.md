@@ -72,7 +72,9 @@ CMake target, `eng/` script or packager invokes it. `build-sdk.ps1`, the
 | Swapchain prepare and chain release | Rust. `PrepareDestroy` returns 0 for a null chain, -1 without owner, context or dispatch, disables the active FG only when it is linked to that chain, then waits. `DestroyChainChecked` prepares, returns 0 for a null chain, -1 without the replacement destroy entry, destroys the chain and clears the current chain only when it matches. The legacy void `DestroyChain` stays a native shell over the same Rust function and keeps its `stderr` line. |
 | Swapchain and FG retirement | Rust. `SwapchainDestroy` disables any active FG, prepares the current chain, returns -1 for a live context without a destroy export, then releases the SDK context and frees the capsule and owner only on success. `FgDestroy` disables, releases a live effect when the destroy export is bound, and frees on success. Every nonzero step returns its code and keeps the owner. |
 
-Two private tables in `bridge_platform.h` carry the leaves. `rsf_fsr3sr_platform`
+The Rust owner no longer has these tables: it calls the leaves in `platform.rs`
+directly, and its unit tests compile same-named fakes. In the C++ bridge, two
+private tables in `bridge_platform.h` carried the leaves. `rsf_fsr3sr_platform`
 is unchanged (ABI 1, 80 bytes, nine entries). `rsf_fsr3fg_platform` is new (ABI 1,
 208 bytes, 25 entries: 15 swapchain and 10 interpolation). The header now also
 holds `VulkanStoryFsr3FgFrame` and the two request records. Rust and C++ assert the
