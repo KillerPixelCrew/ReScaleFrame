@@ -38,6 +38,8 @@ mod gdextension;
 #[cfg(all(windows, not(test)))]
 mod host;
 mod platform;
+// Written only by the gdextension entry points, which unit tests do not build.
+#[cfg_attr(test, allow(dead_code))]
 mod properties;
 #[cfg(all(windows, not(test)))]
 mod runtime;

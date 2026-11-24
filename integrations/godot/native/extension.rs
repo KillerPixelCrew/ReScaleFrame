@@ -6,8 +6,7 @@
 use crate::control::default_settings;
 use crate::platform::{OptionField, OptionValue, Platform, Settings};
 use crate::properties::Properties;
-use crate::sys::rsf_godot_property_emit;
-use std::ffi::{CStr, c_void};
+use std::ffi::CStr;
 
 pub(crate) const INTEGER: u32 = 0;
 pub(crate) const REAL: u32 = 1;
@@ -150,14 +149,13 @@ pub(crate) fn admission(
     (if driver { ADMIT_DRIVER } else { 0 }) | (if renderer { ADMIT_RENDERER } else { 0 })
 }
 
-/// Compose the options from a borrowed Godot Dictionary, then call the registered
+/// Compose the options `read` fills from a borrowed Godot Dictionary, then call the registered
 /// engine service with the typed settings. Only the leaf can interpret Variants.
 #[cfg(all(windows, not(test)))]
-pub(crate) unsafe extern "C" fn rsf_godot_extension_configure(
+pub(crate) fn configure(
     admitted: u32,
     viewport: u64,
-    dictionary: *const c_void,
-    read: unsafe extern "C" fn(*const c_void, *const OptionField, *mut OptionValue) -> u32,
+    mut read: impl FnMut(&OptionField, &mut OptionValue),
 ) -> i32 {
     let required = ADMIT_DRIVER | ADMIT_RENDERER;
     if admitted & required != required {
@@ -165,9 +163,7 @@ pub(crate) unsafe extern "C" fn rsf_godot_extension_configure(
     }
     let mut values = [OptionValue::default(); FIELD_COUNT];
     for (field, value) in FIELDS.0.iter().zip(&mut values) {
-        if unsafe { read(dictionary, field, value) } == 0 {
-            return 0;
-        }
+        read(field, value);
     }
     compose(&values).map_or(0, |value| crate::CONTROL.configure_engine(&value, viewport))
 }
@@ -176,15 +172,8 @@ pub(crate) unsafe extern "C" fn rsf_godot_extension_configure(
 /// as Variants in its own Dictionary.
 // Called only by the gdextension entry points, which unit tests do not build.
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe extern "C" fn rsf_godot_extension_status(
-    admitted: u32,
-    dictionary: *mut c_void,
-    emit: rsf_godot_property_emit,
-) {
+pub(crate) fn status(admitted: u32, fields: &mut Properties) {
     use crate::platform::{ABI_VERSION, SETTINGS_ABI_VERSION, Status};
-    let Some(fields) = (unsafe { Properties::new(dictionary, emit) }) else {
-        return;
-    };
     fields.driver(c"graphics_driver");
     fields.renderer(c"renderer");
     fields.boolean(c"graphics_driver_supported", admitted & ADMIT_DRIVER != 0);

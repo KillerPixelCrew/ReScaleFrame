@@ -5,7 +5,6 @@
 fn main() {
     let headers = [
         "integrations/godot/native/api.h",
-        "integrations/godot/native/extension_abi.h",
         "integrations/godot/native/vulkan_features.h",
     ];
     let builder = rsf_bindgen::owner(
@@ -18,9 +17,6 @@ fn main() {
         ],
         &[],
         &[],
-    )
-    // A Rust record the header only forward-declares.
-    .blocklist_type("rsf_godot_effect_readback")
-    .raw_line("pub(crate) use crate::platform::EffectReadback as rsf_godot_effect_readback;");
+    );
     rsf_bindgen::write(builder, "sys.rs");
 }

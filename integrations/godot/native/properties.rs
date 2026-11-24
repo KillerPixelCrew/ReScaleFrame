@@ -1,97 +1,66 @@
 // SPDX-License-Identifier: MIT
-use crate::sys::*;
-use std::ffi::{CStr, c_char, c_void};
+//! The scripting status schema's writer: each field is a typed `Property` handed to the consumer
+//! (the GDExtension's Dictionary sink). Matrices and text are borrowed for the call.
+use std::ffi::CStr;
 
-pub(crate) struct Properties {
-    user: *mut c_void,
-    emit: unsafe extern "C" fn(*mut c_void, *const c_char, u32, *const rsf_godot_property),
+pub(crate) enum Property<'a> {
+    Integer(i64),
+    Bool(bool),
+    Real(f64),
+    Text(&'a CStr),
+    Extent([i32; 2]),
+    /// Basis rows then the origin.
+    Transform(&'a [f64; 12]),
+    /// Columns.
+    Projection(&'a [f64; 16]),
+    /// The RenderingServer's current rendering method, read by the consumer.
+    Renderer,
+    /// The RenderingServer's current driver name, read by the consumer.
+    Driver,
 }
 
-impl Properties {
-    /// # Safety
-    /// The sink and its user context must remain live for this writer. The sink
-    /// can only borrow the payload for each synchronous emission.
-    pub(crate) unsafe fn new(user: *mut c_void, emit: rsf_godot_property_emit) -> Option<Self> {
-        Some(Self { user, emit: emit? })
+pub(crate) struct Properties<'a> {
+    emit: &'a mut dyn FnMut(&CStr, Property),
+}
+
+impl<'a> Properties<'a> {
+    pub(crate) fn new(emit: &'a mut dyn FnMut(&CStr, Property)) -> Self {
+        Self { emit }
     }
 
-    fn emit(&self, name: &CStr, kind: u32, value: rsf_godot_property) {
-        unsafe { (self.emit)(self.user, name.as_ptr(), kind, &value) };
+    pub(crate) fn integer(&mut self, name: &CStr, integer: i64) {
+        (self.emit)(name, Property::Integer(integer));
     }
 
-    pub(crate) fn integer(&self, name: &CStr, integer: i64) {
-        self.emit(
-            name,
-            RSF_GODOT_PROPERTY_INTEGER,
-            rsf_godot_property { integer },
-        );
+    pub(crate) fn boolean(&mut self, name: &CStr, value: bool) {
+        (self.emit)(name, Property::Bool(value));
     }
 
-    pub(crate) fn boolean(&self, name: &CStr, value: bool) {
-        self.emit(
-            name,
-            RSF_GODOT_PROPERTY_BOOL,
-            rsf_godot_property {
-                integer: value.into(),
-            },
-        );
+    pub(crate) fn real(&mut self, name: &CStr, real: f64) {
+        (self.emit)(name, Property::Real(real));
     }
 
-    pub(crate) fn real(&self, name: &CStr, real: f64) {
-        self.emit(name, RSF_GODOT_PROPERTY_REAL, rsf_godot_property { real });
+    pub(crate) fn text(&mut self, name: &CStr, text: &CStr) {
+        (self.emit)(name, Property::Text(text));
     }
 
-    pub(crate) fn text(&self, name: &CStr, text: &CStr) {
-        self.emit(
-            name,
-            RSF_GODOT_PROPERTY_TEXT,
-            rsf_godot_property {
-                text: text.as_ptr(),
-            },
-        );
+    pub(crate) fn extent(&mut self, name: &CStr, extent: [i32; 2]) {
+        (self.emit)(name, Property::Extent(extent));
     }
 
-    pub(crate) fn extent(&self, name: &CStr, extent: [i32; 2]) {
-        self.emit(
-            name,
-            RSF_GODOT_PROPERTY_EXTENT,
-            rsf_godot_property { extent },
-        );
+    pub(crate) fn transform(&mut self, name: &CStr, matrix: &[f64; 12]) {
+        (self.emit)(name, Property::Transform(matrix));
     }
 
-    pub(crate) fn transform(&self, name: &CStr, matrix: &[f64; 12]) {
-        self.emit(
-            name,
-            RSF_GODOT_PROPERTY_TRANSFORM,
-            rsf_godot_property {
-                matrix: matrix.as_ptr(),
-            },
-        );
+    pub(crate) fn projection(&mut self, name: &CStr, matrix: &[f64; 16]) {
+        (self.emit)(name, Property::Projection(matrix));
     }
 
-    pub(crate) fn projection(&self, name: &CStr, matrix: &[f64; 16]) {
-        self.emit(
-            name,
-            RSF_GODOT_PROPERTY_PROJECTION,
-            rsf_godot_property {
-                matrix: matrix.as_ptr(),
-            },
-        );
+    pub(crate) fn renderer(&mut self, name: &CStr) {
+        (self.emit)(name, Property::Renderer);
     }
 
-    pub(crate) fn renderer(&self, name: &CStr) {
-        self.emit(
-            name,
-            RSF_GODOT_PROPERTY_RENDERER,
-            rsf_godot_property { integer: 0 },
-        );
-    }
-
-    pub(crate) fn driver(&self, name: &CStr) {
-        self.emit(
-            name,
-            RSF_GODOT_PROPERTY_DRIVER,
-            rsf_godot_property { integer: 0 },
-        );
+    pub(crate) fn driver(&mut self, name: &CStr) {
+        (self.emit)(name, Property::Driver);
     }
 }

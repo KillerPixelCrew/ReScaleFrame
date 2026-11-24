@@ -10,6 +10,7 @@ pub(crate) mod effect;
 mod runtime;
 mod sys;
 
+use crate::properties::Property;
 use api::{Dictionary, GString, Godot, Interface, StringName, Variant};
 use std::ffi::{CStr, c_void};
 use sys::*;
@@ -449,8 +450,8 @@ unsafe extern "C" fn ptrcall(
     }
 }
 
-/// The property sink of `ScriptDictionary`: `extension_abi.h` properties become Dictionary
-/// entries with godot-cpp's Variant conversions.
+/// The property sink of `ScriptDictionary`: each `Property` becomes a Dictionary entry with
+/// godot-cpp's Variant conversions.
 struct Sink<'a> {
     godot: &'static Godot,
     dictionary: &'a mut Dictionary,
@@ -458,79 +459,47 @@ struct Sink<'a> {
 }
 
 impl Sink<'_> {
-    fn emitter(&mut self) -> (*mut c_void, crate::sys::rsf_godot_property_emit) {
-        ((self as *mut Self).cast(), Some(emit))
-    }
-}
-
-unsafe extern "C" fn emit(
-    user: *mut c_void,
-    key: *const std::ffi::c_char,
-    kind: u32,
-    value: *const crate::sys::rsf_godot_property,
-) {
-    use crate::sys::*;
-    let (Some(sink), false, Some(value)) = (
-        unsafe { user.cast::<Sink>().as_mut() },
-        key.is_null(),
-        unsafe { value.as_ref() },
-    ) else {
-        return;
-    };
-    let godot = sink.godot;
-    let key = Variant::string(godot, unsafe { CStr::from_ptr(key) });
-    let slot = unsafe { api::dictionary_slot(godot, sink.dictionary.ptr_mut(), &key) };
-    if slot.is_null() {
-        return;
-    }
-    let put = |from, value: ConstTypePtr| unsafe { api::assign(godot, slot, from, value) };
-    match kind {
-        RSF_GODOT_PROPERTY_INTEGER => put(godot.from_int, api::arg(&unsafe { value.integer })),
-        RSF_GODOT_PROPERTY_BOOL => put(
-            godot.from_bool,
-            api::arg(&u8::from(unsafe { value.integer } != 0)),
-        ),
-        RSF_GODOT_PROPERTY_REAL => put(godot.from_float, api::arg(&unsafe { value.real })),
-        RSF_GODOT_PROPERTY_TEXT => {
-            let text = unsafe { value.text };
-            if !text.is_null() {
-                let text = GString::new(godot, unsafe { CStr::from_ptr(text) });
+    fn put(&mut self, key: &CStr, property: Property) {
+        let godot = self.godot;
+        let key = Variant::string(godot, key);
+        let slot = unsafe { api::dictionary_slot(godot, self.dictionary.ptr_mut(), &key) };
+        if slot.is_null() {
+            return;
+        }
+        let put = |from, value: ConstTypePtr| unsafe { api::assign(godot, slot, from, value) };
+        match property {
+            Property::Integer(value) => put(godot.from_int, api::arg(&value)),
+            Property::Bool(value) => put(godot.from_bool, api::arg(&u8::from(value))),
+            Property::Real(value) => put(godot.from_float, api::arg(&value)),
+            Property::Text(text) => {
+                let text = GString::new(godot, text);
                 put(godot.from_string, text.ptr());
             }
-        }
-        RSF_GODOT_PROPERTY_EXTENT => put(godot.from_vector2i, api::arg(&unsafe { value.extent })),
-        RSF_GODOT_PROPERTY_TRANSFORM => {
-            // Basis rows then the origin: Transform3D's single-precision memory order.
-            let matrix = unsafe { value.matrix };
-            if !matrix.is_null() {
-                let transform: [f32; 12] =
-                    std::array::from_fn(|index| unsafe { *matrix.add(index) } as f32);
+            Property::Extent(extent) => put(godot.from_vector2i, api::arg(&extent)),
+            Property::Transform(matrix) => {
+                // Basis rows then the origin: Transform3D's single-precision memory order.
+                let transform: [f32; 12] = matrix.map(|value| value as f32);
                 put(godot.from_transform3d, api::arg(&transform));
             }
-        }
-        RSF_GODOT_PROPERTY_PROJECTION => {
-            // Columns: Projection's single-precision memory order.
-            let matrix = unsafe { value.matrix };
-            if !matrix.is_null() {
-                let projection: [f32; 16] =
-                    std::array::from_fn(|index| unsafe { *matrix.add(index) } as f32);
+            Property::Projection(matrix) => {
+                // Columns: Projection's single-precision memory order.
+                let projection: [f32; 16] = matrix.map(|value| value as f32);
                 put(godot.from_projection, api::arg(&projection));
             }
+            Property::Renderer | Property::Driver => {
+                let method = if matches!(property, Property::Renderer) {
+                    api::Bind::GET_RENDERING_METHOD
+                } else {
+                    api::Bind::GET_RENDERING_DRIVER_NAME
+                };
+                let name = if self.rendering.is_null() {
+                    None
+                } else {
+                    unsafe { godot.string(method, self.rendering, &[]) }
+                };
+                let name = name.unwrap_or_else(|| GString::empty(godot));
+                put(godot.from_string, name.ptr());
+            }
         }
-        RSF_GODOT_PROPERTY_RENDERER | RSF_GODOT_PROPERTY_DRIVER => {
-            let method = if kind == RSF_GODOT_PROPERTY_RENDERER {
-                api::Bind::GET_RENDERING_METHOD
-            } else {
-                api::Bind::GET_RENDERING_DRIVER_NAME
-            };
-            let name = if sink.rendering.is_null() {
-                None
-            } else {
-                unsafe { godot.string(method, sink.rendering, &[]) }
-            };
-            let name = name.unwrap_or_else(|| GString::empty(godot));
-            put(godot.from_string, name.ptr());
-        }
-        _ => {}
     }
 }

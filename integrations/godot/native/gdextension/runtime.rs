@@ -6,6 +6,8 @@ use super::sys::*;
 use super::{Dictionary, RUNTIME_CLASS, Sink};
 use crate::extension::{self, REAL, VARIANT_BOOL, VARIANT_INT};
 use crate::platform::{OptionField, OptionValue};
+use crate::properties::Properties;
+use crate::sys::rsf_input_dump_request;
 use std::ffi::{CStr, c_void};
 use std::ptr::NonNull;
 
@@ -62,14 +64,7 @@ pub(super) unsafe fn configure(
     }
     let admitted = admission(godot, godot.rendering_server());
     let reader = Reader { godot, options };
-    unsafe {
-        extension::rsf_godot_extension_configure(
-            admitted,
-            viewport,
-            (&raw const reader).cast(),
-            read_option,
-        ) != 0
-    }
+    extension::configure(admitted, viewport, |field, value| reader.read(field, value)) != 0
 }
 
 struct Reader {
@@ -77,39 +72,28 @@ struct Reader {
     options: ConstTypePtr,
 }
 
-/// One option: absent leaves the default, otherwise the Variant type and godot-cpp's
-/// `int64_t(Variant)` or `double(Variant)` conversion.
-unsafe extern "C" fn read_option(
-    reader: *const c_void,
-    field: *const OptionField,
-    value: *mut OptionValue,
-) -> u32 {
-    let (Some(reader), Some(field), Some(value)) = (
-        unsafe { reader.cast::<Reader>().as_ref() },
-        unsafe { field.as_ref() },
-        unsafe { value.as_mut() },
-    ) else {
-        return 0;
-    };
-    let godot = reader.godot;
-    let key = Variant::string(godot, unsafe { CStr::from_ptr(field.name) });
-    let Some(raw) = (unsafe { api::dictionary_get(godot, reader.options, &key) }) else {
-        return 1;
-    };
-    value.present = 1;
-    value.variant = match unsafe { (godot.interface.variant_get_type)(raw) } {
-        TYPE_INT => VARIANT_INT,
-        TYPE_BOOL => VARIANT_BOOL,
-        _ => VARIANT_OTHER,
-    };
-    if field.conversion == REAL {
-        unsafe { (godot.to_float)((&raw mut value.real).cast(), raw) };
-    } else {
-        unsafe { (godot.to_int)((&raw mut value.integer).cast(), raw) };
+impl Reader {
+    /// One option: absent leaves the default, otherwise the Variant type and godot-cpp's
+    /// `int64_t(Variant)` or `double(Variant)` conversion.
+    fn read(&self, field: &OptionField, value: &mut OptionValue) {
+        let godot = self.godot;
+        let key = Variant::string(godot, unsafe { CStr::from_ptr(field.name) });
+        let Some(raw) = (unsafe { api::dictionary_get(godot, self.options, &key) }) else {
+            return;
+        };
+        value.present = 1;
+        value.variant = match unsafe { (godot.interface.variant_get_type)(raw) } {
+            TYPE_INT => VARIANT_INT,
+            TYPE_BOOL => VARIANT_BOOL,
+            _ => VARIANT_OTHER,
+        };
+        if field.conversion == REAL {
+            unsafe { (godot.to_float)((&raw mut value.real).cast(), raw) };
+        } else {
+            unsafe { (godot.to_int)((&raw mut value.integer).cast(), raw) };
+        }
     }
-    1
 }
-
 /// `get_status()`.
 pub(super) fn get_status(godot: &'static Godot) -> Dictionary {
     let mut dictionary = Dictionary::new(godot);
@@ -120,8 +104,7 @@ pub(super) fn get_status(godot: &'static Godot) -> Dictionary {
         dictionary: &mut dictionary,
         rendering,
     };
-    let (user, emit) = sink.emitter();
-    unsafe { extension::rsf_godot_extension_status(admitted, user, emit) };
+    extension::status(admitted, &mut Properties::new(&mut |key, property| sink.put(key, property)));
     dictionary
 }
 

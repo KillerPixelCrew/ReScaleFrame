@@ -3,13 +3,13 @@
 //! color and depth and motion vectors. Each instance owns one `effect.rs` probe. The callback's
 //! scene objects, RIDs and readback bytes live in `Call` for that callback only; the readback's
 //! shader, uniform and sampler objects live in `Readback` through the synchronous capture
-//! sequence that `rsf_godot_effect_record_motion` drives.
+//! sequence that `Readback::record` drives.
 use super::api::{self, Bind, GString, Godot, PackedBytes, Ref, StringName, TypedArray, arg};
 use super::sys::*;
 use super::{Dictionary, EFFECT_CLASS, Sink};
 use crate::effect::Effect;
+use crate::properties::{Properties, Property};
 use crate::platform::{EFFECT_MOTION_FORMAT, EffectFrame, EffectReadback, EffectResources};
-use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 
 /// `CompositorEffect::EFFECT_CALLBACK_TYPE_POST_TRANSPARENT`.
@@ -119,10 +119,9 @@ pub(super) unsafe fn get_status(godot: &'static Godot, instance: *mut c_void) ->
         dictionary: &mut dictionary,
         rendering,
     };
-    let (user, emit) = sink.emitter();
-    unsafe {
-        crate::effect::rsf_godot_effect_properties(&instance.probe, rsf_godot_version(), user, emit)
-    };
+    let version = unsafe { CStr::from_ptr(rsf_godot_version()) };
+    let mut emit = |key: &CStr, property: Property| sink.put(key, property);
+    crate::effect::properties(&instance.probe, version, &mut Properties::new(&mut emit));
     dictionary
 }
 
@@ -266,16 +265,7 @@ pub(crate) unsafe fn leaf_read_motion(
         *size = 0;
     }
     let mut readback = Readback::new(call.godot, call.device, call.motion);
-    let calls = rsf_godot_motion_calls {
-        compile: Some(compile_motion),
-        prepare: Some(prepare_motion),
-        dispatch: Some(dispatch_motion),
-        read: Some(read_motion),
-        free_resource: Some(free_motion_resource),
-    };
-    let recorded = unsafe {
-        crate::effect::rsf_godot_effect_record_motion((&raw mut readback).cast(), plan, &calls)
-    } != 0;
+    let recorded = readback.record(unsafe { &*plan });
     // The PackedByteArray owns the CPU copy until the callback returns.
     call.bytes = readback.bytes.take();
     drop(readback);
@@ -394,7 +384,7 @@ impl Readback {
         Some(uniform)
     }
 
-    fn prepare(&mut self, plan: &EffectReadback, valid: &mut [u32; 4]) -> Option<()> {
+    fn prepare(&mut self, plan: &EffectReadback) -> Option<()> {
         let godot = self.godot;
         let constants = TypedArray::new(godot, c"RDPipelineSpecializationConstant");
         self.pipeline = self.rid(
@@ -430,8 +420,6 @@ impl Readback {
             &[uniforms.ptr(), arg(&self.shader), arg(&set)],
         )?;
         self.uniforms = Some(uniforms);
-        *valid = [self.pipeline, self.sampler, self.buffer, self.uniform_set]
-            .map(|rid| u32::from(rid != 0));
         Some(())
     }
 
@@ -484,48 +472,30 @@ impl Readback {
         Some(())
     }
 
-    fn free(&self, resource: u32) -> bool {
-        let rid = match resource {
-            RSF_GODOT_MOTION_SHADER => self.shader,
-            RSF_GODOT_MOTION_PIPELINE => self.pipeline,
-            RSF_GODOT_MOTION_SAMPLER => self.sampler,
-            RSF_GODOT_MOTION_BUFFER => self.buffer,
-            RSF_GODOT_MOTION_UNIFORMS => self.uniform_set,
-            _ => return false,
-        };
-        rid == 0 || unsafe { self.godot.call(Bind::FREE_RID, self.device, &[arg(&rid)]) }
+    /// Releases every RID, children first, and reports whether each release succeeded.
+    fn free(&self) -> bool {
+        let mut freed = true;
+        for rid in [
+            self.uniform_set,
+            self.buffer,
+            self.sampler,
+            self.pipeline,
+            self.shader,
+        ] {
+            freed &= rid == 0
+                || unsafe { self.godot.call(Bind::FREE_RID, self.device, &[arg(&rid)]) };
+        }
+        freed
     }
-}
 
-fn readback<'a>(call: *mut c_void) -> &'a mut Readback {
-    // SAFETY: `leaf_read_motion` lends its `Readback` for the synchronous sequence.
-    unsafe { &mut *call.cast::<Readback>() }
-}
-
-unsafe extern "C" fn compile_motion(call: *mut c_void, plan: *const EffectReadback) -> u32 {
-    (readback(call).compile(unsafe { &*plan }) == Some(true)).into()
-}
-
-unsafe extern "C" fn prepare_motion(
-    call: *mut c_void,
-    plan: *const EffectReadback,
-    valid: *mut u32,
-) -> u32 {
-    let valid = unsafe { &mut *valid.cast::<[u32; 4]>() };
-    readback(call)
-        .prepare(unsafe { &*plan }, valid)
-        .is_some()
-        .into()
-}
-
-unsafe extern "C" fn dispatch_motion(call: *mut c_void, plan: *const EffectReadback) -> u32 {
-    readback(call).dispatch(unsafe { &*plan }).is_some().into()
-}
-
-unsafe extern "C" fn read_motion(call: *mut c_void) -> u32 {
-    readback(call).read().is_some().into()
-}
-
-unsafe extern "C" fn free_motion_resource(call: *mut c_void, resource: u32) -> u32 {
-    readback(call).free(resource).into()
+    /// Only the SDK leaves can allocate, record and release Godot resources. Finish by releasing
+    /// the resources created up to that point, even after a refusal.
+    fn record(&mut self, plan: &EffectReadback) -> bool {
+        let recorded = self.compile(plan) == Some(true)
+            && self.prepare(plan).is_some()
+            && ![self.pipeline, self.sampler, self.buffer, self.uniform_set].contains(&0)
+            && self.dispatch(plan).is_some()
+            && self.read().is_some();
+        self.free() && recorded
+    }
 }

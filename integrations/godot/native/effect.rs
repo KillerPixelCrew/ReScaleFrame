@@ -17,8 +17,7 @@ use crate::platform::{
     EFFECT_MOTION_FORMAT, EffectFrame, EffectReadback, EffectResources, EffectStatus,
 };
 use crate::properties::Properties;
-use crate::sys::*;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 #[cfg(test)]
@@ -160,62 +159,12 @@ impl Effect {
     }
 }
 
-/// Only the SDK leaves can allocate, record and release Godot resources. Finish
-/// by releasing the resources created up to that point, even after a refusal.
+/// The scripting status schema of ReScaleFrameEffect.get_status().
 // Called only by the gdextension entry points, which unit tests do not build.
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe extern "C" fn rsf_godot_effect_record_motion(
-    call: *mut c_void,
-    plan: *const EffectReadback,
-    calls: *const rsf_godot_motion_calls,
-) -> u32 {
-    let Some(rsf_godot_motion_calls {
-        compile: Some(compile),
-        prepare: Some(prepare),
-        dispatch: Some(dispatch),
-        read: Some(read),
-        free_resource: Some(free),
-    }) = (unsafe { calls.as_ref() })
-    else {
-        return 0;
-    };
-    let mut valid = [0; 4];
-    let mut completed = unsafe { compile(call, plan) } != 0
-        && unsafe { prepare(call, plan, valid.as_mut_ptr()) } != 0
-        && !valid.contains(&0)
-        && unsafe { dispatch(call, plan) } != 0
-        && unsafe { read(call) } != 0;
-
-    for resource in [
-        RSF_GODOT_MOTION_UNIFORMS,
-        RSF_GODOT_MOTION_BUFFER,
-        RSF_GODOT_MOTION_SAMPLER,
-        RSF_GODOT_MOTION_PIPELINE,
-        RSF_GODOT_MOTION_SHADER,
-    ] {
-        completed &= unsafe { free(call, resource) } != 0;
-    }
-    u32::from(completed)
-}
-
-// Called only by the gdextension entry points, which unit tests do not build.
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe extern "C" fn rsf_godot_effect_properties(
-    effect: *const Effect,
-    version: *const c_char,
-    user: *mut c_void,
-    emit: rsf_godot_property_emit,
-) {
-    if version.is_null() {
-        return;
-    }
-    let (Some(effect), Some(fields)) = (unsafe { effect.as_ref() }, unsafe {
-        Properties::new(user, emit)
-    }) else {
-        return;
-    };
+pub(crate) fn properties(effect: &Effect, version: &CStr, fields: &mut Properties) {
     let status = effect.status();
-    fields.text(c"version", unsafe { CStr::from_ptr(version) });
+    fields.text(c"version", version);
     fields.text(c"stage", STAGE);
     fields.boolean(c"rendering_ready", status.rendering_ready != 0);
     fields.boolean(c"sr_active", status.sr_active != 0);
