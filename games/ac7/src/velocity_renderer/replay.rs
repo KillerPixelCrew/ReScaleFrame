@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Scope facts and synchronous leases for AC7 D3D11 replay.
 use super::d3d11::{Pipeline, Renderer, clock_ms};
-use super::{LIFETIME, admit, lock, published, release_renderer, reset_for_renderer};
+#[cfg(feature = "warp-fixture")]
+use super::release_renderer;
+use super::{LIFETIME, admit, lock, published, reset_for_renderer};
 use crate::sys::rsf_frame_tap_geometry;
 use crate::velocity_commit::{Log, log_frame_end, refused, set_log};
 use crate::velocity_history;
@@ -145,8 +147,9 @@ pub(crate) fn shader_creation_count() -> u32 {
     unsafe { published(&LIFETIME).cast::<Renderer>().as_ref() }.map_or(0, Renderer::count)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_ac7_velocity_release() {
+/// Destroys the renderer between fixture cases. The carrier never retires it before exit.
+#[cfg(feature = "warp-fixture")]
+pub(crate) fn rsf_ac7_velocity_release() {
     let _lease = lock(&REPLAY);
     release_renderer();
     let _ = SCOPE.replace(None);

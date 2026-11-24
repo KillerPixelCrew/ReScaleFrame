@@ -162,7 +162,7 @@ struct View {
     native_depth: ID3D11Texture2D,
     depth: ID3D11Texture2D,
     depth_target: ID3D11DepthStencilView,
-    _motion: ID3D11Texture2D,
+    // The motion target and view hold the motion texture.
     motion_target: ID3D11RenderTargetView,
     motion_view: ID3D11ShaderResourceView,
     merged: ID3D11Texture2D,
@@ -200,7 +200,6 @@ impl View {
             native_depth,
             depth,
             depth_target,
-            _motion: motion,
             motion_target,
             motion_view,
             merged,
@@ -406,22 +405,18 @@ impl Renderer {
         let mut timing = Timing::new(entered, scope.native_frame as u32);
         let mut pixel = None;
         unsafe { c.PSGetShader(&mut pixel, None, None) };
-        let mut vertex_hash = 0;
-        let variant = self.shaders.variant(
-            &VariantRequest {
-                shaders: [
-                    g.vertex_shader,
-                    raw(&pixel),
-                    raw(&inputs.geometry),
-                    raw(&inputs.hull),
-                    raw(&inputs.domain),
-                ],
-                layout: g.input_layout,
-                material_blend: scope.material_blend,
-                stride: g.strides[0],
-            },
-            &mut vertex_hash,
-        );
+        let variant = self.shaders.variant(&VariantRequest {
+            shaders: [
+                g.vertex_shader,
+                raw(&pixel),
+                raw(&inputs.geometry),
+                raw(&inputs.hull),
+                raw(&inputs.domain),
+            ],
+            layout: g.input_layout,
+            material_blend: scope.material_blend,
+            stride: g.strides[0],
+        });
         timing.phase = clock_ms();
         timing.sample.shader_ms = timing.phase - entered;
         let variant = variant?;
@@ -459,7 +454,7 @@ impl Renderer {
             primitive_key: scope.primitive_key,
             material_key: scope.material_key,
             vertex_factory_key: scope.vertex_factory_key,
-            vertex_hash,
+            vertex_hash: variant.vertex_hash,
             geometry_hash: variant.geometry_hash,
             start: g.start,
             base_vertex: g.base_vertex,

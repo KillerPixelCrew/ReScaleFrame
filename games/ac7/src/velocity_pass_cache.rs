@@ -24,9 +24,15 @@ const HULL: usize = 3;
 const DOMAIN: usize = 4;
 const STAGES: usize = 5;
 
-// Builder outcomes. Anything else leaves the key unrecorded, so a later draw builds again.
-pub(crate) const REFUSED: i32 = 0;
-pub(crate) const BUILT: i32 = 1;
+/// What the device owner's builder made of a variant.
+pub(crate) enum Built {
+    /// The variant's slot in the native variant list.
+    Slot(u32),
+    /// Cached, so the same key is not built again.
+    Refused,
+    /// Left unrecorded, so a later draw builds again.
+    Retry,
+}
 
 // The beam/trail vertex factory declaration: semantics 0 to 4 once each in stream 0 of an
 // 80-byte vertex, an optional semantic 5 at the start of stream 1, all per vertex, float4 except
@@ -57,6 +63,7 @@ pub(crate) struct VariantRequest {
 pub(crate) struct VariantSources<'a> {
     pub(crate) bytes: [&'a [u8]; STAGES],
     pub(crate) elements: &'a [LayoutElement],
+    pub(crate) vertex_hash: u32,
     pub(crate) geometry_hash: u32,
     pub(crate) beam_layout: bool,
 }
@@ -77,6 +84,7 @@ struct VariantKey {
 struct Lease {
     bytes: [Option<Arc<Vec<u8>>>; STAGES],
     elements: Vec<LayoutElement>,
+    vertex_hash: u32,
     geometry_hash: u32,
     beam_layout: bool,
 }
@@ -183,7 +191,7 @@ impl Cache {
             .filter(|source| source.stage as usize == stage)
     }
 
-    fn prepare(&self, request: &VariantRequest, vertex_hash: &mut u32) -> Admission {
+    fn prepare(&self, request: &VariantRequest) -> Admission {
         // A bound native geometry shader, or either tessellation stage, must have its own
         // observed source. The draw callback already refuses a partial tessellation pipeline.
         let tessellated = !request.shaders[HULL].is_null() || !request.shaders[DOMAIN].is_null();
@@ -203,8 +211,6 @@ impl Cache {
             }
         }
         let hashes = sources.map(|source| source.map_or(0, |source| source.hash));
-        *vertex_hash = hashes[VERTEX];
-
         let layout = self.layouts.get(&request.layout.addr());
         let elements = layout.map_or(&[][..], |layout| layout.elements.as_slice());
         let beam_layout = beam_layout(request.stride, elements);
@@ -235,6 +241,7 @@ impl Cache {
             Lease {
                 bytes,
                 elements: leased_elements,
+                vertex_hash: hashes[VERTEX],
                 geometry_hash,
                 beam_layout,
             },
@@ -256,6 +263,7 @@ impl Cache {
         self.generation = self.generation.wrapping_add(1);
     }
 
+    #[cfg(any(test, feature = "warp-fixture"))]
     fn release(&mut self) {
         self.reset_variants();
         self.sources = HashMap::new();
@@ -267,12 +275,11 @@ impl Cache {
 fn admit(
     state: &Mutex<Cache>,
     request: &VariantRequest,
-    vertex_hash: &mut u32,
-    build: impl FnOnce(&VariantSources<'_>, &mut u32) -> i32,
+    build: impl FnOnce(&VariantSources<'_>) -> Built,
 ) -> u32 {
     let (generation, key, lease) = {
         let cache = lock(state);
-        match cache.prepare(request, vertex_hash) {
+        match cache.prepare(request) {
             Admission::Unavailable => return NO_VARIANT,
             Admission::Known(slot) => return slot.unwrap_or(NO_VARIANT),
             Admission::Build(key, lease) => (cache.generation, key, lease),
@@ -285,15 +292,15 @@ fn admit(
     let sources = VariantSources {
         bytes,
         elements: &lease.elements,
+        vertex_hash: lease.vertex_hash,
         geometry_hash: lease.geometry_hash,
         beam_layout: lease.beam_layout,
     };
     // The builder creates D3D11 shaders, whose creation callbacks report back into this cache.
-    let mut slot = NO_VARIANT;
-    let entry = match build(&sources, &mut slot) {
-        BUILT if slot != NO_VARIANT => Some(slot),
-        REFUSED => None,
-        _ => return NO_VARIANT,
+    let entry = match build(&sources) {
+        Built::Slot(slot) => Some(slot),
+        Built::Refused => None,
+        Built::Retry => return NO_VARIANT,
     };
     lock(state).record(generation, key, entry)
 }
@@ -331,10 +338,9 @@ pub(crate) unsafe extern "C" fn rsf_ac7_velocity_layout_seen(
 #[cfg(windows)]
 pub(crate) fn admit_variant(
     request: &VariantRequest,
-    vertex_hash: &mut u32,
-    build: impl FnOnce(&VariantSources<'_>, &mut u32) -> i32,
+    build: impl FnOnce(&VariantSources<'_>) -> Built,
 ) -> u32 {
-    admit(&CACHE, request, vertex_hash, build)
+    admit(&CACHE, request, build)
 }
 
 #[cfg(windows)]
@@ -348,6 +354,7 @@ pub(crate) fn reset_variants() {
 }
 
 /// The pass was released (`velocity_renderer.rs`).
+#[cfg(feature = "warp-fixture")]
 pub(crate) fn release() {
     lock(&CACHE).release();
 }

@@ -13,7 +13,6 @@ void rsf_ac7_velocity_scope(const rsf_game_render_pass* scope);
 void rsf_ac7_velocity_geometry(const struct rsf_frame_tap_geometry* geometry);
 int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass* pass);
 void rsf_ac7_velocity_frame_end(void);
-void rsf_ac7_velocity_release(void);
 #ifdef __cplusplus
 }
 #endif

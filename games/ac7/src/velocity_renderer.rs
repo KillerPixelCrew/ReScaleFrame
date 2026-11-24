@@ -108,6 +108,7 @@ fn admit(
 }
 
 /// Destroys the published renderer, then runs `released`.
+#[cfg(any(test, feature = "warp-fixture"))]
 fn release(state: &Mutex<Lifetime>, released: impl FnOnce()) {
     let old = lock(state).published.take();
     if let Some(old) = old {
@@ -144,6 +145,7 @@ fn reset_for_renderer() {
 
 /// Destroys the published renderer and forgets the observed sources, layouts, variants, history
 /// and profile.
+#[cfg(feature = "warp-fixture")]
 fn release_renderer() {
     release(&LIFETIME, || {
         velocity_pass_cache::release();

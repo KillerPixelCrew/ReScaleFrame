@@ -164,8 +164,7 @@ fn beam_layout_matches_only_the_factory_declaration() {
 #[test]
 fn unobserved_or_mismatched_stages_are_unavailable() {
     let state = Mutex::new(observed());
-    let mut hash = 0;
-    let build = |_: &VariantSources, _: &mut u32| -> i32 { panic!("no build expected") };
+    let build = |_: &VariantSources| -> Built { panic!("no build expected") };
     for shaders in [
         [0, PS, 0, 0, 0],
         [VS, 0, 0, 0, 0],
@@ -176,10 +175,7 @@ fn unobserved_or_mismatched_stages_are_unavailable() {
         [VS, PS, 0, 0, DS],
         [VS, PS, 0, DS, HS],
     ] {
-        assert_eq!(
-            admit(&state, &request(shaders, 0, 0), &mut hash, build),
-            NO_VARIANT
-        );
+        assert_eq!(admit(&state, &request(shaders, 0, 0), build), NO_VARIANT);
     }
     assert!(lock(&state).variants.is_empty());
 }
@@ -191,42 +187,38 @@ fn built_variants_are_reused_and_refusals_cached() {
     let vertex = cache.sources[&VS].hash;
     let state = Mutex::new(cache);
     let builds = Cell::new(0);
-    let mut hash = 0;
 
     let first = request([VS, PS, 0, 0, 0], LAYOUT, 2);
-    let slot = admit(&state, &first, &mut hash, |sources, slot| {
+    let slot = admit(&state, &first, |sources| {
         builds.set(builds.get() + 1);
         assert!(sources.beam_layout);
         assert_eq!(sources.elements.len(), 6);
         assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 0, 0, 0]);
-        assert_eq!(sources.geometry_hash, 0);
+        assert_eq!((sources.vertex_hash, sources.geometry_hash), (vertex, 0));
         let lent = sources.bytes[PIXEL];
         assert_eq!(lent, container(64, 2));
-        *slot = 3;
-        BUILT
+        Built::Slot(3)
     });
-    assert_eq!((slot, hash), (3, vertex));
-    hash = 0;
-    let again = admit(&state, &first, &mut hash, |_, _| panic!("reused"));
-    assert_eq!((again, hash), (3, vertex));
+    assert_eq!(slot, 3);
+    let again = admit(&state, &first, |_| panic!("reused"));
+    assert_eq!(again, 3);
 
     // Material blend is part of the identity, and a refusal is remembered.
     let additive = request([VS, PS, 0, 0, 0], LAYOUT, 4);
-    let refuse = |_: &VariantSources, _: &mut u32| {
+    let refuse = |_: &VariantSources| {
         builds.set(builds.get() + 1);
-        REFUSED
+        Built::Refused
     };
-    assert_eq!(admit(&state, &additive, &mut hash, refuse), NO_VARIANT);
-    assert_eq!(admit(&state, &additive, &mut hash, refuse), NO_VARIANT);
+    assert_eq!(admit(&state, &additive, refuse), NO_VARIANT);
+    assert_eq!(admit(&state, &additive, refuse), NO_VARIANT);
     assert_eq!(builds.get(), 2);
     assert_eq!(lock(&state).variants.len(), 2);
 
     // A new layout object at the same address takes a new serial and a new variant.
     lock(&state).observe_layout(LAYOUT, Some(beam(false).as_slice()));
-    let rebuilt = admit(&state, &first, &mut hash, |sources, slot| {
+    let rebuilt = admit(&state, &first, |sources| {
         assert_eq!(sources.elements.len(), 5);
-        *slot = 4;
-        BUILT
+        Built::Slot(4)
     });
     assert_eq!(rebuilt, 4);
     assert_eq!(lock(&state).variants.len(), 3);
@@ -235,17 +227,13 @@ fn built_variants_are_reused_and_refusals_cached() {
 #[test]
 fn unstored_outcomes_build_again() {
     let state = Mutex::new(observed());
-    let mut hash = 0;
     let plain = request([VS, PS, 0, 0, 0], 0, 0);
-    for outcome in [2, BUILT] {
-        assert_eq!(admit(&state, &plain, &mut hash, |_, _| outcome), NO_VARIANT);
-    }
+    assert_eq!(admit(&state, &plain, |_| Built::Retry), NO_VARIANT);
     assert!(lock(&state).variants.is_empty());
-    let slot = admit(&state, &plain, &mut hash, |sources, slot| {
+    let slot = admit(&state, &plain, |sources| {
         assert!(!sources.beam_layout);
         assert_eq!(sources.elements.len(), 0);
-        *slot = 0;
-        BUILT
+        Built::Slot(0)
     });
     assert_eq!(slot, 0);
 }
@@ -255,22 +243,20 @@ fn beam_classification_separates_variants_for_the_same_layout() {
     let mut cache = observed();
     cache.observe_layout(LAYOUT, Some(&beam(false)));
     let state = Mutex::new(cache);
-    let mut hash = 0;
     let mut draw = request([VS, PS, 0, 0, 0], LAYOUT, 0);
     draw.stride = 64;
     assert_eq!(
-        admit(&state, &draw, &mut hash, |source, _| {
+        admit(&state, &draw, |source| {
             assert!(!source.beam_layout);
-            REFUSED
+            Built::Refused
         }),
         NO_VARIANT
     );
     draw.stride = BEAM_STRIDE;
     assert_eq!(
-        admit(&state, &draw, &mut hash, |source, slot| {
+        admit(&state, &draw, |source| {
             assert!(source.beam_layout);
-            *slot = 0;
-            BUILT
+            Built::Slot(0)
         }),
         0
     );
@@ -282,19 +268,15 @@ fn builder_leases_payload_across_replacement() {
     let bytes = cache.sources[&VS].bytes.as_ptr();
     let state = Mutex::new(cache);
     let draw = request([VS, PS, 0, 0, 0], 0, 0);
-    let mut hash = 0;
-    admit(&state, &draw, &mut hash, |source, _| {
+    admit(&state, &draw, |source| {
         lock(&state).observe_shader(VS, VERTEX as u32, None);
         assert_eq!(source.bytes[VERTEX].as_ptr(), bytes);
         // SAFETY: The callback still holds the lease after the cache forgot the source.
         let lent = source.bytes[VERTEX];
         assert_eq!(lent, container(64, 1));
-        REFUSED
+        Built::Refused
     });
-    assert_eq!(
-        admit(&state, &draw, &mut hash, |_, _| panic!("old source")),
-        NO_VARIANT
-    );
+    assert_eq!(admit(&state, &draw, |_| panic!("old source")), NO_VARIANT);
 }
 
 #[test]
@@ -306,61 +288,42 @@ fn generated_geometry_history_identity() {
         cache.sources[&DS].hash,
     );
     let state = Mutex::new(cache);
-    let mut hash = 0;
-    admit(
-        &state,
-        &request([VS, PS, GS, 0, 0], 0, 0),
-        &mut hash,
-        |sources, slot| {
-            assert_eq!(sources.geometry_hash, gs);
-            assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 64, 0, 0]);
-            *slot = 0;
-            BUILT
-        },
-    );
-    admit(
-        &state,
-        &request([VS, PS, 0, HS, DS], 0, 0),
-        &mut hash,
-        |sources, slot| {
-            assert_eq!(sources.geometry_hash, hs ^ (ds << 1) ^ (ds >> 31));
-            assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 0, 64, 64]);
-            *slot = 1;
-            BUILT
-        },
-    );
+    admit(&state, &request([VS, PS, GS, 0, 0], 0, 0), |sources| {
+        assert_eq!(sources.geometry_hash, gs);
+        assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 64, 0, 0]);
+        Built::Slot(0)
+    });
+    admit(&state, &request([VS, PS, 0, HS, DS], 0, 0), |sources| {
+        assert_eq!(sources.geometry_hash, hs ^ (ds << 1) ^ (ds >> 31));
+        assert_eq!(sources.bytes.map(<[u8]>::len), [64, 64, 0, 64, 64]);
+        Built::Slot(1)
+    });
     assert_eq!(lock(&state).variants.len(), 2);
 }
 
 #[test]
 fn reset_discards_slots_and_late_results() {
     let state = Mutex::new(observed());
-    let mut hash = 0;
     let plain = request([VS, PS, 0, 0, 0], 0, 0);
-    let slot = admit(&state, &plain, &mut hash, |_, slot| {
+    let slot = admit(&state, &plain, |_| {
         // The native list is discarded while this build runs.
         lock(&state).reset_variants();
-        *slot = 0;
-        BUILT
+        Built::Slot(0)
     });
     assert_eq!(slot, NO_VARIANT);
     assert!(lock(&state).variants.is_empty());
 
-    admit(&state, &plain, &mut hash, |_, slot| {
-        *slot = 0;
-        BUILT
-    });
+    admit(&state, &plain, |_| Built::Slot(0));
     lock(&state).reset_variants();
     let builds = Cell::new(0);
-    admit(&state, &plain, &mut hash, |_, slot| {
+    admit(&state, &plain, |_| {
         builds.set(1);
-        *slot = 0;
-        BUILT
+        Built::Slot(0)
     });
     assert_eq!(builds.get(), 1);
 
     lock(&state).release();
-    assert_eq!(admit(&state, &plain, &mut hash, |_, _| BUILT), NO_VARIANT);
+    assert_eq!(admit(&state, &plain, |_| Built::Slot(0)), NO_VARIANT);
     let cache = lock(&state);
     assert!(cache.sources.is_empty() && cache.variants.is_empty() && cache.source_bytes == 0);
 }

@@ -2,7 +2,7 @@
 //! Device-side shader and variant ownership for translucent velocity replay.
 use crate::velocity_commit::{FULLSCREEN_SOURCE, MERGE_SOURCE};
 use crate::velocity_geometry::GeometryRegisters;
-use crate::velocity_pass_cache::{BUILT, REFUSED, VariantRequest, VariantSources, admit_variant};
+use crate::velocity_pass_cache::{Built, VariantRequest, VariantSources, admit_variant};
 use crate::velocity_stage::{HISTORY_WRITER, compile_source};
 use crate::velocity_stream::INDIRECT_SOURCE;
 use crate::velocity_tessellation::DomainRegisters;
@@ -17,8 +17,6 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32G32B32A32_FLOAT;
 use windows::core::{PCSTR, Result};
-
-const RETRY: i32 = 2;
 
 fn create<T>(make: impl FnOnce(*mut Option<T>) -> Result<()>) -> Option<T> {
     let mut shader = None;
@@ -57,6 +55,7 @@ pub(super) struct Variant {
     pub(super) layout: Option<ID3D11InputLayout>,
     pub(super) maximum_vertices: u32,
     pub(super) history_slot: u32,
+    pub(super) vertex_hash: u32,
     pub(super) geometry_hash: u32,
     pub(super) input_points: u32,
     pub(super) particle: bool,
@@ -126,6 +125,7 @@ impl Device {
                 .ok_or(TRANSFORM)?;
         let mut made = Variant {
             maximum_vertices: 1,
+            vertex_hash: sources.vertex_hash,
             particle: particle != 0,
             ..Variant::default()
         };
@@ -286,20 +286,15 @@ impl Device {
         })
     }
 
-    pub(super) fn variant(&mut self, request: &VariantRequest, hash: &mut u32) -> Option<Variant> {
-        let slot = admit_variant(request, hash, |sources, slot| {
-            match self.build(sources, request) {
-                Ok(index) => {
-                    *slot = index;
-                    BUILT
+    pub(super) fn variant(&mut self, request: &VariantRequest) -> Option<Variant> {
+        let slot = admit_variant(request, |sources| match self.build(sources, request) {
+            Ok(index) => Built::Slot(index),
+            Err(Failure::Refused) => Built::Refused,
+            Err(Failure::Retry(reason)) => {
+                if let Some(reason) = reason {
+                    crate::velocity_commit::refused(reason);
                 }
-                Err(Failure::Refused) => REFUSED,
-                Err(Failure::Retry(reason)) => {
-                    if let Some(reason) = reason {
-                        crate::velocity_commit::refused(reason);
-                    }
-                    RETRY
-                }
+                Built::Retry
             }
         });
         self.variants.get(slot as usize).cloned()
