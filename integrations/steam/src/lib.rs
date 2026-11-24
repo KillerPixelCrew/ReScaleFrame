@@ -7,6 +7,7 @@
 //! rsf_d3d11_host_dispatch_chain export. Native exception guards protect the two foreign calls.
 #![cfg(windows)]
 
+use rsf_game_sys::call_header::validate;
 use rsf_game_sys::{
     RSF_D3D11_DISPATCH_PRESENT, RSF_D3D11_DISPATCH_PRESENT1, RSF_D3D11_DISPATCH_RELEASE,
     RSF_D3D11_DISPATCH_RESIZE_BUFFERS, RSF_D3D11_DISPATCH_RESIZE_BUFFERS1,
@@ -19,9 +20,9 @@ use rsf_game_sys::{
     rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_5 as ColorSpaceArgs,
     rsf_d3d11_chain_dispatch__bindgen_ty_1__bindgen_ty_6 as Resize1Args,
 };
-use rsf_game_sys::{RSF_GAME_ABI_VERSION, rsf_game_host_services};
+use rsf_game_sys::{RSF_OK, host_log, rsf_game_host_services};
 use rsf_windows::minhook;
-use std::ffi::{CStr, c_void};
+use std::ffi::c_void;
 use std::os::windows::ffi::OsStringExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::{self, null_mut};
@@ -41,7 +42,6 @@ use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::core::{s, w};
 
-const RSF_OK: i32 = 0;
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 
 // The only recognized overlay build. Every RVA and byte below belongs to it.
@@ -449,12 +449,8 @@ fn guarded(base: usize) -> bool {
         })
 }
 
-fn log(host: &rsf_game_host_services, message: &CStr) {
-    unsafe { rsf_game_sys::rsf_game_log_guarded(host.log, host.user, message.as_ptr()) };
-}
-
-fn fail(host: &rsf_game_host_services, message: &CStr) -> bool {
-    log(host, message);
+fn fail(host: &rsf_game_host_services, message: &str) -> bool {
+    host_log(host, message);
     false
 }
 
@@ -477,7 +473,7 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
     if *attempted {
         return fail(
             host,
-            c"Steam swapchain forwarding installation previously refused; process restart required.",
+            "Steam swapchain forwarding installation previously refused; process restart required.",
         );
     }
     let module = unsafe { GetModuleHandleW(w!("gameoverlayrenderer64.dll")) };
@@ -487,20 +483,20 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
     if !cold_owner() {
         return fail(
             host,
-            c"Steam swapchain forwarding refused late installation after native device creation.",
+            "Steam swapchain forwarding refused late installation after native device creation.",
         );
     }
     if !recognized(module) {
         return fail(
             host,
-            c"Steam swapchain forwarding refused: unrecognized overlay fingerprint.",
+            "Steam swapchain forwarding refused: unrecognized overlay fingerprint.",
         );
     }
     let base = module as usize;
     if !guarded(base) {
         return fail(
             host,
-            c"Steam swapchain forwarding refused: load/call continuation bytes differ.",
+            "Steam swapchain forwarding refused: load/call continuation bytes differ.",
         );
     }
     let runtime = unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) };
@@ -512,7 +508,7 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
     let Some(service) = service else {
         return fail(
             host,
-            c"Steam swapchain forwarding refused: typed chain service unavailable.",
+            "Steam swapchain forwarding refused: typed chain service unavailable.",
         );
     };
     let service_address = service as *const c_void;
@@ -520,14 +516,14 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
     if !pin(module) || !pin(adapter) || !pin(service_address) {
         return fail(
             host,
-            c"Steam swapchain forwarding refused: typed chain service or process-lifetime modules unavailable.",
+            "Steam swapchain forwarding refused: typed chain service or process-lifetime modules unavailable.",
         );
     }
     let page = near_page(base + SITES[0].rva);
     if page.is_null() {
         return fail(
             host,
-            c"Steam swapchain forwarding refused: no near relay page.",
+            "Steam swapchain forwarding refused: no near relay page.",
         );
     }
     // Relays replace only their complete MOV RAX/R10,[RIP+disp32]. Steam retains
@@ -554,7 +550,7 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
             release(page);
             return fail(
                 host,
-                c"Steam swapchain forwarding refused: relay outside rel32 reach.",
+                "Steam swapchain forwarding refused: relay outside rel32 reach.",
             );
         }
         let cell = cells.wrapping_add((site.method as usize - 1) * size_of::<usize>());
@@ -575,7 +571,7 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
         release(page);
         return fail(
             host,
-            c"Steam swapchain forwarding refused: relay publication failed.",
+            "Steam swapchain forwarding refused: relay publication failed.",
         );
     }
     let record = Relay {
@@ -587,7 +583,7 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
         release(page);
         return fail(
             host,
-            c"Steam swapchain forwarding refused: relay already published.",
+            "Steam swapchain forwarding refused: relay already published.",
         );
     }
     *attempted = true; // Relays/modules/trampolines remain process-lived after hook publication.
@@ -638,29 +634,15 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
         let _ = unsafe { minhook::apply() };
         return fail(
             host,
-            c"Steam swapchain forwarding refused: complete hook set enable failed; no facade admitted.",
+            "Steam swapchain forwarding refused: complete hook set enable failed; no facade admitted.",
         );
     }
     INSTALLED.store(true, Ordering::Release);
-    log(
+    host_log(
         host,
-        c"Steam swapchain forwarding installed at seven methods/ten guarded loads and two pre-lock Present entries; native receivers retain Steam handlers; original installer/global untouched; process-lived relays.",
+        "Steam swapchain forwarding installed at seven methods/ten guarded loads and two pre-lock Present entries; native receivers retain Steam handlers; original installer/global untouched; process-lived relays.",
     );
     true
-}
-
-// The ABI prefix must be readable; the full host is borrowed only after validation.
-unsafe fn prepare_from_abi(
-    host: *const rsf_game_host_services,
-    cold_owner: impl FnOnce() -> bool,
-) -> bool {
-    if host.is_null()
-        || unsafe { (*host).struct_size } < size_of::<rsf_game_host_services>() as u32
-        || unsafe { (*host).abi_version } != RSF_GAME_ABI_VERSION
-    {
-        return false;
-    }
-    catch_unwind(AssertUnwindSafe(|| prepare(unsafe { &*host }, cold_owner))).unwrap_or(false)
 }
 
 /// Prepares the Steam overlay's D3D11 chain hooks. Exported for games/fallout4/src/creation.rs,
@@ -677,5 +659,10 @@ pub unsafe extern "C" fn rsf_steam_d3d11_chain_prepare(
     host: *const rsf_game_host_services,
     cold_owner: Option<ColdOwner>,
 ) -> bool {
-    unsafe { prepare_from_abi(host, || cold_owner.is_some_and(|cold| cold())) }
+    // The ABI prefix must be readable; the full host is borrowed only after validation.
+    if unsafe { validate(host) } != RSF_OK {
+        return false;
+    }
+    let cold_owner = || cold_owner.is_some_and(|cold| unsafe { cold() });
+    catch_unwind(AssertUnwindSafe(|| prepare(unsafe { &*host }, cold_owner))).unwrap_or(false)
 }
