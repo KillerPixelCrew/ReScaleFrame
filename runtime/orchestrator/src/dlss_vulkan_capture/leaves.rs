@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
-//! Typed Vulkan, WSI, Streamline registration and file leaves of the present
-//! capture owner, formerly native_fg_dlss_vulkan_capture.cpp. The owner in
-//! dlss_vulkan_capture.rs decides admission, command and fence lifetime,
-//! submission order and retirement.
-use super::{Callback, Handle, Packet, Platform, Target};
+//! The present capture's native state, setup, frame-capture and file leaves, formerly part of
+//! native_fg_dlss_vulkan_capture.cpp. The DLSS-G fixture replaces these leaves; the owner in
+//! dlss_vulkan_capture.rs makes the Vulkan, WSI and registration calls itself.
+use super::{Handle, Platform};
 use crate::frame_capture_vk::{
-    Owner as Capture, rsf_core_capture_vk_complete_group, rsf_core_capture_vk_create,
-    rsf_core_capture_vk_destroy, rsf_core_capture_vk_enabled, rsf_core_capture_vk_flush,
-    rsf_core_capture_vk_initialize, rsf_core_capture_vk_pending, rsf_core_capture_vk_provider,
-    rsf_core_capture_vk_record, rsf_core_capture_vk_wants,
+    Owner as Capture, rsf_core_capture_vk_create, rsf_core_capture_vk_destroy,
+    rsf_core_capture_vk_enabled, rsf_core_capture_vk_flush, rsf_core_capture_vk_initialize,
+    rsf_core_capture_vk_pending, rsf_core_capture_vk_provider, rsf_core_capture_vk_record,
+    rsf_core_capture_vk_wants,
 };
 use crate::sys::rsf_fgvk_setup as Setup;
 use crate::sys::rsf_srvk_image as Image;
@@ -18,10 +17,8 @@ use rsf_game_sys::backend_result::{
     INIT_FAILED, INVALID_ARGUMENT, MISSING_ENTRY_POINT, NOT_READY, OK,
 };
 use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record as Record};
-use rsf_streamline_vk::sys::{
-    RSF_SL_PRESENT_CAPTURE_ABI_VERSION, rsf_sl_present_capture_registration as Registration,
-};
-use std::ffi::{CStr, OsString, c_char, c_void};
+use rsf_streamline_vk::sys::rsf_sl_present_capture_registration as Registration;
+use std::ffi::{CStr, OsString, c_char};
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
@@ -34,19 +31,14 @@ const SHARED_SUBMISSION: u32 = 0;
 
 /// `rsfSlSetPresentCapture` of the corrected common plugin.
 pub(crate) type Register = unsafe extern "C" fn(*const Registration) -> i32;
-type WsiCallback = unsafe extern "C" fn(*mut c_void) -> i32;
-type WsiCall = unsafe extern "C" fn(WsiCallback, *mut c_void) -> i32;
 
-// The image query writes vk::Image handles into the owner's u64 array.
-const _: () = assert!(size_of::<vk::Image>() == size_of::<u64>());
-
-/// The capture leaves' native handle.
+/// The capture's native handle.
 pub(crate) struct Native {
-    setup: Setup,
-    register: Register,
-    capture: *mut Capture,
+    pub(super) setup: Setup,
+    pub(super) register: Register,
+    pub(super) capture: *mut Capture,
     directory: PathBuf,
-    commands: Option<Commands>,
+    pub(super) commands: Option<Commands>,
 }
 
 impl Native {
@@ -74,16 +66,8 @@ impl Drop for Native {
     }
 }
 
-fn native<'a>(native: Handle) -> &'a Native {
+pub(super) fn native<'a>(native: Handle) -> &'a Native {
     unsafe { &*native.cast::<Native>() }
-}
-
-fn commands<'a>(handle: Handle) -> Option<&'a Commands> {
-    native(handle).commands.as_ref()
-}
-
-fn present_info(packet: &Packet) -> &vk::PresentInfoKHR<'_> {
-    unsafe { &*packet.present_info.cast() }
 }
 
 fn environment(name: &CStr) -> Option<OsString> {
@@ -161,187 +145,12 @@ unsafe extern "C" fn open(setup: *const Setup, out: *mut Handle) -> i32 {
     OK
 }
 
-unsafe extern "C" fn close(handle: Handle) {
-    if !handle.is_null() {
-        drop(unsafe { Box::from_raw(handle.cast::<Native>()) });
-    }
-}
-
-unsafe extern "C" fn register(handle: Handle, callback: Option<Callback>, user: Handle) -> i32 {
-    let native = native(handle);
-    let registration = Registration {
-        struct_size: size_of::<Registration>() as u32,
-        abi_version: RSF_SL_PRESENT_CAPTURE_ABI_VERSION,
-        device: native.setup.graphics.device,
-        callback,
-        user,
-    };
-    unsafe { (native.register)(&registration) }
-}
-
-fn result<T>(value: Result<T, vk::Result>, out: &mut T) -> i32 {
-    match value {
-        Ok(value) => {
-            *out = value;
-            OK
-        }
-        Err(error) => error.as_raw(),
-    }
-}
-
-unsafe extern "C" fn create_pool(handle: Handle, family: u32, out: *mut u64) -> i32 {
-    let Some(commands) = commands(handle) else {
-        return vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
-    };
-    let mut pool = vk::CommandPool::null();
-    let pool_result = commands.create_pool(family, vk::CommandPoolCreateFlags::TRANSIENT);
-    let code = result(pool_result, &mut pool);
-    unsafe { out.write(pool.as_raw()) };
-    code
-}
-
-unsafe extern "C" fn destroy_pool(handle: Handle, pool: u64) {
-    if let Some(commands) = commands(handle) {
-        commands.destroy_pool(vk::CommandPool::from_raw(pool));
-    }
-}
-
-unsafe extern "C" fn allocate(handle: Handle, pool: u64, out: *mut Handle) -> i32 {
-    let Some(commands) = commands(handle) else {
-        return vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
-    };
-    let mut buffer = vk::CommandBuffer::null();
-    let code = result(
-        commands.allocate(vk::CommandPool::from_raw(pool)),
-        &mut buffer,
-    );
-    unsafe { out.write(buffer.as_raw() as Handle) };
-    code
-}
-
-unsafe extern "C" fn reset_pool(handle: Handle, pool: u64) -> i32 {
-    commands(handle)
-        .map_or(vk::Result::ERROR_INITIALIZATION_FAILED, |commands| {
-            commands.reset_pool(vk::CommandPool::from_raw(pool))
-        })
-        .as_raw()
-}
-
-fn buffer(commands: Handle) -> vk::CommandBuffer {
-    vk::CommandBuffer::from_raw(commands as u64)
-}
-
-unsafe extern "C" fn begin(handle: Handle, commands: Handle) -> i32 {
-    self::commands(handle)
-        .map_or(vk::Result::ERROR_INITIALIZATION_FAILED, |ops| {
-            ops.begin(buffer(commands))
-        })
-        .as_raw()
-}
-
-unsafe extern "C" fn end(handle: Handle, commands: Handle) -> i32 {
-    self::commands(handle)
-        .map_or(vk::Result::ERROR_INITIALIZATION_FAILED, |ops| {
-            ops.end(buffer(commands))
-        })
-        .as_raw()
-}
-
-unsafe extern "C" fn create_fence(handle: Handle, out: *mut u64) -> i32 {
-    let Some(commands) = commands(handle) else {
-        return vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
-    };
-    let mut fence = vk::Fence::null();
-    let code = result(commands.create_fence(), &mut fence);
-    unsafe { out.write(fence.as_raw()) };
-    code
-}
-
-unsafe extern "C" fn destroy_fence(handle: Handle, fence: u64) {
-    if let Some(commands) = commands(handle) {
-        commands.destroy_fence(vk::Fence::from_raw(fence));
-    }
-}
-
-unsafe extern "C" fn reset_fence(handle: Handle, fence: u64) -> i32 {
-    commands(handle)
-        .map_or(vk::Result::ERROR_INITIALIZATION_FAILED, |commands| {
-            commands.reset_fence(vk::Fence::from_raw(fence))
-        })
-        .as_raw()
-}
-
-unsafe extern "C" fn wait_fence(handle: Handle, fence: u64, timeout: u64) -> i32 {
-    commands(handle)
-        .map_or(vk::Result::ERROR_INITIALIZATION_FAILED, |commands| {
-            commands.wait_fence(vk::Fence::from_raw(fence), timeout)
-        })
-        .as_raw()
-}
-
-unsafe extern "C" fn complete_readback(handle: Handle, commands: Handle) {
-    unsafe { rsf_core_capture_vk_complete_group(native(handle).capture, commands as u64) };
-}
-
 unsafe extern "C" fn wants(handle: Handle, frame: u64) -> u32 {
     u32::from(unsafe { rsf_core_capture_vk_wants(native(handle).capture, frame) } != 0)
 }
 
 unsafe extern "C" fn readbacks(handle: Handle) -> u64 {
     unsafe { rsf_core_capture_vk_pending(native(handle).capture) }
-}
-
-unsafe extern "C" fn target(packet: *const Packet, out: *mut Target) {
-    let packet = unsafe { &*packet };
-    let info = present_info(packet);
-    let chain = unsafe {
-        &*packet
-            .swapchain_info
-            .cast::<vk::SwapchainCreateInfoKHR<'_>>()
-    };
-    let mut target = Target {
-        usage: chain.image_usage.as_raw(),
-        layers: chain.image_array_layers,
-        format: chain.image_format.as_raw() as u32,
-        width: chain.image_extent.width,
-        height: chain.image_extent.height,
-        ..Target::default()
-    };
-    if info.swapchain_count == 1 && !info.p_swapchains.is_null() && !info.p_image_indices.is_null()
-    {
-        target.chain = unsafe { *info.p_swapchains }.as_raw();
-        target.index = unsafe { *info.p_image_indices };
-        target.selected = 1;
-    }
-    unsafe { out.write(target) };
-}
-
-// The image query and the native Present bypass the SDK proxy under its LL2
-// WSI lease.
-fn wsi_call(packet: &Packet, call: &mut dyn FnMut() -> i32) -> i32 {
-    unsafe extern "C" fn trampoline(user: *mut c_void) -> i32 {
-        let call = unsafe { &mut *user.cast::<&mut dyn FnMut() -> i32>() };
-        call()
-    }
-    let lease: WsiCall = unsafe { std::mem::transmute(packet.native_wsi_call) };
-    let mut call = call;
-    unsafe { lease(trampoline, (&raw mut call).cast()) }
-}
-
-unsafe extern "C" fn images(
-    packet: *const Packet,
-    chain: u64,
-    count: *mut u32,
-    out: *mut u64,
-) -> i32 {
-    let packet = unsafe { &*packet };
-    let next: vk::PFN_vkGetSwapchainImagesKHR =
-        unsafe { std::mem::transmute(packet.native_images) };
-    let device = vk::Device::from_raw(packet.device as u64);
-    let chain = vk::SwapchainKHR::from_raw(chain);
-    wsi_call(packet, &mut || {
-        unsafe { next(device, chain, count, out.cast()) }.as_raw()
-    })
 }
 
 unsafe extern "C" fn record(
@@ -368,45 +177,6 @@ unsafe extern "C" fn record(
     u32::from(recorded != 0)
 }
 
-unsafe extern "C" fn submit(packet: *const Packet, commands: Handle, fence: u64) -> i32 {
-    let packet = unsafe { &*packet };
-    let info = present_info(packet);
-    let stages = vec![vk::PipelineStageFlags::ALL_COMMANDS; info.wait_semaphore_count as usize];
-    let buffer = buffer(commands);
-    let submission = vk::SubmitInfo {
-        wait_semaphore_count: info.wait_semaphore_count,
-        p_wait_semaphores: info.p_wait_semaphores,
-        p_wait_dst_stage_mask: stages.as_ptr(),
-        command_buffer_count: 1,
-        p_command_buffers: &buffer,
-        ..Default::default()
-    };
-    let next: vk::PFN_vkQueueSubmit = unsafe { std::mem::transmute(packet.native_submit) };
-    let queue = vk::Queue::from_raw(packet.queue as u64);
-    unsafe { next(queue, 1, &submission, vk::Fence::from_raw(fence)) }.as_raw()
-}
-
-unsafe extern "C" fn present(packet: *const Packet, waits: u32) -> i32 {
-    let packet = unsafe { &*packet };
-    let original = present_info(packet);
-    // A present that keeps its waits is the application's own, passed through unchanged; only one
-    // whose waits the copy fence consumed is a modified copy.
-    let completed;
-    let info = if waits == 0 {
-        completed = vk::PresentInfoKHR {
-            wait_semaphore_count: 0,
-            p_wait_semaphores: ptr::null(),
-            ..*original
-        };
-        &completed
-    } else {
-        original
-    };
-    let next: vk::PFN_vkQueuePresentKHR = unsafe { std::mem::transmute(packet.native_present) };
-    let queue = vk::Queue::from_raw(packet.queue as u64);
-    wsi_call(packet, &mut || unsafe { next(queue, info) }.as_raw())
-}
-
 unsafe extern "C" fn flush(handle: Handle) -> u32 {
     let flushed = unsafe { rsf_core_capture_vk_flush(native(handle).capture, 0, ptr::null_mut()) };
     u32::from(flushed != 0)
@@ -431,30 +201,13 @@ unsafe extern "C" fn append(handle: Handle, file: *const c_char, line: *const u8
     append_bytes(handle, &file, line);
 }
 
-/// The production leaves. The DLSS-G fixture copies the table and replaces
-/// open and the frame, readback and file entries.
+/// The production capture and file leaves. The DLSS-G fixture copies the table and replaces
+/// open and every entry.
 pub(crate) static LEAVES: Platform = Platform {
     open,
-    close,
-    register,
-    create_pool,
-    destroy_pool,
-    allocate,
-    reset_pool,
-    begin,
-    end,
-    create_fence,
-    destroy_fence,
-    reset_fence,
-    wait_fence,
-    complete_readback,
     wants,
     readbacks,
-    target,
-    images,
     record,
-    submit,
-    present,
     flush,
     failure,
     append,

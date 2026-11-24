@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: MIT
-// Dedicated DLSS-G present capture owner. Rust decides admission, owns the
-// per-queue-family command pools and fences, orders submission and retires
-// the readbacks. The production leaves for typed Vulkan, WSI, Streamline
-// registration and file output are in leaves.rs.
+// Dedicated DLSS-G present capture owner, formerly native_fg_dlss_vulkan_capture.cpp. It decides
+// admission, owns the per-queue-family command pools and fences, orders submission behind the
+// original Present waits and retires the readbacks. Frame capture and file output are the leaves
+// in leaves.rs, which the DLSS-G fixture replaces.
 use crate::allocate_handle;
 use crate::dlss_vulkan_capture_ledger::{AMBIGUOUS, Ledger, Source};
+use crate::frame_capture_vk::rsf_core_capture_vk_complete_group;
 use crate::sys::rsf_srvk_image as Image;
 use crate::sys::{rsf_dlssgvk_status as SdkStatus, rsf_fgvk_setup as Setup};
-use ash::vk;
+use crate::vulkan_capture_commands::Commands;
+use ash::vk::{self, Handle as _};
+use leaves::{Native, native};
 use rsf_game_sys::backend_result::{INIT_FAILED, NOT_READY, OK};
 use rsf_game_sys::rsf_frame_record as Record;
 use rsf_streamline_vk::sys::{
     RSF_SL_PRESENT_CAPTURE_ABI_VERSION, rsf_sl_present_capture_packet as Packet,
+    rsf_sl_present_capture_registration as Registration,
 };
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -22,124 +26,123 @@ use std::sync::{Mutex, PoisonError};
 const VK_SUCCESS: i32 = vk::Result::SUCCESS.as_raw();
 const VK_INITIALIZATION_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
 const VK_FORMAT_NOT_SUPPORTED: i32 = vk::Result::ERROR_FORMAT_NOT_SUPPORTED.as_raw();
-const TRANSFER_SOURCE: u32 = vk::ImageUsageFlags::TRANSFER_SRC.as_raw();
-const RGBA8: u32 = vk::Format::R8G8B8A8_UNORM.as_raw() as u32;
-const BGRA8: u32 = vk::Format::B8G8R8A8_UNORM.as_raw() as u32;
-const PRESENT_LAYOUT: u32 = vk::ImageLayout::PRESENT_SRC_KHR.as_raw() as u32;
 const WAIT_NS: u64 = 15_000_000_000;
 
 type Handle = *mut c_void;
 type Callback = unsafe extern "C" fn(Handle, *const Packet) -> i32;
+type WsiCallback = unsafe extern "C" fn(*mut c_void) -> i32;
+type WsiCall = unsafe extern "C" fn(WsiCallback, *mut c_void) -> i32;
 
-/// The swapchain image a Present selects, as the target leaf reads it from the packet.
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Target {
-    pub(crate) chain: u64,
-    pub(crate) index: u32,
-    pub(crate) selected: u32,
-    pub(crate) usage: u32,
-    pub(crate) layers: u32,
-    pub(crate) format: u32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-}
-
-/// The capture owner's native leaves: `leaves::LEAVES` in production; the DLSS-G fixture
-/// (vulkan_dlss_fg/fixture/sdk.rs) replaces open and the frame, readback and file entries.
+/// The capture's frame-capture and file leaves: `leaves::LEAVES` in production; the DLSS-G
+/// fixture (vulkan_dlss_fg/fixture/sdk.rs) replaces them.
 #[derive(Clone, Copy)]
 pub(crate) struct Platform {
     // Writes a null native handle and succeeds when capture is disabled.
     pub(crate) open: unsafe extern "C" fn(*const Setup, *mut Handle) -> i32,
-    pub(crate) close: unsafe extern "C" fn(Handle),
-    // A null callback clears the registration for the same device and user.
-    pub(crate) register: unsafe extern "C" fn(Handle, Option<Callback>, Handle) -> i32,
-    pub(crate) create_pool: unsafe extern "C" fn(Handle, u32, *mut u64) -> i32,
-    pub(crate) destroy_pool: unsafe extern "C" fn(Handle, u64),
-    pub(crate) allocate: unsafe extern "C" fn(Handle, u64, *mut Handle) -> i32,
-    pub(crate) reset_pool: unsafe extern "C" fn(Handle, u64) -> i32,
-    pub(crate) begin: unsafe extern "C" fn(Handle, Handle) -> i32,
-    pub(crate) end: unsafe extern "C" fn(Handle, Handle) -> i32,
-    pub(crate) create_fence: unsafe extern "C" fn(Handle, *mut u64) -> i32,
-    pub(crate) destroy_fence: unsafe extern "C" fn(Handle, u64),
-    pub(crate) reset_fence: unsafe extern "C" fn(Handle, u64) -> i32,
-    pub(crate) wait_fence: unsafe extern "C" fn(Handle, u64, u64) -> i32,
-    pub(crate) complete_readback: unsafe extern "C" fn(Handle, Handle),
     pub(crate) wants: unsafe extern "C" fn(Handle, u64) -> u32,
     pub(crate) readbacks: unsafe extern "C" fn(Handle) -> u64,
-    pub(crate) target: unsafe extern "C" fn(*const Packet, *mut Target),
-    pub(crate) images: unsafe extern "C" fn(*const Packet, u64, *mut u32, *mut u64) -> i32,
     pub(crate) record:
         unsafe extern "C" fn(Handle, Handle, *const Image, *const Record, *const c_char) -> u32,
-    // Submits the copy behind the original Present wait semaphores.
-    pub(crate) submit: unsafe extern "C" fn(*const Packet, Handle, u64) -> i32,
-    // Zero waits presents after the copy fence consumed the original waits.
-    pub(crate) present: unsafe extern "C" fn(*const Packet, u32) -> i32,
     pub(crate) flush: unsafe extern "C" fn(Handle) -> u32,
     pub(crate) failure: unsafe extern "C" fn(Handle, u64, *const c_char, i32),
     pub(crate) append: unsafe extern "C" fn(Handle, *const c_char, *const u8, usize),
 }
 
-impl Platform {
-    fn present_image(&self, packet: &Packet) -> Result<(Image, Target), (&'static CStr, i32)> {
-        let mut target = Target::default();
-        unsafe { (self.target)(packet, &mut target) };
-        if target.usage & TRANSFER_SOURCE == 0
-            || target.selected == 0
-            || target.layers != 1
-            || !matches!(target.format, BGRA8 | RGBA8)
-        {
-            return Err((c"real-chain-copy-contract", VK_FORMAT_NOT_SUPPORTED));
-        }
-        let mut count = 0;
-        let result = unsafe { (self.images)(packet, target.chain, &mut count, ptr::null_mut()) };
-        if result != VK_SUCCESS || target.index >= count {
-            return Err((c"real-images-count", result));
-        }
-        let mut images = Vec::new();
-        images
-            .try_reserve_exact(count as usize)
-            .map_err(|_| (c"real-images", VK_INITIALIZATION_FAILED))?;
-        images.resize(count as usize, 0);
-        let result =
-            unsafe { (self.images)(packet, target.chain, &mut count, images.as_mut_ptr()) };
-        if result != VK_SUCCESS {
-            return Err((c"real-images", result));
-        }
-        if count as usize > images.len() || target.index >= count {
-            return Err((c"real-images", VK_INITIALIZATION_FAILED));
-        }
-        let image = images[target.index as usize];
-        if image == 0 {
-            return Err((c"real-images", VK_INITIALIZATION_FAILED));
-        }
-        let image = Image {
-            device: packet.device,
-            image,
-            format: target.format,
-            width: target.width,
-            height: target.height,
-            layout: PRESENT_LAYOUT,
-            copy_source: 1,
-        };
-        Ok((image, target))
+// The image query and the native Present bypass the SDK proxy under its LL2 WSI lease.
+fn wsi_call(packet: &Packet, call: &mut dyn FnMut() -> i32) -> i32 {
+    unsafe extern "C" fn trampoline(user: *mut c_void) -> i32 {
+        let call = unsafe { &mut *user.cast::<&mut dyn FnMut() -> i32>() };
+        call()
     }
+    let lease: WsiCall = unsafe { std::mem::transmute(packet.native_wsi_call) };
+    let mut call = call;
+    unsafe { lease(trampoline, (&raw mut call).cast()) }
+}
+
+fn present_info(packet: &Packet) -> &vk::PresentInfoKHR<'_> {
+    unsafe { &*packet.present_info.cast() }
+}
+
+/// The original Present, with its waits or, after the copy fence consumed them, without.
+fn present_original(packet: &Packet, keep_waits: bool) -> i32 {
+    let original = present_info(packet);
+    let completed = vk::PresentInfoKHR {
+        wait_semaphore_count: 0,
+        p_wait_semaphores: ptr::null(),
+        ..*original
+    };
+    let info = if keep_waits { original } else { &completed };
+    let next: vk::PFN_vkQueuePresentKHR = unsafe { std::mem::transmute(packet.native_present) };
+    let queue = vk::Queue::from_raw(packet.queue as u64);
+    wsi_call(packet, &mut || unsafe { next(queue, info) }.as_raw())
+}
+
+/// The swapchain image this Present selects, read through the real image query.
+fn present_image(packet: &Packet) -> Result<(Image, vk::SwapchainKHR, u32), (&'static CStr, i32)> {
+    let info = present_info(packet);
+    let chain = unsafe {
+        &*packet
+            .swapchain_info
+            .cast::<vk::SwapchainCreateInfoKHR<'_>>()
+    };
+    if !chain
+        .image_usage
+        .contains(vk::ImageUsageFlags::TRANSFER_SRC)
+        || info.swapchain_count != 1
+        || info.p_swapchains.is_null()
+        || info.p_image_indices.is_null()
+        || chain.image_array_layers != 1
+        || !matches!(
+            chain.image_format,
+            vk::Format::B8G8R8A8_UNORM | vk::Format::R8G8B8A8_UNORM
+        )
+    {
+        return Err((c"real-chain-copy-contract", VK_FORMAT_NOT_SUPPORTED));
+    }
+    let (swapchain, index) = unsafe { (*info.p_swapchains, *info.p_image_indices) };
+    let next: vk::PFN_vkGetSwapchainImagesKHR =
+        unsafe { std::mem::transmute(packet.native_images) };
+    let device = vk::Device::from_raw(packet.device as u64);
+    let images = |count: &mut u32, out: *mut vk::Image| {
+        wsi_call(packet, &mut || {
+            unsafe { next(device, swapchain, count, out) }.as_raw()
+        })
+    };
+    let mut count = 0;
+    let result = images(&mut count, ptr::null_mut());
+    if result != VK_SUCCESS || index >= count {
+        return Err((c"real-images-count", result));
+    }
+    let mut actual = Vec::new();
+    actual
+        .try_reserve_exact(count as usize)
+        .map_err(|_| (c"real-images", VK_INITIALIZATION_FAILED))?;
+    actual.resize(count as usize, vk::Image::null());
+    let result = images(&mut count, actual.as_mut_ptr());
+    if result != VK_SUCCESS {
+        return Err((c"real-images", result));
+    }
+    if count as usize > actual.len() || index >= count || actual[index as usize].is_null() {
+        return Err((c"real-images", VK_INITIALIZATION_FAILED));
+    }
+    let image = Image {
+        device: packet.device,
+        image: actual[index as usize].as_raw(),
+        format: chain.image_format.as_raw() as u32,
+        width: chain.image_extent.width,
+        height: chain.image_extent.height,
+        layout: vk::ImageLayout::PRESENT_SRC_KHR.as_raw() as u32,
+        copy_source: 1,
+    };
+    Ok((image, swapchain, index))
 }
 
 // The command buffer is freed with its pool.
+#[derive(Default)]
 struct Family {
-    pool: u64,
-    commands: Handle,
-    fence: u64,
-}
-
-impl Default for Family {
-    fn default() -> Self {
-        Self {
-            pool: 0,
-            commands: ptr::null_mut(),
-            fence: 0,
-        }
-    }
+    pool: vk::CommandPool,
+    commands: vk::CommandBuffer,
+    fence: vk::Fence,
 }
 
 struct State {
@@ -158,22 +161,44 @@ pub(crate) struct Owner {
 impl Drop for Owner {
     fn drop(&mut self) {
         // The FG owner drains the presenter and device and detaches first.
+        let commands = native(self.native).commands.as_ref();
         let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
-        for family in state.families.values() {
-            unsafe {
-                if family.fence != 0 {
-                    (self.ops.destroy_fence)(self.native, family.fence);
+        if let Some(commands) = commands {
+            for family in state.families.values() {
+                if !family.fence.is_null() {
+                    commands.destroy_fence(family.fence);
                 }
-                if family.pool != 0 {
-                    (self.ops.destroy_pool)(self.native, family.pool);
+                if !family.pool.is_null() {
+                    commands.destroy_pool(family.pool);
                 }
             }
         }
-        unsafe { (self.ops.close)(self.native) };
+        drop(unsafe { Box::from_raw(self.native.cast::<Native>()) });
     }
 }
 
 impl Owner {
+    fn commands(&self) -> Option<&Commands> {
+        native(self.native).commands.as_ref()
+    }
+
+    fn register(&self, callback: Option<Callback>) -> i32 {
+        let native = native(self.native);
+        let registration = Registration {
+            struct_size: size_of::<Registration>() as u32,
+            abi_version: RSF_SL_PRESENT_CAPTURE_ABI_VERSION,
+            device: native.setup.graphics.device,
+            callback,
+            user: ptr::from_ref(self).cast_mut().cast(),
+        };
+        unsafe { (native.register)(&registration) }
+    }
+
+    fn complete_readback(&self, commands: vk::CommandBuffer) {
+        let capture = native(self.native).capture;
+        unsafe { rsf_core_capture_vk_complete_group(capture, commands.as_raw()) };
+    }
+
     fn append(&self, file: &CStr, line: &str) {
         unsafe { (self.ops.append)(self.native, file.as_ptr(), line.as_ptr(), line.len()) };
     }
@@ -226,25 +251,29 @@ impl Owner {
 
     // A family's single command buffer is reused only after its own fence
     // proves the previous copy finished.
-    fn commands(&self, state: &mut State, family: u32) -> Option<(Handle, u64)> {
-        let (ops, native) = (self.ops, self.native);
+    fn family(&self, state: &mut State, family: u32) -> Option<(vk::CommandBuffer, vk::Fence)> {
+        let commands = self.commands()?;
         let work = state.families.entry(family).or_default();
         if state.ledger.pending(family) {
-            if unsafe { (ops.wait_fence)(native, work.fence, WAIT_NS) } != VK_SUCCESS {
+            if commands.wait_fence(work.fence, WAIT_NS) != vk::Result::SUCCESS {
                 return None;
             }
             state.ledger.completed(family);
-            unsafe { (ops.complete_readback)(native, work.commands) };
+            self.complete_readback(work.commands);
         }
-        let created = (work.pool != 0
-            || unsafe { (ops.create_pool)(native, family, &mut work.pool) } == VK_SUCCESS)
-            && (!work.commands.is_null()
-                || unsafe { (ops.allocate)(native, work.pool, &mut work.commands) } == VK_SUCCESS)
-            && (work.fence != 0
-                || unsafe { (ops.create_fence)(native, &mut work.fence) } == VK_SUCCESS);
-        if !created
-            || unsafe { (ops.reset_pool)(native, work.pool) } != VK_SUCCESS
-            || unsafe { (ops.reset_fence)(native, work.fence) } != VK_SUCCESS
+        if work.pool.is_null() {
+            work.pool = commands
+                .create_pool(family, vk::CommandPoolCreateFlags::TRANSIENT)
+                .ok()?;
+        }
+        if work.commands.is_null() {
+            work.commands = commands.allocate(work.pool).ok()?;
+        }
+        if work.fence.is_null() {
+            work.fence = commands.create_fence().ok()?;
+        }
+        if commands.reset_pool(work.pool) != vk::Result::SUCCESS
+            || commands.reset_fence(work.fence) != vk::Result::SUCCESS
         {
             return None;
         }
@@ -275,8 +304,6 @@ impl Owner {
     // synchronous and already owns its SDK queue. Never acquire a session,
     // PCL or host-queue lock from this presenter thread.
     fn present(&self, packet: &Packet) -> i32 {
-        let ops = self.ops;
-        let original = |waits: u32| unsafe { (ops.present)(packet, waits) };
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let state = &mut *state;
         let source = state.ledger.source(packet.source_frame).copied();
@@ -293,24 +320,25 @@ impl Owner {
                 && self.wants(source.record.frame_id)
                 && state.ledger.can_record()
         }) else {
-            return original(1);
+            return present_original(packet, true);
         };
         let frame = packet.source_frame;
-        let (image, target) = match ops.present_image(packet) {
+        let (image, swapchain, index) = match present_image(packet) {
             Ok(image) => image,
             Err((reason, result)) => {
                 self.failure(frame, reason, result);
-                return original(1);
+                return present_original(packet, true);
             }
         };
-        let Some((commands, fence)) = self.commands(state, packet.queue_family) else {
+        let Some((buffer, fence)) = self.family(state, packet.queue_family) else {
             self.failure(frame, c"capture-commands", VK_INITIALIZATION_FAILED);
-            return original(1);
+            return present_original(packet, true);
         };
-        let result = unsafe { (ops.begin)(self.native, commands) };
+        let commands = self.commands().expect("a family has loaded commands");
+        let result = commands.begin(buffer).as_raw();
         if result != VK_SUCCESS {
             self.failure(frame, c"begin", result);
-            return original(1);
+            return present_original(packet, true);
         }
         let before = self.readbacks();
         let generated = packet.generated_index >= 0;
@@ -319,20 +347,39 @@ impl Owner {
                 .expect("a decimal generated index has no NUL")
         });
         let role = generated_role.as_deref().unwrap_or(c"fg-real-present");
-        let recorded =
-            unsafe { (ops.record)(self.native, commands, &image, &source.record, role.as_ptr()) }
-                != 0;
-        let result = unsafe { (ops.end)(self.native, commands) };
+        let raw_buffer = buffer.as_raw() as Handle;
+        let recorded = unsafe {
+            (self.ops.record)(
+                self.native,
+                raw_buffer,
+                &image,
+                &source.record,
+                role.as_ptr(),
+            )
+        } != 0;
+        let result = commands.end(buffer).as_raw();
         if !recorded || result != VK_SUCCESS {
             if self.readbacks() > before {
                 state.ledger.unsubmitted();
             }
             self.failure(frame, c"record", result);
-            return original(1);
+            return present_original(packet, true);
         }
-        // A failed submission may already have consumed the binary waits.
-        // Return it without a second consumption.
-        let result = unsafe { (ops.submit)(packet, commands, fence) };
+        // Submit the copy behind the original Present wait semaphores. A failed submission
+        // may already have consumed the binary waits; return it without a second consumption.
+        let info = present_info(packet);
+        let stages = vec![vk::PipelineStageFlags::ALL_COMMANDS; info.wait_semaphore_count as usize];
+        let submission = vk::SubmitInfo {
+            wait_semaphore_count: info.wait_semaphore_count,
+            p_wait_semaphores: info.p_wait_semaphores,
+            p_wait_dst_stage_mask: stages.as_ptr(),
+            command_buffer_count: 1,
+            p_command_buffers: &buffer,
+            ..Default::default()
+        };
+        let submit: vk::PFN_vkQueueSubmit = unsafe { std::mem::transmute(packet.native_submit) };
+        let queue = vk::Queue::from_raw(packet.queue as u64);
+        let result = unsafe { submit(queue, 1, &submission, fence) }.as_raw();
         if result != VK_SUCCESS {
             if self.readbacks() > before {
                 state.ledger.unsubmitted();
@@ -341,7 +388,7 @@ impl Owner {
             return result;
         }
         state.ledger.submitted(packet.queue_family);
-        let result = unsafe { (ops.wait_fence)(self.native, fence, WAIT_NS) };
+        let result = commands.wait_fence(fence, WAIT_NS).as_raw();
         if result != VK_SUCCESS {
             self.failure(frame, c"wait", result);
             return if result > 0 {
@@ -351,20 +398,20 @@ impl Owner {
             };
         }
         state.ledger.completed(packet.queue_family);
-        unsafe { (ops.complete_readback)(self.native, commands) };
+        self.complete_readback(buffer);
         // Every earlier submitted copy must also have a successful own-fence
         // wait, including other queue families after a previous timeout. No
         // global idle or SDK lock is acquired here. Legacy readbacks have no
         // core completion ticket, so a ready-only flush would leave their
         // pixels unwritten.
         let ready = state.ledger.can_flush();
-        let flushed = ready && unsafe { (ops.flush)(self.native) } != 0;
+        let flushed = ready && unsafe { (self.ops.flush)(self.native) } != 0;
         if ready && !flushed {
             self.failure(frame, c"completed-readback-flush", VK_INITIALIZATION_FAILED);
         }
         // The copy fence completed the original binary waits, so the native
         // Present needs no replacement semaphore or image-index assumption.
-        let result = original(0);
+        let result = present_original(packet, false);
         let sequence = state.ledger.next_sequence();
         self.append(
             c"dlss-present-capture.jsonl",
@@ -387,8 +434,8 @@ impl Owner {
                 packet.generated_index,
                 source.generated_count,
                 generated,
-                target.index,
-                target.chain,
+                index,
+                swapchain.as_raw(),
                 result,
                 ready,
                 flushed,
@@ -409,8 +456,7 @@ impl Owner {
 
     fn detach(&self) -> i32 {
         if self.registered.load(Ordering::Acquire) {
-            let user = ptr::from_ref(self).cast_mut().cast();
-            if unsafe { (self.ops.register)(self.native, None, user) } != VK_SUCCESS {
+            if self.register(None) != VK_SUCCESS {
                 return NOT_READY;
             }
             self.registered.store(false, Ordering::Release);
@@ -467,7 +513,7 @@ pub(crate) unsafe fn rsf_core_dlss_capture_open(
     if owner.is_null() {
         return INIT_FAILED;
     }
-    if unsafe { (ops.register)(native, Some(present), owner.cast()) } != VK_SUCCESS {
+    if unsafe { &*owner }.register(Some(present)) != VK_SUCCESS {
         drop(unsafe { Box::from_raw(owner) });
         return NOT_READY;
     }
@@ -513,7 +559,3 @@ pub(crate) unsafe fn rsf_core_dlss_capture_close(owner: *mut Owner) {
 
 #[path = "dlss_vulkan_capture/leaves.rs"]
 pub(crate) mod leaves;
-
-#[cfg(test)]
-#[path = "dlss_vulkan_capture/owner_tests.rs"]
-mod owner_tests;
