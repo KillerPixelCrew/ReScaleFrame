@@ -989,7 +989,7 @@ fn capture(context: Handle, frame: *const DlssFrame) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssFrame) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_native_fg_evaluate(context: Handle, frame: *const DlssFrame) -> i32 {
     let started = now_qpc();
     let host = call!(present_host);
     if host.is_null() {

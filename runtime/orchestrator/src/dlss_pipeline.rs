@@ -47,7 +47,6 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 use windows::core::{IUnknown, Interface};
 
-type P = rsf_dlssp_platform;
 type Setup = rsf_dlss_pipeline_setup;
 type Status = rsf_dlss_pipeline_status;
 type Layer = rsf_dlss_pipeline_layer;
@@ -565,7 +564,6 @@ impl Pipeline {
     DLSS writes it, whatever reinserts it reads it, and a compute pass may yet need to touch it. */
     unsafe fn create_cleared_target(
         &self,
-        p: &P,
         device: Raw,
         width: u32,
         height: u32,
@@ -576,17 +574,17 @@ impl Pipeline {
             RSF_D3D11_FORMAT_RGBA16_FLOAT,
             RSF_D3D11_BIND_RENDER_TARGET | RSF_D3D11_BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS,
         );
-        let target = unsafe { com_ref::owned((p.create_texture)(device, &desc)) }?;
-        unsafe { (p.clear_black)(device, target.as_raw()) };
+        let target = unsafe { com_ref::owned(leaf::create_texture(device, &desc)) }?;
+        unsafe { leaf::clear_black(device, target.as_raw()) };
         Some(target)
     }
 
-    unsafe fn create_alternate(&self, p: &P, owned: &Owned, width: u32, height: u32) -> (i32, Raw) {
+    unsafe fn create_alternate(&self, owned: &Owned, width: u32, height: u32) -> (i32, Raw) {
         let sink = *lock(&self.sink);
         let directories = owned.directory_pointers();
         let mut adapter = null_mut();
         let result = unsafe {
-            (p.alternate_create)(
+            leaf::alternate_create(
                 owned.device(),
                 width,
                 height,
@@ -602,16 +600,16 @@ impl Pipeline {
         (result, adapter)
     }
 
-    unsafe fn close_dlss(&self, p: &P, owned: &mut Owned) -> i32 {
+    unsafe fn close_dlss(&self, owned: &mut Owned) -> i32 {
         let mut shutdown = OK;
         if owned.streamline_loaded {
             self.say("shutting streamline down");
             // Frees the DLSS feature's own resources first. Streamline's shutdown does this too,
             // but the order matters when the caller's device is about to go.
             shutdown = unsafe {
-                (p.release_resources)();
-                (p.release_viewport)(LAYER_VIEWPORT);
-                (p.shutdown)()
+                leaf::release_resources();
+                leaf::release_viewport(LAYER_VIEWPORT);
+                leaf::shutdown()
             };
             if shutdown != OK {
                 self.say(format!("streamline shutdown failed (result {shutdown})"));
@@ -622,7 +620,7 @@ impl Pipeline {
         shutdown
     }
 
-    unsafe fn open_dlss(&self, p: &P, owned: &mut Owned) -> i32 {
+    unsafe fn open_dlss(&self, owned: &mut Owned) -> i32 {
         let settings = &owned.dlss_settings;
         if settings.directory().is_empty() {
             return INVALID;
@@ -636,10 +634,10 @@ impl Pipeline {
         self.say([b"loading streamline from ".as_slice(), &plugins].concat());
         let plugins = CString::new(plugins).unwrap_or_default();
         let interposer = CString::new(interposer).unwrap_or_default();
-        let host = unsafe { (p.present_host)() };
+        let host = leaf::present_host();
         let loaded = if host.is_null() {
             unsafe {
-                (p.load)(&rsf_dlss_setup {
+                leaf::load(&rsf_dlss_setup {
                     struct_size: size_of::<rsf_dlss_setup>() as u32,
                     abi_version: RSF_DLSS_ABI_VERSION,
                     interposer_path_utf8: interposer.as_ptr(),
@@ -660,7 +658,7 @@ impl Pipeline {
                 })
             }
         } else {
-            unsafe { (p.share_host)(host, sink.log, sink.user as Raw) }
+            unsafe { leaf::share_host(host, sink.log, sink.user as Raw) }
         };
         if loaded != 0 {
             self.say(format!("streamline did not load (result {loaded})"));
@@ -669,12 +667,12 @@ impl Pipeline {
         owned.streamline_loaded = true;
 
         self.say("handing the game's device to streamline");
-        let device_set = unsafe { (p.set_device)(owned.device()) };
+        let device_set = unsafe { leaf::set_device(owned.device()) };
         if device_set != 0 {
             self.say(format!(
                 "streamline refused the device (result {device_set})"
             ));
-            unsafe { self.close_dlss(p, owned) };
+            unsafe { self.close_dlss(owned) };
             return STREAMLINE_FAILED;
         }
 
@@ -683,7 +681,7 @@ impl Pipeline {
             struct_size: size_of::<rsf_dlss_support>() as u32,
             ..unsafe { std::mem::zeroed() }
         };
-        let queried = unsafe { (p.query_support)(&mut support) };
+        let queried = unsafe { leaf::query_support(&mut support) };
         if queried != 0 || support.supported == 0 {
             // Which requirement failed is the difference between "update the driver" and "this
             // machine cannot do it".
@@ -698,7 +696,7 @@ impl Pipeline {
                 flag(support.os_out_of_date, ", OS out of date"),
                 flag(support.no_supported_adapter, ", no supported adapter"),
             ));
-            unsafe { self.close_dlss(p, owned) };
+            unsafe { self.close_dlss(owned) };
             return if queried == DLSS_NOT_SUPPORTED {
                 NOT_SUPPORTED
             } else {
@@ -709,9 +707,9 @@ impl Pipeline {
         OK
     }
 
-    unsafe fn plan_dlss(&self, p: &P, output: [u32; 2], quality: u32) -> Result<Range, i32> {
+    unsafe fn plan_dlss(&self, output: [u32; 2], quality: u32) -> Result<Range, i32> {
         let mut plan = plan_request(output[0], output[1], quality);
-        let result = unsafe { (p.plan)(&mut plan) };
+        let result = unsafe { leaf::plan(&mut plan) };
         if result != OK || plan.render_width == 0 || plan.render_height == 0 {
             self.say(format!(
                 "DLSS gave no render size for quality {quality} (result {result})"
@@ -723,32 +721,31 @@ impl Pipeline {
 
     unsafe fn prepare_dlss(
         &self,
-        p: &P,
         owned: &mut Owned,
         output: [u32; 2],
         quality: u32,
     ) -> Result<Range, i32> {
         if !owned.streamline_loaded {
-            let result = unsafe { self.open_dlss(p, owned) };
+            let result = unsafe { self.open_dlss(owned) };
             if result != OK {
                 return Err(result);
             }
         }
-        unsafe { self.plan_dlss(p, output, quality) }
+        unsafe { self.plan_dlss(output, quality) }
     }
 
     // Undo whatever is held, in the reverse of the order it was acquired. Safe at any point in a
     // partially completed start, which is what its failure paths rely on.
-    unsafe fn tear_down(&self, p: &P, owned: &mut Owned) -> i32 {
+    unsafe fn tear_down(&self, owned: &mut Owned) -> i32 {
         // Close surface admission before the release callback clears the published configuration.
         self.shared().running = false;
         unsafe {
-            (p.native_sr_release)();
+            leaf::native_sr_release();
             if !owned.fidelity.is_null() {
-                (p.fidelity_destroy)(owned.fidelity);
+                leaf::fidelity_destroy(owned.fidelity);
             }
             if !owned.transport.is_null() {
-                (p.transport_destroy)(owned.transport);
+                leaf::transport_destroy(owned.transport);
             }
             owned.fidelity = null_mut();
             owned.transport = null_mut();
@@ -756,14 +753,14 @@ impl Pipeline {
             owned.transport_reported = false;
             owned.fidelity_failed = false;
             if !owned.dense.is_null() {
-                (p.resolve_destroy)(owned.dense);
+                leaf::resolve_destroy(owned.dense);
             }
             owned.dense = null_mut();
             owned.hints_reported = false;
             owned.clouds_reported = false;
             owned.dense_extent = [0; 2];
             if !owned.decode.is_null() {
-                (p.decode_destroy)(owned.decode);
+                leaf::decode_destroy(owned.decode);
             }
             owned.decode = null_mut();
             owned.decode_extent = [0; 2];
@@ -773,7 +770,7 @@ impl Pipeline {
         self.release_layer(owned);
         unsafe { rsf_sr_legacy_destroy(owned.alternate) };
         owned.alternate = null_mut();
-        let shutdown = unsafe { self.close_dlss(p, owned) };
+        let shutdown = unsafe { self.close_dlss(owned) };
         owned.dlss_settings = DlssSettings::default();
         owned.device = None;
         owned.dlss_evaluation_attempted = false;
@@ -797,11 +794,11 @@ impl Pipeline {
     }
 
     #[cfg(test)]
-    pub(super) unsafe fn start(&self, p: &P, device: Raw, setup: *const Setup) -> i32 {
-        unsafe { self.start_backend(p, device, setup, RSF_SR_DLSS) }
+    pub(super) unsafe fn start(&self, device: Raw, setup: *const Setup) -> i32 {
+        unsafe { self.start_backend(device, setup, RSF_SR_DLSS) }
     }
 
-    unsafe fn start_backend(&self, p: &P, device: Raw, setup: *const Setup, backend: u32) -> i32 {
+    unsafe fn start_backend(&self, device: Raw, setup: *const Setup, backend: u32) -> i32 {
         if device.is_null() || !unsafe { has_capacity(setup) } {
             return INVALID;
         }
@@ -872,7 +869,7 @@ impl Pipeline {
         let [width, height] = [setup.output_width, setup.output_height];
         let mut range = Range::alternate([width, height]);
         let result = if backend == RSF_SR_DLSS {
-            match unsafe { self.prepare_dlss(p, owned, [width, height], setup.quality) } {
+            match unsafe { self.prepare_dlss(owned, [width, height], setup.quality) } {
                 Ok(plan) => {
                     range = plan;
                     OK
@@ -882,7 +879,6 @@ impl Pipeline {
         } else {
             unsafe {
                 self.select_alternate(
-                    p,
                     owned,
                     backend,
                     [width, height],
@@ -892,14 +888,14 @@ impl Pipeline {
             }
         };
         if result != OK {
-            unsafe { self.tear_down(p, owned) };
+            unsafe { self.tear_down(owned) };
             return result;
         }
 
         self.say(format!("creating the {width}x{height} output target"));
-        let Some(output) = (unsafe { self.create_cleared_target(p, device, width, height) }) else {
+        let Some(output) = (unsafe { self.create_cleared_target(device, width, height) }) else {
             self.say("the output target could not be created");
-            unsafe { self.tear_down(p, owned) };
+            unsafe { self.tear_down(owned) };
             return RESOURCE_FAILED;
         };
         drop(self.set_output(owned, Some(output)));
@@ -923,7 +919,7 @@ impl Pipeline {
         OK
     }
 
-    pub(super) unsafe fn on_frame(&self, p: &P, context: Raw, frame: *const Frame) -> i32 {
+    pub(super) unsafe fn on_frame(&self, context: Raw, frame: *const Frame) -> i32 {
         if context.is_null() || !unsafe { has_capacity(frame) } {
             return INVALID;
         }
@@ -935,10 +931,10 @@ impl Pipeline {
             return NOT_RUNNING;
         };
         let owned = &mut *guard;
-        unsafe { self.evaluate_scene(p, owned, context, frame) }
+        unsafe { self.evaluate_scene(owned, context, frame) }
     }
 
-    unsafe fn evaluate_scene(&self, p: &P, o: &mut Owned, context: Raw, frame: &Frame) -> i32 {
+    unsafe fn evaluate_scene(&self, o: &mut Owned, context: Raw, frame: &Frame) -> i32 {
         if o.device.is_none() || o.output.is_none() {
             return NOT_RUNNING;
         }
@@ -996,10 +992,10 @@ impl Pipeline {
                 "render size moved from {}x{} to {rw}x{rh}, rebuilding",
                 o.decode_extent[0], o.decode_extent[1]
             ));
-            unsafe { (p.decode_destroy)(o.decode) };
+            unsafe { leaf::decode_destroy(o.decode) };
             o.decode = null_mut();
             o.decode_extent = [0; 2];
-            if o.dlss_evaluation_attempted && unsafe { (p.release_resources)() } == 0 {
+            if o.dlss_evaluation_attempted && unsafe { leaf::release_resources() } == 0 {
                 o.dlss_evaluation_attempted = false;
             }
         }
@@ -1015,7 +1011,7 @@ impl Pipeline {
             // its R16G16_FLOAT output is shared with D3D12.
             let mut decode = null_mut();
             let built = unsafe {
-                (p.decode_create)(
+                leaf::decode_create(
                     o.device(),
                     rw,
                     rh,
@@ -1042,7 +1038,7 @@ impl Pipeline {
         }
 
         // Mandatory: no backend can subtract the bias of Unreal-style storage.
-        let decoded = unsafe { (p.decode_run)(o.decode, context, frame.game_motion, &o.motion) };
+        let decoded = unsafe { leaf::decode_run(o.decode, context, frame.game_motion, &o.motion) };
         if decoded != 0 {
             if o.reported.worth_saying(MOTION_DECODE_FAILED, render) {
                 self.say(format!("the motion decode did not run (result {decoded})"));
@@ -1073,7 +1069,7 @@ impl Pipeline {
             color_in: frame.scene_color,
             color_out: o.output(),
             depth: frame.depth,
-            motion: unsafe { (p.decode_texture)(o.decode) },
+            motion: unsafe { leaf::decode_texture(o.decode) },
             exposure: frame.exposure,
             render_width: rw,
             render_height: rh,
@@ -1129,8 +1125,8 @@ impl Pipeline {
         // Shared D3D12 evaluation also needs copy-compatible R16G16 motion and R32 depth, even when
         // the producer already includes camera motion in every sample.
         let reconstruct = camera.camera_motion_included == 0 && camera.has_motion_sentinel != 0;
-        if dlss_inputs && (reconstruct || !unsafe { (p.present_host)() }.is_null()) {
-            let Some(rebuilt_resolve) = (unsafe { self.fit_resolve(p, o, render) }) else {
+        if dlss_inputs && (reconstruct || !leaf::present_host().is_null()) {
+            let Some(rebuilt_resolve) = (unsafe { self.fit_resolve(o, render) }) else {
                 return self.finish(o, RESOURCE_FAILED);
             };
             if rebuilt_resolve {
@@ -1149,11 +1145,11 @@ impl Pipeline {
                 frame.motion_depth_layer,
                 camera.jitter_pixels,
             );
-            if unsafe { (p.resolve_run)(o.dense, context, dlss.motion, dlss.depth, &params) } == 0 {
+            if unsafe { leaf::resolve_run(o.dense, context, dlss.motion, dlss.depth, &params) } == 0 {
                 return self.finish(o, RESOURCE_FAILED);
             }
-            dlss.motion = unsafe { (p.resolve_motion)(o.dense) };
-            dlss.depth = unsafe { (p.resolve_depth)(o.dense) };
+            dlss.motion = unsafe { leaf::resolve_motion(o.dense) };
+            dlss.depth = unsafe { leaf::resolve_depth(o.dense) };
             dlss.camera_motion_included = 1;
             dlss.motion_scale_x = 1.0 / rw as f32;
             dlss.motion_scale_y = 1.0 / rh as f32;
@@ -1166,7 +1162,7 @@ impl Pipeline {
         let correct_colour = dlss_inputs && self.colour_correction.load(Ordering::Acquire);
         if correct_colour && o.fidelity.is_null() {
             if !o.fidelity_failed {
-                o.fidelity = unsafe { (p.fidelity_create)(o.device()) };
+                o.fidelity = unsafe { leaf::fidelity_create(o.device()) };
                 if o.fidelity.is_null() {
                     o.fidelity_failed = true;
                     self.say("DLSS colour correction could not create its GPU pass; retaining the native graph");
@@ -1182,7 +1178,7 @@ impl Pipeline {
         // presets band in dark linear HDR, and a driver override can replace any preset choice.
         let transported = dlss_inputs && self.colour_transport.load(Ordering::Acquire);
         if transported && o.transport.is_null() && !o.transport_failed {
-            o.transport = unsafe { (p.transport_create)(o.device()) };
+            o.transport = unsafe { leaf::transport_create(o.device()) };
             if o.transport.is_null() {
                 o.transport_failed = true;
                 self.say("DLSS colour transport could not create its GPU passes; DLSS receives linear HDR");
@@ -1191,7 +1187,7 @@ impl Pipeline {
         if transported && !o.transport.is_null() {
             let mut encoded = null_mut();
             if unsafe {
-                (p.transport_encode)(
+                leaf::transport_encode(
                     o.transport,
                     context,
                     frame.scene_color,
@@ -1212,7 +1208,7 @@ impl Pipeline {
                 self.say("DLSS colour transport: exposed display-range encoding in, HDR input off, decoded to linear with highlight recovery");
             }
         }
-        unsafe { self.dump_inputs(p, o, context, frame) };
+        unsafe { self.dump_inputs(o, context, frame) };
 
         let sharpen = self
             .shared()
@@ -1221,7 +1217,7 @@ impl Pipeline {
         let mut submitted = dlss;
         let evaluated = if backend == RSF_SR_DLSS {
             o.dlss_evaluation_attempted = true;
-            unsafe { (p.fg_evaluate)(context, &dlss) }
+            unsafe { leaf::fg_evaluate(context, &dlss) }
         } else {
             // The legacy adapter takes canonical UV. The decode's own output, with no scale from
             // the caller, is current-minus-previous NDC with y up.
@@ -1254,7 +1250,7 @@ impl Pipeline {
             {
                 generation.camera_motion_included = 1;
             }
-            unsafe { (p.fg_capture)(context, &generation) };
+            unsafe { leaf::fg_capture(context, &generation) };
         }
         if evaluated != 0 {
             let failures = {
@@ -1282,7 +1278,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         }
         let output = o.output();
         unsafe {
-            (p.input_dump)(
+            leaf::input_dump(
                 context,
                 c"sr_backend_output".as_ptr(),
                 c"SR backend output before colour-transport decode and optional fidelity correction"
@@ -1298,7 +1294,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         };
         if dlss.color_encoded != 0
             && unsafe {
-                (p.transport_decode)(
+                leaf::transport_decode(
                     o.transport,
                     context,
                     output,
@@ -1331,7 +1327,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
                 let raw = CString::new([prefix.as_slice(), b"_output_uncorrected"].concat())
                     .unwrap_or_default();
                 unsafe {
-                    (p.dump_bytes)(
+                    leaf::dump_bytes(
                         o.device(),
                         context,
                         output,
@@ -1343,7 +1339,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
                 };
             }
             if unsafe {
-                (p.fidelity_run)(
+                leaf::fidelity_run(
                     o.fidelity,
                     context,
                     frame.scene_color,
@@ -1364,14 +1360,14 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             }
         }
         // Post-SR, after decoding and fidelity correction. Failure keeps the vendor's valid output.
-        unsafe { self.sharpen(p, o, context, frame, &dlss, &sharpen, backend) };
+        unsafe { self.sharpen(o, context, frame, &dlss, &sharpen, backend) };
         if let Some(prefix) = prefix {
             unsafe {
-                self.write_dump(p, o, context, frame, &submitted, backend, &prefix, [ow, oh])
+                self.write_dump(o, context, frame, &submitted, backend, &prefix, [ow, oh])
             };
         }
         unsafe {
-            (p.input_dump)(
+            leaf::input_dump(
                 context,
                 c"sr_output".as_ptr(),
                 c"Reconstructed linear HDR image reinserted before native tonemapping".as_ptr(),
@@ -1397,24 +1393,24 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
     }
 
     // Keep a resolve pass built for the render size. A failed rebuild keeps the previous pass.
-    unsafe fn fit_resolve(&self, p: &P, o: &mut Owned, render: [u32; 2]) -> Option<bool> {
+    unsafe fn fit_resolve(&self, o: &mut Owned, render: [u32; 2]) -> Option<bool> {
         if !o.dense.is_null() && o.dense_extent == render {
             return Some(false);
         }
-        let replacement = unsafe { (p.resolve_create)(o.device(), render[0], render[1]) };
+        let replacement = unsafe { leaf::resolve_create(o.device(), render[0], render[1]) };
         if replacement.is_null() {
             return None;
         }
         if !o.dense.is_null() {
-            unsafe { (p.resolve_destroy)(o.dense) };
+            unsafe { leaf::resolve_destroy(o.dense) };
         }
         o.dense = replacement;
         o.dense_extent = render;
         Some(true)
     }
 
-    unsafe fn dump_inputs(&self, p: &P, o: &Owned, context: Raw, frame: &Frame) {
-        let decoded = unsafe { (p.decode_texture)(o.decode) };
+    unsafe fn dump_inputs(&self, o: &Owned, context: Raw, frame: &Frame) {
+        let decoded = unsafe { leaf::decode_texture(o.decode) };
         let inputs: [(&CStr, &CStr, Raw, u32, f32); 11] = [
             (
                 c"sr_source_jittered",
@@ -1496,7 +1492,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         ];
         for (name, description, texture, view, scale) in inputs {
             unsafe {
-                (p.input_dump)(
+                leaf::input_dump(
                     context,
                     name.as_ptr(),
                     description.as_ptr(),
@@ -1511,7 +1507,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
     #[allow(clippy::too_many_arguments)]
     unsafe fn sharpen(
         &self,
-        p: &P,
         o: &mut Owned,
         context: Raw,
         frame: &Frame,
@@ -1539,7 +1534,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             far_plane: dlss.far_plane,
         };
         let sharpened = unsafe {
-            (p.sharpen)(
+            leaf::sharpen(
                 &mut o.sharpen,
                 context,
                 o.output(),
@@ -1562,7 +1557,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
     #[allow(clippy::too_many_arguments)]
     unsafe fn write_dump(
         &self,
-        p: &P,
         o: &Owned,
         context: Raw,
         frame: &Frame,
@@ -1574,7 +1568,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         let decoded = if o.decode.is_null() {
             null_mut()
         } else {
-            unsafe { (p.decode_texture)(o.decode) }
+            unsafe { leaf::decode_texture(o.decode) }
         };
         let targets: [(&str, &[u8], Raw, u32, bool); 10] = [
             (
@@ -1650,7 +1644,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             self.say([format!("writing {what} to ").as_bytes(), &path].concat());
             let path = CString::new(path).unwrap_or_default();
             let raw = unsafe {
-                (p.dump_bytes)(
+                leaf::dump_bytes(
                     o.device(),
                     context,
                     texture,
@@ -1667,7 +1661,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
                 raw
             } else {
                 unsafe {
-                    (p.dump_image)(
+                    leaf::dump_image(
                         o.device(),
                         context,
                         texture,
@@ -1744,7 +1738,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
 
     pub(super) unsafe fn prepare_layer(
         &self,
-        p: &P,
         width: u32,
         height: u32,
         out: *mut Raw,
@@ -1773,14 +1766,14 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
                 "layer size moved from {}x{} to {width}x{height}, rebuilding the layer feature",
                 o.layer_extent[0], o.layer_extent[1]
             ));
-            unsafe { (p.release_viewport)(LAYER_VIEWPORT) };
+            unsafe { leaf::release_viewport(LAYER_VIEWPORT) };
         }
         self.release_layer(o);
 
         self.say(format!(
             "creating the {width}x{height} layer output and its zero motion"
         ));
-        let Some(output) = (unsafe { self.create_cleared_target(p, o.device(), width, height) })
+        let Some(output) = (unsafe { self.create_cleared_target(o.device(), width, height) })
         else {
             self.say("the layer output could not be created");
             self.release_layer(o);
@@ -1795,7 +1788,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             RSF_D3D11_BIND_SHADER_RESOURCE,
         );
         let Some(motion) =
-            (unsafe { com_ref::owned((p.create_zeroed)(o.device(), &desc, width * 4)) })
+            (unsafe { com_ref::owned(leaf::create_zeroed(o.device(), &desc, width * 4)) })
         else {
             drop(output);
             self.say("the layer's zero motion could not be created");
@@ -1815,7 +1808,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         OK
     }
 
-    pub(super) unsafe fn on_layer(&self, p: &P, context: Raw, layer: *const Layer) -> i32 {
+    pub(super) unsafe fn on_layer(&self, context: Raw, layer: *const Layer) -> i32 {
         if context.is_null() || !unsafe { has_capacity(layer) } {
             return INVALID;
         }
@@ -1893,7 +1886,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             dlss.frame_index = (shared.scene.evaluated + shared.scene.refused) as u32;
         }
 
-        let evaluated = unsafe { (p.evaluate_layer)(context, &dlss) };
+        let evaluated = unsafe { leaf::evaluate_layer(context, &dlss) };
         if evaluated != 0 {
             o.layer_failures += 1;
             if o.layer_failures >= FAILURE_LIMIT {
@@ -1946,8 +1939,8 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         OK
     }
 
-    pub(super) unsafe fn set_preset(&self, p: &P, preset: u32) -> i32 {
-        if unsafe { (p.preset_valid)(preset) } == 0 {
+    pub(super) unsafe fn set_preset(&self, preset: u32) -> i32 {
+        if leaf::preset_valid(preset) == 0 {
             return INVALID;
         }
         let changed = {
@@ -1969,7 +1962,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
 
     pub(super) unsafe fn set_quality(
         &self,
-        p: &P,
         quality: u32,
         width_out: *mut u32,
         height_out: *mut u32,
@@ -2000,7 +1992,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             }
             range
         } else {
-            match unsafe { self.plan_dlss(p, output, quality) } {
+            match unsafe { self.plan_dlss(output, quality) } {
                 Ok(plan) => plan,
                 Err(result) => return result,
             }
@@ -2019,7 +2011,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
     // active backend are prepared before anything is committed; a refusal keeps the current set.
     pub(super) unsafe fn resize_output(
         &self,
-        p: &P,
         width: u32,
         height: u32,
         width_out: *mut u32,
@@ -2047,12 +2038,12 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         let mut range = Range::alternate([width, height]);
         let mut next_alternate: *mut Adapter = null_mut();
         if backend == RSF_SR_DLSS {
-            range = match unsafe { self.plan_dlss(p, [width, height], quality) } {
+            range = match unsafe { self.plan_dlss([width, height], quality) } {
                 Ok(plan) => plan,
                 Err(result) => return result,
             };
         } else {
-            let (mut result, created) = unsafe { self.create_alternate(p, o, width, height) };
+            let (mut result, created) = unsafe { self.create_alternate(o, width, height) };
             next_alternate = created.cast();
             if result == 0 {
                 result = unsafe {
@@ -2071,25 +2062,25 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             }
         }
         let mut desc = TextureDesc::default();
-        unsafe { (p.texture_desc)(o.output(), &mut desc) };
+        unsafe { leaf::texture_desc(o.output(), &mut desc) };
         desc.width = width;
         desc.height = height;
-        let Some(replacement) = (unsafe { com_ref::owned((p.create_texture)(o.device(), &desc)) })
+        let Some(replacement) = (unsafe { com_ref::owned(leaf::create_texture(o.device(), &desc)) })
         else {
             unsafe { rsf_sr_legacy_destroy(next_alternate) };
             return RESOURCE_FAILED;
         };
         if backend == RSF_SR_DLSS && o.dlss_evaluation_attempted {
-            if unsafe { (p.release_resources)() } != 0 {
+            if unsafe { leaf::release_resources() } != 0 {
                 return STREAMLINE_FAILED;
             }
             o.dlss_evaluation_attempted = false;
         }
-        unsafe { (p.clear_black)(o.device(), replacement.as_raw()) };
+        unsafe { leaf::clear_black(o.device(), replacement.as_raw()) };
         let previous_output = self.set_output(o, Some(replacement));
         let previous_alternate = std::mem::replace(&mut o.alternate, next_alternate);
         if !o.decode.is_null() {
-            unsafe { (p.decode_destroy)(o.decode) };
+            unsafe { leaf::decode_destroy(o.decode) };
         }
         o.decode = null_mut();
         o.decode_extent = [0; 2];
@@ -2112,7 +2103,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
 
     unsafe fn select_alternate(
         &self,
-        p: &P,
         o: &mut Owned,
         backend: u32,
         output: [u32; 2],
@@ -2121,7 +2111,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
     ) -> i32 {
         let mut result = OK;
         if o.alternate.is_null() {
-            let (created, adapter) = unsafe { self.create_alternate(p, o, output[0], output[1]) };
+            let (created, adapter) = unsafe { self.create_alternate(o, output[0], output[1]) };
             result = created;
             o.alternate = adapter.cast();
         }
@@ -2168,7 +2158,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
     // boundary. Refusals preserve the active backend.
     pub(super) unsafe fn select_backend(
         &self,
-        p: &P,
         backend: u32,
         width_out: *mut u32,
         height_out: *mut u32,
@@ -2191,7 +2180,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         let mut range = Range::alternate(output);
         let result = if backend == RSF_SR_DLSS {
             let was_loaded = o.streamline_loaded;
-            let mut result = match unsafe { self.prepare_dlss(p, o, output, quality) } {
+            let mut result = match unsafe { self.prepare_dlss(o, output, quality) } {
                 Ok(plan) => {
                     range = plan;
                     OK
@@ -2204,11 +2193,11 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
                 };
             }
             if result != OK && !was_loaded {
-                unsafe { self.close_dlss(p, o) };
+                unsafe { self.close_dlss(o) };
             }
             result
         } else {
-            unsafe { self.select_alternate(p, o, backend, output, quality, &mut range) }
+            unsafe { self.select_alternate(o, backend, output, quality, &mut range) }
         };
         let active = {
             let mut shared = self.shared();
@@ -2235,13 +2224,13 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         OK
     }
 
-    pub(super) unsafe fn stop(&self, p: &P) -> i32 {
+    pub(super) unsafe fn stop(&self) -> i32 {
         let Some(mut guard) = self.owned() else {
             return NOT_RUNNING;
         };
         let o = &mut *guard;
         if !o.sharpen.is_null() {
-            unsafe { (p.sharpen_destroy)(o.sharpen) };
+            unsafe { leaf::sharpen_destroy(o.sharpen) };
         }
         o.sharpen = null_mut();
         o.sharpen_reported = false;
@@ -2249,7 +2238,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             return NOT_RUNNING;
         }
         self.say("stopping: releasing pipeline resources");
-        unsafe { self.tear_down(p, o) }
+        unsafe { self.tear_down(o) }
     }
 }
 
@@ -2285,6 +2274,10 @@ extern "C" fn rsf_native_sr_set_surface(width: u32, height: u32) -> i32 {
 
 #[cfg(not(test))]
 mod platform;
+#[cfg(not(test))]
+use platform as leaf;
+#[cfg(test)]
+use tests as leaf;
 
 #[cfg(not(test))]
 pub(crate) mod exports;

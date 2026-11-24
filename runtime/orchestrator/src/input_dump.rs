@@ -27,6 +27,8 @@ mod legacy;
 #[cfg(not(test))]
 pub(crate) use legacy::rsf_input_dump_active;
 pub(crate) use legacy::{rsf_input_dump_fg, rsf_input_dump_fg_prepare, rsf_input_dump_sr};
+#[cfg(not(test))]
+pub(crate) use legacy::rsf_input_dump_texture;
 mod metadata;
 mod native;
 

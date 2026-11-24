@@ -114,7 +114,7 @@ unsafe extern "C" fn rsf_input_dump_pass(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_input_dump_texture(
+pub(crate) unsafe extern "C" fn rsf_input_dump_texture(
     context: *mut c_void,
     name: *const c_char,
     description: *const c_char,

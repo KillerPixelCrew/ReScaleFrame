@@ -1,101 +1,54 @@
 // SPDX-License-Identifier: MIT
+// The production leaves of the D3D11 SR pipeline; dlss_pipeline_tests.rs defines fakes with the
+// same names and signatures.
 use super::*;
 use crate::d3d11_d3d12::borrow;
-use crate::d3d11_output_platform::{
-    rsf_d3d11_output_create_texture, rsf_d3d11_output_texture_desc,
+use crate::colour_d3d11::{
+    rsf_colour_fidelity_create, rsf_colour_fidelity_destroy, rsf_colour_fidelity_run,
+    rsf_colour_transport_create, rsf_colour_transport_decode, rsf_colour_transport_destroy,
+    rsf_colour_transport_encode,
 };
-use crate::d3d11_present::rsf_d3d11_present_host;
-use crate::d3d11_sharpening::{
-    Frame as SharpenFrame, rsf_core_sharpen11_destroy, rsf_core_sharpen11_run,
+pub(super) use crate::d3d11_output_platform::{
+    rsf_d3d11_output_create_texture as create_texture,
+    rsf_d3d11_output_texture_desc as texture_desc,
 };
+pub(super) use crate::d3d11_present::rsf_d3d11_present_host as present_host;
+use crate::d3d11_sharpening::{Frame as SharpenFrame, rsf_core_sharpen11_run};
+pub(super) use crate::d3d11_sharpening::rsf_core_sharpen11_destroy as sharpen_destroy;
+pub(super) use crate::dlss_streamline::exports::{
+    rsf_dlss_evaluate as evaluate_layer, rsf_dlss_load as load,
+    rsf_dlss_plan_render_size as plan, rsf_dlss_query_support as query_support,
+    rsf_dlss_release_resources as release_resources,
+    rsf_dlss_release_viewport as release_viewport, rsf_dlss_set_device as set_device,
+    rsf_dlss_share_host as share_host, rsf_dlss_shutdown as shutdown,
+};
+pub(super) use crate::input_dump::rsf_input_dump_texture as input_dump;
 use crate::input_dump::{Log, TextureOptions};
+use crate::motion_decode::{
+    rsf_motion_decode_create, rsf_motion_decode_destroy, rsf_motion_decode_run,
+    rsf_motion_decode_texture,
+};
 use crate::motion_resolve::{
     rsf_motion_resolve_create, rsf_motion_resolve_depth, rsf_motion_resolve_destroy,
     rsf_motion_resolve_motion, rsf_motion_resolve_run,
 };
+pub(super) use crate::native_fg::{
+    rsf_native_fg_capture as fg_capture, rsf_native_fg_evaluate as fg_evaluate,
+};
+pub(super) use crate::native_sr::rsf_native_sr_release_resources as native_sr_release;
 use crate::sr_legacy::rsf_sr_legacy_create;
 use crate::sys::rsf_motion_resolve_params;
 use crate::sys::{RSF_MOTION_DECODE_ABI_VERSION, rsf_motion_decode_setup as DecodeSetup};
+use rsf_graphics::texture_dump::{rsf_dump_texture, rsf_dump_texture_bytes};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
 
 unsafe extern "C" {
-    fn rsf_dlss_share_host(host: Raw, log: rsf_dlssp_log_fn, user: Raw) -> i32;
-    fn rsf_dlss_load(setup: *const rsf_dlss_setup) -> i32;
-    fn rsf_dlss_set_device(device: Raw) -> i32;
-    fn rsf_dlss_query_support(support: *mut rsf_dlss_support) -> i32;
-    fn rsf_dlss_plan_render_size(plan: *mut rsf_dlss_plan) -> i32;
-    fn rsf_dlss_release_resources() -> i32;
-    fn rsf_dlss_release_viewport(viewport: u32) -> i32;
-    fn rsf_dlss_shutdown() -> i32;
-    fn rsf_dlss_evaluate(context: Raw, frame: *const DlssFrame) -> i32;
-    fn rsf_native_fg_evaluate(context: Raw, frame: *const DlssFrame) -> i32;
-    fn rsf_native_fg_capture(context: Raw, frame: *const DlssFrame);
-    fn rsf_native_sr_release_resources();
-    fn rsf_motion_decode_create(device: Raw, setup: &DecodeSetup, out: &mut Raw) -> i32;
-    fn rsf_motion_decode_run(pass: Raw, context: Raw, motion: Raw, params: &DecodeParams) -> i32;
-    fn rsf_motion_decode_texture(pass: Raw) -> Raw;
-    fn rsf_motion_decode_destroy(pass: Raw);
-    fn rsf_colour_fidelity_create(device: Raw, out: &mut Raw) -> i32;
-    fn rsf_colour_fidelity_run(
-        pass: Raw,
-        context: Raw,
-        scene: Raw,
-        output: Raw,
-        depth: Raw,
-        inverted: u32,
-        jitter: *const f32,
-    ) -> i32;
-    fn rsf_colour_fidelity_destroy(pass: Raw);
-    fn rsf_colour_transport_create(device: Raw, out: &mut Raw) -> i32;
-    fn rsf_colour_transport_encode(
-        pass: Raw,
-        context: Raw,
-        scene: Raw,
-        exposure: Raw,
-        width: u32,
-        height: u32,
-        out: *mut Raw,
-    ) -> i32;
-    fn rsf_colour_transport_decode(
-        pass: Raw,
-        context: Raw,
-        target: Raw,
-        exposure: Raw,
-        width: u32,
-        height: u32,
-        scene: Raw,
-        scene_width: u32,
-        scene_height: u32,
-        jitter: *const f32,
-    ) -> i32;
-    fn rsf_colour_transport_destroy(pass: Raw);
-    fn rsf_input_dump_texture(
-        context: Raw,
-        name: *const c_char,
-        description: *const c_char,
-        texture: Raw,
-        view: u32,
-        scale: f32,
-    );
     fn rsf_sharpening_requested(options: &Sharpening) -> u32;
-    fn rsf_dump_texture_bytes(
-        device: Raw,
-        context: Raw,
-        texture: Raw,
-        options: &TextureOptions,
-    ) -> i32;
-    fn rsf_dump_texture(
-        device: Raw,
-        context: Raw,
-        texture: Raw,
-        options: *const TextureOptions,
-        report: Raw,
-    ) -> i32;
 }
 
-unsafe extern "C" fn clear_black(device: Raw, texture: Raw) {
+pub(super) unsafe fn clear_black(device: Raw, texture: Raw) {
     let device = unsafe { borrow::<ID3D11Device>(&device) };
     let texture = unsafe { borrow::<ID3D11Texture2D>(&texture) };
     let Ok(context) = (unsafe { device.GetImmediateContext() }) else {
@@ -109,7 +62,7 @@ unsafe extern "C" fn clear_black(device: Raw, texture: Raw) {
     }
 }
 
-unsafe extern "C" fn create_zeroed(device: Raw, desc: *const TextureDesc, row_pitch: u32) -> Raw {
+pub(super) unsafe fn create_zeroed(device: Raw, desc: *const TextureDesc, row_pitch: u32) -> Raw {
     let desc = unsafe { &*desc };
     let native = D3D11_TEXTURE2D_DESC {
         Width: desc.width,
@@ -153,7 +106,8 @@ unsafe extern "C" fn create_zeroed(device: Raw, desc: *const TextureDesc, row_pi
     result.map_or(null_mut(), Interface::into_raw)
 }
 
-unsafe extern "C" fn decode_create(
+
+pub(super) unsafe fn decode_create(
     device: Raw,
     width: u32,
     height: u32,
@@ -170,19 +124,23 @@ unsafe extern "C" fn decode_create(
         log,
         log_user: null_mut(),
     };
-    unsafe { rsf_motion_decode_create(device, &setup, &mut *out) }
+    unsafe { rsf_motion_decode_create(device, &setup, out.cast()) }
 }
 
-unsafe extern "C" fn decode_run(
-    pass: Raw,
-    context: Raw,
-    motion: Raw,
-    params: *const DecodeParams,
-) -> i32 {
-    unsafe { rsf_motion_decode_run(pass, context, motion, &*params) }
+// The pass owners type their pass pointers; the pipeline keeps them as raw handles.
+pub(super) unsafe fn decode_run(pass: Raw, context: Raw, motion: Raw, params: *const DecodeParams) -> i32 {
+    unsafe { rsf_motion_decode_run(pass.cast(), context, motion, params) }
 }
 
-unsafe extern "C" fn resolve_create(device: Raw, width: u32, height: u32) -> Raw {
+pub(super) unsafe fn decode_texture(pass: Raw) -> Raw {
+    unsafe { rsf_motion_decode_texture(pass.cast()) }
+}
+
+pub(super) unsafe fn decode_destroy(pass: Raw) {
+    unsafe { rsf_motion_decode_destroy(pass.cast()) };
+}
+
+pub(super) unsafe fn resolve_create(device: Raw, width: u32, height: u32) -> Raw {
     let mut pass = null_mut();
     if unsafe { rsf_motion_resolve_create(device, width, height, &mut pass) } == 0 {
         return null_mut();
@@ -190,7 +148,7 @@ unsafe extern "C" fn resolve_create(device: Raw, width: u32, height: u32) -> Raw
     pass.cast()
 }
 
-unsafe extern "C" fn resolve_run(
+pub(super) unsafe fn resolve_run(
     pass: Raw,
     context: Raw,
     motion: Raw,
@@ -200,35 +158,97 @@ unsafe extern "C" fn resolve_run(
     unsafe { rsf_motion_resolve_run(pass.cast(), context, motion, depth, params) }
 }
 
-unsafe extern "C" fn resolve_motion(pass: Raw) -> Raw {
+pub(super) unsafe fn resolve_motion(pass: Raw) -> Raw {
     unsafe { rsf_motion_resolve_motion(pass.cast()) }
 }
 
-unsafe extern "C" fn resolve_depth(pass: Raw) -> Raw {
+pub(super) unsafe fn resolve_depth(pass: Raw) -> Raw {
     unsafe { rsf_motion_resolve_depth(pass.cast()) }
 }
 
-unsafe extern "C" fn resolve_destroy(pass: Raw) {
+pub(super) unsafe fn resolve_destroy(pass: Raw) {
     unsafe { rsf_motion_resolve_destroy(pass.cast()) };
 }
 
-unsafe extern "C" fn fidelity_create(device: Raw) -> Raw {
+pub(super) unsafe fn fidelity_create(device: Raw) -> Raw {
     let mut pass = null_mut();
     if unsafe { rsf_colour_fidelity_create(device, &mut pass) } == 0 {
         return null_mut();
     }
-    pass
+    pass.cast()
 }
 
-unsafe extern "C" fn transport_create(device: Raw) -> Raw {
+pub(super) unsafe fn fidelity_run(
+    pass: Raw,
+    context: Raw,
+    scene: Raw,
+    output: Raw,
+    depth: Raw,
+    inverted: u32,
+    jitter: *const f32,
+) -> i32 {
+    unsafe { rsf_colour_fidelity_run(pass.cast(), context, scene, output, depth, inverted, jitter) }
+}
+
+pub(super) unsafe fn fidelity_destroy(pass: Raw) {
+    unsafe { rsf_colour_fidelity_destroy(pass.cast()) };
+}
+
+pub(super) unsafe fn transport_create(device: Raw) -> Raw {
     let mut pass = null_mut();
     if unsafe { rsf_colour_transport_create(device, &mut pass) } == 0 {
         return null_mut();
     }
-    pass
+    pass.cast()
 }
 
-unsafe extern "C" fn sharpen(
+pub(super) unsafe fn transport_encode(
+    pass: Raw,
+    context: Raw,
+    scene: Raw,
+    exposure: Raw,
+    width: u32,
+    height: u32,
+    out: *mut Raw,
+) -> i32 {
+    unsafe { rsf_colour_transport_encode(pass.cast(), context, scene, exposure, width, height, out) }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn transport_decode(
+    pass: Raw,
+    context: Raw,
+    target: Raw,
+    exposure: Raw,
+    width: u32,
+    height: u32,
+    scene: Raw,
+    scene_width: u32,
+    scene_height: u32,
+    jitter: *const f32,
+) -> i32 {
+    unsafe {
+        rsf_colour_transport_decode(
+            pass.cast(),
+            context,
+            target,
+            exposure,
+            width,
+            height,
+            scene,
+            scene_width,
+            scene_height,
+            jitter,
+        )
+    }
+}
+
+pub(super) unsafe fn transport_destroy(pass: Raw) {
+    unsafe { rsf_colour_transport_destroy(pass.cast()) };
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn sharpen(
     pass: *mut Raw,
     context: Raw,
     output: Raw,
@@ -259,7 +279,8 @@ unsafe extern "C" fn sharpen(
     )
 }
 
-unsafe extern "C" fn alternate_create(
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn alternate_create(
     device: Raw,
     width: u32,
     height: u32,
@@ -291,11 +312,11 @@ unsafe extern "C" fn alternate_create(
     }
 }
 
-extern "C" fn preset_valid(preset: u32) -> i32 {
+pub(super) fn preset_valid(preset: u32) -> i32 {
     i32::from(crate::streamline_sr::preset_valid(preset))
 }
 
-unsafe extern "C" fn dump_bytes(
+pub(super) unsafe fn dump_bytes(
     device: Raw,
     context: Raw,
     texture: Raw,
@@ -313,7 +334,7 @@ unsafe extern "C" fn dump_bytes(
     unsafe { rsf_dump_texture_bytes(device, context, texture, &options) }
 }
 
-unsafe extern "C" fn dump_image(
+pub(super) unsafe fn dump_image(
     device: Raw,
     context: Raw,
     texture: Raw,
@@ -330,46 +351,3 @@ unsafe extern "C" fn dump_image(
     );
     unsafe { rsf_dump_texture(device, context, texture, &options, null_mut()) }
 }
-
-pub(super) static LEAVES: P = P {
-    present_host: rsf_d3d11_present_host,
-    share_host: rsf_dlss_share_host,
-    load: rsf_dlss_load,
-    set_device: rsf_dlss_set_device,
-    query_support: rsf_dlss_query_support,
-    plan: rsf_dlss_plan_render_size,
-    release_resources: rsf_dlss_release_resources,
-    release_viewport: rsf_dlss_release_viewport,
-    shutdown: rsf_dlss_shutdown,
-    evaluate_layer: rsf_dlss_evaluate,
-    preset_valid,
-    fg_evaluate: rsf_native_fg_evaluate,
-    fg_capture: rsf_native_fg_capture,
-    native_sr_release: rsf_native_sr_release_resources,
-    texture_desc: rsf_d3d11_output_texture_desc,
-    create_texture: rsf_d3d11_output_create_texture,
-    clear_black,
-    create_zeroed,
-    decode_create,
-    decode_run,
-    decode_texture: rsf_motion_decode_texture,
-    decode_destroy: rsf_motion_decode_destroy,
-    resolve_create,
-    resolve_run,
-    resolve_motion,
-    resolve_depth,
-    resolve_destroy,
-    fidelity_create,
-    fidelity_run: rsf_colour_fidelity_run,
-    fidelity_destroy: rsf_colour_fidelity_destroy,
-    transport_create,
-    transport_encode: rsf_colour_transport_encode,
-    transport_decode: rsf_colour_transport_decode,
-    transport_destroy: rsf_colour_transport_destroy,
-    sharpen,
-    sharpen_destroy: rsf_core_sharpen11_destroy,
-    alternate_create,
-    input_dump: rsf_input_dump_texture,
-    dump_bytes,
-    dump_image,
-};

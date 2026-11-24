@@ -603,7 +603,7 @@ pub(crate) unsafe extern "C" fn rsf_native_sr_capture_fg(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_sr_release_resources() {
+pub(crate) extern "C" fn rsf_native_sr_release_resources() {
     rsf_native_scene_reset();
     rsf_native_window_reset();
     rsf_native_cpu_release();

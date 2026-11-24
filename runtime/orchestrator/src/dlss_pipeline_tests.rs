@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Synthetic D3D11 SR pipeline contracts: fake COM objects, a fake leaf table and the legacy
+// Synthetic D3D11 SR pipeline contracts: fake COM objects, the fake leaves and the legacy
 // adapter over a fake bridge. No device, window, SDK or shader is touched.
 use super::*;
 use crate::sr_legacy::fake as legacy;
@@ -88,6 +88,7 @@ struct World {
     dumps: Vec<(String, u32, &'static str, Raw)>,
     reentered: Option<i32>,
     reenter: bool,
+    surface_retry: bool,
 }
 
 impl World {
@@ -124,6 +125,7 @@ impl World {
             dumps: Vec::new(),
             reentered: None,
             reenter: false,
+            surface_retry: false,
         }
     }
 }
@@ -156,14 +158,14 @@ unsafe extern "C" fn sink(_: Raw, message: *const c_char) {
     with(|world| world.logs.push(line));
 }
 
-unsafe extern "C" fn present_host() -> Raw {
+pub(super) fn present_host() -> Raw {
     handle(with(|world| world.host))
 }
-unsafe extern "C" fn share_host(_: Raw, _: rsf_dlssp_log_fn, _: Raw) -> i32 {
+pub(super) unsafe extern "C" fn share_host(_: Raw, _: rsf_dlssp_log_fn, _: Raw) -> i32 {
     call("share_host");
     with(|world| world.load)
 }
-unsafe extern "C" fn load(setup: *const rsf_dlss_setup) -> i32 {
+pub(super) unsafe extern "C" fn load(setup: *const rsf_dlss_setup) -> i32 {
     let setup = unsafe { &*setup };
     assert!(setup.log.is_some() && setup.abi_version == RSF_DLSS_ABI_VERSION);
     let text = |value| {
@@ -178,11 +180,11 @@ unsafe extern "C" fn load(setup: *const rsf_dlss_setup) -> i32 {
     ));
     with(|world| world.load)
 }
-unsafe extern "C" fn set_device(_: Raw) -> i32 {
+pub(super) unsafe extern "C" fn set_device(_: Raw) -> i32 {
     call("set_device");
     0
 }
-unsafe extern "C" fn query_support(out: *mut rsf_dlss_support) -> i32 {
+pub(super) unsafe extern "C" fn query_support(out: *mut rsf_dlss_support) -> i32 {
     let (result, supported) = with(|world| (world.support, world.supported));
     unsafe {
         (*out).supported = supported;
@@ -192,7 +194,7 @@ unsafe extern "C" fn query_support(out: *mut rsf_dlss_support) -> i32 {
     }
     result
 }
-unsafe extern "C" fn plan(out: *mut rsf_dlss_plan) -> i32 {
+pub(super) unsafe extern "C" fn plan(out: *mut rsf_dlss_plan) -> i32 {
     let request = unsafe { &mut *out };
     assert_eq!(request.struct_size as usize, size_of::<rsf_dlss_plan>());
     let (width, height, quality) = (request.output_width, request.output_height, request.quality);
@@ -206,32 +208,32 @@ unsafe extern "C" fn plan(out: *mut rsf_dlss_plan) -> i32 {
     };
     result
 }
-unsafe extern "C" fn release_resources() -> i32 {
+pub(super) unsafe extern "C" fn release_resources() -> i32 {
     call("release_resources");
     with(|world| world.release_result)
 }
-unsafe extern "C" fn release_viewport(viewport: u32) -> i32 {
+pub(super) unsafe extern "C" fn release_viewport(viewport: u32) -> i32 {
     call(format!("release_viewport {viewport}"));
     0
 }
-unsafe extern "C" fn shutdown() -> i32 {
+pub(super) unsafe extern "C" fn shutdown() -> i32 {
     call("shutdown");
     0
 }
-unsafe extern "C" fn evaluate_layer(_: Raw, frame: *const DlssFrame) -> i32 {
+pub(super) unsafe extern "C" fn evaluate_layer(_: Raw, frame: *const DlssFrame) -> i32 {
     let frame = unsafe { *frame };
     with(|world| {
         world.layer_frames.push(frame);
         world.layer_evaluate
     })
 }
-unsafe extern "C" fn preset_valid(preset: u32) -> i32 {
+pub(super) fn preset_valid(preset: u32) -> i32 {
     i32::from(preset == 0 || preset == 5)
 }
-unsafe extern "C" fn fg_evaluate(_: Raw, frame: *const DlssFrame) -> i32 {
+pub(super) unsafe extern "C" fn fg_evaluate(_: Raw, frame: *const DlssFrame) -> i32 {
     if with(|world| world.reenter) {
         // Another frame-thread entry from inside a leaf, as a vendor callback could make it.
-        let result = unsafe { (*PIPE.get()).stop(&PLATFORM) };
+        let result = unsafe { (*PIPE.get()).stop() };
         with(|world| world.reentered = Some(result));
     }
     let frame = unsafe { *frame };
@@ -240,14 +242,25 @@ unsafe extern "C" fn fg_evaluate(_: Raw, frame: *const DlssFrame) -> i32 {
         world.evaluate
     })
 }
-unsafe extern "C" fn fg_capture(_: Raw, frame: *const DlssFrame) {
+pub(super) unsafe extern "C" fn fg_capture(_: Raw, frame: *const DlssFrame) {
     let frame = unsafe { *frame };
     with(|world| world.captures.push(frame));
 }
-unsafe extern "C" fn native_sr_release() {
+pub(super) unsafe extern "C" fn native_sr_release() {
+    // A surface published from inside the release must not survive it.
+    if with(|world| world.surface_retry) {
+        crate::native_sr_state::clear_surface();
+        let published = unsafe { &*PIPE.get() }.set_surface([1280, 720]);
+        call(if published == 0 {
+            "native_sr_release"
+        } else {
+            "surface republished during release"
+        });
+        return;
+    }
     call("native_sr_release");
 }
-unsafe extern "C" fn texture_desc_of(texture: Raw, out: *mut TextureDesc) {
+pub(super) unsafe extern "C" fn texture_desc(texture: Raw, out: *mut TextureDesc) {
     let desc = with(|world| {
         world
             .textures
@@ -258,7 +271,7 @@ unsafe extern "C" fn texture_desc_of(texture: Raw, out: *mut TextureDesc) {
     .expect("pipeline texture");
     unsafe { out.write(desc) };
 }
-unsafe extern "C" fn create_texture(_: Raw, desc: *const TextureDesc) -> Raw {
+pub(super) unsafe extern "C" fn create_texture(_: Raw, desc: *const TextureDesc) -> Raw {
     if with(|world| world.texture_fails) {
         return null_mut();
     }
@@ -267,10 +280,10 @@ unsafe extern "C" fn create_texture(_: Raw, desc: *const TextureDesc) -> Raw {
     with(|world| world.textures.push((texture, desc)));
     texture
 }
-unsafe extern "C" fn clear_black(_: Raw, _: Raw) {
+pub(super) unsafe extern "C" fn clear_black(_: Raw, _: Raw) {
     call("clear");
 }
-unsafe extern "C" fn create_zeroed(_: Raw, desc: *const TextureDesc, pitch: u32) -> Raw {
+pub(super) unsafe extern "C" fn create_zeroed(_: Raw, desc: *const TextureDesc, pitch: u32) -> Raw {
     let texture = fake();
     let desc = unsafe { *desc };
     with(|world| {
@@ -279,7 +292,7 @@ unsafe extern "C" fn create_zeroed(_: Raw, desc: *const TextureDesc, pitch: u32)
     });
     texture
 }
-unsafe extern "C" fn decode_create(
+pub(super) unsafe extern "C" fn decode_create(
     _: Raw,
     width: u32,
     height: u32,
@@ -299,21 +312,21 @@ unsafe extern "C" fn decode_create(
     };
     result
 }
-unsafe extern "C" fn decode_run(_: Raw, _: Raw, _: Raw, params: *const DecodeParams) -> i32 {
+pub(super) unsafe extern "C" fn decode_run(_: Raw, _: Raw, _: Raw, params: *const DecodeParams) -> i32 {
     assert_eq!(unsafe { (*params).output_scale_x }, 1.0);
     with(|world| world.decode_run)
 }
-unsafe extern "C" fn decode_texture(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn decode_texture(_: Raw) -> Raw {
     handle(DECODED)
 }
-unsafe extern "C" fn decode_destroy(_: Raw) {
+pub(super) unsafe extern "C" fn decode_destroy(_: Raw) {
     call("decode_destroy");
 }
-unsafe extern "C" fn resolve_create(_: Raw, width: u32, height: u32) -> Raw {
+pub(super) unsafe extern "C" fn resolve_create(_: Raw, width: u32, height: u32) -> Raw {
     call(format!("resolve_create {width}x{height}"));
     handle(0x3000)
 }
-unsafe extern "C" fn resolve_run(
+pub(super) unsafe extern "C" fn resolve_run(
     _: Raw,
     _: Raw,
     motion: Raw,
@@ -324,19 +337,19 @@ unsafe extern "C" fn resolve_run(
     assert_eq!(unsafe { (*params).has_sentinel }, 1);
     1
 }
-unsafe extern "C" fn resolve_motion(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn resolve_motion(_: Raw) -> Raw {
     handle(RESOLVED_MOTION)
 }
-unsafe extern "C" fn resolve_depth(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn resolve_depth(_: Raw) -> Raw {
     handle(RESOLVED_DEPTH)
 }
-unsafe extern "C" fn resolve_destroy(_: Raw) {
+pub(super) unsafe extern "C" fn resolve_destroy(_: Raw) {
     call("resolve_destroy");
 }
-unsafe extern "C" fn fidelity_create(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn fidelity_create(_: Raw) -> Raw {
     null_mut()
 }
-unsafe extern "C" fn fidelity_run(
+pub(super) unsafe extern "C" fn fidelity_run(
     _: Raw,
     _: Raw,
     _: Raw,
@@ -347,15 +360,16 @@ unsafe extern "C" fn fidelity_run(
 ) -> i32 {
     1
 }
-unsafe extern "C" fn destroy(_: Raw) {}
-unsafe extern "C" fn transport_create(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn fidelity_destroy(_: Raw) {}
+pub(super) unsafe extern "C" fn sharpen_destroy(_: Raw) {}
+pub(super) unsafe extern "C" fn transport_create(_: Raw) -> Raw {
     if with(|world| world.transport) {
         handle(0x4000)
     } else {
         null_mut()
     }
 }
-unsafe extern "C" fn transport_encode(
+pub(super) unsafe extern "C" fn transport_encode(
     _: Raw,
     _: Raw,
     _: Raw,
@@ -367,7 +381,7 @@ unsafe extern "C" fn transport_encode(
     unsafe { out.write(handle(ENCODED)) };
     1
 }
-unsafe extern "C" fn transport_decode(
+pub(super) unsafe extern "C" fn transport_decode(
     _: Raw,
     _: Raw,
     _: Raw,
@@ -382,10 +396,10 @@ unsafe extern "C" fn transport_decode(
     call("transport_decode");
     1
 }
-unsafe extern "C" fn transport_destroy(_: Raw) {
+pub(super) unsafe extern "C" fn transport_destroy(_: Raw) {
     call("transport_destroy");
 }
-unsafe extern "C" fn sharpen(
+pub(super) unsafe extern "C" fn sharpen(
     _: *mut Raw,
     _: Raw,
     _: Raw,
@@ -397,7 +411,7 @@ unsafe extern "C" fn sharpen(
 ) -> i32 {
     1
 }
-unsafe extern "C" fn alternate_create(
+pub(super) unsafe extern "C" fn alternate_create(
     _: Raw,
     width: u32,
     height: u32,
@@ -417,7 +431,7 @@ unsafe extern "C" fn alternate_create(
     unsafe { out.write(legacy::adapter().cast()) };
     0
 }
-unsafe extern "C" fn input_dump(
+pub(super) unsafe extern "C" fn input_dump(
     _: Raw,
     _: *const c_char,
     _: *const c_char,
@@ -433,7 +447,7 @@ unsafe fn dump(kind: &'static str, prefix: *const c_char, view: u32, texture: Ra
     with(|world| world.dumps.push((prefix, view, kind, texture)));
     0
 }
-unsafe extern "C" fn dump_bytes(
+pub(super) unsafe extern "C" fn dump_bytes(
     _: Raw,
     _: Raw,
     texture: Raw,
@@ -444,7 +458,7 @@ unsafe extern "C" fn dump_bytes(
 ) -> i32 {
     unsafe { dump("bytes", prefix, view, texture) }
 }
-unsafe extern "C" fn dump_image(
+pub(super) unsafe extern "C" fn dump_image(
     _: Raw,
     _: Raw,
     texture: Raw,
@@ -455,49 +469,6 @@ unsafe extern "C" fn dump_image(
 ) -> i32 {
     unsafe { dump("image", prefix, view, texture) }
 }
-
-static PLATFORM: P = P {
-    present_host,
-    share_host,
-    load,
-    set_device,
-    query_support,
-    plan,
-    release_resources,
-    release_viewport,
-    shutdown,
-    evaluate_layer,
-    preset_valid,
-    fg_evaluate,
-    fg_capture,
-    native_sr_release,
-    texture_desc: texture_desc_of,
-    create_texture,
-    clear_black,
-    create_zeroed,
-    decode_create,
-    decode_run,
-    decode_texture,
-    decode_destroy,
-    resolve_create,
-    resolve_run,
-    resolve_motion,
-    resolve_depth,
-    resolve_destroy,
-    fidelity_create,
-    fidelity_run,
-    fidelity_destroy: destroy,
-    transport_create,
-    transport_encode,
-    transport_decode,
-    transport_destroy,
-    sharpen,
-    sharpen_destroy: destroy,
-    alternate_create,
-    input_dump,
-    dump_bytes,
-    dump_image,
-};
 
 fn setup() -> Setup {
     let mut motion: DecodeParams = unsafe { std::mem::zeroed() };
@@ -570,12 +541,12 @@ fn status(pipeline: &Pipeline) -> Status {
 fn started(pipeline: &Pipeline) -> Raw {
     PIPE.set(pipeline);
     let device = fake();
-    assert_eq!(unsafe { pipeline.start(&PLATFORM, device, &setup()) }, OK);
+    assert_eq!(unsafe { pipeline.start(device, &setup()) }, OK);
     device
 }
 
 fn run(pipeline: &Pipeline, frame: &Frame) -> i32 {
-    unsafe { pipeline.on_frame(&PLATFORM, handle(CONTEXT), frame) }
+    unsafe { pipeline.on_frame(handle(CONTEXT), frame) }
 }
 
 #[test]
@@ -584,22 +555,22 @@ fn start_validates_plans_and_stop_releases_every_lease() {
     let device = fake();
     let mut request = setup();
     unsafe {
-        assert_eq!(pipeline.start(&PLATFORM, null_mut(), &request), INVALID);
+        assert_eq!(pipeline.start(null_mut(), &request), INVALID);
         request.struct_size -= 4;
-        assert_eq!(pipeline.start(&PLATFORM, device, &request), INVALID);
+        assert_eq!(pipeline.start(device, &request), INVALID);
         request = setup();
         request.abi_version = 4;
-        assert_eq!(pipeline.start(&PLATFORM, device, &request), ABI_MISMATCH);
+        assert_eq!(pipeline.start(device, &request), ABI_MISMATCH);
         request = setup();
         request.motion.scale_y = 0.0;
-        assert_eq!(pipeline.start(&PLATFORM, device, &request), INVALID);
+        assert_eq!(pipeline.start(device, &request), INVALID);
     }
     assert!(
         with(|world| world.calls.is_empty()),
         "refusals touch nothing"
     );
 
-    assert_eq!(unsafe { pipeline.start(&PLATFORM, device, &setup()) }, OK);
+    assert_eq!(unsafe { pipeline.start(device, &setup()) }, OK);
     assert_eq!(refs(device), 2, "the pipeline retains the game's device");
     let state = status(&pipeline);
     assert_eq!(
@@ -641,27 +612,18 @@ fn start_validates_plans_and_stop_releases_every_lease() {
     );
     assert_eq!(desc.bind_flags, 32 | 8 | 128);
     assert_eq!(
-        unsafe { pipeline.start(&PLATFORM, device, &setup()) },
+        unsafe { pipeline.start(device, &setup()) },
         ALREADY_RUNNING
     );
 
-    with(|world| world.calls.clear());
-    unsafe extern "C" fn release_with_surface_retry() {
-        crate::native_sr_state::clear_surface();
-        let published = unsafe { &*PIPE.get() }.set_surface([1280, 720]);
-        call(if published == 0 {
-            "native_sr_release"
-        } else {
-            "surface republished during release"
-        });
-    }
-    let platform = P {
-        native_sr_release: release_with_surface_retry,
-        ..PLATFORM
-    };
+    with(|world| {
+        world.calls.clear();
+        world.surface_retry = true;
+    });
     PIPE.set(&pipeline);
-    assert_eq!(unsafe { pipeline.stop(&platform) }, OK);
+    assert_eq!(unsafe { pipeline.stop() }, OK);
     PIPE.set(ptr::null());
+    with(|world| world.surface_retry = false);
     assert_eq!(
         with(|world| world.calls.clone()),
         [
@@ -676,9 +638,9 @@ fn start_validates_plans_and_stop_releases_every_lease() {
     assert_eq!(status(&pipeline).running, 0);
     assert_eq!(pipeline.set_surface([1280, 720]), 0);
     let lines = with(|world| world.logs.len());
-    assert_eq!(unsafe { pipeline.set_preset(&PLATFORM, 5) }, OK);
+    assert_eq!(unsafe { pipeline.set_preset(5) }, OK);
     assert_eq!(with(|world| world.logs.len()), lines, "no line after stop");
-    assert_eq!(unsafe { pipeline.stop(&PLATFORM) }, NOT_RUNNING);
+    assert_eq!(unsafe { pipeline.stop() }, NOT_RUNNING);
 }
 
 #[test]
@@ -687,7 +649,7 @@ fn refused_start_tears_down_what_it_acquired() {
     let device = fake();
     with(|world| world.support = DLSS_NOT_SUPPORTED);
     assert_eq!(
-        unsafe { pipeline.start(&PLATFORM, device, &setup()) },
+        unsafe { pipeline.start(device, &setup()) },
         NOT_SUPPORTED
     );
     assert_eq!(refs(device), 1);
@@ -705,7 +667,7 @@ fn refused_start_tears_down_what_it_acquired() {
         world.calls.clear();
     });
     assert_eq!(
-        unsafe { pipeline.start(&PLATFORM, device, &setup()) },
+        unsafe { pipeline.start(device, &setup()) },
         STREAMLINE_FAILED
     );
     assert_eq!(
@@ -719,7 +681,7 @@ fn refused_start_tears_down_what_it_acquired() {
         world.texture_fails = true;
     });
     assert_eq!(
-        unsafe { pipeline.start(&PLATFORM, device, &setup()) },
+        unsafe { pipeline.start(device, &setup()) },
         RESOURCE_FAILED
     );
     assert_eq!(refs(device), 1);
@@ -758,8 +720,8 @@ fn frames_decode_resolve_and_carry_history_resets() {
 
     assert_eq!(run(&pipeline, &frame(&camera, [640, 360])), OK);
     assert_eq!(with(|world| world.frames[1].reset), 0);
-    assert_eq!(unsafe { pipeline.set_preset(&PLATFORM, 7) }, INVALID);
-    assert_eq!(unsafe { pipeline.set_preset(&PLATFORM, 5) }, OK);
+    assert_eq!(unsafe { pipeline.set_preset(7) }, INVALID);
+    assert_eq!(unsafe { pipeline.set_preset(5) }, OK);
     assert_eq!(run(&pipeline, &frame(&camera, [640, 360])), OK);
     let preset = with(|world| world.frames[2]);
     assert_eq!((preset.reset, preset.preset), (1, 5));
@@ -820,7 +782,7 @@ fn transport_replaces_colour_and_exposure_and_decodes_the_output() {
     assert_eq!((frame.color_in, frame.color_encoded), (handle(ENCODED), 1));
     assert!(frame.exposure.is_null());
     assert_eq!(calls("transport_decode"), 1);
-    assert_eq!(unsafe { pipeline.stop(&PLATFORM) }, OK);
+    assert_eq!(unsafe { pipeline.stop() }, OK);
     assert_eq!(calls("transport_destroy"), 1);
 }
 
@@ -859,7 +821,7 @@ fn repeated_failures_give_up_until_a_setting_restarts_history() {
     assert_eq!(with(|world| world.captures.len()), 0);
 
     with(|world| world.evaluate = 0);
-    assert_eq!(unsafe { pipeline.set_preset(&PLATFORM, 5) }, OK);
+    assert_eq!(unsafe { pipeline.set_preset(5) }, OK);
     assert_eq!(run(&pipeline, &frame(&camera, [640, 360])), OK);
     assert_eq!(with(|world| world.frames.last().map(|f| f.reset)), Some(1));
     assert_eq!(
@@ -891,17 +853,17 @@ fn layer_feature_owns_its_output_motion_and_history() {
     let mut output = null_mut();
     unsafe {
         assert_eq!(
-            pipeline.prepare_layer(&PLATFORM, 0, 4, &mut output),
+            pipeline.prepare_layer(0, 4, &mut output),
             INVALID
         );
         assert_eq!(
-            pipeline.prepare_layer(&PLATFORM, 256, 128, &mut output),
+            pipeline.prepare_layer(256, 128, &mut output),
             NOT_RUNNING
         );
     }
     started(&pipeline);
     assert_eq!(
-        unsafe { pipeline.prepare_layer(&PLATFORM, 256, 128, &mut output) },
+        unsafe { pipeline.prepare_layer(256, 128, &mut output) },
         OK
     );
     assert_eq!(output, pipeline.layer_texture());
@@ -915,7 +877,7 @@ fn layer_feature_owns_its_output_motion_and_history() {
     assert_eq!((state.layer_width, state.layer_height), (256, 128));
     let mut again = null_mut();
     assert_eq!(
-        unsafe { pipeline.prepare_layer(&PLATFORM, 256, 128, &mut again) },
+        unsafe { pipeline.prepare_layer(256, 128, &mut again) },
         OK
     );
     assert_eq!(again, output, "the same lease while the size holds");
@@ -932,13 +894,13 @@ fn layer_feature_owns_its_output_motion_and_history() {
     };
     let context = handle(CONTEXT);
     assert_eq!(
-        unsafe { pipeline.on_layer(&PLATFORM, context, &layer) },
+        unsafe { pipeline.on_layer(context, &layer) },
         INVALID
     );
     layer.width = 256;
     assert_eq!(run(&pipeline, &frame(&camera, [640, 360])), OK);
     for reset in [1, 0] {
-        assert_eq!(unsafe { pipeline.on_layer(&PLATFORM, context, &layer) }, OK);
+        assert_eq!(unsafe { pipeline.on_layer(context, &layer) }, OK);
         let submitted = with(|world| *world.layer_frames.last().unwrap());
         assert_eq!(
             (submitted.viewport, submitted.alpha, submitted.reset),
@@ -958,7 +920,7 @@ fn layer_feature_owns_its_output_motion_and_history() {
 
     let mut moved = null_mut();
     assert_eq!(
-        unsafe { pipeline.prepare_layer(&PLATFORM, 512, 256, &mut moved) },
+        unsafe { pipeline.prepare_layer(512, 256, &mut moved) },
         OK
     );
     assert_ne!(moved, output);
@@ -975,22 +937,22 @@ fn resize_prepares_before_commit_and_refusal_keeps_identity() {
     let clears = calls("clear");
     unsafe {
         assert_eq!(
-            pipeline.resize_output(&PLATFORM, 0, 720, &mut width, &mut height),
+            pipeline.resize_output(0, 720, &mut width, &mut height),
             INVALID
         );
         assert_eq!(
-            pipeline.resize_output(&PLATFORM, 16385, 720, &mut width, &mut height),
+            pipeline.resize_output(16385, 720, &mut width, &mut height),
             INVALID
         );
         assert_eq!(
-            pipeline.resize_output(&PLATFORM, 1280, 720, &mut width, &mut height),
+            pipeline.resize_output(1280, 720, &mut width, &mut height),
             OK
         );
     }
     assert_eq!((width, height), (640, 360));
     with(|world| world.plan_result = -8);
     assert_eq!(
-        unsafe { pipeline.resize_output(&PLATFORM, 1920, 1080, &mut width, &mut height) },
+        unsafe { pipeline.resize_output(1920, 1080, &mut width, &mut height) },
         STREAMLINE_FAILED
     );
     assert_eq!(pipeline.output_texture(), output);
@@ -1007,7 +969,7 @@ fn resize_prepares_before_commit_and_refusal_keeps_identity() {
     let camera = camera();
     assert_eq!(run(&pipeline, &frame(&camera, [640, 360])), OK);
     assert_eq!(
-        unsafe { pipeline.resize_output(&PLATFORM, 1920, 1080, &mut width, &mut height) },
+        unsafe { pipeline.resize_output(1920, 1080, &mut width, &mut height) },
         OK
     );
     assert_eq!((width, height), (960, 540));
@@ -1035,7 +997,7 @@ fn resize_leaves_a_cold_viewport_alone_until_dlss_has_seen_a_frame() {
     let mut width = 0;
     let mut height = 0;
     assert_eq!(
-        unsafe { pipeline.resize_output(&PLATFORM, 1600, 900, &mut width, &mut height) },
+        unsafe { pipeline.resize_output(1600, 900, &mut width, &mut height) },
         OK
     );
     assert_eq!(calls("release_resources"), 0);
@@ -1044,7 +1006,7 @@ fn resize_leaves_a_cold_viewport_alone_until_dlss_has_seen_a_frame() {
     assert_eq!(run(&pipeline, &frame(&camera, [width, height])), OK);
     let output = pipeline.output_texture();
     assert_eq!(
-        unsafe { pipeline.resize_output(&PLATFORM, 1920, 1080, &mut width, &mut height) },
+        unsafe { pipeline.resize_output(1920, 1080, &mut width, &mut height) },
         STREAMLINE_FAILED
     );
     assert_eq!(calls("release_resources"), 1);
@@ -1059,12 +1021,12 @@ fn backend_switches_reuse_the_legacy_owner_and_refusals_keep_the_active_backend(
     let (mut width, mut height) = (0, 0);
     unsafe {
         assert_eq!(
-            pipeline.select_backend(&PLATFORM, 9, &mut width, &mut height),
+            pipeline.select_backend(9, &mut width, &mut height),
             INVALID
         );
         legacy::SELECT.set(-7);
         assert_eq!(
-            pipeline.select_backend(&PLATFORM, 3, &mut width, &mut height),
+            pipeline.select_backend(3, &mut width, &mut height),
             NOT_SUPPORTED
         );
     }
@@ -1081,7 +1043,7 @@ fn backend_switches_reuse_the_legacy_owner_and_refusals_keep_the_active_backend(
 
     legacy::SELECT.set(0);
     assert_eq!(
-        unsafe { pipeline.select_backend(&PLATFORM, 3, &mut width, &mut height) },
+        unsafe { pipeline.select_backend(3, &mut width, &mut height) },
         OK
     );
     assert_eq!((width, height), (320, 180));
@@ -1107,7 +1069,7 @@ fn backend_switches_reuse_the_legacy_owner_and_refusals_keep_the_active_backend(
     assert_eq!(capture.camera_motion_included, 1);
     let mut layer = null_mut();
     assert_eq!(
-        unsafe { pipeline.prepare_layer(&PLATFORM, 64, 64, &mut layer) },
+        unsafe { pipeline.prepare_layer(64, 64, &mut layer) },
         OK
     );
     let layer_frame = Layer {
@@ -1120,14 +1082,14 @@ fn backend_switches_reuse_the_legacy_owner_and_refusals_keep_the_active_backend(
         camera: &camera,
     };
     assert_eq!(
-        unsafe { pipeline.on_layer(&PLATFORM, handle(CONTEXT), &layer_frame) },
+        unsafe { pipeline.on_layer(handle(CONTEXT), &layer_frame) },
         NOT_RUNNING,
         "the layer feature is DLSS only"
     );
 
     legacy::RENDER.set([400, 225]);
     assert_eq!(
-        unsafe { pipeline.set_quality(&PLATFORM, 1, &mut width, &mut height) },
+        unsafe { pipeline.set_quality(1, &mut width, &mut height) },
         OK
     );
     assert_eq!((status(&pipeline).render_width, width), (400, 400));
@@ -1140,14 +1102,14 @@ fn backend_switches_reuse_the_legacy_owner_and_refusals_keep_the_active_backend(
         world.plan.render_height_max = 0;
     });
     assert_eq!(
-        unsafe { pipeline.select_backend(&PLATFORM, RSF_SR_DLSS, &mut width, &mut height) },
+        unsafe { pipeline.select_backend(RSF_SR_DLSS, &mut width, &mut height) },
         OK
     );
     assert_eq!(with(|world| world.calls.clone()), ["plan 1280x720 q1"]);
     assert_eq!(status(&pipeline).backend, RSF_SR_DLSS);
     assert_eq!(run(&pipeline, &frame(&camera, [640, 360])), OK);
     let destroyed = legacy::DESTROYED.get();
-    assert_eq!(unsafe { pipeline.stop(&PLATFORM) }, OK);
+    assert_eq!(unsafe { pipeline.stop() }, OK);
     assert_eq!(legacy::DESTROYED.get(), destroyed + 1);
     assert_eq!(status(&pipeline).backend, RSF_SR_DLSS);
 }
@@ -1273,7 +1235,7 @@ fn alternate_start_skips_streamline_and_can_lazily_switch_to_dlss() {
     let device = fake();
     with(|world| world.load = -4);
     assert_eq!(
-        unsafe { pipeline.start_backend(&PLATFORM, device, &setup(), 3) },
+        unsafe { pipeline.start_backend(device, &setup(), 3) },
         OK
     );
     assert_eq!(
@@ -1289,7 +1251,7 @@ fn alternate_start_skips_streamline_and_can_lazily_switch_to_dlss() {
     assert_eq!(run(&pipeline, &frame), OK);
     let output = pipeline.output_texture();
     assert_eq!(
-        unsafe { pipeline.select_backend(&PLATFORM, RSF_SR_DLSS, null_mut(), null_mut()) },
+        unsafe { pipeline.select_backend(RSF_SR_DLSS, null_mut(), null_mut()) },
         NOT_SUPPORTED
     );
     assert_eq!(status(&pipeline).backend, 3);
@@ -1297,7 +1259,7 @@ fn alternate_start_skips_streamline_and_can_lazily_switch_to_dlss() {
     assert_eq!(run(&pipeline, &frame), OK);
     with(|world| world.load = 0);
     assert_eq!(
-        unsafe { pipeline.select_backend(&PLATFORM, RSF_SR_DLSS, null_mut(), null_mut()) },
+        unsafe { pipeline.select_backend(RSF_SR_DLSS, null_mut(), null_mut()) },
         OK
     );
     assert_eq!(
@@ -1305,14 +1267,14 @@ fn alternate_start_skips_streamline_and_can_lazily_switch_to_dlss() {
         (RSF_SR_DLSS, 1)
     );
     assert_eq!(pipeline.output_texture(), output);
-    assert_eq!(unsafe { pipeline.stop(&PLATFORM) }, OK);
+    assert_eq!(unsafe { pipeline.stop() }, OK);
 }
 
 #[test]
 fn alternate_quality_change_restarts_after_failure_limit() {
     let pipeline = Pipeline::new();
     assert_eq!(
-        unsafe { pipeline.start_backend(&PLATFORM, fake(), &setup(), 3) },
+        unsafe { pipeline.start_backend(fake(), &setup(), 3) },
         OK
     );
     let camera = camera();
@@ -1324,12 +1286,12 @@ fn alternate_quality_change_restarts_after_failure_limit() {
     assert!(pipeline.shared().given_up);
     legacy::EVALUATE_RESULT.set(0);
     assert_eq!(
-        unsafe { pipeline.set_quality(&PLATFORM, 1, null_mut(), null_mut()) },
+        unsafe { pipeline.set_quality(1, null_mut(), null_mut()) },
         OK
     );
     assert!(!pipeline.shared().given_up);
     assert_eq!(run(&pipeline, &frame), OK);
-    assert_eq!(unsafe { pipeline.stop(&PLATFORM) }, OK);
+    assert_eq!(unsafe { pipeline.stop() }, OK);
 }
 
 #[test]

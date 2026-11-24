@@ -5,12 +5,12 @@ use super::*;
 mod fixture;
 
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dlss_load(setup: *const Setup) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_load(setup: *const Setup) -> i32 {
     unsafe { rsf_core_dlss_streamline_load(setup) }
 }
 
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dlss_set_device(device: Handle) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_set_device(device: Handle) -> i32 {
     if device.is_null() {
         return INVALID_ARGUMENT;
     }
@@ -28,12 +28,12 @@ pub(crate) unsafe extern "C" fn rsf_dlss_native_present(
 }
 
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dlss_query_support(support: *mut Support) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_query_support(support: *mut Support) -> i32 {
     unsafe { rsf_core_dlss_streamline_support(support) }
 }
 
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dlss_plan_render_size(plan: *mut Plan) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_plan_render_size(plan: *mut Plan) -> i32 {
     unsafe { rsf_core_dlss_streamline_plan(plan) }
 }
 
@@ -55,21 +55,21 @@ pub(crate) unsafe extern "C" fn rsf_dlss_evaluate_shared(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_share_host(host: Handle, log: Log, user: Handle) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_share_host(host: Handle, log: Log, user: Handle) -> i32 {
     unsafe { rsf_core_dlss_streamline_share_host(host, log, user) }
 }
 
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dlss_release_viewport(viewport: u32) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_release_viewport(viewport: u32) -> i32 {
     unsafe { rsf_core_dlss_streamline_release(viewport) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_dlss_release_resources() -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_release_resources() -> i32 {
     unsafe { rsf_dlss_release_viewport(0) }
 }
 
 #[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_dlss_shutdown() -> i32 {
+pub(crate) unsafe extern "C" fn rsf_dlss_shutdown() -> i32 {
     unsafe { rsf_core_dlss_streamline_shutdown() }
 }

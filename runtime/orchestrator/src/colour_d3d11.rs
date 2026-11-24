@@ -235,7 +235,7 @@ struct Highlights {
     jitter: [f32; 2],
 }
 
-struct Transport {
+pub(crate) struct Transport {
     sources: SourceViews<8>,
     encoded: Option<(TargetSpec, Target)>,
     scratch: Option<(TargetSpec, Target)>,
@@ -473,7 +473,7 @@ impl FidelityTargets {
     }
 }
 
-struct Fidelity {
+pub(crate) struct Fidelity {
     sources: SourceViews<8>,
     targets: Option<FidelityTargets>,
     program: Program,
@@ -598,7 +598,7 @@ unsafe fn create<T>(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_colour_transport_create(
+pub(crate) unsafe extern "C" fn rsf_colour_transport_create(
     device: Handle,
     out: *mut *mut Mutex<Transport>,
 ) -> i32 {
@@ -621,7 +621,7 @@ unsafe extern "C" fn rsf_colour_transport_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_colour_transport_encode(
+pub(crate) unsafe extern "C" fn rsf_colour_transport_encode(
     pass: *const Mutex<Transport>,
     context: Handle,
     source: Handle,
@@ -647,7 +647,7 @@ unsafe extern "C" fn rsf_colour_transport_encode(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_colour_transport_decode(
+pub(crate) unsafe extern "C" fn rsf_colour_transport_decode(
     pass: *const Mutex<Transport>,
     context: Handle,
     target: Handle,
@@ -681,14 +681,14 @@ unsafe extern "C" fn rsf_colour_transport_decode(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_colour_transport_destroy(pass: *mut Mutex<Transport>) {
+pub(crate) unsafe extern "C" fn rsf_colour_transport_destroy(pass: *mut Mutex<Transport>) {
     if !pass.is_null() {
         drop(unsafe { Box::from_raw(pass) });
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_colour_fidelity_create(
+pub(crate) unsafe extern "C" fn rsf_colour_fidelity_create(
     device: Handle,
     out: *mut *mut Mutex<Fidelity>,
 ) -> i32 {
@@ -710,7 +710,7 @@ unsafe extern "C" fn rsf_colour_fidelity_create(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_colour_fidelity_run(
+pub(crate) unsafe extern "C" fn rsf_colour_fidelity_run(
     pass: *const Mutex<Fidelity>,
     context: Handle,
     scene: Handle,
@@ -737,7 +737,7 @@ unsafe extern "C" fn rsf_colour_fidelity_run(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_colour_fidelity_destroy(pass: *mut Mutex<Fidelity>) {
+pub(crate) unsafe extern "C" fn rsf_colour_fidelity_destroy(pass: *mut Mutex<Fidelity>) {
     if !pass.is_null() {
         drop(unsafe { Box::from_raw(pass) });
     }
