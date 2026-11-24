@@ -3,7 +3,7 @@
 #define RSF_AC7_SCOPE_OWNER_H
 
 /* Internal C interface for the Rust scope owner, its C entry points and their exception leaves.
-   tools/generate-rust-bindings.py generates src/scope_abi.rs from this header. */
+   build.rs binds it into the crate's sys module. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

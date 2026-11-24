@@ -4,7 +4,7 @@
 // the owners of the exact-build code sites, the renderer transaction and the TrueSky plugin patches
 // (sites.rs, patches.rs, guards.rs, renderer.rs, truesky.rs), all in the rsf-ac7 crate, and the
 // export plugin.c reaches. Not a DLL ABI: everything links into ReScaleFrame.Game.AC7.dll and the
-// native graph fixture. tools/generate-rust-bindings.py generates src/sites_abi.rs from this header.
+// native graph fixture. build.rs binds it into the crate's sys module.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

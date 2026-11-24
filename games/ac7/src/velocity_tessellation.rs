@@ -19,9 +19,8 @@ const TRIANGLE_POINTS: u32 = 3;
 const POSITION: u32 = 1;
 const FLOAT32: u32 = 3;
 
+// Operand kinds. Inputs (kind 1) are remapped by velocity_stage.
 const TEMP: u32 = 0;
-#[allow(dead_code)] // Operand kind 1; inputs are remapped by velocity_stage.
-const INPUT: u32 = 1;
 const OUTPUT: u32 = 2;
 const OUTPUT_CONTROL_POINT_ID: u32 = 22;
 const INPUT_CONTROL_POINT: u32 = 25;

@@ -30,9 +30,8 @@ const DCL_RESOURCE: u32 = 88;
 const DCL_CONSTANT_BUFFER: u32 = 89;
 const DCL_GS_INPUT_PRIMITIVE: u32 = 93;
 const DCL_MAX_OUTPUT_VERTEX_COUNT: u32 = 94;
+// DCL_INPUT..=DCL_OUTPUT_SIV spans every input and output declaration.
 const DCL_INPUT: u32 = 95;
-#[allow(dead_code)] // Part of the DXBC opcode list; this stage matches only the SIV form.
-const DCL_OUTPUT: u32 = 101;
 const DCL_OUTPUT_SIV: u32 = 103;
 const EMIT_STREAM: u32 = 117;
 const CUT_STREAM: u32 = 118;
