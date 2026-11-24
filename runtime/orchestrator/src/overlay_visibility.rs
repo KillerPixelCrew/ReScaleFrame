@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::overlay_input::apply_visibility;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
@@ -7,8 +8,6 @@ const DEBOUNCE_MS: u64 = 250;
 const EXTERNAL: u32 = 0;
 const WINDOW: u32 = 1;
 const POLL: u32 = 2;
-
-pub(super) type Apply = unsafe extern "C" fn(u32, u32);
 
 #[derive(Clone, Copy)]
 struct Change {
@@ -98,12 +97,12 @@ fn lock() -> MutexGuard<'static, Visibility> {
     crate::sync::lock(&STATE)
 }
 
-fn apply_changes(mut change: Option<Change>, apply: Apply) {
+fn apply_changes(mut change: Option<Change>) {
     while let Some(next) = change {
         if VISIBLE.swap(next.visible, Ordering::AcqRel) != next.visible {
             // User32 or the log sink can re-enter. New requests only queue
             // while this caller is applying the cursor change.
-            unsafe { apply(u32::from(next.visible), next.source) };
+            unsafe { apply_visibility(u32::from(next.visible), next.source) };
         }
         change = lock().next();
     }
@@ -127,14 +126,14 @@ pub(super) fn reset(toggle_key: u32, down: bool) -> bool {
     VISIBLE.swap(false, Ordering::AcqRel)
 }
 
-pub(super) extern "C" fn rsf_core_overlay_visibility_set(visible: u32, now: u64, apply: Apply) {
+pub(super) extern "C" fn rsf_core_overlay_visibility_set(visible: u32, now: u64) {
     let change = lock().request(visible != 0, EXTERNAL, now);
-    apply_changes(change, apply);
+    apply_changes(change);
 }
 
-pub(super) fn message_press(repeat: bool, now: u64, apply: Apply) -> bool {
+pub(super) fn message_press(repeat: bool, now: u64) -> bool {
     let (edge, change) = lock().press(repeat, now);
-    apply_changes(change, apply);
+    apply_changes(change);
     edge
 }
 
@@ -146,14 +145,9 @@ pub(super) fn focus_lost() {
     lock().focus_lost();
 }
 
-pub(super) extern "C" fn rsf_core_overlay_toggle_poll(
-    focused: u32,
-    down: u32,
-    now: u64,
-    apply: Apply,
-) {
+pub(super) extern "C" fn rsf_core_overlay_toggle_poll(focused: u32, down: u32, now: u64) {
     let change = lock().poll(focused != 0, down != 0, now);
-    apply_changes(change, apply);
+    apply_changes(change);
 }
 
 #[cfg(test)]

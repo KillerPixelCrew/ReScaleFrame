@@ -23,17 +23,13 @@ use crate::{settings_store::set_sharpening, sharpening_policy};
 use rsf_game_sys::RSF_SR_AUTO;
 use std::ffi::CStr;
 
-pub(super) fn fill_latency_stats(
-    stats: &mut Stats,
-    get_latency: unsafe extern "C" fn(*mut rsf_native_latency_status) -> i32,
-    get_routes: unsafe extern "C" fn(*mut rsf_native_input_routes) -> i32,
-) {
+pub(super) fn fill_latency_stats(stats: &mut Stats) {
     let mut latency = rsf_native_latency_status {
         struct_size: size_of::<rsf_native_latency_status>() as u32,
         version: 1,
         ..Default::default()
     };
-    if unsafe { get_latency(&mut latency) } != 0 {
+    if unsafe { rsf_native_latency_status_get(&mut latency) } != 0 {
         stats.pcl_available = latency.pcl_available;
     }
     let mut receipts = rsf_native_input_receipts {
@@ -49,7 +45,7 @@ pub(super) fn fill_latency_stats(
         version: 1,
         ..Default::default()
     };
-    if unsafe { get_routes(&mut routes) } != 0 {
+    if unsafe { rsf_core_native_input_routes_get(&mut routes) } != 0 {
         stats.pcl_routed = routes.routed;
         stats.pcl_failed = routes.failed;
         stats.pcl_unmatched = routes.unmatched;
@@ -58,11 +54,7 @@ pub(super) fn fill_latency_stats(
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn rsf_overlay_fill_fg_stats(stats: &mut Stats, fg: *const FgStatus) {
-    fill_latency_stats(
-        stats,
-        rsf_native_latency_status_get,
-        rsf_core_native_input_routes_get,
-    );
+    fill_latency_stats(stats);
     let choice = rsf_fg_choice_get();
     stats.fg_backend = if rsf_d3d11_present_has_owner() != 0 {
         rsf_d3d11_present_backend()

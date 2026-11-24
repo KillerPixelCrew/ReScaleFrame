@@ -11,7 +11,6 @@ use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::Foundation::{POINT, RECT};
 
 const SHOW_LIMIT: u32 = 64;
-type Show = unsafe extern "C" fn(i32) -> i32;
 
 struct Capture {
     last_clip: Option<RECT>,
@@ -74,9 +73,9 @@ pub(super) unsafe extern "C" fn rsf_core_overlay_cursor_frozen(out: *mut POINT) 
     1
 }
 
-pub(super) extern "C" fn rsf_core_overlay_cursor_show(visible: i32, original: Show) -> i32 {
+pub(super) extern "C" fn rsf_core_overlay_cursor_show(visible: i32) -> i32 {
     if !captured() {
-        let count = unsafe { original(visible) };
+        let count = unsafe { genuine_show(visible) };
         GAME_COUNT.with(|value| value.set(count));
         return count;
     }

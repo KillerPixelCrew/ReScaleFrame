@@ -10,9 +10,6 @@ use crate::dlss_pipeline::rsf_core_dlss_pipeline_apply_sharpening;
 use crate::frame_limit::rsf_core_overlay_refresh_mhz;
 use crate::graphics_d3d11::rsf_call_native_log;
 use crate::native_fg::{rsf_native_fg_options_set, rsf_native_fg_status_get};
-use crate::native_fg_cpu::{
-    platform::rsf_native_latency_status_get, rsf_core_native_input_routes_get,
-};
 #[cfg(not(test))]
 use crate::overlay_host::native::rsf_overlay_host_present;
 use crate::overlay_input::{rsf_overlay_input_set_visible, rsf_overlay_input_visible};
@@ -971,11 +968,7 @@ impl State {
 }
 
 fn sample_latency(stats: &mut rsf_overlay_stats) {
-    fill_latency_stats(
-        stats,
-        rsf_native_latency_status_get,
-        rsf_core_native_input_routes_get,
-    );
+    fill_latency_stats(stats);
     stats.sample_qpc = crate::now_qpc();
     stats.qpc_frequency = crate::qpc_frequency();
 }

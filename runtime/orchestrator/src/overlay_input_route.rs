@@ -2,12 +2,12 @@
 // The message leaves of the overlay input owner.
 use crate::overlay_cursor_hooks::rsf_core_overlay_cursor_ready;
 use crate::overlay_input::{
-    apply_visibility, close_touch, deliver_contact, pointer_contact, record_button,
+    close_touch, deliver_contact, pointer_contact, record_button,
     record_mouse_position, record_raw_mouse, touch_contacts,
 };
 use crate::overlay_pointer;
 use crate::overlay_visibility::{
-    self, Apply, rsf_core_overlay_toggle_key, rsf_core_overlay_visibility_set,
+    self, rsf_core_overlay_toggle_key, rsf_core_overlay_visibility_set,
     rsf_core_overlay_visible,
 };
 use crate::overlay_window::{clear_holds, hold, release, rsf_core_overlay_input_window};
@@ -87,9 +87,9 @@ fn contact_flags(message: u32) -> u32 {
     }
 }
 
-fn apply_gesture(desired: i32, apply: Apply) {
+fn apply_gesture(desired: i32) {
     if desired >= 0 {
-        rsf_core_overlay_visibility_set(desired as u32, unsafe { GetTickCount64() }, apply);
+        rsf_core_overlay_visibility_set(desired as u32, unsafe { GetTickCount64() });
     }
 }
 
@@ -104,7 +104,7 @@ fn route_pointer(window: *mut c_void, message: u32, id: u32, visible: bool) -> D
     contact.flags |= contact_flags(message);
     if contact.kind == PT_TOUCH {
         let desired = contact.gesture(overlay_pointer::POINTER, unsafe { GetTickCount64() });
-        apply_gesture(desired, apply_visibility);
+        apply_gesture(desired);
     }
     let canceled = contact.flags & overlay_pointer::CANCEL != 0;
     if canceled {
@@ -139,7 +139,7 @@ fn route_touch(window: *mut c_void, handle: isize, count: u32, visible: bool) ->
             desired = change;
         }
     }
-    apply_gesture(desired, apply_visibility);
+    apply_gesture(desired);
     if !visible {
         return Disposition::Forward;
     }
@@ -218,7 +218,7 @@ pub(super) extern "C" fn rsf_core_overlay_route_message(
             if lparam & 0x40000000 != 0 {
                 flags |= REPEAT;
             }
-            if route_key(wparam as u32, flags, visible, apply_visibility) != 0 {
+            if route_key(wparam as u32, flags, visible) != 0 {
                 return Disposition::Consume;
             }
         }
@@ -264,7 +264,7 @@ pub(super) extern "C" fn rsf_core_overlay_route_message(
     Disposition::Forward
 }
 
-fn route_key(key: u32, flags: u32, visible: bool, apply: Apply) -> u32 {
+fn route_key(key: u32, flags: u32, visible: bool) -> u32 {
     let system = flags & SYSTEM != 0;
     let toggle = key == rsf_core_overlay_toggle_key();
     if flags & DOWN != 0 {
@@ -272,7 +272,7 @@ fn route_key(key: u32, flags: u32, visible: bool, apply: Apply) -> u32 {
             // The hidden panel still passes its opening press through so
             // the game's matching release must be forwarded as well.
             let now = unsafe { GetTickCount64() };
-            if overlay_visibility::message_press(flags & REPEAT != 0, now, apply) && !visible {
+            if overlay_visibility::message_press(flags & REPEAT != 0, now) && !visible {
                 hold(key);
             }
             return visible.into();

@@ -230,7 +230,7 @@ unsafe extern "system" fn hooked_get_position(point: *mut POINT) -> i32 {
 }
 
 unsafe extern "system" fn hooked_show(show: i32) -> i32 {
-    capture::rsf_core_overlay_cursor_show(show, genuine_show)
+    capture::rsf_core_overlay_cursor_show(show)
 }
 
 unsafe extern "system" fn hooked_set(cursor: HCURSOR) -> HCURSOR {
@@ -340,7 +340,7 @@ pub(super) unsafe extern "C" fn retire_cursor(visible: u32, window_alive: u32) -
     retired
 }
 
-pub(super) unsafe extern "C" fn apply_visibility(visible: u32, route: u32) {
+pub(super) unsafe fn apply_visibility(visible: u32, route: u32) {
     pointer::rsf_core_overlay_pointer_clear();
     capture::rsf_core_overlay_cursor_capture(visible, 1);
     if visible != 0 {
@@ -497,12 +497,7 @@ pub(super) extern "C" fn rsf_overlay_input_poll_toggle() {
     let focused = !foreground.is_null()
         && unsafe { GetAncestor(window, GA_ROOT) == GetAncestor(foreground, GA_ROOT) };
     let down = unsafe { GetAsyncKeyState(rsf_core_overlay_toggle_key() as i32) } < 0;
-    rsf_core_overlay_toggle_poll(
-        focused.into(),
-        down.into(),
-        unsafe { GetTickCount64() },
-        apply_visibility,
-    );
+    rsf_core_overlay_toggle_poll(focused.into(), down.into(), unsafe { GetTickCount64() });
     let mut buttons = 0;
     if focused && rsf_core_overlay_visible() != 0 {
         for key in [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON] {
@@ -516,7 +511,7 @@ pub(super) extern "C" fn rsf_overlay_input_poll_toggle() {
 
 #[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_overlay_input_set_visible(visible: u32) {
-    rsf_core_overlay_visibility_set(visible, unsafe { GetTickCount64() }, apply_visibility);
+    rsf_core_overlay_visibility_set(visible, unsafe { GetTickCount64() });
 }
 
 unsafe extern "C" fn sample_cursor(window: HWND, out: *mut ClientPoint) -> u32 {
