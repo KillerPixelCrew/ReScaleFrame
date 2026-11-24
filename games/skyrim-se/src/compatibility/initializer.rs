@@ -6,6 +6,7 @@ use super::{
     before_device, excluded_byte, features_inactive, profile_matches,
 };
 use crate::platform::{self, Platform};
+use rsf_game_sys::ffi_util::wide_path;
 use rsf_game_sys::win32::module_path;
 use std::ffi::{CStr, OsString, c_char, c_void};
 use std::fs::OpenOptions;
@@ -242,14 +243,10 @@ fn installed_profile() -> Result<(), &'static CStr> {
         .rposition(|&unit| unit == u16::from(b'\\'))
         .ok_or(unavailable)?
         + 1;
-    let suffix = "Data\\SKSE\\Plugins\\CommunityShaders.dll";
-    let mut candidate = Vec::new();
-    candidate
-        .try_reserve_exact(directory + suffix.len() + 1)
-        .map_err(|_| unavailable)?;
-    candidate.extend_from_slice(&path[..directory]);
-    candidate.extend(suffix.encode_utf16());
-    candidate.push(0);
+    let candidate = wide_path(
+        &path[..directory],
+        "Data\\SKSE\\Plugins\\CommunityShaders.dll",
+    );
     match file_kind(&candidate) {
         1 => Ok(()), // absent file or path
         2 if inspect_profile(&candidate[..candidate.len() - 1], 0, read) == Some(true) => Ok(()),
