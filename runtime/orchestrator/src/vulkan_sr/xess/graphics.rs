@@ -50,61 +50,36 @@ impl Graphics {
             memory,
         ))
     }
-}
 
-pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_bind(
-    setup: &Setup,
-    capture: *mut CaptureOwner,
-    output: &mut *mut Graphics,
-) -> i32 {
-    let Some((graphics, memory)) = Graphics::bind(setup) else {
-        return MISSING_ENTRY_POINT;
-    };
-    if unsafe { rsf_core_capture_vk_initialize(capture, setup.device, setup.device_proc, &memory) }
-        == 0
-    {
-        return INIT_FAILED;
+    /// Binds the device entries and initializes `capture` on them. The caller owns the result
+    /// through `Box::from_raw`; the image leaves borrow its `images` as their user handle.
+    pub(super) unsafe fn open(setup: &Setup, capture: *mut CaptureOwner) -> Result<*mut Self, i32> {
+        let (graphics, memory) = Self::bind(setup).ok_or(MISSING_ENTRY_POINT)?;
+        if unsafe {
+            rsf_core_capture_vk_initialize(capture, setup.device, setup.device_proc, &memory)
+        } == 0
+        {
+            return Err(INIT_FAILED);
+        }
+        let graphics = allocate_handle(graphics);
+        if graphics.is_null() {
+            Err(INIT_FAILED)
+        } else {
+            Ok(graphics)
+        }
     }
-    *output = allocate_handle(graphics);
-    if (*output).is_null() { INIT_FAILED } else { 0 }
-}
 
-pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_destroy(graphics: *mut Graphics) {
-    if !graphics.is_null() {
-        unsafe { drop(Box::from_raw(graphics)) };
+    pub(super) fn images(&mut self) -> Handle {
+        (&raw mut self.images).cast()
     }
-}
 
-pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_images(graphics: *mut Graphics) -> Handle {
-    unsafe { graphics.as_mut() }.map_or(std::ptr::null_mut(), |graphics| {
-        (&raw mut graphics.images).cast()
-    })
-}
+    pub(super) unsafe fn barrier(&self, commands: Handle, plan: &Barrier) {
+        let commands = vk::CommandBuffer::from_raw(commands as u64);
+        unsafe { rsf_core_vkfg_record_barrier(self.barrier, commands, plan) };
+    }
 
-pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_barrier(
-    graphics: &Graphics,
-    commands: Handle,
-    plan: &Barrier,
-) {
-    unsafe {
-        rsf_core_vkfg_record_barrier(
-            graphics.barrier,
-            vk::CommandBuffer::from_raw(commands as u64),
-            plan,
-        )
-    };
-}
-
-pub(super) unsafe extern "C" fn rsf_core_xessvk_graphics_copy(
-    graphics: &Graphics,
-    commands: Handle,
-    plan: &ImageCopy,
-) {
-    unsafe {
-        rsf_core_vkfg_record_copy(
-            graphics.copy,
-            vk::CommandBuffer::from_raw(commands as u64),
-            plan,
-        )
-    };
+    pub(super) unsafe fn copy(&self, commands: Handle, plan: &ImageCopy) {
+        let commands = vk::CommandBuffer::from_raw(commands as u64);
+        unsafe { rsf_core_vkfg_record_copy(self.copy, commands, plan) };
+    }
 }

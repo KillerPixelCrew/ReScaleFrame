@@ -2,11 +2,8 @@
 //! Production XeSS Vulkan SR table. It binds the resolved SDK exports to their
 //! C signatures and owns the per-context graphics, capture and sharpening state.
 //! The table stays a C record so fixtures can substitute the loader and lookup.
-use super::graphics::{
-    Graphics, rsf_core_xessvk_graphics_barrier, rsf_core_xessvk_graphics_bind,
-    rsf_core_xessvk_graphics_copy, rsf_core_xessvk_graphics_destroy,
-    rsf_core_xessvk_graphics_images,
-};
+use super::graphics::Graphics;
+
 use super::sdk_abi::{
     xess_2d_t, xess_quality_settings_t, xess_version_t, xess_vk_execute_params_t as XessExecute,
     xess_vk_init_params_t as XessInit,
@@ -81,7 +78,9 @@ impl Drop for Native {
         unsafe {
             rsf_sharpenvk_host_destroy(&mut self.sharpen);
             rsf_core_capture_vk_destroy(self.capture);
-            rsf_core_xessvk_graphics_destroy(self.gpu);
+            if !self.gpu.is_null() {
+                drop(Box::from_raw(self.gpu));
+            }
         }
     }
 }
@@ -210,17 +209,20 @@ unsafe extern "C" fn destroy_context(owner: Handle) -> i32 {
 
 unsafe extern "C" fn bind_device(owner: Handle, setup: &Setup) -> i32 {
     let owner = unsafe { native(owner) };
-    let mut gpu = ptr::null_mut();
-    let result = unsafe { rsf_core_xessvk_graphics_bind(setup, owner.capture, &mut gpu) };
-    if result == 0 {
-        unsafe { rsf_core_xessvk_graphics_destroy(owner.gpu) };
-        owner.gpu = gpu;
+    match unsafe { Graphics::open(setup, owner.capture) } {
+        Ok(gpu) => {
+            if !owner.gpu.is_null() {
+                drop(unsafe { Box::from_raw(owner.gpu) });
+            }
+            owner.gpu = gpu;
+            0
+        }
+        Err(result) => result,
     }
-    result
 }
 
 unsafe extern "C" fn image_user(owner: Handle) -> Handle {
-    unsafe { rsf_core_xessvk_graphics_images(native(owner).gpu) }
+    unsafe { native(owner).gpu.as_mut() }.map_or(ptr::null_mut(), Graphics::images)
 }
 
 unsafe extern "C" fn velocity(owner: Handle, x: f32, y: f32) -> i32 {
@@ -230,12 +232,12 @@ unsafe extern "C" fn velocity(owner: Handle, x: f32, y: f32) -> i32 {
 
 unsafe extern "C" fn record_barrier(owner: Handle, commands: Handle, plan: *const Barrier) {
     let gpu = unsafe { native(owner) }.gpu;
-    unsafe { rsf_core_xessvk_graphics_barrier(&*gpu, commands, &*plan) };
+    unsafe { (*gpu).barrier(commands, &*plan) };
 }
 
 unsafe extern "C" fn record_copy(owner: Handle, commands: Handle, plan: *const ImageCopy) {
     let gpu = unsafe { native(owner) }.gpu;
-    unsafe { rsf_core_xessvk_graphics_copy(&*gpu, commands, &*plan) };
+    unsafe { (*gpu).copy(commands, &*plan) };
 }
 
 unsafe extern "C" fn execute(owner: Handle, commands: Handle, data: &XessExecute) -> i32 {
