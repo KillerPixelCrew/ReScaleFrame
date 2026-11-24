@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "tools"))
 SOURCE = REPO / ".local/anomaly/vanilla/shaders/r3"
 TOOL = REPO / "tools/anomaly_foliage_shader.py"
 

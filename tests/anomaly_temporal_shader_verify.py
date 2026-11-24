@@ -5,8 +5,10 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / 'tools'))
 SPEC = importlib.util.spec_from_file_location('anomaly_temporal_shader', REPO / 'tools/anomaly_temporal_shader.py')
 assert SPEC is not None and SPEC.loader is not None
 TOOL = importlib.util.module_from_spec(SPEC)

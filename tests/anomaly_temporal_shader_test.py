@@ -2,10 +2,12 @@
 import importlib.util
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import unittest
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / 'tools'))
 SOURCE = REPO / '.local/anomaly/vanilla/shaders/r3'
 TOOL = REPO / 'tools/anomaly_temporal_shader.py'
 
