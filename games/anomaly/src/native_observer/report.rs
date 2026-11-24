@@ -6,7 +6,7 @@ use crate::native_geometry::coverage::rsf_anomaly_geometry_stats_read;
 use crate::native_geometry::rsf_anomaly_geometry_active;
 use crate::native_geometry_abi::Stats;
 use crate::sr_stage::rsf_anomaly_sr_stage_report;
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::{c_char, c_void};
 
 unsafe extern "C" fn forward(user: *mut c_void, text: *const c_char) {
     // Each stage reports synchronously. The observer still holds the
@@ -23,16 +23,14 @@ pub(super) fn stages(mut session: Session) {
     if rsf_anomaly_geometry_active() {
         let mut stats = Stats::default();
         unsafe { rsf_anomaly_geometry_stats_read(&mut stats) };
-        if let Ok(text) = CString::new(format!(
+        session.emit(&format!(
             "Anomaly geometry identity registered={} retired={} draws_identified={} draws_unidentified={} faults={}; no history consumer, motion not established",
             stats.models_registered,
             stats.models_retired,
             stats.draws_identified,
             stats.draws_unidentified,
             stats.capture_faults,
-        )) {
-            session.emit(&text);
-        }
+        ));
         rsf_anomaly_geometry_report(Some(forward), user);
     }
     unsafe {

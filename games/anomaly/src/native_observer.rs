@@ -75,7 +75,7 @@ use rsf_game_sys::{
     RSF_ERROR_NOT_READY as NOT_READY, RSF_GAME_ABI_VERSION, RSF_OK as OK, rsf_game_host_services,
     rsf_game_log_fn, rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
@@ -189,8 +189,8 @@ struct Session {
 unsafe impl Send for Session {}
 
 impl Session {
-    fn emit(&self, message: &CStr) {
-        unsafe { rsf_game_sys::rsf_game_log_guarded(self.log, self.user, message.as_ptr()) };
+    fn emit(&self, message: &str) {
+        unsafe { rsf_game_sys::log_guarded(self.log, self.user, message) };
     }
 }
 
@@ -375,10 +375,10 @@ impl Observer {
         let _flight = Flight(self);
         drop(control);
         if sr_refused {
-            session.emit(c"Anomaly SR stage not installed; rendering is stock.");
+            session.emit("Anomaly SR stage not installed; rendering is stock.");
         }
         if motion_refused {
-            session.emit(c"Anomaly motion stage not installed; shaders stay stock.");
+            session.emit("Anomaly motion stage not installed; shaders stay stock.");
         }
         if !input_enabled {
             return NATIVE_REFUSED;
@@ -390,11 +390,9 @@ impl Observer {
         } else {
             "; geometry identity hooks were refused"
         };
-        if let Ok(message) = CString::new(format!(
+        session.emit(&format!(
             "Anomaly guarded native hooks installed on the {label} build ({executable}){geometry}. No executable file was modified."
-        )) {
-            session.emit(&message);
-        }
+        ));
         OK
     }
 
@@ -537,7 +535,7 @@ impl Observer {
         let Some(session) = self.session() else {
             return;
         };
-        if let Ok(message) = CString::new(format!(
+        session.emit(&format!(
             "Anomaly native boundaries engine_frame={} render_frames={} scene={} hud={} pda={} scope={} camera={} output={}x{} reset={}; SR/FG execution not established",
             o.engine_frame,
             o.render_frames,
@@ -549,9 +547,7 @@ impl Observer {
             o.width,
             o.height,
             o.resets,
-        )) {
-            session.emit(&message);
-        }
+        ));
         report::stages(session);
     }
 
