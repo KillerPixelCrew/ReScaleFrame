@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Real WARP calls for the census fixture. The input payload and caller probe stay native.
-use super::named;
+use super::{cast, named};
 use ::windows::{
     Win32::{
         Foundation::HWND,
@@ -26,7 +26,6 @@ use ::windows::{
     core::{GUID, Interface},
 };
 use std::ffi::c_void;
-use std::mem::transmute;
 use std::ptr::{null, null_mut};
 use windows_sys::{
     Win32::{
@@ -37,7 +36,6 @@ use windows_sys::{
 };
 
 type Ptr = *mut c_void;
-type Proc = unsafe extern "system" fn() -> isize;
 type Factory = unsafe extern "system" fn(*const GUID, *mut Ptr) -> i32;
 type Device = unsafe extern "system" fn(Ptr, D3D_FEATURE_LEVEL, *const GUID, *mut Ptr) -> i32;
 type Dispatch = unsafe extern "C" fn(*const c_void);
@@ -75,8 +73,8 @@ fn open_warp() -> Option<(IDXGIFactory4, IDXGIAdapter, ID3D12Device)> {
     if dxgi.is_null() || d3d12.is_null() {
         return None;
     }
-    let create_factory = unsafe { transmute::<Proc, Factory>(named(dxgi, c"CreateDXGIFactory1")?) };
-    let create_device = unsafe { transmute::<Proc, Device>(named(d3d12, c"D3D12CreateDevice")?) };
+    let create_factory = cast::<Factory>(named(dxgi, c"CreateDXGIFactory1")?);
+    let create_device = cast::<Device>(named(d3d12, c"D3D12CreateDevice")?);
     let mut raw = null_mut();
     if unsafe { create_factory(&IDXGIFactory4::IID, &mut raw) } < 0 || raw.is_null() {
         return None;

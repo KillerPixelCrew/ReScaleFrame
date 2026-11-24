@@ -310,9 +310,6 @@ fn measure_switches(rig: &mut Rig, runtime: &Runtime, baseline: bool, failures: 
             for i in 0..if baseline { 8 } else { 12 } {
                 let start = Instant::now();
                 let frame_result = rig.run_frame(runtime);
-                if !baseline {
-                    check!(failures, frame_result == 0);
-                }
                 rig.present();
                 let elapsed = milliseconds(start);
                 if i == 0 {
@@ -320,9 +317,7 @@ fn measure_switches(rig: &mut Rig, runtime: &Runtime, baseline: bool, failures: 
                 } else {
                     later_ms = later_ms.max(elapsed);
                 }
-                if baseline {
-                    check!(failures, frame_result == 0);
-                }
+                check!(failures, frame_result == 0);
             }
         }
         if baseline {

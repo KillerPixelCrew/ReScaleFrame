@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::census_creation::rsf_test_census_creation;
-use super::named;
+use super::{cast, named};
 use crate::sys::rsf_test_census_native;
 use crate::sys::*;
 use rsf_test_support::wide_os;
@@ -8,12 +8,10 @@ use serde_json::Value;
 use std::{
     ffi::{CStr, c_char},
     fs,
-    mem::transmute,
     path::Path,
 };
-use windows_sys::Win32::{
-    Foundation::FARPROC,
-    System::{Environment::SetEnvironmentVariableA, LibraryLoader::LoadLibraryW},
+use windows_sys::Win32::System::{
+    Environment::SetEnvironmentVariableA, LibraryLoader::LoadLibraryW,
 };
 
 type Install = unsafe extern "C" fn(*const rsf_census_options) -> i32;
@@ -591,18 +589,11 @@ fn load_asi() -> Option<Asi> {
     if module.is_null() {
         return None;
     }
-    type Entry = unsafe extern "system" fn() -> isize;
-    let resolve: [FARPROC; 4] = [
-        named(module, c"asi_install_result"),
-        named(module, c"asi_flush"),
-        named(module, c"asi_counters"),
-        named(module, c"asi_shutdown"),
-    ];
     Some(Asi {
-        result: unsafe { transmute::<Entry, CensusOp>(resolve[0]?) },
-        flush: unsafe { transmute::<Entry, CensusOp>(resolve[1]?) },
-        counters: unsafe { transmute::<Entry, Counters>(resolve[2]?) },
-        shutdown: unsafe { transmute::<Entry, CensusOp>(resolve[3]?) },
+        result: cast(named(module, c"asi_install_result")?),
+        flush: cast(named(module, c"asi_flush")?),
+        counters: cast(named(module, c"asi_counters")?),
+        shutdown: cast(named(module, c"asi_shutdown")?),
     })
 }
 

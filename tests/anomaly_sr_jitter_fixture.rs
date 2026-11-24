@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::sr_stage::math::{
-    clamp_mip_offset, jitter_sample, jitter_to_uv, mip_delta, next_jitter, phase_count,
+    clamp_mip_offset, jitter_sample as sample, jitter_to_uv, mip_delta, next_jitter, phase_count,
 };
 use crate::sr_swap::{engine_mul, jitter_projection};
 use crate::sys::*;
@@ -12,10 +12,6 @@ type Sample = rsf_anomaly_sr_jitter_sample;
 type Sequence = rsf_anomaly_sr_jitter_sequence;
 type State = rsf_anomaly_sr_jitter_state;
 type Gate = rsf_anomaly_sr_burst_gate;
-
-fn sample(index: u32, phases: u32) -> Sample {
-    jitter_sample(index, phases)
-}
 
 fn near(actual: f64, expected: f64, tolerance: f64) {
     assert!(
