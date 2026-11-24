@@ -158,6 +158,10 @@ pub fn vk_entry<F: Copy>(entry: F) -> Option<unsafe extern "C" fn()> {
 }
 
 /// A `vkCmdPipelineBarrier` that records nothing, for fake Vulkan entry tables.
+///
+/// # Safety
+///
+/// It reads none of its arguments; it is unsafe only to match the Vulkan entry signature.
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "system" fn ignore_pipeline_barrier(
     _: vk::CommandBuffer,
@@ -382,7 +386,11 @@ impl Library {
     /// `vkGetInstanceProcAddr` of the Vulkan loader.
     pub fn vulkan_instance_proc(&self) -> Option<vk::PFN_vkGetInstanceProcAddr> {
         let address = self.symbol(c"vkGetInstanceProcAddr")?;
-        Some(unsafe { std::mem::transmute::<_, vk::PFN_vkGetInstanceProcAddr>(address) })
+        Some(unsafe {
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, vk::PFN_vkGetInstanceProcAddr>(
+                address,
+            )
+        })
     }
 }
 
