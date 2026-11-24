@@ -10,38 +10,35 @@ pinned-toolchain formatting. See `docs/research/godot-engine-integration.md` for
 `ReScaleFrame.Godot.Native.dll` has no first-party C++ and no longer links godot-cpp.
 `native/gdextension.rs` implements the `rsf_godot_initialize` entry and registers
 `ReScaleFrameEffect` (`CompositorEffect`) and `ReScaleFrameRuntime` (`RefCounted`) through
-Godot 4.7's C interface. `gdextension/effect.rs` holds the class, the `_render_callback`
-virtual, the scene and RenderingDevice leaves and the motion readback objects.
-`gdextension/runtime.rs` holds the option reads, renderer names, status Dictionary and
-render-thread Callable. `gdextension/api.rs` loads the interface, the builtin constructors and
-the method binds by their pinned 4.7 hashes.
+Godot 4.7's C interface. `gdextension/effect.rs` holds the class, its per-instance probe state
+(the pending capture request and the snapshot and capture published under one lock), the scene and
+RenderingDevice reads and the motion readback objects; `effect.rs` classifies the readback.
+`gdextension/runtime.rs` reads the option Dictionary into typed settings for the engine service,
+and writes the renderer names and status Dictionary. `gdextension/api.rs` loads the interface,
+the builtin constructors and the method binds by their pinned 4.7 hashes.
 
-`native/runtime_platform.c` is the only native source. This C11 leaf asserts the private record
-layouts, supplies the CMake-selected optional Vulkan symbols and the CMake version, and
-registers `rsf_godot_host_unload` with `atexit` from a CRT initializer. `exports.def` exports the
-entry. CMake builds the DLL when `RSF_GODOT_NATIVE=ON`, which `eng/build-godot.ps1` passes. The
-Runtime, DXGI and Win32 calls (`Platform` in `native/platform.rs`, implemented by `host.rs` and
-`vulkan/native.rs`) are direct Rust calls; `cfg(test)` swaps in the recording fake in
-`platform/fake.rs`. `runtime_platform.c` asserts only the `api.h` records and Runtime constants.
+`native/runtime_platform.c` is the only native source. This C11 leaf supplies the CMake-selected
+optional Vulkan symbols and the CMake version, and registers `rsf_godot_host_unload` with `atexit`
+from a CRT initializer. `exports.def` exports the entry. CMake builds the DLL when
+`RSF_GODOT_NATIVE=ON`, which `eng/build-godot.ps1` passes. The `api.h` records and the Runtime CPU
+service are bindgen output (`build.rs`).
 
 ## Rust owners in the native DLL
 
 `ReScaleFrame.Godot.Native.dll` links the `rsf-godot` staticlib (`native/lib.rs`) next to the
-same OrchestratorCore. State and policy that earlier lived in C++ globals are Rust; the C++
-leaves only call the engine and godot-cpp. The existing engine ABI keeps its function
-signatures and record layouts. ABI checks read the size before the version and validate output
-headers without borrowing uninitialized bodies.
+same OrchestratorCore. As in the former `runtime.cpp`, `vulkan.cpp` and `vulkan_creation.cpp`,
+each owner keeps its state in one place and calls the Runtime, D3D12, DXGI, Win32 and Vulkan
+directly. The existing engine ABI keeps its function signatures and record layouts. ABI checks
+read the size before the version and validate output headers without borrowing uninitialized
+bodies.
 
 | File | Owns |
 | --- | --- |
-| `native/control.rs` | Requested settings and their generation, the `rsfg_configure` refusal rules (applied before either backend sees a request), engine-module service routing (`rsfg_attach_engine`, `rsfg_configure_engine`, `rsfg_reset_history`); the D3D12 status record (ABI 3) with latency availability, mode and counters read from the Runtime latency owner |
-| `native/vulkan.rs` | Vulkan session state: boot state and identity, requested settings and generation (kept across sessions), the status record (ABI 3) with the Streamline Vulkan latency overlay (`pcl_available` when the PCL message is a registered window message) |
-| `native/d3d12.rs`, `native/host.rs` | D3D12 render path: the engine's first device and queue identity published after fence creation, the SR context plan (Auto resolved by the Runtime's `rsf_gpu_default_sr_backend`, spatial mapped to the normalising context because Godot evaluates FSR1 itself, fallback to backend 0 when a provider is not created), the Present recording receipt, HUD-less slot admission, and the host lifecycle below |
-| `native/vulkan/sr.rs` | SR context state and sequencing: the `rsf_srvk` and FSR4 interop handles, the device and `vkGetDeviceProcAddr` they were created on, retirement before a pass when creation failed, settings or device changed, or the SR output differs from the pass output |
-| `native/window.rs` | Input window admission (the first window of the process whose class is `Engine`, asked by the Runtime's `accept_window` trampoline and by `rsfg_vk_window`, kept until `rsfg_shutdown`) and per-HWND subclass forwarding that survives a refused restoration, so a replacement window attaches independently; `vulkan.rs` holds the Vulkan primary window |
-| `native/vulkan/creation.rs` | Vulkan creation state and policy as a child of the Vulkan session: the resolver and log the start leaf hands over, the owner instance, XeSS preparation, XeSS and Win32 interop readiness, the adapter facts read after each successful `vkCreateDevice` |
-| `native/effect.rs`, `native/extension.rs` | Per-`ReScaleFrameEffect` state (pending motion-capture request, callback count, snapshot and capture published under one lock, read by `get_status`); the motion diagnostic's buffer size, dispatch and shader text; the capture sequence (shader admission, recording, CPU readback, releasing five resources in uniform set, storage buffer, sampler, pipeline, shader order, continuing past a failed release and refusing the capture); the ordered 32 probe and 52 possible Runtime properties |
-| `native/lib.rs` | Iterates the options schema, composes typed settings and applies them through the registered engine service, so the extension's typed settings and the public Dictionary method share one admission and viewport scaling path |
+| `native/control.rs` | Requested settings and their generation, the `rsfg_configure` refusal rules (applied before either backend sees a request), engine-module service routing (`rsfg_attach_engine`, `rsfg_configure_engine`, `rsfg_reset_history`), the D3D12 FG install and the D3D12 status record (ABI 3) with latency availability, mode and counters read from the Runtime latency owner |
+| `native/d3d12.rs` | D3D12 render path: the engine's first device and queue published only with their completion fence, the SR context plan (Auto resolved by the Runtime's `rsf_gpu_default_sr_backend`, spatial mapped to the normalising context because Godot evaluates FSR1 itself, fallback to backend 0 when a provider is not created), the command slots, the Present receipt committed only by a recorded pass, HUD-less slot admission bound to the source's SR slot, and the capture owner |
+| `native/window.rs` | Input window admission (the first window of the process whose class is `Engine`, asked by the Runtime's `accept_window` callback and by `rsfg_vk_window`, kept until `rsfg_shutdown`), per-HWND subclass forwarding that survives a refused restoration, so a replacement window attaches independently, and the Runtime CPU service with the Present execution receipt |
+| `native/vulkan.rs` | The Vulkan session under one guard: boot state and identity, requested settings and generation (kept across sessions), provider admission and Auto resolution, the FG presenter, the Runtime SR session with its retirement, the frame capture (`vulkan/capture.rs`) and the status record with the Streamline Vulkan latency overlay |
+| `native/vulkan_creation.rs` | The engine loader's instance and device creation: the owner instance, XeSS preparation, the XeSS, Win32 interop and latency stages with their fallbacks, and a receipt of the accepted stages and the adapter for each successful `vkCreateDevice` |
 
 The native integration binds one versioned Runtime CPU service at backend setup: CPU facts and
 window messages use its report callback, diagnostic pings its ping callback. Godot admits the window;
@@ -111,26 +108,24 @@ The checklist below maps each earlier finding to its source evidence.
 
 | Finding | Source evidence |
 | --- | --- |
-| Reusable D3D12 status header | `control.rs` writes the current ABI and `control/tests.rs` passes the same buffer twice through `rsfg_status`. |
+| Reusable D3D12 status header | `control.rs` writes the current ABI header (`status_header`). |
 | Shared packaged D3D12 paths | `sdk/game/src/vendor_paths.rs` supplies Godot's session storage and Unity's package identity. |
-| Simultaneous FG failures | `sdk/game/src/presentation_result.rs` keeps both facts and defines provider-switch precedence; the Unity and Godot fixtures both specify simultaneous failures. |
-| Completion fence before binding | `host.rs` creates a candidate fence before committing COM ownership; `d3d12/tests.rs` requires repeated binding attempts while creation fails. |
-| Present recording receipt | `d3d12.rs` publishes after successful recording; the same-frame capture refusal fixture expects Present to report its unknown screen and missed SR. |
+| Simultaneous FG failures | `sdk/game/src/presentation_result.rs` keeps both facts and defines provider-switch precedence. |
+| Completion fence before binding | `d3d12.rs` publishes the binding only with its fence, so a refused fence is retried on the next pass. |
+| Present recording receipt | `d3d12.rs` commits the receipt only after a recorded pass; Present reports a refused one as a missed SR. |
 | HUD-less slot admission | `d3d12.rs` matches the SR slot's session and source, waits on already-submitted work, and refuses a failed wait. |
-| Size-first ABI validation | Raw header reads in `lib.rs` reject the four-byte attach, boot and configure fixture before reading a version. |
-| Auto policy delegation | The fake selectors return configured answers and record the arguments; the Runtime's own choice fixtures cover provider policy. |
-| Shared fixtures | `platform/fake.rs` provides versioned setup and status records and backend boot helpers. |
+| Size-first ABI validation | Raw header reads in `lib.rs` read the size word before the version. |
+| Auto policy delegation | `vulkan.rs` passes the adapter facts and the servable choices to the Runtime's selectors, whose own fixtures cover provider policy. |
+| Device-bound readiness | `vulkan_creation.rs` keeps a receipt per created device; its fixture checks the receipt and its removal at `vkDestroyDevice`. |
 
-What still has to be C++, and why (godot-cpp class wrappers have no Rust equivalent on the C
-interface without reimplementing class/virtual binding and resource lifetimes):
+The C++ had no tests of the D3D12, window and Vulkan session paths; their fake-leaf tests went with
+the leaf layer in the C++-reference pass (PORT.md), and these paths need a Godot run to verify.
+
+What still has to be C++, and why:
 
 | File | Residual source |
 | --- | --- |
-| `runtime.cpp` | Platform wiring, C/C++ layout assertions, the CRT unload callback and the CMake-conditional FSR4 probe/Vulkan capture symbol table (`vulkan_features.h` is the single binding source for the optional provider record). The remaining validation/default leaves call shared inline helpers in `dlss_preset.h`, `sharpening_settings.h` and `frame_generation.h`. |
-| `extension.cpp` | `GDExtensionBinding::InitObject`, scene-level registration and `GDREGISTER_CLASS`. |
-| `effect.h`, `effect.cpp` | `GDCLASS`, construction and destruction, the generated `CompositorEffect::_render_callback(int32_t, RenderData*)` virtual, `Ref`-owned scene and shader objects, Godot matrix and Variant conversions, and RenderingDevice command and RID lifetime (shader compilation, resource and uniform creation, compute-list calls, buffer readback, per-RID free). Rust owns readback admission, dispatch dimensions, shader text and pixel classification. |
-| `runtime_control.h`, `runtime_control.cpp`, `script_dictionary.h` | `GDCLASS` for the `RefCounted` subclass, ClassDB script method binding, typed Dictionary and Variant conversion, RID checks, RenderingServer queries, and `callable_mp_static` plus `call_on_render_thread`. |
-| Engine module `motion.cpp`, `graph.cpp`, `d3d12.cpp`, `vulkan.cpp`, `bridge.cpp` | Godot camera matrix math (a Rust port would have to reproduce Godot's `Projection` and `Transform3D` inverses bit for bit) and the previous camera transform, projection and jump distance; native texture handles, packets and Vulkan image descriptions; the motion resolve pass and shader; the Vulkan graph scope; the D3D12 and Vulkan driver patches; and the singleton's Dictionary parser (kept separate from `extension.rs`'s checked parser pending a compatibility review, because Variant conversions differ in integer type and range checks). |
+| Engine module `motion.cpp`, `graph.cpp`, `d3d12.cpp`, `vulkan.cpp`, `bridge.cpp` | Godot camera matrix math (a Rust port would have to reproduce Godot's `Projection` and `Transform3D` inverses bit for bit) and the previous camera transform, projection and jump distance; native texture handles, packets and Vulkan image descriptions; the motion resolve pass and shader; the Vulkan graph scope; the D3D12 and Vulkan driver patches; and the singleton's Dictionary parser (kept separate from `gdextension/runtime.rs`'s checked parser pending a compatibility review, because Variant conversions differ in integer type and range checks). |
 
 Residuals: DLSS-G stays out of Vulkan FG Auto (above); the Godot D3D12 leaves still pass software as
 false; the motion readback's extent check against a velocity override; D3D12 fixed SR context inputs
@@ -144,7 +139,7 @@ At RSF `31a06a94`, `eng/build-godot-engine.ps1` passed `custom_modules` to Godot
 `modules/SCsub` collected the external module's C++ objects into `module_rescaleframe`. At runtime
 the module loads `ReScaleFrame.Godot.Native.dll`, resolves the existing `rsfg_*` functions and
 registers `rsf_godot_engine_services`. The controller calls the GDExtension's `configure`, which
-uses `native/extension.rs` to compose settings and hands them back through that service table;
+composes settings in `gdextension/runtime.rs` and hands them back through that service table;
 `configure_from_extension` reconstitutes the Dictionary for the native bridge.
 
 `modules/rescaleframe/SCsub` invokes `rustc --emit=obj` from the repository root (rustup reads
@@ -323,8 +318,9 @@ are `float`, `taa_jitter` and `prev_taa_jitter` are `Vector2`).
 - The Rust archive is defined through `rsf_add_rust_static` in every configuration.
   `eng/build-godot.ps1` builds `--target rsf_godot`, which also runs
   `cargo build --locked -p rsf-godot`. Cargo is already required by the root build.
-- The typed Vulkan creation fixture runs in the `rsf-godot` Cargo tests. Its Vulkan records are
-  `ash::vk`; the `rsf_*` provider records come from rsf-game-sys.
+- The Vulkan creation fixture (the port of `tests/godot_vulkan_creation.cpp`) and the motion
+  classification run in the `rsf-godot` Cargo tests. Its Vulkan records are `ash::vk`; the `rsf_*`
+  provider records come from rsf-game-sys.
 - `rsf_godot` carries a second Rust archive beside the orchestrator's, the same unverified
   multi-archive link as Fallout 4 and Minecraft. It has not been linked.
 - `tools-requirements.txt` (SCons, NumPy, Pillow) serves the engine build and the visual analyzer
