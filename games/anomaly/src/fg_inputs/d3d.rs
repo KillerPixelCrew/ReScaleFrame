@@ -23,21 +23,7 @@ impl Drop for SavedState<'_> {
     }
 }
 
-pub(super) const BINDINGS: Bindings = Bindings {
-    device,
-    release_interface: release,
-    describe,
-    same_device,
-    shader,
-    constant_buffer,
-    texture,
-    depth_view,
-    unordered_view,
-    motion_view,
-    dispatch,
-};
-
-unsafe extern "C" fn release(raw: Raw) {
+pub(super) unsafe extern "C" fn release(raw: Raw) {
     drop(unsafe { IUnknown::from_raw(raw) });
 }
 
@@ -45,7 +31,7 @@ fn owned<T: Interface>(value: Option<T>) -> Raw {
     value.map_or(ptr::null_mut(), Interface::into_raw)
 }
 
-unsafe extern "C" fn device(raw: Raw) -> Raw {
+pub(super) unsafe extern "C" fn device(raw: Raw) -> Raw {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     if unsafe { context.GetType() } != D3D11_DEVICE_CONTEXT_IMMEDIATE {
         return ptr::null_mut();
@@ -53,7 +39,7 @@ unsafe extern "C" fn device(raw: Raw) -> Raw {
     owned(unsafe { context.GetDevice() }.ok())
 }
 
-unsafe extern "C" fn describe(raw: Raw, out: *mut Description) {
+pub(super) unsafe extern "C" fn describe(raw: Raw, out: *mut Description) {
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.unwrap();
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe {
@@ -69,7 +55,7 @@ unsafe extern "C" fn describe(raw: Raw, out: *mut Description) {
     }
 }
 
-unsafe extern "C" fn same_device(texture: Raw, device: Raw) -> u32 {
+pub(super) unsafe extern "C" fn same_device(texture: Raw, device: Raw) -> u32 {
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }.unwrap();
     let Ok(owner) = (unsafe { texture.GetDevice() }) else {
         return 0;
@@ -127,7 +113,7 @@ fn shader_code(log: Log, user: Raw) -> Option<Vec<u8>> {
     result.code
 }
 
-unsafe extern "C" fn shader(raw: Raw, log: Log, user: Raw) -> Raw {
+pub(super) unsafe extern "C" fn shader(raw: Raw, log: Log, user: Raw) -> Raw {
     let Some(code) = shader_code(log, user) else {
         return ptr::null_mut();
     };
@@ -141,7 +127,7 @@ unsafe extern "C" fn shader(raw: Raw, log: Log, user: Raw) -> Raw {
     owned(shader)
 }
 
-unsafe extern "C" fn constant_buffer(raw: Raw) -> Raw {
+pub(super) unsafe extern "C" fn constant_buffer(raw: Raw) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: size_of::<Constants>() as u32,
@@ -182,7 +168,7 @@ pub(crate) fn create_texture(
     texture
 }
 
-unsafe extern "C" fn texture(raw: Raw, width: u32, height: u32, format: u32, bind: u32) -> Raw {
+pub(super) unsafe extern "C" fn texture(raw: Raw, width: u32, height: u32, format: u32, bind: u32) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     owned(create_texture(
         device,
@@ -192,7 +178,7 @@ unsafe extern "C" fn texture(raw: Raw, width: u32, height: u32, format: u32, bin
     ))
 }
 
-unsafe extern "C" fn depth_view(raw: Raw, texture: Raw) -> Raw {
+pub(super) unsafe extern "C" fn depth_view(raw: Raw, texture: Raw) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }.unwrap();
     let mut desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
@@ -211,7 +197,7 @@ unsafe extern "C" fn depth_view(raw: Raw, texture: Raw) -> Raw {
     owned(view)
 }
 
-unsafe extern "C" fn unordered_view(raw: Raw, texture: Raw) -> Raw {
+pub(super) unsafe extern "C" fn unordered_view(raw: Raw, texture: Raw) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }.unwrap();
     let mut view = None;
@@ -221,7 +207,7 @@ unsafe extern "C" fn unordered_view(raw: Raw, texture: Raw) -> Raw {
     owned(view)
 }
 
-unsafe extern "C" fn motion_view(raw: Raw, texture: Raw) -> Raw {
+pub(super) unsafe extern "C" fn motion_view(raw: Raw, texture: Raw) -> Raw {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&texture) }.unwrap();
     let mut view = None;
@@ -232,7 +218,7 @@ unsafe extern "C" fn motion_view(raw: Raw, texture: Raw) -> Raw {
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe fn dispatch(
+pub(super) unsafe fn dispatch(
     scope: StateScope,
     raw: Raw,
     pipeline: *const PipelineBindings,

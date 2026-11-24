@@ -61,11 +61,11 @@ fn lease_resource(device: *mut c_void, label: &'static str) -> *mut c_void {
     resource
 }
 
-unsafe extern "C" fn device(context: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn device(context: *mut c_void) -> *mut c_void {
     context
 }
 
-unsafe extern "C" fn release(object: *mut c_void) {
+pub(super) unsafe extern "C" fn release(object: *mut c_void) {
     if LIVE.with_borrow_mut(|live| live.remove(&(object as usize))) {
         let resource = unsafe { Box::from_raw(object.cast::<Resource>()) };
         let state = unsafe { &*resource.context };
@@ -76,25 +76,25 @@ unsafe extern "C" fn release(object: *mut c_void) {
     }
 }
 
-unsafe extern "C" fn describe(texture: *mut c_void, out: *mut Description) {
+pub(super) unsafe extern "C" fn describe(texture: *mut c_void, out: *mut Description) {
     unsafe { out.write((*texture.cast::<Texture>()).desc) };
 }
 
-unsafe extern "C" fn same_device(texture: *mut c_void, device: *mut c_void) -> u32 {
+pub(super) unsafe extern "C" fn same_device(texture: *mut c_void, device: *mut c_void) -> u32 {
     u32::from(unsafe { (*texture.cast::<Texture>()).owner } == device)
 }
 
-unsafe extern "C" fn shader(device: *mut c_void, _: Log, _: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn shader(device: *mut c_void, _: Log, _: *mut c_void) -> *mut c_void {
     let state = context(device);
     state.builds.set(state.builds.get() + 1);
     lease_resource(device, "shader")
 }
 
-unsafe extern "C" fn constant_buffer(device: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn constant_buffer(device: *mut c_void) -> *mut c_void {
     lease_resource(device, "constants")
 }
 
-unsafe extern "C" fn texture(
+pub(super) unsafe extern "C" fn texture(
     device: *mut c_void,
     width: u32,
     height: u32,
@@ -118,14 +118,14 @@ unsafe extern "C" fn texture(
     lease_resource(device, label)
 }
 
-unsafe extern "C" fn depth_view(device: *mut c_void, depth_copy: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn depth_view(device: *mut c_void, depth_copy: *mut c_void) -> *mut c_void {
     if label(depth_copy) != "depth_copy" {
         return ptr::null_mut();
     }
     lease_resource(device, "depth_view")
 }
 
-unsafe extern "C" fn unordered_view(device: *mut c_void, texture: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn unordered_view(device: *mut c_void, texture: *mut c_void) -> *mut c_void {
     match label(texture) {
         "depth" => lease_resource(device, "depth_uav"),
         "motion" => lease_resource(device, "motion_uav"),
@@ -133,12 +133,12 @@ unsafe extern "C" fn unordered_view(device: *mut c_void, texture: *mut c_void) -
     }
 }
 
-unsafe extern "C" fn motion_view(_: *mut c_void, texture: *mut c_void) -> *mut c_void {
+pub(super) unsafe extern "C" fn motion_view(_: *mut c_void, texture: *mut c_void) -> *mut c_void {
     texture
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe fn dispatch(
+pub(super) unsafe fn dispatch(
     _: StateScope,
     context: *mut c_void,
     pipeline: *const PipelineBindings,
@@ -185,20 +185,6 @@ const SET: [&str; 6] = [
 const PIPELINE_CREATED: [Entry; 2] = [("shader", 0), ("constants", 0)];
 const PIPELINE_RELEASED: [Entry; 2] = [("constants", 0), ("shader", 0)];
 
-pub(super) const BINDINGS: Bindings = Bindings {
-    device,
-    release_interface: release,
-    describe,
-    same_device,
-    shader,
-    constant_buffer,
-    texture,
-    depth_view,
-    unordered_view,
-    motion_view,
-    dispatch,
-};
-
 fn created(generation: u32, count: usize) -> Vec<Entry> {
     SET[..count]
         .iter()
@@ -240,7 +226,7 @@ fn foreign_depth_refuses_the_copy_and_foreign_motion_falls_back_to_camera_motion
         width: 9,
         height: 17,
     };
-    let mut owner = Owner::with_bindings(BINDINGS, scope());
+    let mut owner = Owner::new(scope());
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),
         Result::Resources
@@ -278,7 +264,7 @@ fn failed_resize_releases_the_partial_set_and_keeps_the_previous_one_for_retry()
         width: 9,
         height: 17,
     };
-    let mut owner = Owner::with_bindings(BINDINGS, scope());
+    let mut owner = Owner::new(scope());
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),
         Result::Ok
@@ -331,7 +317,7 @@ fn refused_constant_buffer_releases_shader_and_retries_on_same_device() {
         width: 9,
         height: 17,
     };
-    let mut owner = Owner::with_bindings(BINDINGS, scope());
+    let mut owner = Owner::new(scope());
     state.fail_at.set(Some("constants"));
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),

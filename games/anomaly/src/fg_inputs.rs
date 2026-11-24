@@ -7,6 +7,11 @@ use std::ptr;
 
 #[cfg(all(windows, not(test)))]
 pub(crate) mod d3d;
+// The D3D11 leaves: d3d.rs, the recording fakes under test.
+#[cfg(all(windows, not(test)))]
+use d3d as leaves;
+#[cfg(test)]
+use tests as leaves;
 
 type Log = rsf_game_sys::rsf_game_log_fn;
 
@@ -60,38 +65,6 @@ struct Constants {
 }
 
 const _: () = assert!(size_of::<Constants>() == 96);
-
-#[derive(Clone, Copy)]
-struct Bindings {
-    device: unsafe extern "C" fn(context: *mut c_void) -> *mut c_void,
-    release_interface: unsafe extern "C" fn(arg1: *mut c_void),
-    describe: unsafe extern "C" fn(texture: *mut c_void, arg1: *mut Description),
-    same_device: unsafe extern "C" fn(texture: *mut c_void, device: *mut c_void) -> u32,
-    shader: unsafe extern "C" fn(device: *mut c_void, arg1: Log, arg2: *mut c_void) -> *mut c_void,
-    constant_buffer: unsafe extern "C" fn(device: *mut c_void) -> *mut c_void,
-    texture: unsafe extern "C" fn(
-        device: *mut c_void,
-        width: u32,
-        height: u32,
-        format: u32,
-        bind: u32,
-    ) -> *mut c_void,
-    depth_view: unsafe extern "C" fn(device: *mut c_void, depth_copy: *mut c_void) -> *mut c_void,
-    unordered_view: unsafe extern "C" fn(device: *mut c_void, texture: *mut c_void) -> *mut c_void,
-    motion_view: unsafe extern "C" fn(device: *mut c_void, texture: *mut c_void) -> *mut c_void,
-    #[allow(clippy::type_complexity)]
-    dispatch: unsafe fn(
-        state_scope: StateScope,
-        context: *mut c_void,
-        pipeline: *const PipelineBindings,
-        targets: *const Targets,
-        depth: *mut c_void,
-        motion_view: *mut c_void,
-        arg1: *const Constants,
-        groups_x: u32,
-        groups_y: u32,
-    ) -> u32,
-}
 
 #[cfg(windows)]
 #[derive(Clone, Copy)]
@@ -149,14 +122,11 @@ struct SurfaceSet {
 impl SurfaceSet {
     /// Creates the textures, then their views. A failed create drops the leases already taken in
     /// reverse order and returns None, so a caller keeps its previous complete set.
-    fn create(platform: &Bindings, device: *mut c_void, extent: [u32; 2]) -> Option<Self> {
-        let release = platform.release_interface;
-        let create_texture = platform.texture;
-        let create_depth_view = platform.depth_view;
-        let create_uav = platform.unordered_view;
+    fn create(device: *mut c_void, extent: [u32; 2]) -> Option<Self> {
+        let release = leaves::release;
         let make = |format: u32, bind: u32| {
             Lease::new(
-                unsafe { create_texture(device, extent[0], extent[1], format, bind) },
+                unsafe { leaves::texture(device, extent[0], extent[1], format, bind) },
                 release,
             )
         };
@@ -165,11 +135,12 @@ impl SurfaceSet {
         let depth = make(R32_FLOAT, output_bind)?;
         let motion = make(RG16_FLOAT, output_bind)?;
         let depth_view = Lease::new(
-            unsafe { create_depth_view(device, depth_copy.as_ptr()) },
+            unsafe { leaves::depth_view(device, depth_copy.as_ptr()) },
             release,
         )?;
-        let depth_uav = Lease::new(unsafe { create_uav(device, depth.as_ptr()) }, release)?;
-        let motion_uav = Lease::new(unsafe { create_uav(device, motion.as_ptr()) }, release)?;
+        let depth_uav = Lease::new(unsafe { leaves::unordered_view(device, depth.as_ptr()) }, release)?;
+        let motion_uav =
+            Lease::new(unsafe { leaves::unordered_view(device, motion.as_ptr()) }, release)?;
         Some(Self {
             motion_uav,
             depth_uav,
@@ -202,15 +173,14 @@ struct Pipeline {
 
 impl Pipeline {
     fn create(
-        platform: &Bindings,
         device: *mut c_void,
         log: Log,
         user: *mut c_void,
     ) -> std::result::Result<Self, Result> {
-        let release = platform.release_interface;
-        let shader = Lease::new(unsafe { (platform.shader)(device, log, user) }, release)
+        let release = leaves::release;
+        let shader = Lease::new(unsafe { leaves::shader(device, log, user) }, release)
             .ok_or(Result::Shader)?;
-        let constants = Lease::new(unsafe { (platform.constant_buffer)(device) }, release)
+        let constants = Lease::new(unsafe { leaves::constant_buffer(device) }, release)
             .ok_or(Result::Resources)?;
         Ok(Self { constants, shader })
     }
@@ -224,7 +194,6 @@ impl Pipeline {
 }
 
 pub(crate) struct Owner {
-    platform: Bindings,
     state_scope: StateScope,
     surfaces: Option<SurfaceSet>,
     pipeline: Option<Pipeline>,
@@ -234,9 +203,8 @@ pub(crate) struct Owner {
 }
 
 impl Owner {
-    fn with_bindings(platform: Bindings, state_scope: StateScope) -> Self {
+    pub(crate) fn new(state_scope: StateScope) -> Self {
         Self {
-            platform,
             state_scope,
             surfaces: None,
             pipeline: None,
@@ -246,15 +214,6 @@ impl Owner {
         }
     }
 
-    #[cfg(windows)]
-    pub(crate) fn new(state_scope: StateScope) -> Self {
-        #[cfg(test)]
-        let bindings = tests::BINDINGS;
-        #[cfg(not(test))]
-        let bindings = d3d::BINDINGS;
-        Self::with_bindings(bindings, state_scope)
-    }
-
     pub(crate) fn outputs(&self) -> Option<[*mut c_void; 2]> {
         let set = self.surfaces.as_ref().filter(|_| self.ready)?;
         Some([set.depth.as_ptr(), set.motion.as_ptr()])
@@ -262,14 +221,14 @@ impl Owner {
 
     fn describe(&self, texture: *mut c_void) -> Description {
         let mut desc = Description::default();
-        unsafe { (self.platform.describe)(texture, &mut desc) };
+        unsafe { leaves::describe(texture, &mut desc) };
         desc
     }
 
     fn ensure_targets(&mut self, device: *mut c_void, extent: [u32; 2]) -> Option<&SurfaceSet> {
         if self.surfaces.as_ref().is_none_or(|s| s.extent != extent) {
             // The new set is complete before the older one drops.
-            self.surfaces = Some(SurfaceSet::create(&self.platform, device, extent)?);
+            self.surfaces = Some(SurfaceSet::create(device, extent)?);
         }
         self.surfaces.as_ref()
     }
@@ -281,7 +240,6 @@ impl Owner {
         log: Log,
         user: *mut c_void,
     ) -> Result {
-        let platform = self.platform;
         self.ready = false;
         if context.is_null() || frame.depth.is_null() || frame.width == 0 || frame.height == 0 {
             return Result::Resources;
@@ -299,13 +257,11 @@ impl Owner {
             return Result::Size;
         }
 
-        let release_interface = platform.release_interface;
-        let Some(d3d) = Lease::new(unsafe { (platform.device)(context) }, release_interface) else {
+        let Some(d3d) = Lease::new(unsafe { leaves::device(context) }, leaves::release) else {
             return Result::Resources;
         };
         let device = d3d.as_ptr();
-        let same_device = platform.same_device;
-        if unsafe { same_device(frame.depth, device) } == 0 {
+        if unsafe { leaves::same_device(frame.depth, device) } == 0 {
             return Result::Resources;
         }
         if self
@@ -323,7 +279,7 @@ impl Owner {
         }
         let pipeline = match &self.pipeline {
             Some(pipeline) => pipeline.bindings(),
-            None => match Pipeline::create(&platform, device, log, user) {
+            None => match Pipeline::create(device, log, user) {
                 Ok(pipeline) => {
                     let bindings = pipeline.bindings();
                     self.pipeline = Some(pipeline);
@@ -350,11 +306,11 @@ impl Owner {
                 && [desc.width, desc.height] == extent
                 && desc.samples == 1
                 && desc.layers == 1
-                && unsafe { same_device(frame.motion, device) } != 0
+                && unsafe { leaves::same_device(frame.motion, device) } != 0
             {
                 Lease::new(
-                    unsafe { (platform.motion_view)(device, frame.motion) },
-                    release_interface,
+                    unsafe { leaves::motion_view(device, frame.motion) },
+                    leaves::release,
                 )
             } else {
                 // The shader reconstructs camera motion when an optional motion view is unavailable.
@@ -370,7 +326,7 @@ impl Owner {
             ..Default::default()
         };
         let accepted = unsafe {
-            (platform.dispatch)(
+            leaves::dispatch(
                 self.state_scope,
                 context,
                 &pipeline,
