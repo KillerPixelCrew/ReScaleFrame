@@ -31,6 +31,8 @@ use rsf_graphics::capture_pixels;
 mod capture_test_sink;
 #[cfg(windows)]
 mod colour_d3d11;
+#[cfg(all(windows, test))]
+mod host_test_fakes;
 #[cfg(windows)]
 use rsf_graphics::com_ref;
 #[cfg(windows)]

@@ -66,22 +66,12 @@ thread_local! {
     });
 }
 
-fn with<R>(f: impl FnOnce(&mut World) -> R) -> R {
-    WORLD.with(|world| f(&mut world.borrow_mut()))
-}
-fn event(text: String) {
-    with(|world| world.events.push(text));
-}
-fn events() -> Vec<String> {
-    with(|world| std::mem::take(&mut world.events))
-}
+crate::host_test_fakes::host_test_fakes!();
+
 fn has_event(events: &[String], prefix: &str) -> bool {
     events.iter().any(|event| event.starts_with(prefix))
 }
 
-pub(super) unsafe extern "C" fn tick() -> u64 {
-    with(|world| world.now)
-}
 pub(super) unsafe extern "C" fn foreground() -> u32 {
     1
 }
@@ -131,9 +121,6 @@ pub(super) unsafe extern "C" fn native_object(object: Handle) -> Handle {
 pub(super) unsafe extern "C" fn depth_domains(_: *const Pass) -> u32 {
     0
 }
-pub(super) extern "C" fn dlss_preset_valid(preset: u32) -> u32 {
-    u32::from(with(|world| world.refused_preset != Some(preset)))
-}
 pub(super) extern "C" fn fg_default_backend(vendor: u32, _: u32) -> u32 {
     if vendor == 0x10de { 1 } else { 3 }
 }
@@ -158,9 +145,6 @@ pub(super) unsafe extern "C" fn sr12_create(setup: *const SrSetup, out: *mut Han
         unsafe { out.write(with(|world| world.contexts as usize) as Handle) };
     }
     result
-}
-pub(super) unsafe extern "C" fn sr12_destroy(context: Handle) {
-    event(format!("destroy {}", context as usize));
 }
 pub(super) unsafe extern "C" fn sr12_evaluate(
     context: Handle,
@@ -246,15 +230,6 @@ pub(super) unsafe extern "C" fn fg_latency(_: *const LatencyEvent) -> i32 {
 pub(super) unsafe extern "C" fn fg_cpu(_: *const CpuEvent) {
     event("fg cpu".into());
 }
-pub(super) unsafe extern "C" fn fg_submitted(session: u64, frame: u64) {
-    event(format!("fg submitted {session} {frame}"));
-}
-pub(super) unsafe extern "C" fn fg_hudless(_: Handle, pass: *const Pass) {
-    event(format!("fg hudless {}", unsafe { (*pass).source_frame_id }));
-}
-pub(super) unsafe extern "C" fn fg_window(pass: *const Pass) {
-    event(format!("fg window {}", unsafe { (*pass).source_frame_id }));
-}
 pub(super) unsafe extern "C" fn fg_status_try(out: *mut FgStatus) -> i32 {
     match with(|world| world.fg_status) {
         Some(status) => {
@@ -274,10 +249,6 @@ pub(super) extern "C" fn present_host() -> Handle {
 }
 pub(super) extern "C" fn present_has_owner() -> i32 {
     with(|world| world.present_owner)
-}
-pub(super) extern "C" fn present_request(backend: u32) -> i32 {
-    event(format!("fg request {backend}"));
-    with(|world| world.request_result)
 }
 pub(super) extern "C" fn present_backend_choices() -> u32 {
     with(|world| world.present_choices)
