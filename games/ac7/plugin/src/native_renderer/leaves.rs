@@ -72,261 +72,197 @@ pub(crate) fn code_leaves(log: rsf_ac7_renderer_log_fn, user: *mut c_void) -> rs
     }
 }
 
-fn detour(address: *const c_void) -> *mut c_void {
-    address.cast_mut()
-}
-
 /// Attaches each detour to its site. Keyed by hook, so the order of this list carries no meaning.
 fn bind_detours() {
     use hook::*;
     let bindings: [(u32, *mut c_void); HOOKS] = [
         (
             PROCESS_TONEMAP,
-            detour(graph::hooked_process::<PROCESS_TONEMAP> as *const c_void),
+            graph::hooked_process::<PROCESS_TONEMAP> as *mut c_void,
         ),
         (
             PROCESS_AA,
-            detour(graph::hooked_process::<PROCESS_AA> as *const c_void),
+            graph::hooked_process::<PROCESS_AA> as *mut c_void,
         ),
         (
             PROCESS_MATERIAL,
-            detour(graph::hooked_process::<PROCESS_MATERIAL> as *const c_void),
+            graph::hooked_process::<PROCESS_MATERIAL> as *mut c_void,
         ),
         (
             PROCESS_HUD,
-            detour(graph::hooked_process::<PROCESS_HUD> as *const c_void),
+            graph::hooked_process::<PROCESS_HUD> as *mut c_void,
         ),
         (
             PROCESS_COMPOSITE,
-            detour(graph::hooked_process::<PROCESS_COMPOSITE> as *const c_void),
+            graph::hooked_process::<PROCESS_COMPOSITE> as *mut c_void,
         ),
         (
             PROCESS_OUTPUT,
-            detour(graph::hooked_process::<PROCESS_OUTPUT> as *const c_void),
+            graph::hooked_process::<PROCESS_OUTPUT> as *mut c_void,
         ),
         (
             DESCRIPTOR_TONEMAP,
-            detour(graph::hooked_descriptor::<PROCESS_TONEMAP> as *const c_void),
+            graph::hooked_descriptor::<PROCESS_TONEMAP> as *mut c_void,
         ),
         (
             DESCRIPTOR_AA,
-            detour(graph::hooked_descriptor::<PROCESS_AA> as *const c_void),
+            graph::hooked_descriptor::<PROCESS_AA> as *mut c_void,
         ),
         (
             DESCRIPTOR_MATERIAL,
-            detour(graph::hooked_descriptor::<PROCESS_MATERIAL> as *const c_void),
+            graph::hooked_descriptor::<PROCESS_MATERIAL> as *mut c_void,
         ),
         (
             DESCRIPTOR_HUD,
-            detour(graph::hooked_descriptor::<PROCESS_HUD> as *const c_void),
+            graph::hooked_descriptor::<PROCESS_HUD> as *mut c_void,
         ),
         (
             DESCRIPTOR_COMPOSITE,
-            detour(graph::hooked_descriptor::<PROCESS_COMPOSITE> as *const c_void),
+            graph::hooked_descriptor::<PROCESS_COMPOSITE> as *mut c_void,
         ),
         (
             DESCRIPTOR_OUTPUT,
-            detour(graph::hooked_descriptor::<PROCESS_OUTPUT> as *const c_void),
+            graph::hooked_descriptor::<PROCESS_OUTPUT> as *mut c_void,
         ),
-        (
-            POSTPROCESS,
-            detour(graph::hooked_postprocess as *const c_void),
-        ),
-        (CONTEXT, detour(graph::hooked_context as *const c_void)),
-        (
-            VISIBILITY,
-            detour(views::hooked_visibility as *const c_void),
-        ),
-        (CONSTRUCT, detour(views::hooked_construct as *const c_void)),
-        (
-            WIDGET_QUEUE,
-            detour(widgets::hooked_widget_queue as *const c_void),
-        ),
+        (POSTPROCESS, graph::hooked_postprocess as *mut c_void),
+        (CONTEXT, graph::hooked_context as *mut c_void),
+        (VISIBILITY, views::hooked_visibility as *mut c_void),
+        (CONSTRUCT, views::hooked_construct as *mut c_void),
+        (WIDGET_QUEUE, widgets::hooked_widget_queue as *mut c_void),
         (
             WIDGET_TARGETS,
-            detour(widgets::hooked_widget_targets as *const c_void),
+            widgets::hooked_widget_targets as *mut c_void,
         ),
-        (
-            WIDGET_DRAW,
-            detour(widgets::hooked_widget_draw as *const c_void),
-        ),
-        (
-            ENGINE_TICK,
-            detour(frame::hooked_engine_tick as *const c_void),
-        ),
+        (WIDGET_DRAW, widgets::hooked_widget_draw as *mut c_void),
+        (ENGINE_TICK, frame::hooked_engine_tick as *mut c_void),
         (
             RENDERER_RETIRE,
-            detour(frame::hooked_renderer_retire as *const c_void),
+            frame::hooked_renderer_retire as *mut c_void,
         ),
-        (
-            POLL_INPUT,
-            detour(frame::hooked_poll_input as *const c_void),
-        ),
+        (POLL_INPUT, frame::hooked_poll_input as *mut c_void),
         (
             GAME_INSTANCE_INIT,
-            detour(widgets::hooked_game_instance_init as *const c_void),
+            widgets::hooked_game_instance_init as *mut c_void,
         ),
-        (
-            TARGET_INIT,
-            detour(widgets::hooked_target_init as *const c_void),
-        ),
+        (TARGET_INIT, widgets::hooked_target_init as *mut c_void),
         (
             SIMULATION_A,
-            detour(frame::hooked_simulation::<SIMULATION_A> as *const c_void),
+            frame::hooked_simulation::<SIMULATION_A> as *mut c_void,
         ),
         (
             SIMULATION_B,
-            detour(frame::hooked_simulation::<SIMULATION_B> as *const c_void),
+            frame::hooked_simulation::<SIMULATION_B> as *mut c_void,
         ),
-        (REDRAW, detour(frame::hooked_redraw as *const c_void)),
-        (
-            VIEWPORT_DRAW,
-            detour(frame::hooked_viewport_draw as *const c_void),
-        ),
-        (
-            SLATE_PRIVATE,
-            detour(slate::hooked_slate_private as *const c_void),
-        ),
-        (
-            SLATE_ALLOCATE,
-            detour(slate::hooked_slate_allocate as *const c_void),
-        ),
-        (
-            SLATE_TASK,
-            detour(slate::hooked_slate_task as *const c_void),
-        ),
-        (
-            SLATE_WINDOW,
-            detour(slate::hooked_slate_window as *const c_void),
-        ),
-        (
-            SLATE_TEXTURE,
-            detour(slate::hooked_slate_texture as *const c_void),
-        ),
+        (REDRAW, frame::hooked_redraw as *mut c_void),
+        (VIEWPORT_DRAW, frame::hooked_viewport_draw as *mut c_void),
+        (SLATE_PRIVATE, slate::hooked_slate_private as *mut c_void),
+        (SLATE_ALLOCATE, slate::hooked_slate_allocate as *mut c_void),
+        (SLATE_TASK, slate::hooked_slate_task as *mut c_void),
+        (SLATE_WINDOW, slate::hooked_slate_window as *mut c_void),
+        (SLATE_TEXTURE, slate::hooked_slate_texture as *mut c_void),
         (
             TRANSLUCENCY_SIZE,
-            detour(translucency::hooked_translucency_size as *const c_void),
+            translucency::hooked_translucency_size as *mut c_void,
         ),
         (
             UNMODIFIED_BEGIN,
-            detour(translucency::hooked_unmodified_begin as *const c_void),
+            translucency::hooked_unmodified_begin as *mut c_void,
         ),
         (
             UNMODIFIED_RESOLVE,
-            detour(translucency::hooked_unmodified_resolve as *const c_void),
+            translucency::hooked_unmodified_resolve as *mut c_void,
         ),
         (
             TRANSLUCENCY_RENDER,
-            detour(translucency::hooked_translucency_render as *const c_void),
+            translucency::hooked_translucency_render as *mut c_void,
         ),
         (
             PIXEL_VIEW_UNIFORM,
-            detour(evidence::hooked_pixel_view_uniform as *const c_void),
+            evidence::hooked_pixel_view_uniform as *mut c_void,
         ),
         (
             RHI_PIXEL_UNIFORM,
-            detour(evidence::hooked_rhi_pixel_uniform as *const c_void),
+            evidence::hooked_rhi_pixel_uniform as *mut c_void,
         ),
         (
             RHI_PIXEL_TABLES,
-            detour(evidence::hooked_rhi_pixel_tables as *const c_void),
+            evidence::hooked_rhi_pixel_tables as *mut c_void,
         ),
         (
             PIXEL_ENQUEUE_A,
-            detour(evidence::hooked_pixel_enqueue::<PIXEL_ENQUEUE_A> as *const c_void),
+            evidence::hooked_pixel_enqueue::<PIXEL_ENQUEUE_A> as *mut c_void,
         ),
         (
             PIXEL_ENQUEUE_B,
-            detour(evidence::hooked_pixel_enqueue::<PIXEL_ENQUEUE_B> as *const c_void),
+            evidence::hooked_pixel_enqueue::<PIXEL_ENQUEUE_B> as *mut c_void,
         ),
         (
             PIXEL_ENQUEUE_C,
-            detour(evidence::hooked_pixel_enqueue::<PIXEL_ENQUEUE_C> as *const c_void),
+            evidence::hooked_pixel_enqueue::<PIXEL_ENQUEUE_C> as *mut c_void,
         ),
         (
             PIXEL_ENQUEUE_D,
-            detour(evidence::hooked_pixel_enqueue::<PIXEL_ENQUEUE_D> as *const c_void),
+            evidence::hooked_pixel_enqueue::<PIXEL_ENQUEUE_D> as *mut c_void,
         ),
-        (
-            SKY_PROJECTION,
-            detour(sky::hooked_sky_projection as *const c_void),
-        ),
-        (SKY_RENDER, detour(sky::hooked_sky_render as *const c_void)),
+        (SKY_PROJECTION, sky::hooked_sky_projection as *mut c_void),
+        (SKY_RENDER, sky::hooked_sky_render as *mut c_void),
         (
             TEMPORAL_SAMPLE_INDEX,
-            detour(views::hooked_temporal_sample_index as *const c_void),
+            views::hooked_temporal_sample_index as *mut c_void,
         ),
         (
             SCENE_COLOUR_FORMAT,
-            detour(translucency::hooked_scene_colour_format as *const c_void),
+            translucency::hooked_scene_colour_format as *mut c_void,
         ),
-        (
-            RENDER_FAMILY,
-            detour(frame::hooked_render_family as *const c_void),
-        ),
+        (RENDER_FAMILY, frame::hooked_render_family as *mut c_void),
         (
             FRAME_TASK_CONSTRUCT,
-            detour(frame::hooked_frame_task_construct as *const c_void),
+            frame::hooked_frame_task_construct as *mut c_void,
         ),
         (
             FRAME_TASK_EXECUTE,
-            detour(frame::hooked_frame_task_execute as *const c_void),
+            frame::hooked_frame_task_execute as *mut c_void,
         ),
         (
             RHI_FRAME_BEGIN,
-            detour(frame::hooked_rhi_frame_begin as *const c_void),
+            frame::hooked_rhi_frame_begin as *mut c_void,
         ),
-        (
-            RHI_FRAME_END,
-            detour(frame::hooked_rhi_frame_end as *const c_void),
-        ),
-        (
-            FRAME_SYNC,
-            detour(frame::hooked_frame_sync as *const c_void),
-        ),
-        (
-            PUMP_MESSAGES,
-            detour(frame::hooked_pump_messages as *const c_void),
-        ),
-        (
-            ENGINE_PACING,
-            detour(frame::hooked_engine_pacing as *const c_void),
-        ),
+        (RHI_FRAME_END, frame::hooked_rhi_frame_end as *mut c_void),
+        (FRAME_SYNC, frame::hooked_frame_sync as *mut c_void),
+        (PUMP_MESSAGES, frame::hooked_pump_messages as *mut c_void),
+        (ENGINE_PACING, frame::hooked_engine_pacing as *mut c_void),
         (
             CREATE_PIXEL_SHADER,
-            detour(shaders::hooked_create_pixel_shader as *const c_void),
+            shaders::hooked_create_pixel_shader as *mut c_void,
         ),
-        (
-            BASE_PASS,
-            detour(translucency::hooked_base_pass as *const c_void),
-        ),
+        (BASE_PASS, translucency::hooked_base_pass as *mut c_void),
         (
             TRANSLUCENCY_MESH,
-            detour(translucency::hooked_translucency_mesh as *const c_void),
+            translucency::hooked_translucency_mesh as *mut c_void,
         ),
         (
             MESH_PARTICLE_PARAMETERS,
-            detour(translucency::hooked_mesh_particle_parameters as *const c_void),
+            translucency::hooked_mesh_particle_parameters as *mut c_void,
         ),
         (
             BEAM_NO_NOISE,
-            detour(particles::hooked_beam_fill::<BEAM_NO_NOISE> as *const c_void),
+            particles::hooked_beam_fill::<BEAM_NO_NOISE> as *mut c_void,
         ),
         (
             BEAM_NOISE,
-            detour(particles::hooked_beam_fill::<BEAM_NOISE> as *const c_void),
+            particles::hooked_beam_fill::<BEAM_NOISE> as *mut c_void,
         ),
         (
             BEAM_INTERPOLATED_NOISE,
-            detour(particles::hooked_beam_fill::<BEAM_INTERPOLATED_NOISE> as *const c_void),
+            particles::hooked_beam_fill::<BEAM_INTERPOLATED_NOISE> as *mut c_void,
         ),
         (
             RIBBON_FILL,
-            detour(particles::hooked_beam_fill::<RIBBON_FILL> as *const c_void),
+            particles::hooked_beam_fill::<RIBBON_FILL> as *mut c_void,
         ),
         (
             ANIM_TRAIL_FILL,
-            detour(particles::hooked_beam_fill::<ANIM_TRAIL_FILL> as *const c_void),
+            particles::hooked_beam_fill::<ANIM_TRAIL_FILL> as *mut c_void,
         ),
     ];
     for (hook, detour) in bindings {
