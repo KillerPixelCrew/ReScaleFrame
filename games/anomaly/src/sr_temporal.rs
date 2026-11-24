@@ -481,9 +481,7 @@ impl Driver {
     }
 
     fn resolve_backend(render: &RenderState, device: Raw, requested: u32) -> Option<u32> {
-        let Some(Startup { admit: service, .. }) = render.startup else {
-            return None;
-        };
+        let Startup { admit: service, .. } = render.startup?;
         let setup = render.setup.as_ref()?;
         let result = admit(
             service,

@@ -274,6 +274,7 @@ pub(crate) unsafe extern "C" fn rsf_overlay_d3d12_frame(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn rsf_overlay_d3d12_frame_for_window(
     device: Handle,
     queue: Handle,
