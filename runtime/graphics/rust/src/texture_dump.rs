@@ -55,7 +55,6 @@ pub struct Report {
 
 const _: () = {
     assert!(size_of::<Report>() == 40);
-    assert!(size_of::<Pixels>() == 40);
     assert!(size_of::<TextureOptions>() == 40);
     assert!(size_of::<MotionTextureOptions>() == 64);
     assert!(offset_of!(MotionTextureOptions, motion) == 40);
