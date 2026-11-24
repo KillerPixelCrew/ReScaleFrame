@@ -2,8 +2,8 @@
 //! Unity Vulkan surface identity and swapchain semaphore ownership.
 
 use super::{
-    Function, INITIALIZATION_FAILED, NativeHooks, OUT_OF_HOST_MEMORY, SUCCESS, instance_command,
-    resolver,
+    DEVICE_LOST, Function, INITIALIZATION_FAILED, NativeHooks, OUT_OF_DEVICE_MEMORY,
+    OUT_OF_HOST_MEMORY, SUCCESS, instance_command, resolver,
 };
 use crate::vulkan_state::{
     forget_win32_surface, register_swapchain, register_win32_surface, retire_swapchain,
@@ -13,8 +13,6 @@ use ash::vk::{self, Handle as _};
 use std::ffi::c_void;
 use std::ptr;
 
-const DEVICE_LOST: i32 = -4;
-const OUT_OF_DEVICE_MEMORY: i32 = -2;
 pub(super) type CreateSwapchain = unsafe extern "system" fn(
     *mut c_void,
     *const vk::SwapchainCreateInfoKHR<'static>,

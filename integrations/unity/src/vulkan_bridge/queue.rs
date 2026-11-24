@@ -14,7 +14,7 @@ pub(super) fn execute(
         Device::Ready(graphics) => graphics,
         Device::Busy => return Ok(()),
         Device::Failed => {
-            fault(INIT_FAILED, c"Unity Vulkan shared device/fence initialization failed; native output remains in place.");
+            fault(backend_result::INIT_FAILED, c"Unity Vulkan shared device/fence initialization failed; native output remains in place.");
             return Ok(());
         }
     };

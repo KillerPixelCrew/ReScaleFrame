@@ -12,7 +12,7 @@ use crate::vulkan_resolver;
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{
     RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_WINDOW,
-    rsf_game_render_pass,
+    backend_result, rsf_game_render_pass,
 };
 use std::ffi::CStr;
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::*};
@@ -31,9 +31,6 @@ mod window;
 pub(crate) use window::{create_window, rsf_uvk_bridge_owns_window, rsf_uvk_bridge_update_window};
 
 const EVENT_WINDOW: u32 = 1;
-// The C backend status values are cast macros.
-const INIT_FAILED: i32 = -6;
-const FEATURE_FAILED: i32 = -9;
 const QUEUE_EXCEPTION: &CStr = c"Unity Vulkan queue execution failed; resources remain owned.";
 const PRESENT_EXCEPTION: &CStr = c"Unity Vulkan present interception failed; the bridge stopped.";
 const SLOT_FAILED: &CStr = c"Unity Vulkan command slot could not be reused; the bridge stopped.";
@@ -59,7 +56,7 @@ fn fault(result: i32, message: &CStr) {
 }
 
 fn stop(message: &CStr) {
-    fault(FEATURE_FAILED, message);
+    fault(backend_result::FEATURE_FAILED, message);
 }
 
 #[unsafe(no_mangle)]

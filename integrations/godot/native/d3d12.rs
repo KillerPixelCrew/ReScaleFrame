@@ -18,13 +18,12 @@
 use crate::control::Control;
 use crate::platform::{Platform, Settings, Sharpening, SrCreate, SrEvaluate, SrFrame};
 use rsf_game_sys::{
-    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass,
+    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW, backend_result,
+    rsf_game_render_pass,
 };
 use std::ffi::{c_int, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-const BACKEND_OK: i32 = 0;
-const BACKEND_ERROR_INVALID_ARGUMENT: i32 = -1;
 const SR_NONE: u32 = 0;
 const SR_SPATIAL: u32 = 6;
 const SR_AUTO: u32 = 7;
@@ -155,7 +154,7 @@ impl D3d12 {
                 bound: None,
                 context: None,
                 plan: (0, 0),
-                context_result: BACKEND_OK,
+                context_result: backend_result::OK,
                 submitted: 0,
                 slots: [0; SLOTS as usize],
                 next_slot: 0,
@@ -255,7 +254,7 @@ impl D3d12 {
         };
         let (plan, diagnose) = {
             let mut ledger = self.ledger();
-            let diagnose = evaluated == BACKEND_ERROR_INVALID_ARGUMENT
+            let diagnose = evaluated == backend_result::INVALID_ARGUMENT
                 && ledger.diagnostics < DIAGNOSTIC_LIMIT;
             if diagnose {
                 ledger.diagnostics += 1;
@@ -276,7 +275,7 @@ impl D3d12 {
                 hudless: false,
                 submitted: false,
             });
-            if evaluated == BACKEND_OK {
+            if evaluated == backend_result::OK {
                 ledger.rendered = Some(Rendered::of(pass));
                 if pass.role == RSF_GAME_RENDER_SR {
                     ledger.sr_slot = Some(((pass.session_id, pass.source_frame_id), slot));
@@ -294,7 +293,7 @@ impl D3d12 {
             output_width: context.output.0,
             output_height: context.output.1,
         });
-        c_int::from(evaluated == BACKEND_OK)
+        c_int::from(evaluated == backend_result::OK)
     }
 
     /// Reuse descriptors only after the slot's last submission completed.

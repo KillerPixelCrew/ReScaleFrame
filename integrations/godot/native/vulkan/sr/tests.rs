@@ -104,7 +104,7 @@ fn a_context_is_created_once_and_reused() {
     let value = status(&vulkan);
     assert_eq!(
         (value.active_sr, value.sr_result, value.evaluated_frames),
-        (SR_FSR3, BACKEND_OK, 1)
+        (SR_FSR3, backend_result::OK, 1)
     );
     assert_eq!(
         (
@@ -178,7 +178,7 @@ fn a_refused_retirement_falls_back_before_the_pass_identity() {
             value.refused_frames,
             value.output_width
         ),
-        (BACKEND_ERROR_NOT_READY, 0, 1, 1920)
+        (backend_result::NOT_READY, 0, 1, 1920)
     );
 }
 
@@ -239,7 +239,7 @@ fn four_refusals_are_logged_per_session() {
 #[test]
 fn an_input_refusal_is_logged_after_runtime_recovers_output() {
     let vulkan = booted();
-    fake::VK_EVALUATED.set(BACKEND_ERROR_INVALID_ARGUMENT);
+    fake::VK_EVALUATED.set(backend_result::INVALID_ARGUMENT);
     assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
     let calls = fake::take_vk_sr_calls();
     assert_eq!(
@@ -255,7 +255,7 @@ fn an_input_refusal_is_logged_after_runtime_recovers_output() {
     let value = status(&vulkan);
     assert_eq!(
         (value.sr_result, value.refused_frames, value.render_width),
-        (BACKEND_ERROR_INVALID_ARGUMENT, 1, 1280)
+        (backend_result::INVALID_ARGUMENT, 1, 1280)
     );
 }
 
@@ -269,7 +269,7 @@ fn passthrough_providers_need_no_context() {
         configure(&vulkan, |s| s.sr_backend = backend);
         assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
         let value = status(&vulkan);
-        assert_eq!((value.active_sr, value.sr_result), (backend, BACKEND_OK));
+        assert_eq!((value.active_sr, value.sr_result), (backend, backend_result::OK));
     }
     // The stale context was retired before the first passthrough.
     assert_eq!(
@@ -300,9 +300,9 @@ fn fsr4_needs_its_build_and_the_graph_lease() {
     configure(&vulkan, |s| s.sr_backend = SR_FSR4);
     for refusal in [
         -3,
-        BACKEND_ERROR_NOT_READY,
-        BACKEND_ERROR_NOT_READY,
-        BACKEND_ERROR_NOT_READY,
+        backend_result::NOT_READY,
+        backend_result::NOT_READY,
+        backend_result::NOT_READY,
     ] {
         fake::VK_SPLIT_OPEN_RESULT.set(refusal);
         render(&vulkan, &pass(DEVICE, OUTPUT));
@@ -340,7 +340,7 @@ fn fsr4_needs_its_build_and_the_graph_lease() {
             ("dump", u64::from(SR_FSR4))
         ]
     );
-    assert_eq!(status(&vulkan).sr_result, BACKEND_ERROR_NOT_READY);
+    assert_eq!(status(&vulkan).sr_result, backend_result::NOT_READY);
 }
 
 #[test]
@@ -377,7 +377,7 @@ fn a_leaf_exception_refuses_the_pass_without_a_report() {
     fake::VK_THROWS.set(Some("evaluate"));
     assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 0);
     assert_eq!(status(&vulkan).evaluated_frames, 0);
-    assert_eq!(status(&vulkan).sr_result, BACKEND_OK);
+    assert_eq!(status(&vulkan).sr_result, backend_result::OK);
     // A creation that wrote its handle before the exception keeps it for retirement.
     let vulkan = booted();
     fake::VK_THROWS.set(Some("create"));
@@ -395,7 +395,7 @@ fn diagnostic_failures_preserve_fallback_and_evaluation_outcomes() {
     let vulkan = booted();
     configure(&vulkan, |settings| settings.sr_backend = SR_FSR3);
     let input = pass(DEVICE, OUTPUT);
-    fake::VK_EVALUATED.set(BACKEND_ERROR_INVALID_ARGUMENT);
+    fake::VK_EVALUATED.set(backend_result::INVALID_ARGUMENT);
     fake::VK_THROWS.set(Some("dump"));
     assert_eq!(render(&vulkan, &input), 1);
     assert!(fake::take_vk_sr_calls().contains(&("fallback", 0)));
@@ -406,7 +406,7 @@ fn diagnostic_failures_preserve_fallback_and_evaluation_outcomes() {
     assert!(fake::take_vk_sr_calls().contains(&("fallback", 0)));
     assert_eq!(vulkan.status().0.refused_frames, 2);
 
-    fake::VK_EVALUATED.set(BACKEND_OK);
+    fake::VK_EVALUATED.set(backend_result::OK);
     fake::VK_THROWS.set(Some("dump"));
     assert_eq!(render(&vulkan, &input), 1);
     assert_eq!(vulkan.status().0.evaluated_frames, 1);
@@ -472,13 +472,13 @@ fn auto_without_a_servable_provider_takes_the_spatial_fallback() {
             value.render_width,
             value.output_width
         ),
-        (SR_AUTO, 0, BACKEND_ERROR_NOT_SUPPORTED, 1, 1280, 1920)
+        (SR_AUTO, 0, backend_result::NOT_SUPPORTED, 1, 1280, 1920)
     );
     // An explicit Off still passes the engine's output through.
     configure(&vulkan, |s| s.sr_backend = SR_NONE);
     assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
     assert!(fake::take_vk_sr_calls().is_empty());
-    assert_eq!(status(&vulkan).sr_result, BACKEND_OK);
+    assert_eq!(status(&vulkan).sr_result, backend_result::OK);
 }
 
 #[test]

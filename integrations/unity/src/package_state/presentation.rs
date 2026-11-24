@@ -5,10 +5,11 @@
 //! pass. The identity comes from [UnitySR] when the plugin loads and from rsfu_initialize for each
 //! session. SR views read it for their contexts. Auto uses the Runtime's
 //! rsf_fg_default_backend with the current D3D12 adapter.
-use super::{BACKEND_OK, Leaves, Package, raw};
+use super::{Leaves, Package, raw};
 use crate::generation::{self, Sources};
 use crate::sys::{RSF_FG_BACKEND_AUTO, RSF_REFLEX_OFF, rsf_fg12_setup, rsf_native_fg_options};
 use crate::sys::{RSF_FG_OFF, rsf_unity_package_view_setup};
+use rsf_game_sys::backend_result;
 use rsf_game_sys::vendor_paths::VendorPaths;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
@@ -161,7 +162,7 @@ impl Package {
                 super::services::backend_log,
             );
             let result = leaves.fg_install(&setup);
-            *installed = result == BACKEND_OK;
+            *installed = result == backend_result::OK;
             result
         };
         self.lock().status.fg_result = result;

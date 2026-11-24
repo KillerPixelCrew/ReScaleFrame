@@ -2,19 +2,16 @@
 //! Godot retains the Runtime SR session until engine GPU use has retired. Runtime
 //! owns the provider handle, recording continuation and spatial recovery.
 
-use super::{
-    BACKEND_ERROR_NOT_READY, BACKEND_ERROR_NOT_SUPPORTED, BACKEND_OK, SR_AUTO, SR_EVALUATED,
-    SR_FSR4, SR_REFUSED, Vulkan,
-};
+use super::{SR_AUTO, SR_EVALUATED, SR_FSR4, SR_REFUSED, Vulkan};
 use crate::d3d12::sharpening;
 use crate::platform::{
     Platform, VK_LOG_FSR4_DISPATCH, VK_LOG_INPUT_REFUSAL, VK_LOG_REJECTED, VkProc, VkSrCreate,
     VkSrFrame, VkSrPass, VkView,
 };
+use rsf_game_sys::backend_result;
 use std::ffi::{c_int, c_void};
 use std::sync::{MutexGuard, PoisonError};
 
-const BACKEND_ERROR_INVALID_ARGUMENT: i32 = -1;
 const SR_NONE: u32 = 0;
 const SR_SPATIAL: u32 = 6;
 /// Logged refusals per session: rejected passes, FSR4 dispatch failures and input refusals.
@@ -76,7 +73,7 @@ fn retire(contexts: &mut Contexts) -> bool {
     if !Platform.vulkan_device_idle(contexts.device as *mut c_void, contexts.device_proc) {
         return false;
     }
-    if Platform.vulkan_sr_destroy(contexts.session as *mut c_void) != BACKEND_OK {
+    if Platform.vulkan_sr_destroy(contexts.session as *mut c_void) != backend_result::OK {
         return false;
     }
     contexts.session = 0;
@@ -119,9 +116,9 @@ impl Vulkan {
         let backend = view.sr_backend;
         if contexts.live()
             && contexts.stale(view, pass)
-            && (Platform.vulkan_presenter_drain(false) != BACKEND_OK || !retire(contexts))
+            && (Platform.vulkan_presenter_drain(false) != backend_result::OK || !retire(contexts))
         {
-            sr.result = BACKEND_ERROR_NOT_READY;
+            sr.result = backend_result::NOT_READY;
             return self.record(call, &mut sr, contexts, &view.settings, false);
         }
         sr.identity = 1;
@@ -132,13 +129,13 @@ impl Vulkan {
         sr.source_frame_id = pass.source_frame_id;
         // Auto with no servable provider: the engine rendered at Auto's reduced extent.
         if backend == SR_NONE && view.settings.sr_backend == SR_AUTO {
-            sr.result = BACKEND_ERROR_NOT_SUPPORTED;
+            sr.result = backend_result::NOT_SUPPORTED;
             return self.record(call, &mut sr, contexts, &view.settings, false);
         }
         // Godot evaluates FSR1 itself; no context passes the engine's output through.
         if backend == SR_NONE || backend == SR_SPATIAL {
             sr.backend = backend;
-            sr.result = BACKEND_OK;
+            sr.result = backend_result::OK;
             sr.outcome = SR_EVALUATED;
             self.sr_frame(&sr);
             return Some(1);
@@ -158,7 +155,7 @@ impl Vulkan {
                 return None;
             }
             sr.result = created.result;
-            if !contexts.live() || sr.result != BACKEND_OK {
+            if !contexts.live() || sr.result != backend_result::OK {
                 return self.record(call, &mut sr, contexts, &view.settings, false);
             }
             contexts.generation = view.generation;
@@ -188,17 +185,17 @@ impl Vulkan {
             Platform.vulkan_sr_record(call, session, &sharpening, &mut sr.result)?;
         if evaluate {
             if contexts.backend == SR_FSR4
-                && sr.result != BACKEND_OK
+                && sr.result != backend_result::OK
                 && spend(&mut contexts.diagnostics)
             {
-                let _ = Platform.vulkan_sr_log(call, VK_LOG_FSR4_DISPATCH, sr.result, BACKEND_OK);
+                let _ = Platform.vulkan_sr_log(call, VK_LOG_FSR4_DISPATCH, sr.result, backend_result::OK);
             }
             let _ = Platform.vulkan_sr_dump_result(call, contexts.backend, sr.result);
-            if sr.result == BACKEND_ERROR_INVALID_ARGUMENT && spend(&mut contexts.diagnostics) {
-                let _ = Platform.vulkan_sr_log(call, VK_LOG_INPUT_REFUSAL, sr.result, BACKEND_OK);
+            if sr.result == backend_result::INVALID_ARGUMENT && spend(&mut contexts.diagnostics) {
+                let _ = Platform.vulkan_sr_log(call, VK_LOG_INPUT_REFUSAL, sr.result, backend_result::OK);
             }
         }
-        if evaluate && sr.result == BACKEND_OK && output == BACKEND_OK {
+        if evaluate && sr.result == backend_result::OK && output == backend_result::OK {
             sr.backend = contexts.backend;
             sr.outcome = SR_EVALUATED;
         } else if !commands.is_null() {
@@ -208,7 +205,7 @@ impl Vulkan {
             }
         }
         self.sr_frame(sr);
-        Some(c_int::from(output == BACKEND_OK))
+        Some(c_int::from(output == backend_result::OK))
     }
 }
 

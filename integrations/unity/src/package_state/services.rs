@@ -14,7 +14,7 @@
 //! The log lock is held across the log leaves and the input-window lock across the window leaves;
 //! neither leaf calls back. The message and CPU paths take neither lock, so a message the window
 //! dispatches while it is being hooked cannot wait on the hook.
-use super::{BACKEND_OK, Leaves, PACKAGE, Package, loaded, raw};
+use super::{Leaves, PACKAGE, Package, loaded, raw};
 use crate::bridge_state::{
     rsf_unity_frames_active, rsf_unity_frames_callback_enter, rsf_unity_frames_callback_leave,
 };
@@ -24,17 +24,14 @@ use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN,
     RSF_GAME_CPU_FRAME_END, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
     RSF_GAME_CPU_INPUT_UNFRAMED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_INPUT_CONTROLLER,
-    RSF_GAME_INPUT_KEYBOARD, RSF_GAME_INPUT_MOUSE, rsf_game_cpu_event, rsf_game_host_services,
+    RSF_GAME_INPUT_KEYBOARD, RSF_GAME_INPUT_MOUSE, backend_result, rsf_game_cpu_event,
+    rsf_game_host_services,
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-/// RSF_BACKEND_ERROR_INVALID_ARGUMENT and RSF_BACKEND_ERROR_FEATURE_FAILED, cast macros;
-/// package.c asserts them.
-const BACKEND_INVALID_ARGUMENT: i32 = -1;
-pub(super) const BACKEND_FEATURE_FAILED: i32 = -9;
 /// The kinds rsfu_input accepts.
 const INPUT_KINDS: u32 = RSF_GAME_INPUT_KEYBOARD | RSF_GAME_INPUT_MOUSE | RSF_GAME_INPUT_CONTROLLER;
 
@@ -382,7 +379,7 @@ impl Package {
             flags |= RSF_GAME_CPU_INPUT_UNFRAMED;
         }
         leaves.cpu(&self.services.received(source, now, kinds, 0, flags));
-        BACKEND_OK
+        backend_result::OK
     }
 }
 
@@ -427,19 +424,19 @@ pub(super) fn report_window_message(message: u32, lparam: isize) {
 #[unsafe(no_mangle)]
 extern "C" fn rsfu_input(frame: u64, kinds: u32) -> c_int {
     if frame == 0 || kinds & !INPUT_KINDS != 0 {
-        return BACKEND_INVALID_ARGUMENT;
+        return backend_result::INVALID_ARGUMENT;
     }
     if kinds == 0 {
-        return BACKEND_OK;
+        return backend_result::OK;
     }
     match loaded() {
         Some(leaves) => {
             let Some(_callback) = InputCallback::enter() else {
-                return BACKEND_OK;
+                return backend_result::OK;
             };
             PACKAGE.input(leaves, frame, kinds)
         }
-        None => BACKEND_FEATURE_FAILED,
+        None => backend_result::FEATURE_FAILED,
     }
 }
 
@@ -467,10 +464,10 @@ mod tests {
     #[test]
     fn rsfu_input_checks_its_arguments_first() {
         unsafe {
-            assert_eq!(rsfu_input(0, 1), BACKEND_INVALID_ARGUMENT);
-            assert_eq!(rsfu_input(1, 8), BACKEND_INVALID_ARGUMENT);
-            assert_eq!(rsfu_input(1, 0), BACKEND_OK);
-            assert_eq!(rsfu_input(1, 7), BACKEND_FEATURE_FAILED);
+            assert_eq!(rsfu_input(0, 1), backend_result::INVALID_ARGUMENT);
+            assert_eq!(rsfu_input(1, 8), backend_result::INVALID_ARGUMENT);
+            assert_eq!(rsfu_input(1, 0), backend_result::OK);
+            assert_eq!(rsfu_input(1, 7), backend_result::FEATURE_FAILED);
             // A null text or table is ignored.
             rsf_unity_package_log(std::ptr::null());
             rsf_unity_package_log(c"x".as_ptr());

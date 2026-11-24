@@ -82,7 +82,7 @@ fn the_first_pass_binds_creates_the_auto_provider_and_evaluates_slot_zero() {
     let value = status(&control);
     assert_eq!(
         (value.requested_sr, value.active_sr, value.sr_result),
-        (SR_AUTO, 1, BACKEND_OK)
+        (SR_AUTO, 1, backend_result::OK)
     );
     assert_eq!(
         (
@@ -362,7 +362,7 @@ fn only_gameplay_flight_passes_keep_the_flight_screen() {
 #[test]
 fn input_refusals_are_logged_four_times_and_each_is_counted() {
     let control = fake::boot_d3d12();
-    fake::EVALUATED.set(BACKEND_ERROR_INVALID_ARGUMENT);
+    fake::EVALUATED.set(backend_result::INVALID_ARGUMENT);
     for frame in 1..=5 {
         assert_eq!(render(&control, &sr(frame)), 0);
         submit(&control, &[list(frame)]);
@@ -375,7 +375,7 @@ fn input_refusals_are_logged_four_times_and_each_is_counted() {
     let value = status(&control);
     assert_eq!(
         (value.refused_frames, value.active_sr, value.sr_result),
-        (5, 0, BACKEND_ERROR_INVALID_ARGUMENT)
+        (5, 0, backend_result::INVALID_ARGUMENT)
     );
 }
 

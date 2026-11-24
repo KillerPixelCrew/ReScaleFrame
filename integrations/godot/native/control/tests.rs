@@ -230,8 +230,8 @@ fn sr_frames_report_the_effective_backend() {
     let frame = SrFrame {
         requested_sr: SR_SPATIAL,
         context_backend: 0,
-        context_result: BACKEND_OK,
-        evaluated: BACKEND_OK,
+        context_result: backend_result::OK,
+        evaluated: backend_result::OK,
         render_width: 1280,
         render_height: 720,
         output_width: 1920,

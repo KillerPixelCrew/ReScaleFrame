@@ -63,7 +63,7 @@ fn boot_resets_the_session_under_the_guard() {
         (value.struct_size, value.abi_version, value.session_id),
         (size_of::<Status>() as u32, ABI_VERSION, 42)
     );
-    assert_eq!(value.fg_result, BACKEND_ERROR_NOT_SUPPORTED);
+    assert_eq!(value.fg_result, backend_result::NOT_SUPPORTED);
     assert_eq!(vulkan.settings(), (default_settings(), 1));
     // A booted session refuses another boot.
     assert_eq!(vulkan.boot(&setup(c"C:/game/runtime")), 0);
@@ -113,7 +113,7 @@ fn shutdown_keeps_a_refused_session_and_releases_an_ended_one() {
     assert_eq!(active, 0);
     assert_eq!(
         (value.active_sr, value.sr_result),
-        (0, BACKEND_ERROR_NOT_READY)
+        (0, backend_result::NOT_READY)
     );
 }
 
@@ -367,11 +367,11 @@ fn fg_runs_only_in_requested_gameplay_on_the_flight_screen() {
                 true,
                 |enabled, count| {
                     assert_eq!((enabled, count), (expected, 1));
-                    BACKEND_OK
+                    backend_result::OK
                 },
-                || BACKEND_OK
+                || backend_result::OK
             ),
-            BACKEND_OK
+            backend_result::OK
         );
     };
     run(SCREEN_FLIGHT, 0);
@@ -423,13 +423,13 @@ fn sr_plan_changes_leave_the_runtime_presenter_current() {
 #[test]
 fn fg_result_belongs_to_this_pass_even_when_the_presenter_is_missing() {
     let vulkan = booted();
-    let run = || vulkan.fg_pass(SCREEN_FLIGHT, true, |_, _| BACKEND_OK, || BACKEND_OK);
-    assert_eq!(run(), BACKEND_OK);
+    let run = || vulkan.fg_pass(SCREEN_FLIGHT, true, |_, _| backend_result::OK, || backend_result::OK);
+    assert_eq!(run(), backend_result::OK);
     assert_eq!(
         vulkan.fg_pass(SCREEN_FLIGHT, false, |_, _| panic!(), || panic!()),
-        BACKEND_ERROR_NOT_READY
+        backend_result::NOT_READY
     );
-    assert_eq!(status(&vulkan).fg_result, BACKEND_ERROR_NOT_READY);
+    assert_eq!(status(&vulkan).fg_result, backend_result::NOT_READY);
     assert_eq!(
         vulkan.fg_pass(SCREEN_FLIGHT, true, |_, _| -5, || panic!()),
         -5
@@ -443,7 +443,7 @@ fn presents_report_the_presenter_status() {
     let vulkan = booted();
     vulkan.presented(&VkPresentFacts {
         enabled: 1,
-        result: BACKEND_OK,
+        result: backend_result::OK,
         generated_callbacks: 3,
         presented: 9,
         tagged: 4,
@@ -466,7 +466,7 @@ fn sr_frames_count_each_outcome() {
     let frame = VkSrFrame {
         identity: 1,
         outcome: SR_EVALUATED,
-        result: BACKEND_OK,
+        result: backend_result::OK,
         backend: SR_FSR3,
         render_width: 1280,
         render_height: 720,
@@ -485,7 +485,7 @@ fn sr_frames_count_each_outcome() {
     vulkan.sr_frame(&VkSrFrame {
         identity: 0,
         outcome: SR_REFUSED,
-        result: BACKEND_ERROR_NOT_READY,
+        result: backend_result::NOT_READY,
         output_width: 2560,
         source_frame_id: 8,
         ..frame

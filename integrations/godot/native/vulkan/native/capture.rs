@@ -150,21 +150,21 @@ impl Capture {
 
     pub(super) fn release(&mut self, user: Handle) -> i32 {
         if self.owner.is_null() || self.setup.user != user {
-            return BACKEND_OK;
+            return backend_result::OK;
         }
         let ops = &features().capture;
         let (Some(drain), Some(destroy)) = (ops.drain, ops.destroy) else {
-            return BACKEND_ERROR_NOT_READY;
+            return backend_result::NOT_READY;
         };
         let joined = unsafe { drain(self.owner) };
-        if joined != BACKEND_OK && joined != RSF_INPUT_DUMP_VK_DEVICE_LOST {
+        if joined != backend_result::OK && joined != RSF_INPUT_DUMP_VK_DEVICE_LOST {
             return joined;
         }
         let stopped = unsafe { destroy(self.owner) };
-        if stopped != BACKEND_OK {
+        if stopped != backend_result::OK {
             return stopped;
         }
-        if joined == BACKEND_OK {
+        if joined == backend_result::OK {
             let _ = unsafe { rsf_core_capture_vk_flush(self.stages, 0, ptr::null_mut()) };
         } else {
             unsafe { rsf_core_capture_vk_discard_all(self.stages) };
@@ -173,7 +173,7 @@ impl Capture {
         self.chain = vk::SwapchainKHR::null();
         self.record = None;
         self.setup = rsf_input_dump_vk_setup::default();
-        BACKEND_OK
+        backend_result::OK
     }
 
     pub(super) fn stop(&mut self) {
@@ -292,22 +292,22 @@ impl Capture {
             layout,
             copy_source: u32::from(self.usage.contains(TRANSFER_SRC)),
         };
-        unsafe { snapshot(self.owner, &record, &image, c"final_color".as_ptr()) != BACKEND_OK }
+        unsafe { snapshot(self.owner, &record, &image, c"final_color".as_ptr()) != backend_result::OK }
     }
 
     fn present_image(&self, owner: *mut rsf_fgvk, index: usize) -> Option<(u64, u32)> {
         let mut count = 0;
         let mut layout = PRESENT_LAYOUT;
         let value = if !owner.is_null() {
-            if unsafe { rsf_fgvk_images(owner, &mut count, ptr::null_mut()) } != BACKEND_OK
+            if unsafe { rsf_fgvk_images(owner, &mut count, ptr::null_mut()) } != backend_result::OK
                 || count == 0
                 || count as usize > SWAPCHAIN_IMAGES
             {
                 return None;
             }
             let mut images = [0u64; SWAPCHAIN_IMAGES];
-            if unsafe { rsf_fgvk_images(owner, &mut count, images.as_mut_ptr()) } != BACKEND_OK
-                || unsafe { rsf_fgvk_image_layout(owner, &mut layout) } != BACKEND_OK
+            if unsafe { rsf_fgvk_images(owner, &mut count, images.as_mut_ptr()) } != backend_result::OK
+                || unsafe { rsf_fgvk_image_layout(owner, &mut layout) } != backend_result::OK
                 || index >= count as usize
             {
                 return None;

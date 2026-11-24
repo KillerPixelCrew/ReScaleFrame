@@ -9,14 +9,12 @@ use crate::platform::{
     ABI_VERSION, Platform, Settings, Setup, Status, VkFacts, VkLatencyFacts, VkPresentFacts,
     VkSrFrame, VkView,
 };
+use rsf_game_sys::backend_result;
 use std::ffi::{c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-const BACKEND_OK: i32 = 0;
-const BACKEND_ERROR_NOT_SUPPORTED: i32 = -7;
-const BACKEND_ERROR_NOT_READY: i32 = -8;
 const SR_DLSS: u32 = 1;
 const SR_FSR3: u32 = 3;
 const SR_FSR4: u32 = 4;
@@ -209,7 +207,7 @@ impl Vulkan {
                 state.settings = default_settings();
                 state.status = initial_status();
                 state.status.session_id = Platform.tick_count().wrapping_add(1);
-                state.status.fg_result = BACKEND_ERROR_NOT_SUPPORTED;
+                state.status.fg_result = backend_result::NOT_SUPPORTED;
             }
             // Each session logs its own refusals.
             self.contexts().reset_diagnostics();
@@ -232,7 +230,7 @@ impl Vulkan {
             if !self.booted() {
                 return 1;
             }
-            if Platform.vulkan_presenter_drain(true) != BACKEND_OK
+            if Platform.vulkan_presenter_drain(true) != backend_result::OK
                 || !self.retire_contexts()
                 || Platform.vulkan_stop() == 0
             {
@@ -242,7 +240,7 @@ impl Vulkan {
             let session = {
                 let mut state = self.state();
                 state.status.active_sr = 0;
-                state.status.sr_result = BACKEND_ERROR_NOT_READY;
+                state.status.sr_result = backend_result::NOT_READY;
                 state.status.session_id
             };
             // The device borrow ends with the session.
@@ -262,7 +260,7 @@ impl Vulkan {
                 return 0;
             }
             if Platform.vulkan_latency_options(settings.latency_mode, settings.frame_limit_us)
-                != BACKEND_OK
+                != backend_result::OK
             {
                 return 0;
             }
@@ -432,15 +430,15 @@ impl Vulkan {
         let options_result = if presenter {
             options(enabled, settings.generated_frames)
         } else {
-            BACKEND_ERROR_NOT_READY
+            backend_result::NOT_READY
         };
-        let result = if options_result == BACKEND_OK {
+        let result = if options_result == backend_result::OK {
             record()
         } else {
             options_result
         };
         let mut state = self.state();
-        state.status.generated_frames = if enabled != 0 && options_result == BACKEND_OK {
+        state.status.generated_frames = if enabled != 0 && options_result == backend_result::OK {
             settings.generated_frames
         } else {
             0
@@ -463,7 +461,7 @@ impl Vulkan {
             status.source_frame_id = frame.source_frame_id;
         }
         status.sr_result = frame.result;
-        let evaluated = frame.outcome == SR_EVALUATED && frame.result == BACKEND_OK;
+        let evaluated = frame.outcome == SR_EVALUATED && frame.result == backend_result::OK;
         status.active_sr = if evaluated { frame.backend } else { 0 };
         if evaluated {
             status.evaluated_frames = status.evaluated_frames.wrapping_add(1);

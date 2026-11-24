@@ -36,7 +36,7 @@ use crate::sys::{
 use rsf_game_sys::{
     RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_render_config, rsf_game_render_pass,
 };
-use rsf_game_sys::{RSF_SCREEN_FLIGHT, RSF_SCREEN_MENU};
+use rsf_game_sys::{RSF_SCREEN_FLIGHT, RSF_SCREEN_MENU, backend_result};
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::null_mut;
@@ -45,8 +45,6 @@ use std::sync::atomic::{
 };
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-/// RSF_BACKEND_OK, a cast macro bindgen does not evaluate; package.c asserts it.
-const BACKEND_OK: i32 = 0;
 /// RSF_SCREEN_MENU and RSF_SCREEN_FLIGHT, cast macros; package.c asserts them. The stored
 /// gameplay flag picks the screen class of every SR pass.
 /// rsfu_initialize's results, part of the managed contract (ReScaleFrameRuntime.Apply).
@@ -612,7 +610,7 @@ impl Package {
         if view_backend != 0 || requested == RSF_SR_NONE || requested == RSF_SR_SPATIAL {
             status.sr_result = result;
         }
-        if result == BACKEND_OK {
+        if result == backend_result::OK {
             status.evaluated_frames = status.evaluated_frames.wrapping_add(1);
             status.active_sr = if requested == RSF_SR_SPATIAL {
                 RSF_SR_SPATIAL
@@ -731,7 +729,7 @@ impl Package {
             state.plan = EMPTY_PLAN;
             state.status.active_sr = 0;
             if !sr.is_null() {
-                state.status.sr_result = services::BACKEND_FEATURE_FAILED;
+                state.status.sr_result = backend_result::FEATURE_FAILED;
                 drop(state);
                 leaves.sr_destroy(sr);
             }
@@ -1545,15 +1543,15 @@ mod tests {
         let package = Package::new();
         package.lock().status.sr_result = 4;
         // Auto fell back to a view without a temporal backend: the creation result stays.
-        package.evaluated(BACKEND_OK, 0);
+        package.evaluated(backend_result::OK, 0);
         let status = package.lock().status;
         assert_eq!(
             (status.sr_result, status.active_sr, status.evaluated_frames),
             (4, 0, 1)
         );
-        package.evaluated(BACKEND_OK, 3);
+        package.evaluated(backend_result::OK, 3);
         assert_eq!(package.lock().status.active_sr, 3);
-        assert_eq!(package.lock().status.sr_result, BACKEND_OK);
+        assert_eq!(package.lock().status.sr_result, backend_result::OK);
         package.evaluated(-2, 0);
         let status = package.lock().status;
         assert_eq!(
@@ -1561,16 +1559,16 @@ mod tests {
             (-2, 1, 3)
         );
         package.lock().settings.sr_backend = RSF_SR_SPATIAL;
-        package.evaluated(BACKEND_OK, 0);
+        package.evaluated(backend_result::OK, 0);
         let status = package.lock().status;
         assert_eq!(
             (status.sr_result, status.active_sr),
-            (BACKEND_OK, RSF_SR_SPATIAL)
+            (backend_result::OK, RSF_SR_SPATIAL)
         );
         package.lock().settings.sr_backend = RSF_SR_NONE;
         package.lock().status.sr_result = 4;
-        package.evaluated(BACKEND_OK, 0);
-        assert_eq!(package.lock().status.sr_result, BACKEND_OK);
+        package.evaluated(backend_result::OK, 0);
+        assert_eq!(package.lock().status.sr_result, backend_result::OK);
         assert_eq!(package.lock().status.evaluated_frames, 4);
     }
 
@@ -1984,8 +1982,8 @@ mod tests {
         let pass = sr_pass(1, (1920, 1080), (960, 540));
         for (result, extent, expected) in [
             (-4, (960, 540), -4),
-            (0, (0, 540), services::BACKEND_FEATURE_FAILED),
-            (0, (1921, 540), services::BACKEND_FEATURE_FAILED),
+            (0, (0, 540), backend_result::FEATURE_FAILED),
+            (0, (1921, 540), backend_result::FEATURE_FAILED),
         ] {
             set(|f| {
                 f.plan_result = result;
@@ -2249,7 +2247,7 @@ mod tests {
             );
         }
         // Managed input is keyed to its frame only while that frame is in progress.
-        assert_eq!(package.input(&leaves, 7, 3), BACKEND_OK);
+        assert_eq!(package.input(&leaves, 7, 3), backend_result::OK);
         assert_eq!(calls(), ["cpu 5 42 7 1000/10 3 0x0 1 1"]);
         package.input(&leaves, 6, 4);
         assert_eq!(calls(), ["cpu 5 42 0 1000/10 4 0x0 17 1"]);

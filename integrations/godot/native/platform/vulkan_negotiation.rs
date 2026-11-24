@@ -6,6 +6,8 @@
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 
+use ash::vk;
+use rsf_game_sys::backend_result;
 use rsf_game_sys::vulkan_extensions::WIN32_INTEROP;
 pub(crate) use rsf_game_sys::vulkan_extensions::merge;
 
@@ -14,12 +16,11 @@ pub(crate) type VkFunction = unsafe extern "C" fn();
 /// `rsf_godot_vk_proc`: `vkGetInstanceProcAddr` or `vkGetDeviceProcAddr`.
 pub(crate) type VkProc = unsafe extern "C" fn(*mut c_void, *const c_char) -> Option<VkFunction>;
 
-const VK_SUCCESS: i32 = 0;
-const VK_ERROR_OUT_OF_HOST_MEMORY: i32 = -1;
-const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
-const VK_ERROR_EXTENSION_NOT_PRESENT: i32 = -7;
-pub(crate) const VK_ERROR_FEATURE_NOT_PRESENT: i32 = -8;
-const BACKEND_OK: i32 = 0;
+pub(crate) const VK_SUCCESS: i32 = vk::Result::SUCCESS.as_raw();
+pub(crate) const VK_ERROR_OUT_OF_HOST_MEMORY: i32 = vk::Result::ERROR_OUT_OF_HOST_MEMORY.as_raw();
+pub(crate) const VK_ERROR_INITIALIZATION_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
+pub(crate) const VK_ERROR_EXTENSION_NOT_PRESENT: i32 = vk::Result::ERROR_EXTENSION_NOT_PRESENT.as_raw();
+pub(crate) const VK_ERROR_FEATURE_NOT_PRESENT: i32 = vk::Result::ERROR_FEATURE_NOT_PRESENT.as_raw();
 
 /// `RSF_VK_XESS_*`.
 pub(crate) const VK_XESS_FEATURES2: u32 = 1;
@@ -572,7 +573,7 @@ impl<D: Fn(&CStr)> DeviceNegotiation<D> {
         };
         let merged;
         let mut actual = request.handle;
-        if requirements.result == BACKEND_OK && requirements.extension_count != 0 {
+        if requirements.result == backend_result::OK && requirements.extension_count != 0 {
             // SAFETY: the Runtime's names stay valid through the synchronous create.
             let names =
                 unsafe { extension_list(requirements.extensions, requirements.extension_count) };
@@ -617,7 +618,7 @@ impl<D: Fn(&CStr)> DeviceNegotiation<D> {
             // SAFETY: a successful create wrote the dispatchable VkDevice handle.
             let device = unsafe { call.output.cast::<*mut c_void>().read() };
             if leaves.latency_created(instance, call.physical_device, device, underlying, actual)
-                == BACKEND_OK
+                == backend_result::OK
             {
                 (self.diagnostic)(c"Core Vulkan latency device requirements enabled.");
             }

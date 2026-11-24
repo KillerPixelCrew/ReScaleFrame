@@ -3,12 +3,12 @@
 //! engine objects. Runtime capture callbacks from nested SDK WSI bypass the
 //! bridge while that guard is held.
 
-use super::{BACKEND_ERROR_NOT_READY, BACKEND_ERROR_NOT_SUPPORTED, BACKEND_OK};
 use crate::platform::*;
 use crate::sys::*;
 use crate::vulkan::handle;
 use crate::{CONTROL, rsf_godot_vk_creation_resolver};
 use ash::vk;
+use rsf_game_sys::backend_result;
 use rsf_game_sys::ffi_util::{ascii_wide, wide};
 use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
@@ -181,7 +181,7 @@ impl Platform {
             unsafe {
                 rsf_godot_vk_creation_resolver(
                     base,
-                    u32::from(xess_result == BACKEND_OK),
+                    u32::from(xess_result == backend_result::OK),
                     setup.log,
                     setup.log_user,
                 )
@@ -190,8 +190,8 @@ impl Platform {
             base
         };
         *RESOLVER.write().unwrap_or_else(PoisonError::into_inner) = resolver;
-        state().streamline_ready = latency_result == BACKEND_OK;
-        log(if latency_result == BACKEND_OK {
+        state().streamline_ready = latency_result == backend_result::OK;
+        log(if latency_result == backend_result::OK {
             c"Godot Vulkan host ready with Streamline Vulkan dispatch and PCL startup."
         } else {
             c"Godot Vulkan host ready. Streamline Vulkan initialization failed; platform latency capabilities are queried at device creation."
@@ -205,11 +205,11 @@ impl Platform {
         {
             let mut state = state();
             let user = state.capture.user();
-            if state.capture.release(user) != BACKEND_OK {
+            if state.capture.release(user) != backend_result::OK {
                 return 0;
             }
         }
-        if unsafe { rsf_xessvk_shutdown() } != BACKEND_OK {
+        if unsafe { rsf_xessvk_shutdown() } != backend_result::OK {
             return 0;
         }
         CONTROL.vulkan.creation().stop();
@@ -219,7 +219,7 @@ impl Platform {
             state.shutdown_pending = !state.presenter.is_null();
             state.shutdown_pending
         };
-        if !pending && unsafe { rsf_latencyvk_shutdown() } != BACKEND_OK {
+        if !pending && unsafe { rsf_latencyvk_shutdown() } != backend_result::OK {
             return 0;
         }
         let mut state = state();
@@ -241,7 +241,7 @@ impl Platform {
             abi_version: RSF_LATENCYVK_ABI_VERSION,
             ..Default::default()
         };
-        if unsafe { rsf_latencyvk_get_status(&mut latency) } != BACKEND_OK {
+        if unsafe { rsf_latencyvk_get_status(&mut latency) } != backend_result::OK {
             return None;
         }
         Some(VkLatencyFacts {
@@ -282,7 +282,7 @@ impl Platform {
             return None;
         }
         let mut count = 0;
-        (unsafe { rsf_fgvk_max_generated(owner, &mut count) } == BACKEND_OK).then_some(count)
+        (unsafe { rsf_fgvk_max_generated(owner, &mut count) } == backend_result::OK).then_some(count)
     }
 
     /// The FSR4 FG generated-frame capacity on the presenter's device; zero when the probe
@@ -303,7 +303,7 @@ impl Platform {
             abi_version: RSF_FSR4FG_BRIDGE_ABI_VERSION,
             ..Default::default()
         };
-        if unsafe { probe(&setup, &mut info) } == BACKEND_OK {
+        if unsafe { probe(&setup, &mut info) } == backend_result::OK {
             info.max_generated
         } else {
             0
@@ -314,11 +314,11 @@ impl Platform {
         unsafe { rsf_latencyvk_options(mode, frame_limit) }
     }
 
-    /// Drains the live presenter, disabling it first when asked; `BACKEND_OK` without one.
+    /// Drains the live presenter, disabling it first when asked; `backend_result::OK` without one.
     pub(crate) fn vulkan_presenter_drain(&self, disable: bool) -> i32 {
         let owner = state().presenter;
         if owner.is_null() {
-            return BACKEND_OK;
+            return backend_result::OK;
         }
         if disable {
             let _ = unsafe { rsf_fgvk_enable(owner, 0) };
@@ -393,7 +393,7 @@ unsafe extern "C" fn rsfg_vk_create(
     };
     let _guard = guard();
     if !state().presenter.is_null() {
-        return BACKEND_ERROR_NOT_SUPPORTED;
+        return backend_result::NOT_SUPPORTED;
     }
     CONTROL
         .vulkan
@@ -438,7 +438,7 @@ unsafe extern "C" fn rsfg_vk_create(
     };
     state().presenter = owner;
     unsafe { out.write(owner.cast()) };
-    let ready = result == BACKEND_OK && !owner.is_null();
+    let ready = result == backend_result::OK && !owner.is_null();
     let mut maximum = 0;
     if ready {
         let _ = unsafe { rsf_fgvk_max_generated(owner, &mut maximum) };
@@ -499,7 +499,7 @@ unsafe extern "C" fn rsfg_vk_acquire(
 ) -> i32 {
     let _guard = guard();
     let mut backend = 0;
-    if unsafe { rsf_fgvk_backend(owner.cast(), &mut backend) } != BACKEND_OK {
+    if unsafe { rsf_fgvk_backend(owner.cast(), &mut backend) } != backend_result::OK {
         return VK_INIT_FAILED;
     }
     if !CONTROL.vulkan.presenter_current(backend) {
@@ -574,7 +574,7 @@ unsafe extern "C" fn rsfg_vk_present(owner: Handle, info: *const c_void) -> i32 
         abi_version: RSF_FGVK_ABI_VERSION,
         ..Default::default()
     };
-    if unsafe { rsf_fgvk_get_status(owner.cast(), &mut status) } == BACKEND_OK {
+    if unsafe { rsf_fgvk_get_status(owner.cast(), &mut status) } == backend_result::OK {
         CONTROL.vulkan.presented(&VkPresentFacts {
             enabled: status.enabled,
             result: status.result,
@@ -610,15 +610,15 @@ unsafe extern "C" fn rsfg_vk_destroy(owner: Handle) -> i32 {
         let mut state = state();
         if owner == state.presenter.cast() {
             let user = state.capture.user();
-            if state.capture.release(user) != BACKEND_OK {
-                return BACKEND_ERROR_NOT_READY;
+            if state.capture.release(user) != backend_result::OK {
+                return backend_result::NOT_READY;
             }
         }
     }
     let result = unsafe { rsf_fgvk_destroy(owner.cast()) };
     let (retired, shutdown_pending) = {
         let mut state = state();
-        let retired = result == BACKEND_OK && owner == state.presenter.cast();
+        let retired = result == backend_result::OK && owner == state.presenter.cast();
         if retired {
             state.presenter = ptr::null_mut();
             state.graphics = rsf_srvk_setup::default();
@@ -628,7 +628,7 @@ unsafe extern "C" fn rsfg_vk_destroy(owner: Handle) -> i32 {
     if retired {
         CONTROL.vulkan.presenter_retired();
         if shutdown_pending {
-            if unsafe { rsf_latencyvk_shutdown() } == BACKEND_OK {
+            if unsafe { rsf_latencyvk_shutdown() } == backend_result::OK {
                 state().shutdown_pending = false;
             } else {
                 log(c"Godot Vulkan SDK shutdown refused after owner retirement; retaining the mapped session.");
@@ -757,7 +757,7 @@ unsafe fn render(
         },
     );
     if pass.role == RSF_GAME_RENDER_FINAL_SCENE {
-        return i32::from(fg_result == BACKEND_OK);
+        return i32::from(fg_result == backend_result::OK);
     }
 
     let mut recording = Recording {

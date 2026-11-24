@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Package entry points backed by the linked Unity SDK and Runtime shims.
 use super::services::backend_log;
-use super::{BACKEND_OK, PACKAGE, routing, services};
+use super::{PACKAGE, routing, services};
+use rsf_game_sys::backend_result;
 use crate::bridge_native::package::*;
 use crate::generation::RSF_DLSS_ENGINE_UNITY;
 use crate::preview::*;
@@ -147,13 +148,13 @@ pub(super) unsafe extern "C" fn rsf_unity_package_create_view(
     };
     let created = unsafe { rsf_sr12_create_planned(&setup, &mut plan, output) };
     unsafe {
-        result.write(if plan.requested_result != BACKEND_OK {
+        result.write(if plan.requested_result != backend_result::OK {
             plan.requested_result
         } else {
             created
         });
     }
-    if created == BACKEND_OK {
+    if created == backend_result::OK {
         view.backend = plan.backend;
         view.render_width = plan.render_width;
         view.render_height = plan.render_height;

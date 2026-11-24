@@ -23,9 +23,11 @@ const CREATE_SURFACE: u32 = 7;
 const DESTROY_SURFACE: u32 = 8;
 const SLOTS: usize = DESTROY_SURFACE as usize + 1;
 
-const SUCCESS: i32 = 0;
-const OUT_OF_HOST_MEMORY: i32 = -1;
-const INITIALIZATION_FAILED: i32 = -3;
+pub(crate) const SUCCESS: i32 = vk::Result::SUCCESS.as_raw();
+const OUT_OF_HOST_MEMORY: i32 = vk::Result::ERROR_OUT_OF_HOST_MEMORY.as_raw();
+const OUT_OF_DEVICE_MEMORY: i32 = vk::Result::ERROR_OUT_OF_DEVICE_MEMORY.as_raw();
+const INITIALIZATION_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
+pub(crate) const DEVICE_LOST: i32 = vk::Result::ERROR_DEVICE_LOST.as_raw();
 
 /// Resolver keys by slot. vkGetInstanceProcAddr itself is never routed, and vkGetDeviceProcAddr
 /// only from the instance resolver.

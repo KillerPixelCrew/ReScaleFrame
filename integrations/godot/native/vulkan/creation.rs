@@ -4,7 +4,10 @@
 //! passes supply their device identity. Resolver callbacks run outside the graphics
 //! guard, and the binding and receipt locks are released before calling the loader.
 
-use crate::platform::vulkan_negotiation::{DeviceNegotiation, extension_list, merge};
+use crate::platform::vulkan_negotiation::{
+    DeviceNegotiation, VK_ERROR_EXTENSION_NOT_PRESENT, VK_ERROR_INITIALIZATION_FAILED,
+    VK_ERROR_OUT_OF_HOST_MEMORY, VK_SUCCESS, extension_list, merge,
+};
 use crate::platform::{
     VK_ROUTE_CREATE_DEVICE, VK_ROUTE_CREATE_INSTANCE, VK_ROUTE_DESTROY_DEVICE,
     VK_ROUTE_DEVICE_PROC, VK_ROUTE_FORWARD, VK_ROUTE_NONE, VK_SCOPE_DEVICE, VkAdapter,
@@ -18,10 +21,6 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-const VK_SUCCESS: i32 = vk::Result::SUCCESS.as_raw();
-const VK_ERROR_OUT_OF_HOST_MEMORY: i32 = vk::Result::ERROR_OUT_OF_HOST_MEMORY.as_raw();
-const VK_ERROR_INITIALIZATION_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
-const VK_ERROR_EXTENSION_NOT_PRESENT: i32 = vk::Result::ERROR_EXTENSION_NOT_PRESENT.as_raw();
 const VK_ERROR_INCOMPATIBLE_DRIVER: i32 = vk::Result::ERROR_INCOMPATIBLE_DRIVER.as_raw();
 
 #[derive(Clone, Copy)]

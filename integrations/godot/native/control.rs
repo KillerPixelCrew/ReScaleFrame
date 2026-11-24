@@ -17,13 +17,13 @@ use crate::platform::{
 use crate::vulkan::Vulkan;
 use crate::window::Window;
 use rsf_game_sys::{
-    presentation_result::PresentationResult, rsf_game_log_fn, vendor_paths::VendorPaths,
+    backend_result, presentation_result::PresentationResult, rsf_game_log_fn,
+    vendor_paths::VendorPaths,
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-const BACKEND_OK: i32 = 0;
 const SR_DLSS: u32 = 1;
 const SR_SPATIAL: u32 = 6;
 const SR_AUTO: u32 = 7;
@@ -281,7 +281,7 @@ impl Control {
         }
         let result = Platform.fg_install(&paths.fg_install());
         self.session().status.fg_result = result;
-        let booted = result == BACKEND_OK;
+        let booted = result == backend_result::OK;
         self.booted.store(booted, Ordering::Release);
         c_int::from(booted)
     }
@@ -367,7 +367,7 @@ impl Control {
     /// One evaluated D3D12 SR pass. FSR1 is evaluated by Godot before the callback; the native
     /// context only normalises its depth and motion, so a spatial request reports spatial.
     pub(crate) fn sr_frame(&self, frame: &SrFrame) {
-        let evaluated = frame.evaluated == BACKEND_OK;
+        let evaluated = frame.evaluated == backend_result::OK;
         let mut session = self.session();
         let status = &mut session.status;
         status.requested_sr = frame.requested_sr;
@@ -376,7 +376,7 @@ impl Control {
             (true, SR_SPATIAL) => SR_SPATIAL,
             (true, _) => frame.context_backend,
         };
-        status.sr_result = if frame.context_result != BACKEND_OK {
+        status.sr_result = if frame.context_result != backend_result::OK {
             frame.context_result
         } else {
             frame.evaluated

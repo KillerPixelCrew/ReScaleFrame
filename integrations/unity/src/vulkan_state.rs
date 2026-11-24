@@ -28,6 +28,7 @@
 use crate::bridge_interop::VULKAN;
 use crate::device_creation::{Claim, Creation};
 use crate::sys::{RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
+use crate::vulkan_resolver::{DEVICE_LOST, SUCCESS};
 pub(super) use crate::sys::{
     rsf_unity_vulkan_command_handles as CommandSlot,
     rsf_unity_vulkan_device_handles as DeviceHandles,
@@ -887,9 +888,6 @@ impl Presentation {
     }
 }
 
-const VK_SUCCESS: i32 = 0;
-const VK_ERROR_DEVICE_LOST: i32 = -4;
-
 fn set_surface_window(window: *mut c_void) -> bool {
     presentation().set_window(window)
 }
@@ -962,7 +960,7 @@ pub(crate) fn retire_swapchain(
         .iter()
         .any(|known| known.device == device as usize && known.detached)
     {
-        return VK_SUCCESS;
+        return SUCCESS;
     }
     registry.leased = true;
     drop(registry);
@@ -970,7 +968,7 @@ pub(crate) fn retire_swapchain(
     let result = wait_idle();
     // Device loss permits explicit teardown. An allocation failure or any other result leaves
     // the detached records available for a later retirement attempt on this device.
-    if matches!(result, VK_SUCCESS | VK_ERROR_DEVICE_LOST) {
+    if matches!(result, SUCCESS | DEVICE_LOST) {
         loop {
             let retired = {
                 let mut registry = presentation();
@@ -1405,13 +1403,13 @@ mod tests {
             retire_swapchain(
                 device,
                 7,
-                || VK_ERROR_DEVICE_LOST,
+                || DEVICE_LOST,
                 |sem| {
                     assert!(!try_begin_lease());
                     retired.push(sem);
                 }
             ),
-            VK_ERROR_DEVICE_LOST
+            DEVICE_LOST
         );
         assert_eq!(retired, [81, 82]);
         forget_win32_surface(55, 33);
