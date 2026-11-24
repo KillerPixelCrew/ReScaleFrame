@@ -20,22 +20,9 @@ impl Device {
         flags: D3D11_CREATE_DEVICE_FLAG,
         levels: Option<&[D3D_FEATURE_LEVEL]>,
     ) -> Option<Self> {
-        let (mut device, mut context, mut level) = (None, None, D3D_FEATURE_LEVEL::default());
-        unsafe {
-            D3D11CreateDevice(
-                adapter,
-                driver,
-                Default::default(),
-                flags,
-                levels,
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                Some(&mut level),
-                Some(&mut context),
-            )
-        }
-        .ok()?;
-        let device: ID3D11Device = device?;
+        let (device, context) =
+            rsf_test_support::d3d11_device_on(adapter, driver, flags, levels).ok()?;
+        let level = unsafe { device.GetFeatureLevel() };
         let info = if flags == D3D11_CREATE_DEVICE_DEBUG {
             device.cast().ok()
         } else {
@@ -43,7 +30,7 @@ impl Device {
         };
         Some(Self {
             device,
-            context: context?,
+            context,
             level,
             info,
         })

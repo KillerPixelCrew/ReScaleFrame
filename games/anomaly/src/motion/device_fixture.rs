@@ -86,24 +86,11 @@ fn create_device(
     } else {
         D3D11_CREATE_DEVICE_FLAG(0)
     };
-    let (mut device, mut context) = (None, None);
-    let mut level = D3D_FEATURE_LEVEL::default();
     let adapter = adapter.map(<&IDXGIAdapter>::from);
-    unsafe {
-        D3D11CreateDevice(
-            adapter,
-            driver,
-            Default::default(),
-            flags,
-            levels,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            Some(&mut level),
-            Some(&mut context),
-        )
-    }
-    .ok()?;
-    Some((device?, context?, level))
+    let (device, context) =
+        rsf_test_support::d3d11_device_on(adapter, driver, flags, levels).ok()?;
+    let level = unsafe { device.GetFeatureLevel() };
+    Some((device, context, level))
 }
 
 fn first_nvidia() -> Option<IDXGIAdapter1> {

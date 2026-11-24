@@ -77,25 +77,14 @@ fn hardware() -> Option<Device> {
     let mut adapters = (0..).map_while(|i| unsafe { factory.EnumAdapters(i) }.ok());
     let adapter = adapters
         .find(|adapter| unsafe { adapter.GetDesc() }.is_ok_and(|desc| desc.VendorId == 0x10de))?;
-    let (mut device, mut context) = (None, None);
-    unsafe {
-        D3D11CreateDevice(
-            &adapter,
-            D3D_DRIVER_TYPE_UNKNOWN,
-            Default::default(),
-            D3D11_CREATE_DEVICE_FLAG(0),
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-    }
+    let (device, context) = rsf_test_support::d3d11_device_on(
+        Some(&adapter),
+        D3D_DRIVER_TYPE_UNKNOWN,
+        D3D11_CREATE_DEVICE_FLAG(0),
+        None,
+    )
     .ok()?;
-    Some(Device {
-        device: device?,
-        context: context?,
-    })
+    Some(Device { device, context })
 }
 
 fn inputs(device: &Device) -> TestResult<[ID3D11Texture2D; 3]> {

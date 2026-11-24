@@ -24,13 +24,14 @@ overlay-device-fixture = [
 motion-hooks-fixture = []
 motion-binder-fixture = []
 motion-device-fixture = [
+  "dep:rsf-test-support",
   "windows/Win32_Graphics_Direct3D_Fxc",
   "windows/Win32_Graphics_Dxgi",
   "windows-sys/Win32_System_Kernel",
 ]
 native-entry = []
 native-hook-fixture = []
-sr-fixtures = ["windows/Win32_Graphics_Dxgi"]
+sr-fixtures = ["dep:rsf-test-support", "windows/Win32_Graphics_Dxgi"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
@@ -38,7 +39,7 @@ rsf-game-sys = { path = "../../sdk/game" }
 [target."cfg(windows)".dependencies]
 rsf-windows = { path = "../../integrations/windows" }
 rsf-shader-compiler = { path = "../../runtime/shader_patch/compiler" }
-# The overlay device fixture's WARP swap chain; absent from the shipping build.
+# The fixtures' D3D11 devices and WARP swap chain; absent from the shipping build.
 rsf-test-support = { path = "../../tests/support", optional = true }
 windows = { workspace = true, features = [
   "Win32_Graphics_Direct3D",

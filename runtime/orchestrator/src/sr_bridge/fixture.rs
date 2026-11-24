@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use std::ffi::{CStr, c_char};
-use windows::Win32::Foundation::{E_FAIL, HMODULE};
+use windows::Win32::Foundation::E_FAIL;
 use windows::Win32::Graphics::{
     Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN},
     Direct3D11::*,
@@ -232,25 +232,12 @@ unsafe extern "C" fn rsf_sr_bridge_fixture(argc: i32, argv: *const *const c_char
     } else {
         D3D_DRIVER_TYPE_HARDWARE
     };
-    let (mut device, mut context) = (None, None);
-    if unsafe {
-        D3D11CreateDevice(
-            selected_adapter.as_ref(),
-            driver,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_FLAG(0),
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-    }
-    .is_err()
-    {
-        return 77;
-    }
-    let (Some(device), Some(context)) = (device, context) else {
+    let Ok((device, context)) = rsf_test_support::d3d11_device_on(
+        selected_adapter.as_ref(),
+        driver,
+        D3D11_CREATE_DEVICE_FLAG(0),
+        None,
+    ) else {
         return 77;
     };
     if let Ok(desc) = device
