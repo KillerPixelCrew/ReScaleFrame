@@ -20,7 +20,7 @@ static SINK: Mutex<Log> = Mutex::new(Log {
 });
 
 unsafe extern "C" fn forward(_: Raw, message: *const c_char) {
-    let sink = *SINK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let sink = *crate::lock(&SINK);
     unsafe { rsf_game_sys::rsf_game_log_guarded(sink.callback, sink.user as Raw, message) };
 }
 
@@ -30,7 +30,7 @@ pub(crate) unsafe fn configure(
     config: *const rsf_anomaly_sr_driver_config,
 ) {
     if let Some(config) = unsafe { config.as_ref() } {
-        *SINK.lock().unwrap_or_else(|poison| poison.into_inner()) = Log {
+        *crate::lock(&SINK) = Log {
             callback: log,
             user: user as usize,
         };

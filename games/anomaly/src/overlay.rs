@@ -22,7 +22,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
+use crate::lock;
+use std::sync::{LazyLock, Mutex, OnceLock};
 use windows_sys::core::w;
 
 use rsf_game_sys::{RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH, RSF_OK as OK};
@@ -35,9 +36,6 @@ const API_REFUSED: Status = RSF_ANOMALY_OVERLAY_API_REFUSED as Status;
 const CONFIGURE_REFUSED: Status = RSF_ANOMALY_OVERLAY_CONFIGURE_REFUSED as Status;
 const HOOKS_REFUSED: Status = RSF_ANOMALY_OVERLAY_HOOKS_REFUSED as Status;
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
 
 /// A refused start or binding: the status and a NUL-terminated reason that outlives the process's use of it.
 #[derive(Clone, Copy, Debug)]

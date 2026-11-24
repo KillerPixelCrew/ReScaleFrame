@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::ffi::{CStr, c_void};
 use std::ptr::{null, null_mut};
-use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 use windows_sys::Win32::Foundation::{HWND, MAX_PATH};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
@@ -248,7 +248,7 @@ impl Hooks {
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        crate::lock(&self.state)
     }
 
     fn install(

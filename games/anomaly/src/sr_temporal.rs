@@ -443,9 +443,7 @@ struct Driver {
 
 impl Driver {
     fn published(&self) -> MutexGuard<'_, Published> {
-        self.published
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
+        crate::lock(&self.published)
     }
 
     fn refresh(&self, render: &RenderState) {

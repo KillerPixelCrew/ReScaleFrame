@@ -27,7 +27,8 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::ptr;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use crate::lock;
+use std::sync::Mutex;
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -101,9 +102,6 @@ impl Entry {
 
 static LOG: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
 
 fn write_log(message: &[u8]) {
     let path = lock(&LOG);

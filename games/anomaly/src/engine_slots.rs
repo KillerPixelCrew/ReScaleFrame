@@ -4,7 +4,7 @@ use crate::input::rsf_anomaly_input_activate;
 use std::ffi::c_void;
 use std::ptr::{null_mut, with_exposed_provenance, with_exposed_provenance_mut};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 pub(super) const INPUT: usize = 0;
 const POSITION: usize = 1;
@@ -42,7 +42,7 @@ static INPUT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static POSITION_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 fn slots() -> MutexGuard<'static, [Option<Slot>; 2]> {
-    SLOTS.lock().unwrap_or_else(PoisonError::into_inner)
+    crate::lock(&SLOTS)
 }
 
 impl Slot {

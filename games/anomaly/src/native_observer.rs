@@ -77,7 +77,8 @@ use rsf_game_sys::{
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use crate::lock;
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
     GetModuleHandleW,
@@ -228,9 +229,6 @@ struct Observer {
 static OBSERVER: Observer =
     Observer::new(crate::fg_stage::frame_open, crate::fg_stage::retire_inputs);
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
 
 impl Observer {
     const fn new(fg_frame_open: fn() -> bool, fg_retire_inputs: fn() -> bool) -> Self {

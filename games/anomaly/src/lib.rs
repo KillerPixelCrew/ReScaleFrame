@@ -97,3 +97,10 @@ mod temporal_fixture;
 mod wide;
 
 const AMD64: u16 = 0x8664;
+
+/// Locks a mutex whose state stays valid after a panicking holder (every lock in this adapter).
+fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}

@@ -4,7 +4,7 @@ use super::{KEYBOARD, MOUSE};
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 // RSF_OVERLAY_CAPTURE_MOUSE / _KEYBOARD.
 const CAPTURE_MOUSE: u32 = 0x1;
@@ -110,7 +110,7 @@ impl Gate {
     }
 
     fn lock(&self) -> MutexGuard<'_, BTreeMap<usize, Entry>> {
-        self.devices.lock().unwrap_or_else(PoisonError::into_inner)
+        crate::lock(&self.devices)
     }
 
     /// Runs on the polling thread before the call is answered and returns whether the device kind

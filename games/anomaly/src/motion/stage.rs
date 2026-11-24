@@ -44,7 +44,8 @@ use std::sync::atomic::{
     AtomicBool, AtomicU8,
     Ordering::{Acquire, Relaxed, Release},
 };
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use crate::lock;
+use std::sync::{Mutex, OnceLock};
 
 const MAIN: u8 = 0;
 
@@ -124,11 +125,6 @@ impl WindowFacts {
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
 
 fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()

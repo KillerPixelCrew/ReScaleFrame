@@ -780,9 +780,7 @@ impl Stage {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+        crate::lock(&self.state)
     }
 
     fn active_lock(&self) -> Option<MutexGuard<'_, State>> {

@@ -2,7 +2,7 @@
 use std::ffi::c_void;
 use std::ptr;
 use std::slice;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 #[cfg(windows)]
 use windows_sys::Win32::System::{
     Diagnostics::Debug::IMAGE_NT_HEADERS64, SystemServices::IMAGE_DOS_HEADER,
@@ -208,7 +208,7 @@ fn disable_batch(targets: &[Address], queue: Queue, apply: Apply) -> bool {
 static TRANSACTION: Mutex<()> = Mutex::new(());
 
 pub(super) fn transaction() -> MutexGuard<'static, ()> {
-    TRANSACTION.lock().unwrap_or_else(PoisonError::into_inner)
+    crate::lock(&TRANSACTION)
 }
 
 fn install(batch: &mut *mut c_void, platform: &Platform, sites: &[Target]) -> bool {
