@@ -3,18 +3,16 @@
 use crate::fixture_device::{
     rsf_present_fixture_adapter, rsf_present_fixture_device11, rsf_present_fixture_device12,
 };
-use rsf_test_support::default_window_procedure;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
-use windows::Win32::Foundation::{HINSTANCE, HWND};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 use windows::Win32::Graphics::Direct3D12::{ID3D12CommandQueue, ID3D12Device};
 use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_CHAIN_DESC, IDXGIAdapter1, IDXGIFactory, IDXGISwapChain,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{IUnknown, Interface, PCWSTR};
+use windows::core::{IUnknown, Interface};
 
 pub(super) type Raw = *mut c_void;
 
@@ -89,41 +87,6 @@ pub(super) fn create_chain(
         .ok()
         .map_err(|_| 1)?;
     chain.ok_or(1)
-}
-
-pub(super) fn register_window(class: PCWSTR) -> Result<HINSTANCE, i32> {
-    let module = unsafe { GetModuleHandleW(PCWSTR::null()) }.map_err(|_| 1)?;
-    let instance = HINSTANCE(module.0);
-    let wc = WNDCLASSW {
-        hInstance: instance,
-        lpfnWndProc: Some(default_window_procedure),
-        lpszClassName: class,
-        ..Default::default()
-    };
-    if unsafe { RegisterClassW(&wc) } == 0 {
-        return Err(1);
-    }
-    Ok(instance)
-}
-
-pub(super) fn window(class: PCWSTR, title: PCWSTR, instance: HINSTANCE) -> Result<HWND, i32> {
-    unsafe {
-        CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            class,
-            title,
-            WS_OVERLAPPEDWINDOW,
-            0,
-            0,
-            1280,
-            720,
-            None,
-            None,
-            Some(instance),
-            None,
-        )
-    }
-    .map_err(|_| 1)
 }
 
 pub(super) fn show(window: HWND, foreground: bool) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Result, check, enabled, gpu::*};
+use super::{HEIGHT, Result, WIDTH, check, enabled, gpu::*};
 use crate::{BUSY, sys::*};
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
@@ -7,19 +7,30 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_WINDOW, RSF_SCREEN_FLIGHT, rsf_game_cpu_event,
     rsf_game_host_services, rsf_game_latency_event, rsf_game_render_pass,
 };
+use rsf_test_support::Window;
 use std::{ptr, thread, time::Duration};
 use windows::{
     Win32::{
         Graphics::{Direct3D12::*, Dxgi::IDXGISwapChain3},
         System::LibraryLoader::GetModuleHandleW,
-        UI::WindowsAndMessaging::{MSG, PM_REMOVE, PeekMessageW, ShowCursor},
+        UI::WindowsAndMessaging::{MSG, PM_REMOVE, PeekMessageW, ShowCursor, WS_OVERLAPPEDWINDOW},
     },
-    core::{Interface, w},
+    core::{Interface, PCWSTR, w},
 };
 use windows_sys::Win32::System::{
     Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
     WindowsProgramming::WritePrivateProfileStringW,
 };
+
+fn fixture_window(class: PCWSTR, title: PCWSTR) -> Result<Window> {
+    Ok(Window::new(
+        class,
+        title,
+        WS_OVERLAPPEDWINDOW,
+        WIDTH as i32,
+        HEIGHT as i32,
+    )?)
+}
 
 const RENDER_TARGET: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_RENDER_TARGET;
 const PRESENT: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_PRESENT;
@@ -126,8 +137,8 @@ pub(super) fn native_present(gpu: &Gpu, host: &rsf_game_host_services) -> Result
     let Some(present) = host.present else {
         return Ok(());
     };
-    let window = Window::new(w!("RSFRDR2SRHostFixture"), w!("RSF fixture"))?;
-    let chain = gpu.swapchain(window.hwnd, 2)?;
+    let window = fixture_window(w!("RSFRDR2SRHostFixture"), w!("RSF fixture"))?;
+    let chain = gpu.swapchain(window.handle, 2)?;
     unsafe {
         present(host.user, chain.as_raw(), 0, 0, 1);
         let presented = chain.Present(0, Default::default());
@@ -245,7 +256,7 @@ fn inputs(host: &rsf_game_host_services, session: u64, source: u64, window: &Win
     unsafe {
         call(host.user, &received);
         call(host.user, &received);
-        if rsf_native_latency_ping(window.hwnd.0) != 0 {
+        if rsf_native_latency_ping(window.handle.0) != 0 {
             let mut message = MSG::default();
             while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
                 let dequeued = rsf_game_cpu_event {
@@ -297,9 +308,9 @@ pub(super) fn cold_generation(
     host: &rsf_game_host_services,
     mut pass: rsf_game_render_pass,
 ) -> Result<()> {
-    let window = Window::new(w!("sgaWindow"), w!("RDR2 integration fixture"))?;
+    let window = fixture_window(w!("sgaWindow"), w!("RDR2 integration fixture"))?;
     // The RDR2 host intercepts this creation before its first SR registration.
-    let created = gpu.swapchain(window.hwnd, 3)?;
+    let created = gpu.swapchain(window.handle, 3)?;
     let chain: IDXGISwapChain3 = created.cast()?;
     check(
         fg_status()?.available != 0,

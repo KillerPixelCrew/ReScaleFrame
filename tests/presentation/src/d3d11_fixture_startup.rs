@@ -10,6 +10,7 @@ use crate::sys::{
     rsf_dlss_frame, rsf_dlss_release_resources, rsf_dlss_share_host, rsf_dlss_shutdown,
 };
 use rsf_game_sys::{RSF_D3D11_DISPATCH_RELEASE, rsf_d3d11_chain_dispatch};
+use rsf_test_support::Window;
 use std::ffi::{CStr, c_char};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,11 +19,12 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Environment::GetEnvironmentVariableA;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_SYSTEM_AWARE, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{BOOL, IUnknown, Interface, PCSTR, s, w};
+use windows::core::{BOOL, IUnknown, Interface, PCSTR, PCWSTR, s, w};
 
 const NOT_READY: i32 = -8;
 const INVALID_ARGUMENT: i32 = -1;
@@ -170,11 +172,8 @@ impl Mode {
         }
     }
 
-    fn create_window(&self, instance: HINSTANCE) -> Result<HWND, i32> {
-        if !self.borderless {
-            return window(CLASS, w!("Presentation bridge fixture"), instance);
-        }
-        // Keep X-Ray's ANSI class, topmost style and off-origin starting position.
+    // Keeps X-Ray's ANSI class, topmost style and off-origin starting position.
+    fn create_xray_window(instance: HINSTANCE) -> Result<HWND, i32> {
         let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
         let mut rect = RECT {
             left: 0,
@@ -423,8 +422,25 @@ unsafe fn run(argv: &[*const c_char], native: &rsf_ac7_fixture_calls) -> Result<
         return Err(1);
     }
     println!("fixture: D3D11 observer installed");
-    let instance = register_window(CLASS)?;
-    let hwnd = mode.create_window(instance)?;
+    let window;
+    let hwnd = if mode.borderless {
+        let instance = HINSTANCE(
+            unsafe { GetModuleHandleW(PCWSTR::null()) }
+                .map_err(|_| 1)?
+                .0,
+        );
+        Mode::create_xray_window(instance)?
+    } else {
+        window = Window::new(
+            CLASS,
+            w!("Presentation bridge fixture"),
+            WS_OVERLAPPEDWINDOW,
+            1280,
+            720,
+        )
+        .map_err(|_| 1)?;
+        window.handle
+    };
     if mode.borderless {
         show(hwnd, false);
     }
@@ -566,8 +582,6 @@ unsafe fn run(argv: &[*const c_char], native: &rsf_ac7_fixture_calls) -> Result<
     {
         return Err(1);
     }
-    let _ = unsafe { DestroyWindow(hwnd) };
-    let _ = unsafe { UnregisterClassW(CLASS, Some(instance)) };
     println!(
         "PASS: shared D3D12 DLSS SR and CPU token; D3D11 COM identity/buffers, Off Present, retained-reference resize refusal, resize and retirement"
     );

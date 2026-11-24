@@ -9,17 +9,13 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, WAIT_OBJECT_0, WPARAM},
+        Foundation::{HANDLE, HWND, WAIT_OBJECT_0},
         Graphics::{
             Direct3D::D3D_FEATURE_LEVEL_12_0,
             Direct3D12::*,
             Dxgi::{Common::*, *},
         },
-        System::{
-            LibraryLoader::GetModuleHandleW,
-            Threading::{CreateEventW, WaitForSingleObject},
-        },
-        UI::WindowsAndMessaging::*,
+        System::Threading::{CreateEventW, WaitForSingleObject},
     },
     core::{IUnknown, Interface, PCWSTR},
 };
@@ -462,72 +458,5 @@ impl Readback {
         };
         unsafe { self.resource.Unmap(0, None) };
         Ok(rgb)
-    }
-}
-
-unsafe extern "system" fn window_procedure(
-    window: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe { DefWindowProcW(window, message, wparam, lparam) }
-}
-
-pub(super) struct Window {
-    pub hwnd: HWND,
-    class: PCWSTR,
-    instance: HINSTANCE,
-}
-
-impl Window {
-    pub fn new(class: PCWSTR, title: PCWSTR) -> Result<Self> {
-        let instance = HINSTANCE(unsafe { GetModuleHandleW(PCWSTR::null()) }?.0);
-        let desc = WNDCLASSW {
-            lpfnWndProc: Some(window_procedure),
-            hInstance: instance,
-            lpszClassName: class,
-            ..Default::default()
-        };
-        check(
-            unsafe { RegisterClassW(&desc) } != 0,
-            "register fixture window",
-        )?;
-        let hwnd = unsafe {
-            CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                class,
-                title,
-                WS_OVERLAPPEDWINDOW,
-                0,
-                0,
-                WIDTH as i32,
-                HEIGHT as i32,
-                None,
-                None,
-                Some(instance),
-                None,
-            )
-        };
-        match hwnd {
-            Ok(hwnd) => Ok(Self {
-                hwnd,
-                class,
-                instance,
-            }),
-            Err(error) => {
-                let _ = unsafe { UnregisterClassW(class, Some(instance)) };
-                Err(error.into())
-            }
-        }
-    }
-}
-
-impl Drop for Window {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = DestroyWindow(self.hwnd);
-            let _ = UnregisterClassW(self.class, Some(self.instance));
-        }
     }
 }

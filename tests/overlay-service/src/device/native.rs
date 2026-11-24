@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use windows::{
     Win32::{
-        Foundation::{E_POINTER, HINSTANCE, HWND},
+        Foundation::{E_POINTER, HWND},
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
@@ -18,52 +18,14 @@ use windows::{
                 IDXGIFactory, IDXGISwapChain,
             },
         },
-        System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW,
-            RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+            DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage, WS_OVERLAPPEDWINDOW,
         },
     },
-    core::{BOOL, Interface, PCWSTR, w},
+    core::{BOOL, Interface, w},
 };
 
-use rsf_test_support::{d3d11_swapchain, default_window_procedure, warp_swapchain};
-
-const CLASS: PCWSTR = w!("RsfOverlayDllApiFixture");
-struct Window(HWND);
-
-impl Window {
-    fn new(
-        instance: HINSTANCE,
-        title: PCWSTR,
-        width: i32,
-        height: i32,
-    ) -> windows::core::Result<Self> {
-        unsafe {
-            CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                CLASS,
-                title,
-                WS_OVERLAPPEDWINDOW,
-                0,
-                0,
-                width,
-                height,
-                None,
-                None,
-                Some(instance),
-                None,
-            )
-        }
-        .map(Self)
-    }
-}
-
-impl Drop for Window {
-    fn drop(&mut self) {
-        let _ = unsafe { DestroyWindow(self.0) };
-    }
-}
+use rsf_test_support::{Window, d3d11_swapchain, warp_swapchain};
 
 fn description(window: HWND, width: u32, height: u32) -> DXGI_SWAP_CHAIN_DESC {
     DXGI_SWAP_CHAIN_DESC {
@@ -96,23 +58,19 @@ pub(super) struct Graphics {
     context: ID3D11DeviceContext,
     device: ID3D11Device,
     window: Window,
-    instance: HINSTANCE,
 }
 
 impl Graphics {
     pub(super) fn new() -> Result<Self, StartError> {
-        let module = unsafe { GetModuleHandleW(PCWSTR::null()) }.map_err(StartError::Window)?;
-        let instance = HINSTANCE(module.0);
-        let class = WNDCLASSW {
-            lpfnWndProc: Some(default_window_procedure),
-            hInstance: instance,
-            lpszClassName: CLASS,
-            ..Default::default()
-        };
-        unsafe { RegisterClassW(&class) };
-        let window =
-            Window::new(instance, w!("overlay fixture"), 640, 360).map_err(StartError::Window)?;
-        let desc = description(window.0, 640, 360);
+        let window = Window::new(
+            w!("RsfOverlayDllApiFixture"),
+            w!("overlay fixture"),
+            WS_OVERLAPPEDWINDOW,
+            640,
+            360,
+        )
+        .map_err(StartError::Window)?;
+        let desc = description(window.handle, 640, 360);
         let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
         let ((device, context, chain), adapter) =
             d3d11_swapchain(D3D_DRIVER_TYPE_HARDWARE, flags, &desc)
@@ -125,12 +83,11 @@ impl Graphics {
             context,
             device,
             window,
-            instance,
         })
     }
 
     pub(super) fn hwnd(&self) -> HWND {
-        self.window.0
+        self.window.handle
     }
 
     pub(super) fn clear(&self) -> windows::core::Result<()> {
@@ -177,8 +134,14 @@ impl Graphics {
         &self,
         run: impl FnOnce(&IDXGISwapChain),
     ) -> windows::core::Result<()> {
-        let window = Window::new(self.instance, w!("other"), 64, 64)?;
-        let desc = description(window.0, 64, 64);
+        let window = Window::new(
+            w!("RsfOverlayDllApiFixtureOther"),
+            w!("other"),
+            WS_OVERLAPPEDWINDOW,
+            64,
+            64,
+        )?;
+        let desc = description(window.handle, 64, 64);
         let dxgi = self.device.cast::<IDXGIDevice>()?;
         let adapter = unsafe { dxgi.GetAdapter() }?;
         let factory: IDXGIFactory = unsafe { adapter.GetParent() }?;

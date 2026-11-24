@@ -5,15 +5,11 @@ use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::{ManuallyDrop, transmute};
 use std::ptr::null_mut;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetDC, HDC, ReleaseDC};
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::DXGI_SAMPLE_DESC, OpenGL::*};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, UnregisterClassW,
-    WINDOW_EX_STYLE, WNDCLASSW, WS_POPUP,
-};
-use windows::core::{Interface, PCWSTR, s, w};
+use windows::Win32::UI::WindowsAndMessaging::WS_POPUP;
+use windows::core::{Interface, s, w};
 
 const FRAMEBUFFER: u32 = 0x8d40;
 const COLOR_ATTACHMENT0: u32 = 0x8ce0;
@@ -380,60 +376,31 @@ unsafe fn verify() -> Result<(), FixtureError> {
     }
 }
 
-unsafe extern "system" fn window_proc(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
-}
-
 pub(super) struct Window {
-    instance: HINSTANCE,
     pub(super) hwnd: HWND,
     pub(super) dc: HDC,
     pub(super) context: HGLRC,
+    /// Destroys the window after the GL context and DC above are released.
+    _window: rsf_test_support::Window,
 }
 
 impl Window {
-    const CLASS: windows::core::PCWSTR = w!("RSFHiddenGLTest");
-
     fn create() -> Result<Self, FixtureError> {
         unsafe {
-            let instance = GetModuleHandleW(PCWSTR::null())
-                .map_err(|_| FixtureError::Fail("get fixture module"))?;
-            let instance = HINSTANCE(instance.0);
-            require(
-                RegisterClassW(&WNDCLASSW {
-                    lpfnWndProc: Some(window_proc),
-                    hInstance: instance,
-                    lpszClassName: Self::CLASS,
-                    ..Default::default()
-                }) != 0,
-                "register hidden GL window",
-            )?;
-            let mut window = Self {
-                instance,
-                hwnd: HWND::default(),
-                dc: HDC::default(),
-                context: HGLRC::default(),
-            };
-            window.hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                Self::CLASS,
+            let hidden = rsf_test_support::Window::new(
+                w!("RSFHiddenGLTest"),
                 w!("RSF hidden GPU test"),
                 WS_POPUP,
-                0,
-                0,
                 32,
                 32,
-                None,
-                None,
-                Some(instance),
-                None,
             )
             .map_err(|_| FixtureError::Fail("create hidden GL window"))?;
+            let mut window = Self {
+                hwnd: hidden.handle,
+                dc: HDC::default(),
+                context: HGLRC::default(),
+                _window: hidden,
+            };
             window.dc = GetDC(Some(window.hwnd));
             require(!window.dc.is_invalid(), "get GL window DC")?;
             let format = PIXELFORMATDESCRIPTOR {
@@ -468,10 +435,6 @@ impl Drop for Window {
             if !self.dc.is_invalid() {
                 ReleaseDC(Some(self.hwnd), self.dc);
             }
-            if !self.hwnd.0.is_null() {
-                let _ = DestroyWindow(self.hwnd);
-            }
-            let _ = UnregisterClassW(Self::CLASS, Some(self.instance));
         }
     }
 }

@@ -8,6 +8,7 @@ use crate::fixture_device::{rsf_present_fixture_debug_errors, rsf_present_fixtur
 use crate::present_fixture_startup::*;
 use crate::sys::rsf_fg_fixture_inputs;
 use crate::sys::*;
+use rsf_test_support::Window;
 use std::ffi::{CStr, CString, c_char};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -19,6 +20,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::CreateEventW;
+use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW;
 use windows::core::{BOOL, Interface, PCWSTR, w};
 
 unsafe extern "C" {
@@ -316,10 +318,16 @@ unsafe fn run(argv: &[*const c_char]) -> Result<i32, i32> {
         return Err(1);
     }
     let (factory, adapter) = adapter::<IDXGIFactory4>(vendor, true)?;
-    let class = w!("RSFSharedFG");
-    let instance = register_window(class)?;
     let focus_test = mode.mfg && env_present(c"RSF_MFG_FOCUS_TEST");
-    let hwnd = window(class, w!("Shared generation fixture"), instance)?;
+    let window = Window::new(
+        w!("RSFSharedFG"),
+        w!("Shared generation fixture"),
+        WS_OVERLAPPEDWINDOW,
+        1280,
+        720,
+    )
+    .map_err(|_| 1)?;
+    let hwnd = window.handle;
     let mut focus = Focus(null_mut());
     let state = rsf_fg_fixture_state_create(
         u32::from(mode.service),
