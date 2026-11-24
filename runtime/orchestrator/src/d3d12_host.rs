@@ -2,7 +2,12 @@
 use rsf_game_sys::{depth_domains_requested, rsf_game_render_pass};
 use std::ffi::c_void;
 use std::ptr::null_mut;
-use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::*};
+use windows::Win32::Graphics::{
+    Direct3D12::*,
+    Dxgi::{
+        Common::*, CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter1, IDXGIFactory4,
+    },
+};
 use windows::core::{GUID, HRESULT, Interface};
 
 pub(super) type Raw = *mut c_void;
@@ -34,6 +39,20 @@ pub(super) fn device_of(child: &ID3D12DeviceChild) -> Option<ID3D12Device> {
 
 pub(super) fn owned_by(child: &ID3D12DeviceChild, device: *const c_void) -> bool {
     device_of(child).is_some_and(|owner| owner.as_raw().cast_const() == device)
+}
+
+// The DXGI vendor ID of the device's adapter, and whether that adapter is a software one.
+pub(super) fn adapter_identity(device: &ID3D12Device) -> Option<(u32, bool)> {
+    let desc = unsafe {
+        CreateDXGIFactory1::<IDXGIFactory4>()
+            .and_then(|factory| factory.EnumAdapterByLuid::<IDXGIAdapter1>(device.GetAdapterLuid()))
+            .and_then(|adapter| adapter.GetDesc1())
+    }
+    .ok()?;
+    Some((
+        desc.VendorId,
+        desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0,
+    ))
 }
 
 #[cfg_attr(test, allow(dead_code))]

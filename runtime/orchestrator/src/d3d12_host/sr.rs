@@ -4,33 +4,9 @@ use crate::sys::rsf_backend_log_fn;
 use rsf_shader_compiler::{Compiler, Request, blob_bytes, compile};
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
-use windows::Win32::Graphics::{
-    Direct3D::Fxc::{D3DCOMPILE_ENABLE_STRICTNESS, D3DCOMPILE_OPTIMIZATION_LEVEL3},
-    Dxgi::{CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter1, IDXGIFactory4},
+use windows::Win32::Graphics::Direct3D::Fxc::{
+    D3DCOMPILE_ENABLE_STRICTNESS, D3DCOMPILE_OPTIMIZATION_LEVEL3,
 };
-
-pub(crate) unsafe extern "C" fn rsf_core_sr12_adapter_identity(
-    device: Raw,
-    vendor: *mut u32,
-    software: *mut u32,
-) -> u32 {
-    let device: &ID3D12Device = unsafe { borrow(&device) };
-    let desc = unsafe {
-        CreateDXGIFactory1::<IDXGIFactory4>()
-            .and_then(|factory| factory.EnumAdapterByLuid::<IDXGIAdapter1>(device.GetAdapterLuid()))
-            .and_then(|adapter| adapter.GetDesc1())
-    };
-    let Ok(desc) = desc else {
-        return 0;
-    };
-    unsafe {
-        vendor.write(desc.VendorId);
-        software.write(u32::from(
-            desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0,
-        ));
-    }
-    1
-}
 
 fn create_root(device: &ID3D12Device) -> Option<ID3D12RootSignature> {
     let ranges = [
@@ -143,20 +119,15 @@ fn normalization_shader(log: rsf_backend_log_fn, user: Raw) -> Option<Vec<u8>> {
     None
 }
 
-pub(crate) unsafe extern "C" fn rsf_core_sr12_create_pipeline(
+// The normalization root signature and pipeline, as owned references.
+pub(crate) unsafe fn rsf_core_sr12_create_pipeline(
     device: Raw,
     log: rsf_backend_log_fn,
     user: Raw,
-    root_out: *mut Raw,
-    pipeline_out: *mut Raw,
-) -> i32 {
+) -> Option<(Raw, Raw)> {
     let device: &ID3D12Device = unsafe { borrow(&device) };
-    let Some(root) = create_root(device) else {
-        return 0;
-    };
-    let Some(code) = normalization_shader(log, user) else {
-        return 0;
-    };
+    let root = create_root(device)?;
+    let code = normalization_shader(log, user)?;
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: ManuallyDrop::new(Some(unsafe {
             ID3D12RootSignature::from_raw(root.as_raw())
@@ -167,16 +138,10 @@ pub(crate) unsafe extern "C" fn rsf_core_sr12_create_pipeline(
         },
         ..Default::default()
     };
-    let Some(pipeline) = receive::<ID3D12PipelineState>(|iid, out| unsafe {
+    let pipeline = receive::<ID3D12PipelineState>(|iid, out| unsafe {
         (device.vtable().CreateComputePipelineState)(device.as_raw(), &desc, iid, out)
-    }) else {
-        return 0;
-    };
-    unsafe {
-        root_out.write(root.into_raw());
-        pipeline_out.write(pipeline.into_raw());
-    }
-    1
+    })?;
+    Some((root.into_raw(), pipeline.into_raw()))
 }
 
 pub(crate) unsafe extern "C" fn rsf_core_sr12_create_heap(device: Raw) -> Raw {

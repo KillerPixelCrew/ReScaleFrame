@@ -6,10 +6,7 @@ use crate::sys::rsf_streamline_graphics;
 use diagnostics::report_stage;
 use std::ffi::c_char;
 use std::ptr::null_mut;
-use windows::Win32::Graphics::{
-    Direct3D12::ID3D12Device,
-    Dxgi::{CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter1, IDXGIFactory4},
-};
+use windows::Win32::Graphics::Direct3D12::ID3D12Device;
 use windows::core::Interface;
 
 /// The presentation bridge, Streamline host and Anti-Lag leaves the CPU owner calls; the native
@@ -82,19 +79,12 @@ pub(super) unsafe extern "C" fn native_device() -> Handle {
     }
 }
 
+// The hardware adapter's vendor ID, 0 for a software adapter.
 pub(super) unsafe extern "C" fn adapter_vendor(raw: Handle) -> u32 {
-    let Some(device) = (unsafe { ID3D12Device::from_raw_borrowed(&raw) }) else {
-        return 0;
-    };
-    let desc = unsafe {
-        CreateDXGIFactory1::<IDXGIFactory4>()
-            .and_then(|factory| factory.EnumAdapterByLuid::<IDXGIAdapter1>(device.GetAdapterLuid()))
-            .and_then(|adapter| adapter.GetDesc1())
-    };
-    match desc {
-        Ok(desc) if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0 => desc.VendorId,
-        _ => 0,
-    }
+    unsafe { ID3D12Device::from_raw_borrowed(&raw) }
+        .and_then(crate::d3d12_host::adapter_identity)
+        .filter(|&(_, software)| !software)
+        .map_or(0, |(vendor, _)| vendor)
 }
 
 #[unsafe(no_mangle)]

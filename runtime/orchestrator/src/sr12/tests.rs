@@ -216,18 +216,15 @@ pub(super) unsafe extern "C" fn session_get_status(
 pub(super) unsafe extern "C" fn session_destroy(_: Handle) {
     event("session-destroy".into());
 }
-pub(super) unsafe extern "C" fn create_pipeline(
+pub(super) unsafe fn create_pipeline(
     _: Handle,
     _: rsf_backend_log_fn,
     _: Handle,
-    root: *mut Handle,
-    pipeline: *mut Handle,
-) -> i32 {
-    unsafe {
-        root.write(created("root", TextureDesc::default()));
-        pipeline.write(created("pipeline", TextureDesc::default()));
-    }
-    1
+) -> Option<(Handle, Handle)> {
+    Some((
+        created("root", TextureDesc::default()),
+        created("pipeline", TextureDesc::default()),
+    ))
 }
 pub(super) unsafe extern "C" fn create_heap(_: Handle) -> Handle {
     created("heap", TextureDesc::default())

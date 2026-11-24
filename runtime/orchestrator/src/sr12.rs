@@ -423,12 +423,7 @@ unsafe fn create_gpu(
     external_exposure: bool,
 ) -> Option<Gpu> {
     let device = setup.device;
-    let (mut root, mut pipeline) = (ptr::null_mut(), ptr::null_mut());
-    if unsafe { native::create_pipeline(device, setup.log, setup.user, &mut root, &mut pipeline) }
-        == 0
-    {
-        return None;
-    }
+    let (root, pipeline) = unsafe { native::create_pipeline(device, setup.log, setup.user) }?;
     let root = unsafe { com_ref::owned(root) }?;
     let pipeline = unsafe { com_ref::owned(pipeline) }?;
     let heap = || unsafe { com_ref::owned(native::create_heap(device)) };
@@ -1280,13 +1275,12 @@ unsafe extern "C" fn rsf_core_sr12_create_planned(
         return INVALID_ARGUMENT;
     }
     if setup.backend == RSF_SR_AUTO {
-        let (mut vendor, mut software) = (0, 0);
-        let identity = crate::d3d12_host::sr::rsf_core_sr12_adapter_identity;
-        if unsafe { identity(setup.device, &mut vendor, &mut software) } == 0 {
+        let device = unsafe { crate::d3d12_host::borrow(&setup.device) };
+        let Some((vendor, software)) = crate::d3d12_host::adapter_identity(device) else {
             plan.requested_result = NOT_READY;
             return NOT_READY;
-        }
-        setup.backend = crate::rsf_gpu_default_sr_backend(vendor, software);
+        };
+        setup.backend = crate::rsf_gpu_default_sr_backend(vendor, u32::from(software));
     }
     let owner = match unsafe { create_checked(&setup) } {
         Ok(owner) => {
