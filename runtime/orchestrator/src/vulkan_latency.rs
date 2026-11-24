@@ -540,11 +540,11 @@ pub unsafe fn rsf_core_latencyvk_cpu(platform: &Platform, event: *const rsf_game
     }
     let user = ptr::from_ref(platform).cast_mut().cast();
     let version = unsafe { (*event).event_version };
+    // Source facts (version 2) reach the sink without native_cpu adoption: this sink has no
+    // prospective owner or token contract, so a reservation could only pace or mark late.
     if matches!(
         version,
-        RSF_GAME_CPU_EVENT_VERSION
-            | RSF_GAME_CPU_EVENT_VERSION_SOURCE
-            | RSF_GAME_CPU_EVENT_VERSION_RECEIPT
+        RSF_GAME_CPU_EVENT_VERSION | RSF_GAME_CPU_EVENT_VERSION_RECEIPT
     ) {
         if unsafe { rsf_native_cpu_dispatch(event, Some(fact), user) } != 0
             && version == RSF_GAME_CPU_EVENT_VERSION
@@ -553,7 +553,7 @@ pub unsafe fn rsf_core_latencyvk_cpu(platform: &Platform, event: *const rsf_game
                 rsf_native_cpu_dispatch(ping, Some(fact), user);
             });
         }
-    } else if version == 0 {
+    } else if matches!(version, 0 | RSF_GAME_CPU_EVENT_VERSION_SOURCE) {
         unsafe { fact(user, event) };
     }
 }
