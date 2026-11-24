@@ -3,6 +3,10 @@ use super::*;
 use crate::platform::fake::setup;
 use crate::platform::{VkAdapter, fake};
 use rsf_game_sys::RSF_SCREEN_FLIGHT;
+use rsf_game_sys::{
+    RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4, RSF_FG_BACKEND_XESS,
+    RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_XESS,
+};
 use std::ptr;
 
 const WINDOW: usize = 0x1234;
@@ -26,7 +30,7 @@ fn ready() -> VkFacts {
         xess_fg_compiled: 1,
         presenter: 1,
         streamline_ready: 0,
-        presenter_backend: FG_FSR3,
+        presenter_backend: RSF_FG_BACKEND_FSR3,
         sdk_shutdown_pending: 0,
     }
 }
@@ -132,7 +136,10 @@ fn generation_counts_sr_identity_across_sessions() {
     let (view, active) = vulkan.view();
     assert_eq!(active, 1);
     assert_eq!((view.settings, view.generation), (default_settings(), 2));
-    assert_eq!((view.sr_backend, view.fg_backend), (SR_FSR3, FG_FSR3));
+    assert_eq!(
+        (view.sr_backend, view.fg_backend),
+        (RSF_SR_FSR3, RSF_FG_BACKEND_FSR3)
+    );
 }
 
 #[test]
@@ -152,33 +159,33 @@ fn device_and_provider_refusals_keep_the_request() {
                 fsr4_sr_compiled: 0,
                 ..ready()
             },
-            settings(|s| s.sr_backend = SR_FSR4),
+            settings(|s| s.sr_backend = RSF_SR_FSR4),
         ),
         (
             VkFacts {
                 graph_handoff: 0,
                 ..ready()
             },
-            settings(|s| s.sr_backend = SR_FSR4),
+            settings(|s| s.sr_backend = RSF_SR_FSR4),
         ),
         (
             VkFacts {
                 fsr4_fg_compiled: 0,
                 ..ready()
             },
-            settings(|s| s.fg_backend = FG_FSR4),
+            settings(|s| s.fg_backend = RSF_FG_BACKEND_FSR4),
         ),
         (
             VkFacts {
                 presenter: 0,
                 ..ready()
             },
-            settings(|s| s.fg_backend = FG_FSR4),
+            settings(|s| s.fg_backend = RSF_FG_BACKEND_FSR4),
         ),
         (
             ready(),
             settings(|s| {
-                s.fg_backend = FG_FSR4;
+                s.fg_backend = RSF_FG_BACKEND_FSR4;
                 s.generated_frames = 2;
             }),
         ),
@@ -187,7 +194,7 @@ fn device_and_provider_refusals_keep_the_request() {
                 xess_fg_compiled: 0,
                 ..ready()
             },
-            settings(|s| s.fg_backend = FG_XESS),
+            settings(|s| s.fg_backend = RSF_FG_BACKEND_XESS),
         ),
         (
             VkFacts {
@@ -213,9 +220,12 @@ fn device_and_provider_refusals_keep_the_request() {
     // XeSS SR needs the XeSS device, FSR4 SR and XeSS FG the Win32 interop device, as the
     // creation owner last created them.
     let unready = [
-        ((false, true), settings(|s| s.sr_backend = SR_XESS)),
-        ((true, false), settings(|s| s.sr_backend = SR_FSR4)),
-        ((true, false), settings(|s| s.fg_backend = FG_XESS)),
+        ((false, true), settings(|s| s.sr_backend = RSF_SR_XESS)),
+        ((true, false), settings(|s| s.sr_backend = RSF_SR_FSR4)),
+        (
+            (true, false),
+            settings(|s| s.fg_backend = RSF_FG_BACKEND_XESS),
+        ),
     ];
     fake::VK_FACTS.set(ready());
     for ((xess, interop), request) in unready {
@@ -238,8 +248,8 @@ fn interop_fg_needs_the_primary_window_reported_since_the_start() {
     vulkan.creation().report_ready(true, true);
     fake::VK_FACTS.set(ready());
     fake::VK_PROBE.set(1);
-    let fsr4 = settings(|s| s.fg_backend = FG_FSR4);
-    let xess = settings(|s| s.fg_backend = FG_XESS);
+    let fsr4 = settings(|s| s.fg_backend = RSF_FG_BACKEND_FSR4);
+    let xess = settings(|s| s.fg_backend = RSF_FG_BACKEND_XESS);
     fake::take_calls();
     // Refused before the probe without a reported window.
     assert_eq!(vulkan.configure(&fsr4), 0);
@@ -264,7 +274,7 @@ fn interop_fg_needs_the_primary_window_reported_since_the_start() {
 #[test]
 fn the_fsr4_probe_runs_only_after_the_cheaper_refusals() {
     let vulkan = booted();
-    let request = settings(|s| s.fg_backend = FG_FSR4);
+    let request = settings(|s| s.fg_backend = RSF_FG_BACKEND_FSR4);
     fake::VK_FACTS.set(VkFacts {
         presenter: 0,
         ..ready()
@@ -288,11 +298,11 @@ fn the_fsr4_probe_runs_only_after_the_cheaper_refusals() {
 fn presenter_capacity_bounds_the_owned_provider() {
     let vulkan = booted();
     fake::VK_FACTS.set(VkFacts {
-        presenter_backend: FG_DLSS,
+        presenter_backend: RSF_FG_BACKEND_DLSS,
         ..ready()
     });
     let request = settings(|s| {
-        s.fg_backend = FG_DLSS;
+        s.fg_backend = RSF_FG_BACKEND_DLSS;
         s.fg_mode = 1;
         s.generated_frames = 3;
     });
@@ -306,7 +316,7 @@ fn presenter_capacity_bounds_the_owned_provider() {
     fake::VK_PRESENTER_MAX.set(None);
     fake::take_calls();
     let other = settings(|s| {
-        s.fg_backend = FG_XESS;
+        s.fg_backend = RSF_FG_BACKEND_XESS;
         s.fg_mode = 1;
         s.generated_frames = 3;
     });
@@ -393,20 +403,20 @@ fn fg_runs_only_in_requested_gameplay_on_the_flight_screen() {
 #[test]
 fn sr_plan_changes_leave_the_runtime_presenter_current() {
     let vulkan = booted();
-    vulkan.presenter_created(true, FG_FSR4, 1);
+    vulkan.presenter_created(true, RSF_FG_BACKEND_FSR4, 1);
     assert_eq!(status(&vulkan).fg_available, 1);
-    assert!(!vulkan.presenter_current(FG_FSR4));
+    assert!(!vulkan.presenter_current(RSF_FG_BACKEND_FSR4));
     fake::VK_FACTS.set(ready());
     fake::VK_PROBE.set(1);
     for quality in [2, 3] {
         assert_eq!(
             vulkan.configure(&settings(|s| {
-                s.fg_backend = FG_FSR4;
+                s.fg_backend = RSF_FG_BACKEND_FSR4;
                 s.quality = quality;
             })),
             1
         );
-        assert!(vulkan.presenter_current(FG_FSR4));
+        assert!(vulkan.presenter_current(RSF_FG_BACKEND_FSR4));
     }
     vulkan.presenter_retired();
     let value = status(&vulkan);
@@ -475,7 +485,7 @@ fn sr_frames_count_each_outcome() {
         identity: 1,
         outcome: SR_EVALUATED,
         result: backend_result::OK,
-        backend: SR_FSR3,
+        backend: RSF_SR_FSR3,
         render_width: 1280,
         render_height: 720,
         output_width: 1920,
@@ -486,7 +496,7 @@ fn sr_frames_count_each_outcome() {
     let value = status(&vulkan);
     assert_eq!(
         (value.requested_sr, value.active_sr, value.evaluated_frames),
-        (SR_AUTO, SR_FSR3, 1)
+        (RSF_SR_AUTO, RSF_SR_FSR3, 1)
     );
     assert_eq!(vulkan.view().0.output_width, 1920);
     // A refused retirement keeps the previous identity.
@@ -535,14 +545,14 @@ fn auto_resolves_through_the_runtime_policy_for_the_device_adapter() {
     fake::VK_FACTS.set(served);
     fake::take_auto();
     // DLSS-G is explicit only. The fake answers independently of vendor and capability masks.
-    let sr_all = bits(&[SR_DLSS, SR_FSR3, SR_FSR4, SR_XESS]);
-    let fg_all = bits(&[FG_FSR3, FG_XESS]);
+    let sr_all = bits(&[RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_XESS]);
+    let fg_all = bits(&[RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_XESS]);
     let cases = [
-        (adapter(0x10de, 0), (SR_XESS, FG_FSR3)),
-        (adapter(0x8086, 0), (SR_DLSS, FG_FSR3)),
-        (adapter(0x1002, 0), (SR_XESS, FG_XESS)),
+        (adapter(0x10de, 0), (RSF_SR_XESS, RSF_FG_BACKEND_FSR3)),
+        (adapter(0x8086, 0), (RSF_SR_DLSS, RSF_FG_BACKEND_FSR3)),
+        (adapter(0x1002, 0), (RSF_SR_XESS, RSF_FG_BACKEND_XESS)),
         (adapter(0x10de, 1), (0, 0)),
-        (None, (SR_DLSS, FG_XESS)),
+        (None, (RSF_SR_DLSS, RSF_FG_BACKEND_XESS)),
     ];
     for (facts, expected) in cases {
         vulkan.creation().report_adapter(facts);
@@ -563,15 +573,18 @@ fn auto_resolves_through_the_runtime_policy_for_the_device_adapter() {
     vulkan.creation().report_adapter(adapter(0x10de, 0));
     assert_eq!(
         vulkan.configure(&settings(|s| {
-            s.sr_backend = SR_FSR3;
-            s.fg_backend = FG_XESS;
+            s.sr_backend = RSF_SR_FSR3;
+            s.fg_backend = RSF_FG_BACKEND_XESS;
         })),
         1
     );
     fake::take_calls();
     fake::take_auto();
     let view = vulkan.view().0;
-    assert_eq!((view.sr_backend, view.fg_backend), (SR_FSR3, FG_XESS));
+    assert_eq!(
+        (view.sr_backend, view.fg_backend),
+        (RSF_SR_FSR3, RSF_FG_BACKEND_XESS)
+    );
     assert_eq!(fake::take_auto(), (None, None));
     assert!(fake::take_calls().is_empty());
 }
@@ -583,18 +596,24 @@ fn auto_passes_only_providers_the_session_can_serve() {
     vulkan.creation().report_adapter(adapter(0x10de, 0));
     fake::VK_FACTS.set(ready());
     let view = vulkan.view().0;
-    assert_eq!((view.sr_backend, view.fg_backend), (SR_FSR3, FG_FSR3));
+    assert_eq!(
+        (view.sr_backend, view.fg_backend),
+        (RSF_SR_FSR3, RSF_FG_BACKEND_FSR3)
+    );
     // Intel without the XeSS device, the interop device or the primary window.
     vulkan.creation().report_adapter(adapter(0x8086, 0));
     vulkan.creation().report_ready(false, false);
     fake::take_auto();
     let view = vulkan.view().0;
-    assert_eq!((view.sr_backend, view.fg_backend), (SR_FSR3, FG_FSR3));
+    assert_eq!(
+        (view.sr_backend, view.fg_backend),
+        (RSF_SR_FSR3, RSF_FG_BACKEND_FSR3)
+    );
     assert_eq!(
         fake::take_auto(),
         (
-            Some((0x8086, 0, bits(&[SR_FSR3]))),
-            Some((0x8086, 0, bits(&[FG_FSR3])))
+            Some((0x8086, 0, bits(&[RSF_SR_FSR3]))),
+            Some((0x8086, 0, bits(&[RSF_FG_BACKEND_FSR3])))
         )
     );
     // The XeSS device serves XeSS SR; XeSS FG also needs interop and the primary window.
@@ -605,11 +624,14 @@ fn auto_passes_only_providers_the_session_can_serve() {
     fresh.creation().report_ready(true, true);
     fresh.view();
     let (sr, fg) = fake::take_auto();
-    assert_ne!(sr.unwrap().2 & bits(&[SR_XESS]), 0);
-    assert_eq!(fg.unwrap().2 & bits(&[FG_XESS]), 0);
+    assert_ne!(sr.unwrap().2 & bits(&[RSF_SR_XESS]), 0);
+    assert_eq!(fg.unwrap().2 & bits(&[RSF_FG_BACKEND_XESS]), 0);
     fresh.report_window(ptr::without_provenance_mut(WINDOW));
     fresh.view();
-    assert_ne!(fake::take_auto().1.unwrap().2 & bits(&[FG_XESS]), 0);
+    assert_ne!(
+        fake::take_auto().1.unwrap().2 & bits(&[RSF_FG_BACKEND_XESS]),
+        0
+    );
     // FSR4 SR is served only with its build, the graph lease capability and interop; FSR4 FG is
     // never offered to Auto, so its probe is not asked.
     fake::VK_FACTS.set(VkFacts {
@@ -619,8 +641,11 @@ fn auto_passes_only_providers_the_session_can_serve() {
     fake::take_auto();
     fresh.view();
     let (sr, fg) = fake::take_auto();
-    assert_eq!(sr.map(|asked| asked.2 & bits(&[SR_FSR4])), Some(0));
-    assert_eq!(fg.map(|asked| asked.2 & bits(&[FG_FSR4])), Some(0));
+    assert_eq!(sr.map(|asked| asked.2 & bits(&[RSF_SR_FSR4])), Some(0));
+    assert_eq!(
+        fg.map(|asked| asked.2 & bits(&[RSF_FG_BACKEND_FSR4])),
+        Some(0)
+    );
     assert!(!fake::take_calls().contains(&"fsr4_fg_probe"));
 }
 
@@ -630,7 +655,7 @@ fn auto_admission_and_presenter_follow_the_resolved_provider() {
     vulkan.creation().report_adapter(adapter(0x10de, 0));
     fake::VK_FACTS.set(VkFacts {
         streamline_ready: 1,
-        presenter_backend: FG_FSR3,
+        presenter_backend: RSF_FG_BACKEND_FSR3,
         ..ready()
     });
     // NVIDIA with Streamline: Auto FG is not offered DLSS-G and resolves to FSR3, so FSR3's
@@ -642,19 +667,19 @@ fn auto_admission_and_presenter_follow_the_resolved_provider() {
     fake::VK_PRESENTER_MAX.set(Some(1));
     assert_eq!(vulkan.configure(&request), 0);
     assert_eq!(vulkan.configure(&settings(|s| s.fg_mode = 1)), 1);
-    assert!(vulkan.presenter_current(FG_FSR3));
-    assert!(!vulkan.presenter_current(FG_DLSS));
+    assert!(vulkan.presenter_current(RSF_FG_BACKEND_FSR3));
+    assert!(!vulkan.presenter_current(RSF_FG_BACKEND_DLSS));
     // An explicit DLSS-G request keeps its documented admission: not bounded by the live FSR3
     // presenter's capacity, and the FSR3 presenter is no longer current.
     let explicit = settings(|s| {
-        s.fg_backend = FG_DLSS;
+        s.fg_backend = RSF_FG_BACKEND_DLSS;
         s.fg_mode = 1;
         s.generated_frames = 3;
     });
     fake::VK_PRESENTER_MAX.set(None);
     assert_eq!(vulkan.configure(&explicit), 1);
-    assert!(!vulkan.presenter_current(FG_FSR3));
-    assert!(vulkan.presenter_current(FG_DLSS));
+    assert!(!vulkan.presenter_current(RSF_FG_BACKEND_FSR3));
+    assert!(vulkan.presenter_current(RSF_FG_BACKEND_DLSS));
     // Auto FG on Intel before the primary window is reported resolves to FSR3 instead of
     // refusing the request for XeSS's missing window.
     let intel = Vulkan::new();
@@ -664,13 +689,13 @@ fn auto_admission_and_presenter_follow_the_resolved_provider() {
     fake::VK_FACTS.set(ready());
     fake::VK_PRESENTER_MAX.set(Some(1));
     assert_eq!(intel.configure(&settings(|s| s.fg_mode = 1)), 1);
-    assert!(intel.presenter_current(FG_FSR3));
+    assert!(intel.presenter_current(RSF_FG_BACKEND_FSR3));
     // Once reported, XeSS is served: the FSR3 owner is recreated as a fixed-guide XeSS owner.
     intel.report_window(ptr::without_provenance_mut(WINDOW));
-    fake::FG_SELECTED.set(FG_XESS);
-    assert!(!intel.presenter_current(FG_FSR3));
-    intel.presenter_created(true, FG_XESS, 1);
-    assert!(intel.presenter_current(FG_XESS));
+    fake::FG_SELECTED.set(RSF_FG_BACKEND_XESS);
+    assert!(!intel.presenter_current(RSF_FG_BACKEND_FSR3));
+    intel.presenter_created(true, RSF_FG_BACKEND_XESS, 1);
+    assert!(intel.presenter_current(RSF_FG_BACKEND_XESS));
     fake::VK_PRESENTER_MAX.set(None);
 }
 
@@ -679,7 +704,7 @@ fn reconstruction_key_covers_each_context_setting() {
     let defaults = default_settings();
     let key = defaults.reconstruction_key();
     assert_ne!(
-        settings(|s| s.sr_backend = SR_FSR3).reconstruction_key(),
+        settings(|s| s.sr_backend = RSF_SR_FSR3).reconstruction_key(),
         key
     );
     let mut changed = defaults;

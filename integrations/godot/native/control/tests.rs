@@ -2,6 +2,7 @@
 use super::*;
 use crate::platform::fake;
 use crate::platform::fake::setup;
+use rsf_game_sys::{RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_SPATIAL};
 use std::ptr;
 
 fn status(control: &Control) -> (c_int, Status) {
@@ -22,14 +23,14 @@ fn a_boot_in_progress_refuses_another_install() {
 fn configure_advances_the_generation_only_for_sr_identity() {
     let control = Control::new();
     let mut settings = default_settings();
-    settings.fg_mode = FG_FIXED;
+    settings.fg_mode = RSF_FG_FIXED;
     settings.latency_mode = 1;
     assert_eq!(control.configure(&settings), 1);
     assert_eq!(control.snapshot(), (settings, 1));
     assert_eq!(
         fake::FG_OPTIONS.get(),
         Some(FgOptions {
-            mode: FG_FIXED,
+            mode: RSF_FG_FIXED,
             generated_frames: 1,
             reflex_mode: 1,
             frame_limit_us: 0,
@@ -57,7 +58,7 @@ fn configure_refusals_keep_the_request() {
         |s| s.generated_frames = 16,
         |s| s.fg_backend = 2,
         |s| {
-            s.sr_backend = SR_DLSS;
+            s.sr_backend = RSF_SR_DLSS;
             s.quality = QUALITY_ULTRA_QUALITY;
         },
     ];
@@ -228,7 +229,7 @@ fn vulkan_status_adds_inputs_and_window() {
 fn sr_frames_report_the_effective_backend() {
     let control = fake::boot_d3d12();
     let frame = SrFrame {
-        requested_sr: SR_SPATIAL,
+        requested_sr: RSF_SR_SPATIAL,
         context_backend: 0,
         context_result: backend_result::OK,
         evaluated: backend_result::OK,
@@ -241,10 +242,10 @@ fn sr_frames_report_the_effective_backend() {
     let (_, value) = status(&control);
     assert_eq!(
         (value.active_sr, value.requested_sr, value.evaluated_frames),
-        (SR_SPATIAL, SR_SPATIAL, 1)
+        (RSF_SR_SPATIAL, RSF_SR_SPATIAL, 1)
     );
     control.sr_frame(&SrFrame {
-        requested_sr: SR_AUTO,
+        requested_sr: RSF_SR_AUTO,
         context_backend: 3,
         context_result: -4,
         evaluated: -1,
@@ -256,7 +257,7 @@ fn sr_frames_report_the_effective_backend() {
         (0, -4, 1)
     );
     control.sr_frame(&SrFrame {
-        requested_sr: SR_AUTO,
+        requested_sr: RSF_SR_AUTO,
         context_backend: 3,
         ..frame
     });

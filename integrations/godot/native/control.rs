@@ -18,6 +18,10 @@ use crate::vulkan::Vulkan;
 use crate::window::Window;
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
+    RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF, RSF_FG_STAT_TOTAL_PRESENTED, RSF_REFLEX_BOOST,
+    RSF_REFLEX_OFF, RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_SPATIAL, RSF_UI_MODE_BACKBUFFER_HUDLESS,
+};
+use rsf_game_sys::{
     backend_result, presentation_result::PresentationResult, rsf_game_log_fn,
     vendor_paths::VendorPaths,
 };
@@ -25,18 +29,8 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-const SR_DLSS: u32 = 1;
-const SR_SPATIAL: u32 = 6;
-const SR_AUTO: u32 = 7;
-const FG_BACKEND_AUTO: u32 = 7;
-const FG_OFF: u32 = 0;
-const FG_FIXED: u32 = 1;
-const REFLEX_OFF: u32 = 0;
-const REFLEX_BOOST: u32 = 2;
 const QUALITY_ULTRA_QUALITY: u32 = 5;
 const MAX_GENERATED_FRAMES: u32 = 15;
-const FG_STAT_TOTAL_PRESENTED: u32 = 1;
-const UI_MODE_BACKBUFFER_HUDLESS: u32 = 4;
 const DLSS_ENGINE_CUSTOM: u32 = 0;
 
 /// The settings both backends start from and the extension composes over.
@@ -44,13 +38,13 @@ pub(crate) const fn default_settings() -> Settings {
     Settings {
         struct_size: size_of::<Settings>() as u32,
         abi_version: SETTINGS_ABI_VERSION,
-        sr_backend: SR_AUTO,
+        sr_backend: RSF_SR_AUTO,
         quality: 1,
         dlss_preset: 0,
-        fg_backend: FG_BACKEND_AUTO,
-        fg_mode: FG_OFF,
+        fg_backend: RSF_FG_BACKEND_AUTO,
+        fg_mode: RSF_FG_OFF,
         generated_frames: 1,
-        latency_mode: REFLEX_OFF,
+        latency_mode: RSF_REFLEX_OFF,
         frame_limit_us: 0,
         gameplay: 1,
         sharpening: Sharpening {
@@ -74,16 +68,16 @@ pub(crate) const fn default_settings() -> Settings {
 
 /// The refusal rules of `rsfg_configure`, applied before either backend sees the settings.
 pub(crate) fn settings_valid(value: &Settings) -> bool {
-    value.sr_backend <= SR_AUTO
+    value.sr_backend <= RSF_SR_AUTO
         && value.quality <= QUALITY_ULTRA_QUALITY
         && Platform.dlss_preset_valid(value.dlss_preset)
         && (value.sharpening.struct_size == 0 || Platform.sharpening_valid(&value.sharpening))
-        && value.fg_mode <= FG_FIXED
-        && value.latency_mode <= REFLEX_BOOST
+        && value.fg_mode <= RSF_FG_FIXED
+        && value.latency_mode <= RSF_REFLEX_BOOST
         && (1..=MAX_GENERATED_FRAMES).contains(&value.generated_frames)
         && value.gameplay <= 1
-        && (Platform.fg_backend_known(value.fg_backend) || value.fg_backend == FG_BACKEND_AUTO)
-        && !(value.sr_backend == SR_DLSS && value.quality == QUALITY_ULTRA_QUALITY)
+        && (Platform.fg_backend_known(value.fg_backend) || value.fg_backend == RSF_FG_BACKEND_AUTO)
+        && !(value.sr_backend == RSF_SR_DLSS && value.quality == QUALITY_ULTRA_QUALITY)
 }
 
 /// Owner-held UTF-8 paths. Each boot attempt leaks one set so a Runtime that kept the previous
@@ -121,14 +115,14 @@ impl SessionPaths {
     /// HUD-less backbuffer UI, inverted finite depth in metres and Godot's custom engine identity.
     fn fg_install(&self) -> FgInstall {
         FgInstall {
-            backend: FG_BACKEND_AUTO,
+            backend: RSF_FG_BACKEND_AUTO,
             max_generated_frames: u32::MAX,
             runtime_switching: 1,
-            ui_mode: UI_MODE_BACKBUFFER_HUDLESS,
+            ui_mode: RSF_UI_MODE_BACKBUFFER_HUDLESS,
             options: FgOptions {
-                mode: FG_OFF,
+                mode: RSF_FG_OFF,
                 generated_frames: 1,
-                reflex_mode: REFLEX_OFF,
+                reflex_mode: RSF_REFLEX_OFF,
                 frame_limit_us: 0,
                 debug: 0,
             },
@@ -372,7 +366,7 @@ impl Control {
         status.requested_sr = frame.requested_sr;
         status.active_sr = match (evaluated, frame.requested_sr) {
             (false, _) => 0,
-            (true, SR_SPATIAL) => SR_SPATIAL,
+            (true, RSF_SR_SPATIAL) => RSF_SR_SPATIAL,
             (true, _) => frame.context_backend,
         };
         status.sr_result = if frame.context_result != backend_result::OK {
@@ -444,7 +438,7 @@ fn apply_fg(status: &mut Status, fg: &FgFacts) {
     status.total_presented = fg.total_presented;
     status.generated_presented = fg.generated_presented;
     status.presentation_statistics_valid =
-        u32::from(fg.statistics_flags & FG_STAT_TOTAL_PRESENTED != 0);
+        u32::from(fg.statistics_flags & RSF_FG_STAT_TOTAL_PRESENTED != 0);
     status.presentation_statistics_flags = fg.statistics_flags;
     status.source_frame_id = fg.source_frame_id;
     status.provider_generation = fg.provider_generation;

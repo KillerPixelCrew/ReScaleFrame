@@ -11,21 +11,15 @@ use crate::platform::{
 };
 use rsf_game_sys::backend_result;
 use rsf_game_sys::ffi_util::lock_or_recover;
+use rsf_game_sys::{
+    RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
+    RSF_FG_BACKEND_XESS, RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_XESS,
+};
 use std::ffi::{c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-const SR_DLSS: u32 = 1;
-const SR_FSR3: u32 = 3;
-const SR_FSR4: u32 = 4;
-const SR_XESS: u32 = 5;
-const SR_AUTO: u32 = 7;
-const FG_DLSS: u32 = 1;
-const FG_FSR3: u32 = 3;
-const FG_FSR4: u32 = 4;
-const FG_XESS: u32 = 5;
-const FG_BACKEND_AUTO: u32 = 7;
 /// The first registered window message; the PCL ping message is one when Streamline bound it.
 const REGISTERED_MESSAGE: u32 = 0xc000;
 /// A Vulkan handle from the pointer-sized word the leaf records carry.
@@ -57,22 +51,22 @@ struct Capabilities {
 
 impl Capabilities {
     fn sr_choices(&self) -> u32 {
-        choice(true, SR_FSR3)
-            | choice(self.facts.streamline_ready != 0, SR_DLSS)
-            | choice(self.device.xess, SR_XESS)
+        choice(true, RSF_SR_FSR3)
+            | choice(self.facts.streamline_ready != 0, RSF_SR_DLSS)
+            | choice(self.device.xess, RSF_SR_XESS)
             | choice(
                 self.facts.fsr4_sr_compiled != 0
                     && self.facts.graph_handoff != 0
                     && self.device.interop,
-                SR_FSR4,
+                RSF_SR_FSR4,
             )
     }
 
     fn fg_choices(&self) -> u32 {
-        choice(true, FG_FSR3)
+        choice(true, RSF_FG_BACKEND_FSR3)
             | choice(
                 self.facts.xess_fg_compiled != 0 && self.device.interop && self.primary,
-                FG_XESS,
+                RSF_FG_BACKEND_XESS,
             )
     }
 }
@@ -144,8 +138,8 @@ impl Vulkan {
     /// it. Without adapter facts (no device yet, or the properties read failed) vendor and software
     /// are zero, the Runtime's unknown adapter.
     fn providers(&self, settings: &Settings, capabilities: Option<&Capabilities>) -> Providers {
-        let auto_sr = settings.sr_backend == SR_AUTO;
-        let auto_fg = settings.fg_backend == FG_BACKEND_AUTO;
+        let auto_sr = settings.sr_backend == RSF_SR_AUTO;
+        let auto_fg = settings.fg_backend == RSF_FG_BACKEND_AUTO;
         let mut providers = Providers {
             sr: settings.sr_backend,
             fg: settings.fg_backend,
@@ -288,16 +282,19 @@ impl Vulkan {
         let facts = capabilities.facts;
         let on = |flag: u32| flag != 0;
         // DLSS admission is still verified by its live provider at evaluation.
-        if matches!(value.sr_backend, SR_XESS | SR_FSR4)
+        if matches!(value.sr_backend, RSF_SR_XESS | RSF_SR_FSR4)
             && capabilities.sr_choices() & choice(true, value.sr_backend) == 0
         {
             return false;
         }
         let selected = self.providers(value, Some(&capabilities)).fg;
-        if !matches!(selected, FG_DLSS | FG_FSR3 | FG_FSR4 | FG_XESS) {
+        if !matches!(
+            selected,
+            RSF_FG_BACKEND_DLSS | RSF_FG_BACKEND_FSR3 | RSF_FG_BACKEND_FSR4 | RSF_FG_BACKEND_XESS
+        ) {
             return false;
         }
-        if selected == FG_FSR4 {
+        if selected == RSF_FG_BACKEND_FSR4 {
             if !on(facts.fsr4_fg_compiled)
                 || !on(facts.presenter)
                 || !capabilities.device.interop
@@ -311,11 +308,14 @@ impl Vulkan {
                 return false;
             }
         }
-        if selected == FG_XESS && capabilities.fg_choices() & choice(true, selected) == 0 {
+        if selected == RSF_FG_BACKEND_XESS
+            && capabilities.fg_choices() & choice(true, selected) == 0
+        {
             return false;
         }
         if value.fg_mode != 0
-            && (!on(facts.presenter) || (selected == FG_FSR3 && value.generated_frames != 1))
+            && (!on(facts.presenter)
+                || (selected == RSF_FG_BACKEND_FSR3 && value.generated_frames != 1))
         {
             return false;
         }
@@ -361,16 +361,17 @@ impl Vulkan {
                 output_height: state.status.output_height,
             }
         };
-        let capabilities =
-            if view.settings.sr_backend == SR_AUTO || view.settings.fg_backend == FG_BACKEND_AUTO {
-                device.map(|device| Capabilities {
-                    device: self.creation.device_receipt(device),
-                    facts: Platform.vulkan_facts(),
-                    primary: !self.primary_window().is_null(),
-                })
-            } else {
-                None
-            };
+        let capabilities = if view.settings.sr_backend == RSF_SR_AUTO
+            || view.settings.fg_backend == RSF_FG_BACKEND_AUTO
+        {
+            device.map(|device| Capabilities {
+                device: self.creation.device_receipt(device),
+                facts: Platform.vulkan_facts(),
+                primary: !self.primary_window().is_null(),
+            })
+        } else {
+            None
+        };
         let providers = self.providers(&view.settings, capabilities.as_ref());
         view.sr_backend = providers.sr;
         view.fg_backend = providers.fg;

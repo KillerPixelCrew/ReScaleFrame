@@ -18,6 +18,7 @@
 use crate::control::Control;
 use crate::platform::{Platform, Settings, Sharpening, SrCreate, SrEvaluate, SrFrame};
 use rsf_game_sys::ffi_util::lock_or_recover;
+use rsf_game_sys::{RSF_FG_BACKEND_AUTO, RSF_SR_AUTO, RSF_SR_NONE, RSF_SR_SPATIAL};
 use rsf_game_sys::{
     RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW, RSF_SCREEN_FLIGHT,
     RSF_SCREEN_MENU, RSF_SCREEN_UNKNOWN, backend_result, rsf_game_render_pass,
@@ -25,10 +26,6 @@ use rsf_game_sys::{
 use std::ffi::{c_int, c_void};
 use std::sync::{Mutex, MutexGuard};
 
-const SR_NONE: u32 = 0;
-const SR_SPATIAL: u32 = 6;
-const SR_AUTO: u32 = 7;
-const FG_BACKEND_AUTO: u32 = 7;
 /// `rsf_sr12_evaluate` command slots 0..2.
 const SLOTS: u32 = 3;
 /// Refused passes whose inputs are logged.
@@ -87,7 +84,7 @@ impl Context {
     ) -> bool {
         self.generation != generation
             || self.output != output
-            || (self.backend == SR_NONE && render != plan)
+            || (self.backend == RSF_SR_NONE && render != plan)
     }
 }
 
@@ -195,7 +192,7 @@ impl D3d12 {
         }
         let (settings, generation) = control.snapshot();
         let fg = match settings.fg_backend {
-            FG_BACKEND_AUTO => Platform.fg_default_backend(),
+            RSF_FG_BACKEND_AUTO => Platform.fg_default_backend(),
             backend => backend,
         };
         if let Some(current) = Platform.present_owner()
@@ -370,12 +367,12 @@ impl D3d12 {
     ) -> Option<Context> {
         let paths = control.paths()?;
         let mut backend = settings.sr_backend;
-        if backend == SR_AUTO {
+        if backend == RSF_SR_AUTO {
             backend = Platform.sr_default_backend();
         }
         // Godot evaluates FSR1 before the callback; the context only normalises its inputs.
-        if backend == SR_SPATIAL {
-            backend = SR_NONE;
+        if backend == RSF_SR_SPATIAL {
+            backend = RSF_SR_NONE;
         }
         let mut request = SrCreate {
             backend,
@@ -390,11 +387,11 @@ impl D3d12 {
         let plan = self.ledger().plan;
         let mut created = Platform.sr_create(&request, plan)?;
         self.ledger().context_result = created.result;
-        if created.handle.is_null() && backend != SR_NONE {
-            request.backend = SR_NONE;
+        if created.handle.is_null() && backend != RSF_SR_NONE {
+            request.backend = RSF_SR_NONE;
             created =
                 Platform.sr_create(&request, (created.desired_width, created.desired_height))?;
-            backend = SR_NONE;
+            backend = RSF_SR_NONE;
         }
         if created.handle.is_null() {
             return None;

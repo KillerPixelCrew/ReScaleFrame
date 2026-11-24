@@ -2,13 +2,13 @@
 use super::*;
 use crate::control::default_settings;
 use crate::platform::{Status, fake};
+use rsf_game_sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_SPATIAL};
 use std::ptr;
 
 const DEVICE: usize = 0x10;
 const QUEUE: usize = 0x20;
 const HUDLESS_LIST: usize = 0x900;
 const CHAIN: usize = 0x77;
-const SR_DLSS: u32 = 1;
 
 fn configure(control: &Control, change: impl FnOnce(&mut Settings)) {
     let mut settings = default_settings();
@@ -82,7 +82,7 @@ fn the_first_pass_binds_creates_the_auto_provider_and_evaluates_slot_zero() {
     let value = status(&control);
     assert_eq!(
         (value.requested_sr, value.active_sr, value.sr_result),
-        (SR_AUTO, 1, backend_result::OK)
+        (RSF_SR_AUTO, 1, backend_result::OK)
     );
     assert_eq!(
         (
@@ -180,14 +180,14 @@ fn a_provider_context_follows_its_output_but_not_its_input_extent() {
 #[test]
 fn spatial_uses_the_normalising_context_and_its_plan() {
     let control = fake::boot_d3d12();
-    configure(&control, |s| s.sr_backend = SR_SPATIAL);
+    configure(&control, |s| s.sr_backend = RSF_SR_SPATIAL);
     let mut frame = sr(1);
     assert_eq!(render(&control, &frame), 1);
     assert_eq!(
         fake::take_d3d12_calls(),
         [("bind", 0), ("create", 0), ("wait", 0), ("evaluate", 0)]
     );
-    assert_eq!(status(&control).active_sr, SR_SPATIAL);
+    assert_eq!(status(&control).active_sr, RSF_SR_SPATIAL);
     submit(&control, &[list(1)]);
     assert_eq!(fake::take_d3d12_calls(), [("signal", 1)]);
     frame.source_frame_id = 2;
@@ -210,14 +210,14 @@ fn spatial_uses_the_normalising_context_and_its_plan() {
 #[test]
 fn a_refused_provider_falls_back_and_reports_its_first_result() {
     let control = fake::boot_d3d12();
-    configure(&control, |s| s.sr_backend = SR_DLSS);
-    fake::REFUSED.set(Some((SR_DLSS, -7)));
+    configure(&control, |s| s.sr_backend = RSF_SR_DLSS);
+    fake::REFUSED.set(Some((RSF_SR_DLSS, -7)));
     assert_eq!(render(&control, &sr(1)), 1);
     assert_eq!(
         fake::take_d3d12_calls(),
         [
             ("bind", 0),
-            ("create", u64::from(SR_DLSS)),
+            ("create", u64::from(RSF_SR_DLSS)),
             ("create", 0),
             ("wait", 0),
             ("evaluate", 0)
@@ -226,15 +226,15 @@ fn a_refused_provider_falls_back_and_reports_its_first_result() {
     let value = status(&control);
     assert_eq!(
         (value.requested_sr, value.active_sr, value.sr_result),
-        (SR_DLSS, 0, -7)
+        (RSF_SR_DLSS, 0, -7)
     );
 }
 
 #[test]
 fn no_context_refuses_the_pass_before_a_slot_is_taken() {
     let control = fake::boot_d3d12();
-    configure(&control, |s| s.sr_backend = SR_SPATIAL);
-    fake::REFUSED.set(Some((SR_NONE, -3)));
+    configure(&control, |s| s.sr_backend = RSF_SR_SPATIAL);
+    fake::REFUSED.set(Some((RSF_SR_NONE, -3)));
     assert_eq!(render(&control, &sr(1)), 0);
     assert_eq!(fake::take_d3d12_calls(), [("bind", 0), ("create", 0)]);
     fake::REFUSED.set(None);

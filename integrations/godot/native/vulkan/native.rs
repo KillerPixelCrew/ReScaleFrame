@@ -11,6 +11,7 @@ use ash::vk;
 use rsf_game_sys::backend_result;
 use rsf_game_sys::ffi_util::{ascii_wide, checked, lock_or_recover, wide};
 use rsf_game_sys::win32::typed_export;
+use rsf_game_sys::{RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR4};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE,
     RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_frame_record, rsf_game_log_fn,
@@ -401,8 +402,8 @@ unsafe extern "C" fn rsfg_vk_create(
     let (directory, intel) = {
         let state = state();
         let directory = match selected {
-            super::FG_DLSS => &state.streamline,
-            super::FG_FSR4 => &state.fsr4,
+            RSF_FG_BACKEND_DLSS => &state.streamline,
+            RSF_FG_BACKEND_FSR4 => &state.fsr4,
             _ => &state.directory,
         };
         (directory.as_ptr(), state.intel.as_ptr())

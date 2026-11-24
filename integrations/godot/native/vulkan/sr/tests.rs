@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
-use super::super::{SR_DLSS, SR_FSR3};
 use super::*;
 use crate::control::default_settings;
 use crate::platform::{Settings, Status, VkAdapter, VkFacts, VkFunction, fake};
+use rsf_game_sys::{
+    RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_NONE, RSF_SR_SPATIAL,
+};
 use std::ffi::c_char;
 use std::ptr;
 
@@ -92,10 +94,10 @@ fn a_context_is_created_once_and_reused() {
     assert_eq!(
         fake::take_vk_sr_calls(),
         [
-            ("create", u64::from(SR_FSR3)),
+            ("create", u64::from(RSF_SR_FSR3)),
             ("plan", context),
             ("evaluate", context),
-            ("dump", u64::from(SR_FSR3))
+            ("dump", u64::from(RSF_SR_FSR3))
         ]
     );
     // Without requested sharpening the Runtime defaults are applied.
@@ -103,7 +105,7 @@ fn a_context_is_created_once_and_reused() {
     let value = status(&vulkan);
     assert_eq!(
         (value.active_sr, value.sr_result, value.evaluated_frames),
-        (SR_FSR3, backend_result::OK, 1)
+        (RSF_SR_FSR3, backend_result::OK, 1)
     );
     assert_eq!(
         (
@@ -120,7 +122,7 @@ fn a_context_is_created_once_and_reused() {
         [
             ("plan", context),
             ("evaluate", context),
-            ("dump", u64::from(SR_FSR3))
+            ("dump", u64::from(RSF_SR_FSR3))
         ]
     );
 }
@@ -140,7 +142,7 @@ fn a_new_request_output_or_device_retires_the_context_first() {
             ("drain", 0),
             ("idle", DEVICE as u64),
             ("destroy", first),
-            ("create", u64::from(SR_FSR3))
+            ("create", u64::from(RSF_SR_FSR3))
         ]
     );
     // The last reported output, not the context's, is compared.
@@ -190,7 +192,7 @@ fn a_failed_creation_falls_back_and_retries() {
     assert_eq!(
         fake::take_vk_sr_calls(),
         [
-            ("create", u64::from(SR_FSR3)),
+            ("create", u64::from(RSF_SR_FSR3)),
             ("fallback", 0),
             ("log", u64::from(VK_LOG_REJECTED))
         ]
@@ -246,7 +248,7 @@ fn an_input_refusal_is_logged_after_runtime_recovers_output() {
         [
             ("evaluate", calls[1].1),
             ("fallback", 0),
-            ("dump", u64::from(SR_FSR3)),
+            ("dump", u64::from(RSF_SR_FSR3)),
             ("log", u64::from(VK_LOG_INPUT_REFUSAL)),
             ("log", u64::from(VK_LOG_REJECTED))
         ]
@@ -264,7 +266,7 @@ fn passthrough_providers_need_no_context() {
     render(&vulkan, &pass(DEVICE, OUTPUT));
     let (context, _) = handles(&vulkan);
     fake::take_vk_sr_calls();
-    for backend in [SR_NONE, SR_SPATIAL] {
+    for backend in [RSF_SR_NONE, RSF_SR_SPATIAL] {
         configure(&vulkan, |s| s.sr_backend = backend);
         assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
         let value = status(&vulkan);
@@ -285,21 +287,24 @@ fn passthrough_providers_need_no_context() {
 fn the_dlss_preset_is_applied_once_after_creation() {
     let vulkan = booted();
     configure(&vulkan, |s| {
-        s.sr_backend = SR_DLSS;
+        s.sr_backend = RSF_SR_DLSS;
         s.dlss_preset = 3;
     });
     render(&vulkan, &pass(DEVICE, OUTPUT));
     render(&vulkan, &pass(DEVICE, OUTPUT));
     let calls = fake::take_vk_sr_calls();
-    assert_eq!(calls[..2], [("create", u64::from(SR_DLSS)), ("preset", 3)]);
+    assert_eq!(
+        calls[..2],
+        [("create", u64::from(RSF_SR_DLSS)), ("preset", 3)]
+    );
     assert_eq!(calls.iter().filter(|call| call.0 == "preset").count(), 1);
-    assert_eq!(status(&vulkan).active_sr, SR_DLSS);
+    assert_eq!(status(&vulkan).active_sr, RSF_SR_DLSS);
 }
 
 #[test]
 fn fsr4_needs_its_build_and_the_graph_lease() {
     let vulkan = booted();
-    configure(&vulkan, |s| s.sr_backend = SR_FSR4);
+    configure(&vulkan, |s| s.sr_backend = RSF_SR_FSR4);
     for refusal in [
         -3,
         backend_result::NOT_READY,
@@ -325,13 +330,13 @@ fn fsr4_needs_its_build_and_the_graph_lease() {
     assert_eq!(
         fake::take_vk_sr_calls(),
         [
-            ("fsr4_create", u64::from(SR_FSR4)),
+            ("fsr4_create", u64::from(RSF_SR_FSR4)),
             ("fsr4_plan", fsr4),
             ("fsr4_evaluate", fsr4),
-            ("dump", u64::from(SR_FSR4))
+            ("dump", u64::from(RSF_SR_FSR4))
         ]
     );
-    assert_eq!(status(&vulkan).active_sr, SR_FSR4);
+    assert_eq!(status(&vulkan).active_sr, RSF_SR_FSR4);
     fake::VK_SPLIT_RECORD.set(false);
     render(&vulkan, &pass(DEVICE, OUTPUT));
     assert_eq!(
@@ -339,7 +344,7 @@ fn fsr4_needs_its_build_and_the_graph_lease() {
         [
             ("fsr4_plan", fsr4),
             ("fallback", 0),
-            ("dump", u64::from(SR_FSR4))
+            ("dump", u64::from(RSF_SR_FSR4))
         ]
     );
     assert_eq!(status(&vulkan).sr_result, backend_result::NOT_READY);
@@ -348,7 +353,7 @@ fn fsr4_needs_its_build_and_the_graph_lease() {
 #[test]
 fn an_fsr4_dispatch_without_a_continuation_is_not_counted() {
     let vulkan = booted();
-    configure(&vulkan, |s| s.sr_backend = SR_FSR4);
+    configure(&vulkan, |s| s.sr_backend = RSF_SR_FSR4);
     render(&vulkan, &pass(DEVICE, OUTPUT));
     let (_, fsr4) = handles(&vulkan);
     fake::take_vk_sr_calls();
@@ -362,7 +367,7 @@ fn an_fsr4_dispatch_without_a_continuation_is_not_counted() {
             ("fsr4_plan", fsr4),
             ("fsr4_evaluate", fsr4),
             ("log", u64::from(VK_LOG_FSR4_DISPATCH)),
-            ("dump", u64::from(SR_FSR4))
+            ("dump", u64::from(RSF_SR_FSR4))
         ]
     );
     let value = status(&vulkan);
@@ -432,10 +437,10 @@ fn auto_without_a_servable_provider_takes_the_spatial_fallback() {
             value.render_width,
             value.output_width
         ),
-        (SR_AUTO, 0, backend_result::NOT_SUPPORTED, 1, 1280, 1920)
+        (RSF_SR_AUTO, 0, backend_result::NOT_SUPPORTED, 1, 1280, 1920)
     );
     // An explicit Off still passes the engine's output through.
-    configure(&vulkan, |s| s.sr_backend = SR_NONE);
+    configure(&vulkan, |s| s.sr_backend = RSF_SR_NONE);
     assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
     assert!(fake::take_vk_sr_calls().is_empty());
     assert_eq!(status(&vulkan).sr_result, backend_result::OK);
@@ -458,7 +463,7 @@ fn a_changed_auto_resolution_retires_the_context() {
         ..fake::VK_FACTS.get()
     });
     // The fake answers for the Runtime's provider policy.
-    fake::SR_SELECTED.set(SR_DLSS);
+    fake::SR_SELECTED.set(RSF_SR_DLSS);
     assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
     let calls = fake::take_vk_sr_calls();
     assert_eq!(
@@ -467,10 +472,10 @@ fn a_changed_auto_resolution_retires_the_context() {
             ("drain", 0),
             ("idle", DEVICE as u64),
             ("destroy", first),
-            ("create", u64::from(SR_DLSS))
+            ("create", u64::from(RSF_SR_DLSS))
         ]
     );
     // The DLSS context gets the requested preset once, as an explicit request does.
     assert_eq!(calls[4], ("preset", 0));
-    assert_eq!(status(&vulkan).active_sr, SR_DLSS);
+    assert_eq!(status(&vulkan).active_sr, RSF_SR_DLSS);
 }
