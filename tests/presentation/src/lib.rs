@@ -27,11 +27,8 @@ mod d3d11_fixture_startup;
 mod d3d11_host_device;
 mod d3d11_marker;
 mod d3d11_scope_fixture;
-mod fg_bridge;
-mod fg_fixture_callbacks;
+mod fg_fixture;
 mod fg_fixture_focus;
-mod fg_fixture_loop;
-mod fg_fixture_startup;
 mod fsr4_fg_bridge;
 #[cfg(feature = "gl-device-fixture")]
 mod gl_fixture;
