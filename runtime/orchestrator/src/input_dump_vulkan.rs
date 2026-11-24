@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
-use crate::dx12_vulkan_platform::lookup;
+use crate::dx12_vulkan_platform::entry;
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_complete_group, rsf_core_capture_vk_discard_group,
     rsf_core_capture_vk_flush, rsf_core_capture_vk_pending, rsf_core_capture_vk_ready,
@@ -17,7 +17,6 @@ use ash::vk::{self, Handle as _};
 use rsf_game_sys::backend_result::{FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NOT_READY};
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{c_char, c_void};
-use std::mem;
 use std::ptr;
 use std::sync::Mutex;
 
@@ -64,17 +63,14 @@ impl Owner {
     fn create(setup: &Setup, submit: Submit) -> Result<Self, i32> {
         let graphics = &setup.graphics;
         let ops = Commands::load(graphics).ok_or(-7)?;
-        let properties = lookup(
-            graphics.instance_proc,
-            graphics.instance,
-            c"vkGetPhysicalDeviceMemoryProperties",
-        )
-        .ok_or(-7)?;
         let properties = unsafe {
-            mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetPhysicalDeviceMemoryProperties>(
-                properties,
+            entry::<vk::PFN_vkGetPhysicalDeviceMemoryProperties>(
+                graphics.instance_proc,
+                graphics.instance,
+                c"vkGetPhysicalDeviceMemoryProperties",
             )
-        };
+        }
+        .ok_or(-7)?;
         let mut memory = vk::PhysicalDeviceMemoryProperties::default();
         unsafe {
             properties(
