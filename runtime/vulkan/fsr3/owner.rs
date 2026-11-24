@@ -31,10 +31,6 @@ pub mod sdk_abi;
 
 type Handle = *mut c_void;
 
-const VULKAN_LOADER: u32 = 1 << 0;
-const VULKAN_BUFFER_REQUIREMENTS: u32 = 1 << 1;
-const VULKAN_READY: u32 = VULKAN_LOADER | VULKAN_BUFFER_REQUIREMENTS;
-
 /// `VK_ERROR_INITIALIZATION_FAILED`, the swapchain pass-through refusal.
 const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
 /// Byte offset of `VkSwapchainCreateInfoKHR::oldSwapchain`, asserted natively.
@@ -385,8 +381,7 @@ unsafe fn create_sr(request: &Request, result: *mut *mut Context) -> i32 {
         unsafe { leaf::release(native.as_ptr()) };
         code
     };
-    let vulkan = unsafe { leaf::bind_vulkan(request.device) };
-    if vulkan & VULKAN_READY != VULKAN_READY {
+    if !unsafe { leaf::bind_vulkan(request.device) } {
         return failed(-3);
     }
     let code = unsafe { leaf::create(native.as_ptr(), sdk.create, request) };
@@ -463,7 +458,7 @@ unsafe extern "C" fn rsf_vk_fsr3_destroy(context: *mut Context) -> i32 {
     };
     let destroy = SDK.get().expect("live SR context has a bound SDK").destroy;
     let native = owner.native.as_ptr();
-    let effect = unsafe { leaf::has_effect(native) } != 0;
+    let effect = unsafe { leaf::has_effect(native) };
     let code = if effect {
         unsafe { leaf::destroy(native, destroy) }
     } else {
@@ -511,7 +506,7 @@ struct FgContext {
 /// # Safety
 /// `swapchain` is a live owner.
 unsafe fn has_context(swapchain: *mut Swapchain) -> bool {
-    unsafe { leaf::wsi_has_context((*swapchain).native.as_ptr()) != 0 }
+    unsafe { leaf::wsi_has_context((*swapchain).native.as_ptr()) }
 }
 
 /// Creates the SDK presentation context and queries its replacement table.
@@ -568,7 +563,7 @@ unsafe fn create_swapchain(request: &WsiRequest, result: *mut *mut Swapchain) ->
         return failed(code);
     }
     let code = unsafe { leaf::wsi_query(native.as_ptr(), sdk.query) };
-    if code != 0 || unsafe { leaf::wsi_complete(native.as_ptr()) } == 0 {
+    if code != 0 || !unsafe { leaf::wsi_complete(native.as_ptr()) } {
         let error = if code != 0 { code } else { -3 };
         if unsafe { leaf::wsi_destroy(native.as_ptr(), sdk.destroy) } == 0 {
             return failed(error);
@@ -894,7 +889,7 @@ unsafe fn create_fg(request: &FgRequest, result: *mut *mut FgContext) -> i32 {
         unsafe { leaf::fg_release(native.as_ptr()) };
         code
     };
-    if unsafe { leaf::fg_bind_vulkan() } == 0 {
+    if !unsafe { leaf::fg_bind_vulkan() } {
         return failed(-3);
     }
     let code = unsafe { leaf::fg_create(native.as_ptr(), create, request) };
@@ -945,7 +940,7 @@ unsafe fn fg_disable(context: *mut FgContext) -> i32 {
             return 0;
         }
         let native = (*context).native.as_ptr();
-        if leaf::fg_has_effect(native) == 0 {
+        if !leaf::fg_has_effect(native) {
             return -1;
         }
         let swapchain = (*context).swapchain;
@@ -1096,7 +1091,7 @@ unsafe extern "C" fn rsf_vk_fsr3_fg_destroy(context: *mut FgContext) -> i32 {
         }
         let native = (*context).native.as_ptr();
         let destroy = SDK.get().expect("live FG context has a bound SDK").destroy;
-        let code = if leaf::fg_has_effect(native) != 0 {
+        let code = if leaf::fg_has_effect(native) {
             leaf::fg_destroy(native, destroy)
         } else {
             0
@@ -1154,12 +1149,8 @@ mod tests {
         drop(unsafe { Box::from_raw(native.cast::<Fake>()) });
     }
 
-    pub(super) unsafe extern "C" fn bind_vulkan(device: Handle) -> u32 {
-        match device as usize {
-            NO_LOADER => 0,
-            NO_BUFFER_REQUIREMENTS => VULKAN_LOADER,
-            _ => VULKAN_LOADER | VULKAN_BUFFER_REQUIREMENTS,
-        }
+    pub(super) unsafe extern "C" fn bind_vulkan(device: Handle) -> bool {
+        !matches!(device as usize, NO_LOADER | NO_BUFFER_REQUIREMENTS)
     }
 
     pub(super) unsafe extern "C" fn create(
@@ -1203,8 +1194,8 @@ mod tests {
         0
     }
 
-    pub(super) unsafe extern "C" fn has_effect(native: *const Native) -> u32 {
-        u32::from(unsafe { &*native.cast::<Fake>() }.effect)
+    pub(super) unsafe extern "C" fn has_effect(native: *const Native) -> bool {
+        unsafe { &*native.cast::<Fake>() }.effect
     }
 
     pub(super) unsafe extern "C" fn destroy(native: *mut Native, destroy: Handle) -> i32 {
@@ -1341,12 +1332,12 @@ mod tests {
         code
     }
 
-    pub(super) unsafe extern "C" fn wsi_complete(native: *const WsiNative) -> u32 {
-        u32::from(wsi(native).complete)
+    pub(super) unsafe extern "C" fn wsi_complete(native: *const WsiNative) -> bool {
+        wsi(native).complete
     }
 
-    pub(super) unsafe extern "C" fn wsi_has_context(native: *const WsiNative) -> u32 {
-        u32::from(wsi(native).context)
+    pub(super) unsafe extern "C" fn wsi_has_context(native: *const WsiNative) -> bool {
+        wsi(native).context
     }
 
     pub(super) unsafe extern "C" fn wsi_destroy(native: *mut WsiNative, destroy: Handle) -> i32 {
@@ -1438,8 +1429,8 @@ mod tests {
         drop(unsafe { Box::from_raw(native.cast::<FakeFg>()) });
     }
 
-    pub(super) unsafe extern "C" fn fg_bind_vulkan() -> u32 {
-        u32::from(step("fg_bind_vulkan") == 0)
+    pub(super) unsafe extern "C" fn fg_bind_vulkan() -> bool {
+        step("fg_bind_vulkan") == 0
     }
 
     pub(super) unsafe extern "C" fn fg_create(
@@ -1455,8 +1446,8 @@ mod tests {
         code
     }
 
-    pub(super) unsafe extern "C" fn fg_has_effect(native: *const FgNative) -> u32 {
-        u32::from(fg(native).effect)
+    pub(super) unsafe extern "C" fn fg_has_effect(native: *const FgNative) -> bool {
+        fg(native).effect
     }
 
     pub(super) unsafe extern "C" fn fg_destroy(native: *mut FgNative, destroy: Handle) -> i32 {

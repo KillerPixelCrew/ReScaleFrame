@@ -165,22 +165,15 @@ pub(super) unsafe fn fg_release(owner: *mut FgNative) {
     unsafe { unbox::<FgCapsule, _>(owner) }
 }
 
-pub(super) unsafe fn bind_vulkan(device: Handle) -> u32 {
-    if !bind_loader() {
-        return 0;
-    }
-    let requirements =
-        unsafe { device_proc(device.cast(), c"vkGetBufferMemoryRequirements2KHR".as_ptr()) };
-    VULKAN_LOADER
-        | if requirements.is_some() {
-            VULKAN_BUFFER_REQUIREMENTS
-        } else {
-            0
-        }
+/// Binds the loader and requires the buffer-requirements entry the 1.1.4 SR backend calls.
+pub(super) unsafe fn bind_vulkan(device: Handle) -> bool {
+    bind_loader()
+        && unsafe { device_proc(device.cast(), c"vkGetBufferMemoryRequirements2KHR".as_ptr()) }
+            .is_some()
 }
 
-pub(super) unsafe fn fg_bind_vulkan() -> u32 {
-    u32::from(bind_loader())
+pub(super) unsafe fn fg_bind_vulkan() -> bool {
+    bind_loader()
 }
 
 pub(super) unsafe fn create(owner: *mut Native, address: Handle, request: *const Request) -> i32 {
@@ -266,8 +259,8 @@ pub(super) unsafe fn evaluate(
     }
 }
 
-pub(super) unsafe fn has_effect(owner: *const Native) -> u32 {
-    u32::from(!unsafe { (*owner.cast::<SrCapsule>()).effect }.is_null())
+pub(super) unsafe fn has_effect(owner: *const Native) -> bool {
+    !unsafe { (*owner.cast::<SrCapsule>()).effect }.is_null()
 }
 
 pub(super) unsafe fn destroy(owner: *mut Native, address: Handle) -> i32 {
@@ -325,19 +318,17 @@ pub(super) unsafe fn wsi_query(owner: *mut WsiNative, address: Handle) -> i32 {
     }
 }
 
-pub(super) unsafe fn wsi_complete(owner: *const WsiNative) -> u32 {
+pub(super) unsafe fn wsi_complete(owner: *const WsiNative) -> bool {
     let ops = unsafe { &(*owner.cast::<WsiCapsule>()).functions };
-    u32::from(
-        ops.pOutCreateSwapchainFFXAPI.is_some()
-            && ops.pOutDestroySwapchainFFXAPI.is_some()
-            && ops.pOutGetSwapchainImagesKHR.is_some()
-            && ops.pOutAcquireNextImageKHR.is_some()
-            && ops.pOutQueuePresentKHR.is_some(),
-    )
+    ops.pOutCreateSwapchainFFXAPI.is_some()
+        && ops.pOutDestroySwapchainFFXAPI.is_some()
+        && ops.pOutGetSwapchainImagesKHR.is_some()
+        && ops.pOutAcquireNextImageKHR.is_some()
+        && ops.pOutQueuePresentKHR.is_some()
 }
 
-pub(super) unsafe fn wsi_has_context(owner: *const WsiNative) -> u32 {
-    u32::from(!unsafe { (*owner.cast::<WsiCapsule>()).context }.is_null())
+pub(super) unsafe fn wsi_has_context(owner: *const WsiNative) -> bool {
+    !unsafe { (*owner.cast::<WsiCapsule>()).context }.is_null()
 }
 
 pub(super) unsafe fn wsi_destroy(owner: *mut WsiNative, address: Handle) -> i32 {
@@ -530,8 +521,8 @@ pub(super) unsafe fn fg_create(
     }
 }
 
-pub(super) unsafe fn fg_has_effect(owner: *const FgNative) -> u32 {
-    u32::from(!unsafe { (*owner.cast::<FgCapsule>()).effect }.is_null())
+pub(super) unsafe fn fg_has_effect(owner: *const FgNative) -> bool {
+    !unsafe { (*owner.cast::<FgCapsule>()).effect }.is_null()
 }
 
 pub(super) unsafe fn fg_destroy(owner: *mut FgNative, address: Handle) -> i32 {
