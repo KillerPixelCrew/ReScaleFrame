@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The contact-shadow correction at the engine's pixel shader factory.
-use super::{Guard, Renderer, copy, hook, installed, original, read};
+use super::{Guard, Renderer, copy, hook, installed, key, original, read};
 use rsf_ac7::contact_shadow::{Correction, correct};
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of};
@@ -105,17 +105,14 @@ pub(super) unsafe extern "C" fn hooked_create_pixel_shader(
     }
     let total = input.count as usize;
     let data = input.data;
+    let address = key(data.cast());
     // The matched native factory reads ResourceTableBits and five uint32 arrays, then DXBC.
     // It consumes the borrowed bytes synchronously and retains only shader/table metadata.
     let mut offset = 4usize;
     for _ in 0..5 {
         let mut count = 0u32;
         if offset + 4 > total
-            || !copy(
-                (&mut count as *mut u32).cast(),
-                data.wrapping_add(offset).cast(),
-                4,
-            )
+            || !read(address, offset, &mut count)
             || count > 65536
             || count as usize * 4 > total - offset - 4
         {
@@ -125,24 +122,12 @@ pub(super) unsafe extern "C" fn hooked_create_pixel_shader(
     }
     let (mut optional, mut dxbc_size, mut magic) = (0u32, 0u32, [0u8; 4]);
     if offset + 32 > total
-        || !copy(
-            magic.as_mut_ptr().cast(),
-            data.wrapping_add(offset).cast(),
-            4,
-        )
+        || !read(address, offset, &mut magic)
         || &magic != b"DXBC"
-        || !copy(
-            (&mut optional as *mut u32).cast(),
-            data.wrapping_add(total - 4).cast(),
-            4,
-        )
+        || !read(address, total - 4, &mut optional)
         || optional < 4
         || optional as usize > total - offset
-        || !copy(
-            (&mut dxbc_size as *mut u32).cast(),
-            data.wrapping_add(offset + 24).cast(),
-            4,
-        )
+        || !read(address, offset + 24, &mut dxbc_size)
         || dxbc_size as usize != total - offset - optional as usize
     {
         return forward();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Owned widget raster targets: the game-instance HUD canvases and the widget component render
 //! targets at an integer density of the output size, with logical layout restored around them.
-use super::frame::{INSIDE_ENGINE_TICK, SHARED_REPAINT_TARGETS};
+use super::frame::{INSIDE_ENGINE_TICK, SHARED_REPAINT_TARGETS, object_is_a};
 use super::{Guard, Renderer, engine, hook, hook_rva, installed, key, method, original, read};
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -67,21 +67,10 @@ fn shared_widget_target(converter: u64, target: &mut u64) -> bool {
     let get_world: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
         unsafe { super::function(get_world as usize as *mut c_void) };
     let world = key(unsafe { get_world(converter as usize as *mut c_void) });
-    let (mut instance, mut actual_class, mut bases, mut expected_base) = (0u64, 0u64, 0u64, 0u64);
-    let (mut expected_depth, mut actual_depth) = (0i32, 0i32);
+    let mut instance = 0u64;
     let expected_class =
         key(unsafe { engine::<unsafe extern "C" fn() -> *mut c_void>(0x92_3e60)() });
-    if !read(world, 0x140, &mut instance)
-        || !read(instance, 0x10, &mut actual_class)
-        || !read(expected_class, 0x90, &mut expected_depth)
-        || !read(actual_class, 0x90, &mut actual_depth)
-        || expected_depth < 0
-        || expected_depth > actual_depth
-        || expected_depth > 4096
-        || !read(actual_class, 0x88, &mut bases)
-        || !read(bases, expected_depth as usize * 8, &mut expected_base)
-        || expected_base != expected_class.wrapping_add(0x88)
-    {
+    if !read(world, 0x140, &mut instance) || !object_is_a(instance, expected_class) {
         return false;
     }
     let mut stereo = 0u8;

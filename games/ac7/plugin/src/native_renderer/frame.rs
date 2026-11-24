@@ -44,15 +44,12 @@ thread_local! {
     static FULL_FRAME_TICKET: Cell<*mut c_void> = const { Cell::new(null_mut()) };
 }
 
-fn object_has_class(object: u64, cache_rva: u32) -> bool {
-    let (mut expected, mut actual, mut bases, mut entry) = (0u64, 0u64, 0u64, 0u64);
+/// Whether the UObject at `object` is of class `expected` or derives from it: the class at +0x10
+/// lists its super chain at +0x88, indexed by the depth at +0x90.
+pub(super) fn object_is_a(object: u64, expected: u64) -> bool {
+    let (mut actual, mut bases, mut entry) = (0u64, 0u64, 0u64);
     let (mut depth, mut actual_depth) = (0i32, 0i32);
     object != 0
-        && copy(
-            (&mut expected as *mut u64).cast(),
-            game_module().wrapping_add(cache_rva as usize).cast(),
-            8,
-        )
         && expected != 0
         && read(object, 0x10, &mut actual)
         && read(expected, 0x90, &mut depth)
@@ -63,6 +60,18 @@ fn object_has_class(object: u64, cache_rva: u32) -> bool {
         && read(actual, 0x88, &mut bases)
         && read(bases, depth as usize * 8, &mut entry)
         && entry == expected.wrapping_add(0x88)
+}
+
+/// `object_is_a` against the class the engine caches at `cache_rva`.
+fn object_has_class(object: u64, cache_rva: u32) -> bool {
+    let mut expected = 0u64;
+    object != 0
+        && copy(
+            (&mut expected as *mut u64).cast(),
+            game_module().wrapping_add(cache_rva as usize).cast(),
+            8,
+        )
+        && object_is_a(object, expected)
 }
 
 /// Copy classification with the renderer. A later world at Present cannot establish which
