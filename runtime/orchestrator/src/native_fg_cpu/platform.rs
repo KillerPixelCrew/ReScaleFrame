@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d11_present::rsf_d3d11_present_graphics;
-use crate::d3d11_present_abi::rsf_streamline_graphics;
+use crate::sys::rsf_streamline_graphics;
 use crate::native_cpu::rsf_native_cpu_rendered_source_set;
 use diagnostics::report_stage;
 use std::ffi::c_char;
@@ -73,7 +73,7 @@ pub(super) mod leaf {
 pub(super) unsafe extern "C" fn native_device() -> Handle {
     let mut graphics = rsf_streamline_graphics {
         struct_size: size_of::<rsf_streamline_graphics>() as u32,
-        ..rsf_streamline_graphics::EMPTY
+        ..unsafe { std::mem::zeroed() }
     };
     if unsafe { rsf_d3d11_present_graphics(&mut graphics) } != 0 {
         graphics.native_device

@@ -92,6 +92,8 @@ mod leaf {
 use tests as leaf;
 
 type Graphics = rsf_streamline_graphics;
+// No graphics published.
+const NO_GRAPHICS: Graphics = unsafe { std::mem::zeroed() };
 
 pub(crate) const S_OK: i32 = 0;
 pub(crate) const E_FAIL: i32 = 0x8000_4005_u32 as i32;
@@ -354,7 +356,7 @@ static RETIREMENT_PENDING: AtomicBool = AtomicBool::new(false);
 // The active provider paces through the shared Streamline host (Reflex), so latency calls go
 // to the host once rather than to both. Changes only with ACTIVE_SESSION, under PROVIDER_GUARD.
 static HOST_PACED: AtomicBool = AtomicBool::new(false);
-static ACTIVE_GRAPHICS: Mutex<SendGraphics> = Mutex::new(SendGraphics(Graphics::EMPTY));
+static ACTIVE_GRAPHICS: Mutex<SendGraphics> = Mutex::new(SendGraphics(NO_GRAPHICS));
 // Main-thread latency calls share the provider lifetime; only replacement and retirement
 // write-lock it, so a caller arriving mid-switch is turned away instead of blocking.
 static PROVIDER_GUARD: RwLock<()> = RwLock::new(());
@@ -780,7 +782,7 @@ impl Owner {
             windowed: 0,
             native12: 0,
             tearing: 0,
-            graphics: Graphics::EMPTY,
+            graphics: NO_GRAPHICS,
             direct_queue: null_mut(),
             device11: null_mut(),
             buffer_usage: 0,
@@ -2348,7 +2350,7 @@ impl Owner {
                 RETIREMENT_PENDING.store(true, Ordering::Release);
                 lock(&STATUS).invalidate();
                 OUTER_ALIAS.store(null_mut(), Ordering::Release);
-                lock(&ACTIVE_GRAPHICS).0 = Graphics::EMPTY;
+                lock(&ACTIVE_GRAPHICS).0 = NO_GRAPHICS;
                 ACTIVE_CHAIN.store(null_mut(), Ordering::Release);
                 ACTIVE_BRIDGE.store(null_mut(), Ordering::Release);
                 ACTIVE_SESSION.store(null_mut(), Ordering::Release);

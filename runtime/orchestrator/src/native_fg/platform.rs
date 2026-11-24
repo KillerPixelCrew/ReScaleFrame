@@ -2,7 +2,7 @@
 use super::{Handle, Log, TextureInfo};
 use crate::d3d11_d3d12::*;
 use crate::d3d11_present::rsf_d3d11_present_graphics;
-use crate::d3d11_present_abi::rsf_streamline_graphics;
+use crate::sys::rsf_streamline_graphics;
 use crate::shared_surface::{
     ABI_VERSION as SURFACE_ABI, SurfaceSetup, rsf_shared_fence_create, rsf_shared_surface_create,
 };
@@ -58,7 +58,7 @@ pub(super) unsafe fn present_graphics(
 ) -> i32 {
     let mut graphics = rsf_streamline_graphics {
         struct_size: size_of::<rsf_streamline_graphics>() as u32,
-        ..rsf_streamline_graphics::EMPTY
+        ..unsafe { std::mem::zeroed() }
     };
     if unsafe { rsf_d3d11_present_graphics(&mut graphics) } == 0 {
         return 0;

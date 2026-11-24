@@ -1,33 +1,12 @@
 // SPDX-License-Identifier: MIT
-// Records the presentation owner and its native leaves exchange. Rust-only; the streamline
-// graphics record mirrors rescaleframe/streamline_host.h.
+// Records the presentation owner and its native leaves exchange. Rust-only, except the Streamline
+// graphics record from rescaleframe/streamline_host.h.
 #![allow(non_camel_case_types)]
 
+pub(crate) use crate::sys::rsf_streamline_graphics;
 use std::ffi::c_void;
 
 pub(crate) type Raw = *mut c_void;
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub(crate) struct rsf_streamline_graphics {
-    pub struct_size: u32,
-    pub device: Raw,
-    pub queue: Raw,
-    pub factory: Raw,
-    pub native_device: Raw,
-    pub native_queue: Raw,
-}
-
-impl rsf_streamline_graphics {
-    pub(crate) const EMPTY: Self = Self {
-        struct_size: 0,
-        device: std::ptr::null_mut(),
-        queue: std::ptr::null_mut(),
-        factory: std::ptr::null_mut(),
-        native_device: std::ptr::null_mut(),
-        native_queue: std::ptr::null_mut(),
-    };
-}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -86,5 +65,3 @@ pub(crate) const FAMILY_FIDELITYFX: u32 = 2;
 pub(crate) const FAMILY_XESS: u32 = 3;
 
 pub(crate) enum Chain {}
-
-const _: () = assert!(size_of::<rsf_streamline_graphics>() == 48);

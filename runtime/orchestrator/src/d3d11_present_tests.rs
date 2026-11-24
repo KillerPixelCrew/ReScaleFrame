@@ -1189,7 +1189,7 @@ fn reset() -> MutexGuard<'static, ()> {
         value.store(null_mut(), Ordering::SeqCst);
     }
     ACTIVE_CHAIN.store(null_mut(), Ordering::SeqCst);
-    lock(&ACTIVE_GRAPHICS).0 = Graphics::EMPTY;
+    lock(&ACTIVE_GRAPHICS).0 = NO_GRAPHICS;
     ACTIVE_BACKEND.store(DLSS, Ordering::SeqCst);
     REQUESTED_BACKEND.store(NO_REQUEST, Ordering::SeqCst);
     BACKEND_CHOICES.store((RSF_FG_BACKEND_ALL | 1) & !(1 << FSR4), Ordering::SeqCst);
@@ -1470,7 +1470,7 @@ fn creation_admission_publication_and_retirement() {
         0
     );
     assert_eq!(short, size_of::<u32>() as u32);
-    let mut graphics = Graphics::EMPTY;
+    let mut graphics = NO_GRAPHICS;
     graphics.struct_size = 48;
     assert_eq!(unsafe { rsf_d3d11_present_graphics(&mut graphics) }, 1);
     let interop = with(|fake| com_raw(fake.interop()));

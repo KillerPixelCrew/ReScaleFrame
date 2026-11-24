@@ -994,7 +994,7 @@ unsafe fn host_native<'a>(host: *mut Host) -> Option<&'a mut Native> {
     unsafe { native.cast::<Native>().as_mut() }
 }
 
-use crate::d3d11_present_abi::rsf_streamline_graphics as Graphics;
+use crate::sys::rsf_streamline_graphics as Graphics;
 
 fn raw<T: Interface>(object: &Option<T>) -> Handle {
     object.as_ref().map_or(null_mut(), Interface::as_raw)
