@@ -624,8 +624,8 @@ unsafe extern "C" fn lookup_instance(
     unsafe { (leaf.host.resolve)(graphics.instance_proc, graphics.instance, name, out) }
 }
 
-// startup::open resolved each slot by its exact SDK export or Vulkan command name; 	yped`n// pairs it with the field's signature.
-
+// startup::open resolved each slot by its exact SDK export or Vulkan command name; `typed`
+// pairs it with the field's signature.
 unsafe extern "C" fn bind_core(native: Handle, entries: &CoreEntries) {
     let leaf = unsafe { unpublished(native) };
     let [

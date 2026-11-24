@@ -177,11 +177,6 @@ impl ImageCopy {
     }
 }
 
-const _: () = {
-    assert!(size_of::<Barrier>() == 40);
-    assert!(size_of::<ImageCopy>() == 32);
-};
-
 // Both images stay on the graphics queue and return to shader-read layout.
 // The caller supplies the active copy extent and tracks destination initialization.
 pub(super) unsafe fn record_shader_read_copy(

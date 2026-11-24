@@ -276,14 +276,7 @@ impl Owner {
             status: Status {
                 struct_size: size_of::<Status>() as u32,
                 abi_version: RSF_FGVK_ABI_VERSION,
-                enabled: 0,
-                available: 0,
-                result: 0,
-                prepared: 0,
-                tagged: 0,
-                generated_callbacks: 0,
-                last_present_count: 0,
-                source_frame: 0,
+                ..Default::default()
             },
         }
     }
