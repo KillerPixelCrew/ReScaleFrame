@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Module, run};
+use super::{Module, plugin_api, run};
 use crate::sys::{RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation as Observation};
 use rsf_game_sys::*;
 use rsf_game_sys::{
@@ -10,13 +10,6 @@ use std::ffi::CStr;
 use std::path::Path;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
-
-type Entry = unsafe extern "C" fn(u32, *mut rsf_game_plugin_api) -> i32;
-
-fn entry(module: &Module) -> Entry {
-    let name = CStr::from_bytes_with_nul(RSF_GAME_ENTRY_POINT).expect("GameSDK export name");
-    unsafe { module.export(name) }.expect("Anomaly GameSDK export")
-}
 
 fn plugin(module: &Module) {
     for (ordinal, name) in [
@@ -30,23 +23,7 @@ fn plugin(module: &Module) {
         assert!(named.is_some(), "missing export {name:?}");
         assert_eq!(named.map(|f| f as usize), by_ordinal.map(|f| f as usize));
     }
-    let query = entry(module);
-    let version = RSF_GAME_ABI_VERSION;
-    let mut api: rsf_game_plugin_api = unsafe { std::mem::zeroed() };
-    assert_eq!(
-        unsafe { query(version, null_mut()) },
-        RSF_ERROR_INVALID_ARGUMENT
-    );
-    assert_eq!(
-        unsafe { query(version, &mut api) },
-        RSF_ERROR_INVALID_ARGUMENT
-    );
-    api.struct_size = size_of_val(&api) as u32;
-    assert_eq!(
-        unsafe { query(version + 1, &mut api) },
-        RSF_ERROR_ABI_MISMATCH
-    );
-    assert_eq!(unsafe { query(version, &mut api) }, RSF_OK);
+    let api = plugin_api(module);
     assert!(!api.info.id.is_null());
     assert_eq!(unsafe { CStr::from_ptr(api.info.id) }, c"anomaly");
     assert_eq!(api.info.rendering_ready, 0);
@@ -96,15 +73,11 @@ fn plugin(module: &Module) {
 }
 
 fn lifecycle(module: &Module) {
-    let query = entry(module);
     type Observe = unsafe extern "C" fn(*mut Observation) -> i32;
     let observe: Observe =
         unsafe { module.export(c"rsf_anomaly_observation") }.expect("Anomaly observation export");
     let version = RSF_GAME_ABI_VERSION;
-    let mut api: rsf_game_plugin_api = unsafe { std::mem::zeroed() };
-    api.struct_size = size_of_val(&api) as u32;
-    assert_eq!(unsafe { query(version, &mut api) }, RSF_OK);
-    let hooks = api.hooks;
+    let hooks = plugin_api(module).hooks;
     let prepare = hooks.prepare.expect("prepare");
     let start = hooks.start.expect("start");
     let status = hooks.status.expect("status");

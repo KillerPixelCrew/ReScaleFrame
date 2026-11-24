@@ -85,6 +85,26 @@ impl Drop for Module {
     }
 }
 
+/// The plugin's API table, after checking that its entry point refuses a null table, an unsized
+/// table and a newer ABI version.
+fn plugin_api(module: &Module) -> rsf_game_sys::rsf_game_plugin_api {
+    use rsf_game_sys::*;
+    type Entry = unsafe extern "C" fn(u32, *mut rsf_game_plugin_api) -> i32;
+    let name = CStr::from_bytes_with_nul(RSF_GAME_ENTRY_POINT).expect("GameSDK export name");
+    let entry = unsafe { module.export::<Entry>(name) }.expect("plugin entry point");
+    let version = RSF_GAME_ABI_VERSION;
+    // Zero initializes the sized C record before setting its input fields.
+    let mut api: rsf_game_plugin_api = unsafe { std::mem::zeroed() };
+    unsafe {
+        assert_eq!(entry(version, null_mut()), RSF_ERROR_INVALID_ARGUMENT);
+        assert_eq!(entry(version, &mut api), RSF_ERROR_INVALID_ARGUMENT);
+        api.struct_size = size_of_val(&api) as u32;
+        assert_eq!(entry(version + 1, &mut api), RSF_ERROR_ABI_MISMATCH);
+        assert_eq!(entry(version, &mut api), RSF_OK);
+    }
+    api
+}
+
 fn run(check: impl FnOnce() -> i32 + std::panic::UnwindSafe) -> i32 {
     std::panic::catch_unwind(check).unwrap_or(1)
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Module, run};
+use super::{Module, plugin_api, run};
 use rsf_game_sys::*;
 use rsf_game_sys::{
     RSF_ERROR_ABI_MISMATCH, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED,
@@ -68,22 +68,8 @@ fn inactive(status: &rsf_game_renderer_status) -> bool {
 }
 
 fn contract(fixture: &Fixture, module: &Module) {
-    let name = CStr::from_bytes_with_nul(RSF_GAME_ENTRY_POINT).expect("GameSDK export name");
-    type Entry = unsafe extern "C" fn(u32, *mut rsf_game_plugin_api) -> i32;
-    let entry = unsafe { module.export::<Entry>(name) }.expect("plugin entry point");
     let version = RSF_GAME_ABI_VERSION;
-    // Zero initializes the sized C records before setting their input fields.
-    let mut api: rsf_game_plugin_api = unsafe { std::mem::zeroed() };
-    unsafe {
-        assert_eq!(
-            entry(version, std::ptr::null_mut()),
-            RSF_ERROR_INVALID_ARGUMENT
-        );
-        assert_eq!(entry(version, &mut api), RSF_ERROR_INVALID_ARGUMENT);
-        api.struct_size = size_of_val(&api) as u32;
-        assert_eq!(entry(version + 1, &mut api), RSF_ERROR_ABI_MISMATCH);
-        assert_eq!(entry(version, &mut api), RSF_OK);
-    }
+    let api = plugin_api(module);
 
     let detect = api.detect.expect("detection callback");
     assert!(!api.info.id.is_null());
