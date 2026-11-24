@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+// The overlay calls these installs directly; its unit tests swap in fakes, so under test only the fixtures reach them.
+#![cfg_attr(test, allow(dead_code))]
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut};

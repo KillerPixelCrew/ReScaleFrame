@@ -7,15 +7,12 @@
 //! per-panel diagnostics and backbuffer capture. The hooks and COM calls live in the adapter. Window, key and
 //! INI reads are the Win32 calls in `win32` below. The service never loads a second Runtime.
 
-use crate::fg_stage::{self, Frontend};
 use crate::native_hooks::HookOps;
 use crate::sys::*;
 /// Rust-only records of the adapter options and chain identity.
 pub(crate) mod records;
 use crate::host_log::Log;
-use crate::sr_stage::{OverlayChoices, STAGE};
 use crate::sys::rsf_anomaly_sr_settings;
-use crate::{overlay_hooks, overlay_native};
 pub(crate) use records::*;
 use rsf_game_sys::rsf_overlay_sr_report;
 use std::ffi::{CStr, CString, OsString, c_char, c_int, c_void};
@@ -266,80 +263,52 @@ unsafe fn rsf_anomaly_overlay_bind(
 
 // ---- native leaves -----------------------------------------------------------------------------------------------
 
-#[derive(Clone, Copy)]
-struct Leaves {
-    chain: unsafe extern "C" fn(*mut c_void, *mut rsf_anomaly_overlay_chain) -> u32,
-    capture_backbuffer: unsafe extern "C" fn(
-        *mut c_void,
-        rsf_input_dump_named_texture_fn,
-        *const rsf_named_frame_dump,
-        *mut rsf_named_frame_dump_report,
-    ) -> i32,
-}
+// The chain and backbuffer leaves, the hook installs, the SR and FG stage controls and the window and key reads of the
+// Present path. Production calls them directly; unit tests compile same-named fakes (`tests::leaves`).
+#[cfg(not(test))]
+use self::native as leaves;
+#[cfg(test)]
+use self::tests::leaves;
 
-type InstallHook = fn(&HookOps, &mut *const c_char) -> bool;
+#[cfg(not(test))]
+mod native {
+    use super::{HookOps, c_char, c_void, rsf_anomaly_sr_settings, rsf_overlay_sr_report};
+    use crate::sr_stage::{OverlayChoices, STAGE};
+        pub(super) use super::win32::{engine_window, insert_held};
+    pub(super) use crate::fg_stage::{foreign_chain as fg_foreign_chain, overlay_options as fg_options};
+    pub(super) use crate::overlay_hooks::install_input;
+    pub(super) use crate::overlay_native::{capture_backbuffer, describe_chain as chain};
 
-struct Platform {
-    leaves: Leaves,
-    install_input: InstallHook,
-    install_present: InstallHook,
-}
-
-const NATIVE: Platform = Platform {
-    leaves: Leaves {
-        chain: overlay_native::describe_chain,
-        capture_backbuffer: overlay_native::capture_backbuffer,
-    },
-    install_input: overlay_hooks::install_input,
-    install_present: |hooks, reason| {
-        overlay_hooks::install_present(
-            rsf_anomaly_overlay_present,
-            rsf_anomaly_overlay_resize,
+    pub(super) fn install_present(hooks: &HookOps, reason: &mut *const c_char) -> bool {
+        crate::overlay_hooks::install_present(
+            super::rsf_anomaly_overlay_present,
+            super::rsf_anomaly_overlay_resize,
             hooks,
             reason,
         )
-    },
-};
+    }
 
-#[derive(Clone, Copy)]
-struct StageControls {
-    sr_choices: fn(*mut c_void) -> OverlayChoices,
-    sr_report: fn(*mut rsf_overlay_sr_report) -> bool,
-    sr_request: fn(&rsf_anomaly_sr_settings),
-    fg_options: fn() -> Option<Frontend>,
-    fg_foreign_chain: fn(*mut c_void) -> bool,
-}
+    pub(super) fn sr_choices(runtime: *mut c_void) -> OverlayChoices {
+        STAGE.choices(runtime)
+    }
 
-const STAGES: StageControls = StageControls {
-    sr_choices: |runtime| STAGE.choices(runtime),
-    sr_report: |report| STAGE.overlay_report(report.cast()),
-    sr_request: |settings| STAGE.request(settings),
-    fg_options: fg_stage::overlay_options,
-    fg_foreign_chain: fg_stage::foreign_chain,
-};
+    pub(super) fn sr_report(report: *mut rsf_overlay_sr_report) -> bool {
+        STAGE.overlay_report(report.cast())
+    }
 
-impl StageControls {
-    fn request_sr(&self, settings: &rsf_render_settings) {
-        (self.sr_request)(&rsf_anomaly_sr_settings {
-            enabled: settings.sr_enabled != 0,
-            backend: settings.sr_backend,
-            quality: settings.sr_quality,
-            preset: settings.dlss_preset,
-        });
+    pub(super) fn sr_request(settings: &rsf_anomaly_sr_settings) {
+        STAGE.request(settings)
     }
 }
 
-/// The window and key reads the Present path needs. Production uses `win32`.
-#[derive(Clone, Copy)]
-struct Desktop {
-    engine_window: fn(*mut c_void) -> bool,
-    insert_held: fn(*mut c_void) -> bool,
+fn request_sr(settings: &rsf_render_settings) {
+    leaves::sr_request(&rsf_anomaly_sr_settings {
+        enabled: settings.sr_enabled != 0,
+        backend: settings.sr_backend,
+        quality: settings.sr_quality,
+        preset: settings.dlss_preset,
+    });
 }
-
-const DESKTOP: Desktop = Desktop {
-    engine_window: win32::engine_window,
-    insert_held: win32::insert_held,
-};
 
 // ---- configuration translation -----------------------------------------------------------------------------------
 
@@ -350,14 +319,13 @@ const DESKTOP: Desktop = Desktop {
 /// status says so. Requested and effective SR status come from `sr_report`. `table` and `configuration` must outlive
 /// the configure call; the Runtime copies both.
 fn make_setup(
-    controls: StageControls,
     options: &rsf_anomaly_overlay_options,
     configuration: *const u16,
     adapter_options: &[AdapterOption],
     table: &mut Vec<rsf_overlay_service_option>,
 ) -> rsf_overlay_service_setup {
-    let sr = (controls.sr_choices)(options.runtime);
-    let fg = (controls.fg_options)();
+    let sr = leaves::sr_choices(options.runtime);
+    let fg = leaves::fg_options();
     let mut setup = rsf_overlay_service_setup {
         struct_size: size_of::<rsf_overlay_service_setup>() as u32,
         abi_version: RSF_OVERLAY_API_VERSION,
@@ -559,9 +527,6 @@ fn configure_capture(
 
 struct Service {
     api: Api,
-    leaves: Leaves,
-    controls: StageControls,
-    desktop: Desktop,
     log: Log,
     diagnostics: Option<DiagnosticsFn>,
     capture: Option<Capture>,
@@ -642,7 +607,7 @@ impl Service {
             applied.latency
         ));
         // The SR stage applies them at its next frame boundary (drained: after the frame's SR work, before Present).
-        self.controls.request_sr(applied);
+        request_sr(applied);
     }
 
     fn summary(&self, run: &PanelRun, when: &str) {
@@ -710,7 +675,7 @@ impl Service {
             ..Default::default()
         };
         let result = unsafe {
-            (self.leaves.capture_backbuffer)(chain, Some(capture.dump), &request, &mut report)
+            leaves::capture_backbuffer(chain, Some(capture.dump), &request, &mut report)
         };
         self.say(format_args!(
             "Anomaly overlay capture {name}: result {result} ({}x{} format {}) -> {}",
@@ -817,13 +782,13 @@ impl Service {
         }
         // With the FG bridge presenting, DXGI's Present also runs for the provider's physical or proxy chain (on the
         // provider's own thread for generated frames). The panel belongs to the engine-facing chain only.
-        if (self.controls.fg_foreign_chain)(chain) {
+        if leaves::fg_foreign_chain(chain) {
             return;
         }
         let mut info = rsf_anomaly_overlay_chain::default();
-        if unsafe { (self.leaves.chain)(chain, &mut info) } == 0
+        if unsafe { leaves::chain(chain, &mut info) } == 0
             || info.window.is_null()
-            || !(self.desktop.engine_window)(info.window)
+            || !leaves::engine_window(info.window)
         {
             return;
         }
@@ -866,7 +831,7 @@ impl Service {
         if self.key_poll {
             // Insert normally arrives as a window message. If DirectInput's focus handling swallows it, this edge
             // toggles instead; the Runtime's 250 ms debounce makes the two paths safe together.
-            let down = (self.desktop.insert_held)(info.window);
+            let down = leaves::insert_held(info.window);
             if down && !panel.insert_down {
                 unsafe { (self.api.toggle)() };
             }
@@ -884,26 +849,21 @@ struct Overlay {
     service: OnceLock<Service>,
     started: AtomicBool,
     suspended: AtomicBool,
-    desktop: Desktop,
-    controls: StageControls,
 }
 
 impl Overlay {
-    const fn new(desktop: Desktop, controls: StageControls) -> Self {
+    const fn new() -> Self {
         Self {
             gate: Mutex::new(()),
             service: OnceLock::new(),
             started: AtomicBool::new(false),
             suspended: AtomicBool::new(false),
-            desktop,
-            controls,
         }
     }
 
     fn start(
         &self,
         options: &rsf_anomaly_overlay_options,
-        platform: &Platform,
         hooks: Option<&HookOps>,
         adapter_options: Vec<AdapterOption>,
     ) -> Result<Status, Refusal> {
@@ -940,15 +900,8 @@ impl Overlay {
         .inspect_err(|refusal| {
             log.say(format_args!("Anomaly overlay refused: {}.", refusal.text()));
         })?;
-        let leaves = platform.leaves;
         let mut table = Vec::new();
-        let setup = make_setup(
-            self.controls,
-            options,
-            ini.as_ptr(),
-            &adapter_options,
-            &mut table,
-        );
+        let setup = make_setup(options, ini.as_ptr(), &adapter_options, &mut table);
         let configured = unsafe { (api.configure)(&setup) };
         if configured != OK {
             let refusal = Refusal::new(
@@ -963,11 +916,8 @@ impl Overlay {
         }
         let key_poll = win32::ini_int(ini, w!("OverlayKeyPoll"), 1) != 0;
         let (diagnostics, capture) = configure_capture(options, ini, &log);
-        let service = self.service.get_or_init(|| Service {
+        self.service.get_or_init(|| Service {
             api,
-            leaves,
-            controls: self.controls,
-            desktop: self.desktop,
             log,
             diagnostics,
             capture,
@@ -995,14 +945,14 @@ impl Overlay {
             ));
             if setup.sr_backend_choices != 0 {
                 // The persisted (and validated) choice is what SR starts with.
-                service.controls.request_sr(&saved);
+                request_sr(&saved);
             }
         }
         if options.install_hooks != 0 {
             let hooks = hooks.ok_or(Refusal::new(HOOKS_REFUSED, c"no hook operations"))?;
             // Input first: a panel that cannot keep the game from acting on mouse and keyboard must not open.
             let mut reason = ptr::null();
-            if !(platform.install_input)(hooks, &mut reason) {
+            if !leaves::install_input(hooks, &mut reason) {
                 log.say(format_args!(
                     "Anomaly overlay refused: DirectInput gate unavailable ({}). The panel will not start.",
                     text(reason)
@@ -1013,7 +963,7 @@ impl Overlay {
                 });
             }
             let mut reason = ptr::null();
-            if !(platform.install_present)(hooks, &mut reason) {
+            if !leaves::install_present(hooks, &mut reason) {
                 log.say(format_args!(
                     "Anomaly overlay refused: Present hook unavailable ({}). The panel will not start.",
                     text(reason)
@@ -1061,7 +1011,7 @@ impl Overlay {
     }
 }
 
-static OVERLAY: Overlay = Overlay::new(DESKTOP, STAGES);
+static OVERLAY: Overlay = Overlay::new();
 static PANEL: LazyLock<Mutex<Panel>> = LazyLock::new(Mutex::default);
 
 pub(crate) fn suspend() -> bool {
@@ -1088,7 +1038,7 @@ pub(super) unsafe extern "C" fn rsf_anomaly_overlay_start(
     reason: *mut *const c_char,
 ) -> u32 {
     let result = catch_unwind(AssertUnwindSafe(|| match unsafe { options.as_ref() } {
-        Some(options) => OVERLAY.start(options, &NATIVE, hooks, registered_options()),
+        Some(options) => OVERLAY.start(options, hooks, registered_options()),
         None => Err(Refusal::new(
             CONFIGURE_REFUSED,
             c"no adapter configuration path",
@@ -1110,6 +1060,7 @@ pub(super) unsafe extern "C" fn rsf_anomaly_overlay_start(
 }
 
 /// The capture bits (RSF_OVERLAY_CAPTURE_*) the input gate acts on; 0 before start or when the query fails.
+#[cfg_attr(test, allow(dead_code))]
 pub(super) extern "C" fn rsf_anomaly_overlay_capture_bits(_: *mut c_void) -> u32 {
     OVERLAY.running().map_or(0, Service::capture_bits)
 }
@@ -1128,6 +1079,7 @@ pub(super) extern "C" fn rsf_anomaly_overlay_present(_: *mut c_void, chain: *mut
 }
 
 /// Before ResizeBuffers or ResizeTarget is forwarded.
+#[cfg_attr(test, allow(dead_code))]
 extern "C" fn rsf_anomaly_overlay_resize(_: *mut c_void, chain: *mut c_void) {
     if let Ok(panel) = PANEL.try_lock()
         && panel.chain != 0
@@ -1146,7 +1098,7 @@ unsafe extern "C" fn accept_window(_: *mut c_void, window: *mut c_void) -> c_int
 
 unsafe extern "C" fn sr_report(_: *mut c_void, report: *mut rsf_overlay_sr_report) -> c_int {
     match service() {
-        Some(service) if !report.is_null() => (service.controls.sr_report)(report).into(),
+        Some(_) if !report.is_null() => leaves::sr_report(report).into(),
         _ => 0,
     }
 }
@@ -1217,6 +1169,7 @@ mod win32 {
     }
 
     /// Insert is held and `window` has the foreground.
+    #[cfg_attr(test, allow(dead_code))]
     pub(super) fn insert_held(window: *mut c_void) -> bool {
         (unsafe { GetAsyncKeyState(i32::from(VK_INSERT)) } as u16 & 0x8000) != 0
             && unsafe { GetForegroundWindow() } == window

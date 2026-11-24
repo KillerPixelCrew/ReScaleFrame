@@ -806,10 +806,12 @@ pub(crate) extern "C" fn rsf_anomaly_fg_set_overlay_sink(
     let _ = OVERLAY.set((sink, user as usize));
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn overlay_options() -> Option<Frontend> {
     installed().map(|stage| stage.options.frontend)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn foreign_chain(chain: Raw) -> bool {
     installed().is_some_and(|stage| {
         (unsafe { (stage.tables.present.has_owner)() != 0 }) && !stage.owns(chain)

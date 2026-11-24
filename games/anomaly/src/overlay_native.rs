@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Windows SDK calls used by the Anomaly overlay's D3D11 and DirectInput boundaries.
+// The overlay calls the chain and capture leaves directly; its unit tests swap in fakes.
+#![cfg_attr(test, allow(dead_code))]
 use crate::lease::Lease;
 use crate::overlay::rsf_anomaly_overlay_chain;
 use crate::sys::{

@@ -1655,5 +1655,7 @@ pub(crate) mod leaves {
         false
     }
     pub(crate) fn driver_overlay_report(_: *mut c_void) {}
+    // The overlay is the only caller of STAGE.request, and its tests fake the stage controls.
+    #[allow(dead_code)]
     pub(crate) fn driver_request(_: *const rsf_anomaly_sr_settings) {}
 }

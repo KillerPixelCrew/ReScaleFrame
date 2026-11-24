@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::fg_stage::Frontend;
+use crate::sr_stage::OverlayChoices;
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, AtomicUsize};
 
 fn lines(log: &Mutex<Vec<String>>) -> Vec<String> {
@@ -140,78 +143,101 @@ fn binding_refuses_cleanly_and_accepts_a_complete_table() {
 static SR_OFFER: AtomicU32 = AtomicU32::new(0);
 static FG_LINK: AtomicU32 = AtomicU32::new(0);
 static SR_REQUESTS: AtomicU32 = AtomicU32::new(0);
-
-fn sr_choices(_: *mut c_void) -> OverlayChoices {
-    if SR_OFFER.load(Ordering::SeqCst) == 0 {
-        return Default::default();
-    }
-    OverlayChoices {
-        backends: (1 << 1) | (1 << 5),
-        qualities: 0x1f,
-        preset: true,
-        defaults: rsf_anomaly_sr_settings {
-            enabled: true,
-            backend: 5,
-            quality: 2,
-            preset: 4,
-        },
-    }
-}
-fn count_request(_: &rsf_anomaly_sr_settings) {
-    SR_REQUESTS.fetch_add(1, Ordering::SeqCst);
-}
-fn fg_options() -> Option<Frontend> {
-    (FG_LINK.load(Ordering::SeqCst) != 0).then_some(Frontend {
-        enabled: 1,
-        backend: 3,
-        generated: 2,
-        latency: 1,
-        frame_limit_us: 7000,
-    })
-}
-const TEST_STAGES: StageControls = StageControls {
-    sr_choices,
-    sr_report: |_| false,
-    sr_request: count_request,
-    fg_options,
-    fg_foreign_chain: |_| false,
-};
 static DEVICE: AtomicUsize = AtomicUsize::new(0x1000);
-unsafe extern "C" fn describe(_: *mut c_void, out: *mut rsf_anomaly_overlay_chain) -> u32 {
-    unsafe {
-        out.write(rsf_anomaly_overlay_chain {
-            window: ptr::without_provenance_mut(0x20),
-            device: ptr::without_provenance(DEVICE.load(Ordering::SeqCst)),
-            width: 1920,
-            height: 1080,
-        })
-    };
-    1
-}
 static CAPTURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
-unsafe extern "C" fn capture_backbuffer(
-    _: *mut c_void,
-    dump: rsf_input_dump_named_texture_fn,
-    request: *const rsf_named_frame_dump,
-    report: *mut rsf_named_frame_dump_report,
-) -> i32 {
-    assert!(dump.is_some());
-    let request = unsafe { &*request };
-    assert_eq!(request.abi_version, RSF_NAMED_FRAME_DUMP_ABI_VERSION);
-    lock(&CAPTURES).push(text(request.name));
-    unsafe {
-        (*report).width = 1920;
-        (*report).height = 1080;
+static INSERT: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    /// The Present hook install refuses, as a dummy swap chain that cannot be created does.
+    static PRESENT_REFUSED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The same-named stand-ins `overlay` calls under test (`native` in production).
+pub(super) mod leaves {
+    use super::*;
+
+    pub(in crate::overlay) fn sr_choices(_: *mut c_void) -> OverlayChoices {
+        if SR_OFFER.load(Ordering::SeqCst) == 0 {
+            return Default::default();
+        }
+        OverlayChoices {
+            backends: (1 << 1) | (1 << 5),
+            qualities: 0x1f,
+            preset: true,
+            defaults: rsf_anomaly_sr_settings {
+                enabled: true,
+                backend: 5,
+                quality: 2,
+                preset: 4,
+            },
+        }
     }
-    OK
+    pub(in crate::overlay) fn sr_report(_: *mut rsf_overlay_sr_report) -> bool {
+        false
+    }
+    pub(in crate::overlay) fn sr_request(_: &rsf_anomaly_sr_settings) {
+        SR_REQUESTS.fetch_add(1, Ordering::SeqCst);
+    }
+    pub(in crate::overlay) fn fg_options() -> Option<Frontend> {
+        (FG_LINK.load(Ordering::SeqCst) != 0).then_some(Frontend {
+            enabled: 1,
+            backend: 3,
+            generated: 2,
+            latency: 1,
+            frame_limit_us: 7000,
+        })
+    }
+    pub(in crate::overlay) fn fg_foreign_chain(_: *mut c_void) -> bool {
+        false
+    }
+    pub(in crate::overlay) unsafe extern "C" fn chain(
+        _: *mut c_void,
+        out: *mut rsf_anomaly_overlay_chain,
+    ) -> u32 {
+        unsafe {
+            out.write(rsf_anomaly_overlay_chain {
+                window: ptr::without_provenance_mut(0x20),
+                device: ptr::without_provenance(DEVICE.load(Ordering::SeqCst)),
+                width: 1920,
+                height: 1080,
+            })
+        };
+        1
+    }
+    pub(in crate::overlay) unsafe extern "C" fn capture_backbuffer(
+        _: *mut c_void,
+        dump: rsf_input_dump_named_texture_fn,
+        request: *const rsf_named_frame_dump,
+        report: *mut rsf_named_frame_dump_report,
+    ) -> i32 {
+        assert!(dump.is_some());
+        let request = unsafe { &*request };
+        assert_eq!(request.abi_version, RSF_NAMED_FRAME_DUMP_ABI_VERSION);
+        lock(&CAPTURES).push(text(request.name));
+        unsafe {
+            (*report).width = 1920;
+            (*report).height = 1080;
+        }
+        OK
+    }
+    pub(in crate::overlay) fn install_input(_: &HookOps, _: &mut *const c_char) -> bool {
+        true
+    }
+    pub(in crate::overlay) fn install_present(_: &HookOps, reason: &mut *const c_char) -> bool {
+        if PRESENT_REFUSED.get() {
+            *reason = c"dummy swap chain creation failed".as_ptr();
+            return false;
+        }
+        true
+    }
+    pub(in crate::overlay) fn engine_window(_: *mut c_void) -> bool {
+        true
+    }
+    pub(in crate::overlay) fn insert_held(_: *mut c_void) -> bool {
+        INSERT.load(Ordering::SeqCst)
+    }
 }
-fn installed(_: &HookOps, _: &mut *const c_char) -> bool {
-    true
-}
-fn present_refused(_: &HookOps, reason: &mut *const c_char) -> bool {
-    *reason = c"dummy swap chain creation failed".as_ptr();
-    false
-}
+
 unsafe extern "C" fn dump(
     _: *mut c_void,
     _: *mut c_void,
@@ -219,17 +245,6 @@ unsafe extern "C" fn dump(
     _: *mut rsf_named_frame_dump_report,
 ) -> i32 {
     OK
-}
-
-fn platform() -> Platform {
-    Platform {
-        leaves: Leaves {
-            chain: describe,
-            capture_backbuffer,
-        },
-        install_input: installed,
-        install_present: installed,
-    }
 }
 
 const UNUSED_HOOKS: HookOps = HookOps {
@@ -316,7 +331,7 @@ fn setup_translates_what_the_adapter_can_apply() {
 
     let mut table = Vec::new();
     // Neither SR Stage 5 nor the FG bridge: SR unavailable, FG Off only.
-    let setup = make_setup(TEST_STAGES, &start, INI.as_ptr(), &adapter, &mut table);
+    let setup = make_setup(&start, INI.as_ptr(), &adapter, &mut table);
     assert_eq!(setup.abi_version, RSF_OVERLAY_API_VERSION);
     assert_eq!(
         setup.struct_size as usize,
@@ -352,13 +367,13 @@ fn setup_translates_what_the_adapter_can_apply() {
     );
 
     FG_LINK.store(1, Ordering::SeqCst);
-    let fg_only = make_setup(TEST_STAGES, &start, INI.as_ptr(), &[], &mut table);
+    let fg_only = make_setup(&start, INI.as_ptr(), &[], &mut table);
     assert_eq!(fg_only.sr_backend_choices, 0);
     assert_ne!(fg_only.fg_backend_choices, 0);
     assert_eq!(fg_only.defaults.fg_enabled, 1);
 
     SR_OFFER.store(1, Ordering::SeqCst);
-    let setup = make_setup(TEST_STAGES, &start, INI.as_ptr(), &[], &mut table);
+    let setup = make_setup(&start, INI.as_ptr(), &[], &mut table);
     SR_OFFER.store(0, Ordering::SeqCst);
     FG_LINK.store(0, Ordering::SeqCst);
     assert_eq!(
@@ -419,10 +434,10 @@ fn runtime_start_and_capture_report_refusals() {
     start.api_override = ptr::null();
     start.log = Some(collect);
     start.log_user = ptr::from_ref(&log).cast_mut().cast();
-    let overlay = Overlay::new(TEST_DESKTOP, TEST_STAGES);
+    let overlay = Overlay::new();
     assert_eq!(
         overlay
-            .start(&start, &platform(), None, Vec::new())
+            .start(&start, None, Vec::new())
             .unwrap_err()
             .status,
         API_MISSING
@@ -440,7 +455,7 @@ fn runtime_start_and_capture_report_refusals() {
     start.api_override = &api;
     assert_eq!(
         overlay
-            .start(&start, &platform(), None, Vec::new())
+            .start(&start, None, Vec::new())
             .unwrap_err()
             .status,
         CONFIGURE_REFUSED
@@ -466,13 +481,6 @@ unsafe extern "C" fn counted_configure(_: *const rsf_overlay_service_setup) -> i
     CONFIGURES.fetch_add(1, Ordering::SeqCst);
     OK
 }
-fn no_window(_: *mut c_void) -> bool {
-    false
-}
-const TEST_DESKTOP: Desktop = Desktop {
-    engine_window: no_window,
-    insert_held: no_window,
-};
 
 // The C++ service answered a start after a hook refusal with already_started, which the cold entry accepts as a
 // started overlay. Configure is one-shot and the guarded hook installs do not repeat, so the retry must stay refused.
@@ -482,13 +490,11 @@ fn a_hook_refusal_stays_refused_on_retry() {
         configure: Some(counted_configure),
         ..table()
     };
-    let mut leaves = platform();
-    leaves.install_present = present_refused;
-    let overlay = Overlay::new(TEST_DESKTOP, TEST_STAGES);
+    PRESENT_REFUSED.set(true);
+    let overlay = Overlay::new();
     let first = overlay
         .start(
             &options(&api, true),
-            &leaves,
             Some(&UNUSED_HOOKS),
             Vec::new(),
         )
@@ -498,7 +504,6 @@ fn a_hook_refusal_stays_refused_on_retry() {
     let retry = overlay
         .start(
             &options(&api, true),
-            &leaves,
             Some(&UNUSED_HOOKS),
             Vec::new(),
         )
@@ -507,25 +512,26 @@ fn a_hook_refusal_stays_refused_on_retry() {
     assert!(reason_of(retry).contains("refused earlier"));
     assert_eq!(CONFIGURES.load(Ordering::SeqCst), 1);
     assert!(overlay.running().is_none());
+    PRESENT_REFUSED.set(false);
 
     // Without hooks the same table starts once; the next start reports it.
-    let overlay = Overlay::new(TEST_DESKTOP, TEST_STAGES);
+    let overlay = Overlay::new();
     let mut empty = options(&api, false);
     empty.configuration = w!("");
     assert_eq!(
         overlay
-            .start(&empty, &platform(), None, Vec::new())
+            .start(&empty, None, Vec::new())
             .unwrap_err()
             .status,
         CONFIGURE_REFUSED
     );
     assert_eq!(
-        overlay.start(&options(&api, false), &platform(), None, Vec::new()),
+        overlay.start(&options(&api, false), None, Vec::new()),
         Ok(STARTED)
     );
     assert_eq!(
         overlay
-            .start(&options(&api, false), &platform(), None, Vec::new())
+            .start(&options(&api, false), None, Vec::new())
             .unwrap_err()
             .status,
         ALREADY_STARTED
@@ -547,7 +553,6 @@ static RESETS: AtomicU32 = AtomicU32::new(0);
 static REFUSE_RESET: AtomicBool = AtomicBool::new(false);
 const NOT_READY: i32 = -3;
 static TOGGLES: AtomicU32 = AtomicU32::new(0);
-static INSERT: AtomicBool = AtomicBool::new(false);
 unsafe extern "C" fn visible() -> u32 {
     VISIBLE.load(Ordering::SeqCst)
 }
@@ -564,22 +569,9 @@ unsafe extern "C" fn count_toggle() -> i32 {
     TOGGLES.fetch_add(1, Ordering::SeqCst);
     OK
 }
-fn any_window(_: *mut c_void) -> bool {
-    true
-}
-fn insert(_: *mut c_void) -> bool {
-    INSERT.load(Ordering::SeqCst)
-}
-
 fn service(api: &rsf_overlay_api, log: Log, capture: Option<Capture>) -> Service {
     Service {
         api: Api::new(api).unwrap(),
-        leaves: platform().leaves,
-        controls: TEST_STAGES,
-        desktop: Desktop {
-            engine_window: any_window,
-            insert_held: insert,
-        },
         log,
         diagnostics: None,
         capture,
@@ -629,7 +621,7 @@ fn the_panel_restarts_on_a_new_chain_and_polls_insert() {
     service.present(&mut panel, next, false);
     assert_eq!(TOGGLES.load(Ordering::SeqCst), 2);
 
-    let overlay = Overlay::new(service.desktop, service.controls);
+    let overlay = Overlay::new();
     assert!(overlay.service.set(service).is_ok());
     overlay.started.store(true, Ordering::Release);
     let panel = Mutex::new(panel);

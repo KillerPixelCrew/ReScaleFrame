@@ -2,6 +2,7 @@
 //! Link the Windows fixtures to the same adapter entry points used by the carrier.
 use super::*;
 use crate::input::gate;
+use crate::{overlay_hooks, overlay_native};
 use windows::Win32::Devices::HumanInterfaceDevice::*;
 use windows::Win32::Foundation::{GENERIC_READ, HWND};
 use windows::Win32::Graphics::Direct3D::*;

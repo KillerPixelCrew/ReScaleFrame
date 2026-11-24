@@ -2607,7 +2607,9 @@ impl Stage {
     }
 
     // ---- the shared overlay -------------------------------------------------------------------------------------
+    // The overlay calls these directly; its unit tests fake them.
     #[cfg(windows)]
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn choices(&self, runtime: *mut c_void) -> OverlayChoices {
         // The overlay borrows the same carrier-owned module as the renderer.
         self.choices_with(unsafe { crate::sr_temporal::admission_export(runtime) })
@@ -2654,6 +2656,7 @@ impl Stage {
         true
     }
 
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn request(&self, settings: &rsf_anomaly_sr_settings) {
         if self.stage.load(Ordering::Acquire) == 5 {
             leaf!(self.platform(), driver_request(settings));

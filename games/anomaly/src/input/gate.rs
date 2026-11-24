@@ -100,6 +100,7 @@ unsafe fn flush(device: *mut c_void, calls: &DeviceCalls, stride: u32) -> HResul
 
 impl Gate {
     #[cfg(windows)]
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn new(capture: Capture) -> Self {
         Self {
             capture: Some(capture),
