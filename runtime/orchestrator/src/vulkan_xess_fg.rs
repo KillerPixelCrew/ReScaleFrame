@@ -599,15 +599,6 @@ pub(crate) unsafe fn rsf_xessgvk_max_generated(owner: *const Owner) -> u32 {
         (owner.vendor.ops.max_generated)(owner.vendor.bridge)
     })
 }
-unsafe extern "C" fn rsf_core_xessgvk_present(
-    owner: *mut Owner,
-    info: *const PresentInfo,
-    source: *const Record,
-    explicit: u32,
-) -> i32 {
-    unsafe { shared::present(owner, info, source, explicit) }
-}
-
 /// The marshaller's callback: the owner behind the provider handle.
 unsafe extern "C" fn present_owner(
     owner: Handle,
@@ -615,7 +606,7 @@ unsafe extern "C" fn present_owner(
     source: *const Record,
     exact: u32,
 ) -> i32 {
-    unsafe { rsf_core_xessgvk_present(owner.cast(), info, source, exact) }
+    unsafe { shared::present::<Xess>(owner.cast(), info, source, exact) }
 }
 
 /// Present routes through the shared V02 marshaller (vulkan_dx12_fg/platform.rs).

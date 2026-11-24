@@ -116,16 +116,6 @@ unsafe extern "C" fn rsf_fsr4gvk_probe(setup: *const Graphics, info: *mut Bridge
     unsafe { probe(setup, info) }
 }
 
-/// Rust admits the setup before it asks the shared graphics table to describe create_info.
-pub(crate) unsafe fn rsf_fsr4gvk_create(
-    setup: *const Setup,
-    options: *const Options,
-    output: *mut *mut Owner,
-    chain: *mut u64,
-) -> i32 {
-    unsafe { create(setup, options, output, chain) }
-}
-
 type Owner = shared::Owner<Fsr4>;
 
 pub(crate) struct Fsr4 {
@@ -161,7 +151,8 @@ unsafe fn probe(setup: *const Graphics, info: *mut BridgeInfo) -> i32 {
     unsafe { leaf::probe(luid, directory.as_ptr(), info) }
 }
 
-pub(crate) unsafe fn create(
+/// Rust admits the setup before it asks the shared graphics table to describe create_info.
+pub(crate) unsafe fn rsf_fsr4gvk_create(
     setup: *const Setup,
     options: *const Options,
     output: *mut *mut Owner,
@@ -418,22 +409,13 @@ pub(crate) unsafe fn rsf_fsr4gvk_enable_options(
 pub(crate) fn rsf_fsr4gvk_max_generated(owner: *const Owner) -> u32 {
     u32::from(!owner.is_null())
 }
-unsafe fn present(
-    owner: *mut Owner,
-    info: *const PresentInfo,
-    source: *const Record,
-    explicit: u32,
-) -> i32 {
-    unsafe { shared::present(owner, info, source, explicit) }
-}
-
 unsafe extern "C" fn present_marshaled(
     owner: Handle,
     info: &PresentInfo,
     source: *const Record,
     explicit: u32,
 ) -> i32 {
-    unsafe { present(owner.cast(), info, source, explicit) }
+    unsafe { shared::present::<Fsr4>(owner.cast(), info, source, explicit) }
 }
 
 pub(crate) unsafe fn rsf_fsr4gvk_present(owner: *mut Owner, info: *const c_void) -> i32 {

@@ -9,7 +9,7 @@ use crate::sys::{
     rsf_fsr4fg_info as BridgeInfo, rsf_fsr4fg_present_status as BridgeStatus, rsf_vk_function,
 };
 use crate::vulkan_fsr4_fg::{
-    Fsr4, Options, create as fsr4_create, rsf_fsr4gvk_acquire, rsf_fsr4gvk_destroy,
+    Fsr4, Options, rsf_fsr4gvk_acquire, rsf_fsr4gvk_create as fsr4_create, rsf_fsr4gvk_destroy,
     rsf_fsr4gvk_drain, rsf_fsr4gvk_enable_options, rsf_fsr4gvk_hudless, rsf_fsr4gvk_prepare,
     rsf_fsr4gvk_present_source, rsf_fsr4gvk_status, rsf_fsr4gvk_submitted,
 };
