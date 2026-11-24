@@ -23,6 +23,7 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::System::LibraryLoader::{
     GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_FLAGS, LoadLibraryExW,
 };
+use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, UnregisterClassW,
     WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
@@ -126,6 +127,20 @@ pub fn cpu_event(
         render_expected: 1,
         ..Default::default()
     }
+}
+
+/// The performance counter.
+pub fn qpc() -> u64 {
+    let mut count = 0;
+    let _ = unsafe { QueryPerformanceCounter(&mut count) };
+    count as u64
+}
+
+/// The performance counter's frequency.
+pub fn qpc_frequency() -> u64 {
+    let mut frequency = 0;
+    let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
+    frequency as u64
 }
 
 /// `text` as the NUL-terminated UTF-16 a Win32 call takes.

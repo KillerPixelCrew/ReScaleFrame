@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::*;
 use crate::sys::{RSF_FG_FIXED, RSF_FG_OFF, RSF_REFLEX_ON};
+use rsf_test_support::{qpc as now, qpc_frequency};
 use std::ffi::c_void;
 use std::mem::{align_of, size_of};
 use std::ptr::{null, null_mut};
-use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 const SIZE: usize = size_of::<rsf_d3d11_fg_api>();
 const VERSION: u32 = RSF_D3D11_FG_API_VERSION;
@@ -67,18 +67,6 @@ impl Check {
         );
         self.that(table == before, "refusal preserves every caller byte");
     }
-}
-
-fn now() -> u64 {
-    let mut ticks = 0;
-    unsafe { QueryPerformanceCounter(&mut ticks) };
-    ticks as u64
-}
-
-fn qpc_frequency() -> u64 {
-    let mut frequency = 0;
-    unsafe { QueryPerformanceFrequency(&mut frequency) };
-    frequency as u64
 }
 
 fn same<F: Copy>(actual: Option<F>, expected: Option<F>, equal: impl FnOnce(F, F) -> bool) -> bool {

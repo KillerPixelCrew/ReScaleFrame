@@ -7,7 +7,6 @@ use std::ffi::c_void;
 use std::ptr::{copy_nonoverlapping, null_mut};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
-use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::core::Interface;
 
 #[path = "d3d11_host_device_dispatch.rs"]
@@ -268,14 +267,16 @@ unsafe extern "C" fn rsf_d3d11_host_fixture_cpu(
     render_expected: u32,
 ) {
     let host = unsafe { &*host };
-    let mut now = 0;
-    let mut frequency = 0;
-    let _ = unsafe { QueryPerformanceCounter(&mut now) };
-    let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
     let event = rsf_game_cpu_event {
         event_version: RSF_GAME_CPU_EVENT_VERSION,
         render_expected,
-        ..rsf_test_support::cpu_event(host.session_id, source, stage, now as u64, frequency as u64)
+        ..rsf_test_support::cpu_event(
+            host.session_id,
+            source,
+            stage,
+            rsf_test_support::qpc(),
+            rsf_test_support::qpc_frequency(),
+        )
     };
     unsafe { host.cpu_event.unwrap()(host.user, &event) };
 }

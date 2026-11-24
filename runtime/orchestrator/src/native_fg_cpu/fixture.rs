@@ -12,13 +12,7 @@ use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::{Condvar, Mutex, OnceLock, mpsc};
 use std::time::Duration;
-use windows_sys::Win32::{
-    Foundation::CloseHandle,
-    System::{
-        Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
-        Threading::GetCurrentThreadId,
-    },
-};
+use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::GetCurrentThreadId};
 
 mod cases;
 
@@ -73,11 +67,6 @@ fn marker_count() -> usize {
 }
 
 fn fact(source_frame_id: u64, stage: u32) -> Event {
-    let (mut stamp, mut frequency) = (0, 0);
-    unsafe {
-        QueryPerformanceCounter(&mut stamp);
-        QueryPerformanceFrequency(&mut frequency);
-    }
     Event {
         render_expected: 0,
         event_version: RSF_GAME_CPU_EVENT_VERSION,
@@ -86,8 +75,8 @@ fn fact(source_frame_id: u64, stage: u32) -> Event {
             SESSION,
             source_frame_id,
             stage,
-            stamp as u64,
-            frequency as u64,
+            rsf_test_support::qpc(),
+            rsf_test_support::qpc_frequency(),
         )
     }
 }
