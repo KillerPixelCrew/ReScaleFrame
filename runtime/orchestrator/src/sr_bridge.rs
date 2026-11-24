@@ -24,7 +24,8 @@ use crate::sys::*;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
 };
-use std::ffi::{CString, c_void};
+use rsf_graphics::dump_options::Log;
+use std::ffi::c_void;
 use std::ptr;
 use std::time::Instant;
 use windows::core::{IUnknown, Interface};
@@ -44,9 +45,7 @@ const FENCE_TIMEOUT_MS: u32 = 10_000;
 const WARM_UP_TIMEOUT_MS: u32 = 30_000;
 const COMMAND_SLOTS: usize = 3;
 
-// Colour, depth, motion, exposure, output, then the reactive and transparency masks.
-#[allow(dead_code)] // Slot 0 is addressed as the first entry.
-const COLOR: usize = 0;
+// Colour (slot 0), depth, motion, exposure, output, then the reactive and transparency masks.
 const DEPTH: usize = 1;
 const MOTION: usize = 2;
 const EXPOSURE: usize = 3;
@@ -55,7 +54,6 @@ const MASKS: usize = 5;
 const SLOTS: usize = 7;
 
 type Handle = *mut c_void;
-type Log = rsf_backend_log_fn;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
@@ -155,7 +153,6 @@ pub(crate) struct Bridge {
     immediate: IUnknown,
     device11: IUnknown,
     log: Log,
-    log_user: Handle,
     tick: u64,
     faulted: bool,
     // A refused signal must be retried on the stream that issued the work for this tick.
@@ -164,14 +161,6 @@ pub(crate) struct Bridge {
     signal_unflushed: bool,
     auto_exposure: u32,
     hdr: bool,
-}
-
-fn say(log: Log, user: Handle, message: &str) {
-    if let Some(log) = log
-        && let Ok(message) = CString::new(message)
-    {
-        unsafe { log(user, message.as_ptr()) };
-    }
 }
 
 // The extent a slot must cover: output size, 1x1 exposure, otherwise the render size.
@@ -255,8 +244,7 @@ impl Bridge {
             context,
             immediate,
             device11,
-            log,
-            log_user,
+            log: Log::new(log, log_user),
             tick: 0,
             faulted: false,
             pending_signal: None,
@@ -267,7 +255,7 @@ impl Bridge {
     }
 
     fn say(&self, message: &str) {
-        say(self.log, self.log_user, message);
+        self.log.say(message);
     }
 
     fn gpu_failure(&mut self) -> i32 {
@@ -347,10 +335,7 @@ impl Bridge {
         if resource.is_null() {
             return None;
         }
-        let mut desc = TextureDesc::default();
-        if unsafe { native::describe(resource, device, &mut desc) } == 0 {
-            return None;
-        }
+        let desc = unsafe { native::describe(resource, device) }?;
         cached.desc = desc;
         cached.texture = Some(unsafe { com_ref::retain(resource) });
         Some(desc)
@@ -395,8 +380,8 @@ impl Bridge {
                     width,
                     height,
                     format,
-                    self.log,
-                    self.log_user,
+                    self.log.callback,
+                    self.log.user as Handle,
                 )
             };
             let Some(surface) = Owned::new(surface, native::surface_destroy) else {

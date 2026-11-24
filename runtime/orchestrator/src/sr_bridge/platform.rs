@@ -122,30 +122,22 @@ pub(super) unsafe extern "C" fn create_texture(
         )
     }
 }
-pub(super) unsafe extern "C" fn describe(
-    texture: Handle,
-    device: Handle,
-    out: *mut TextureDesc,
-) -> i32 {
+// The description of a texture owned by `device`.
+pub(super) unsafe fn describe(texture: Handle, device: Handle) -> Option<TextureDesc> {
     let texture = unsafe { borrow::<ID3D11Texture2D>(&texture) };
-    let Ok(owner) = (unsafe { texture.GetDevice() }) else {
-        return 0;
-    };
+    let owner = unsafe { texture.GetDevice() }.ok()?;
     if owner.as_raw() != device {
-        return 0;
+        return None;
     }
     let mut desc = D3D11_TEXTURE2D_DESC::default();
-    unsafe {
-        texture.GetDesc(&mut desc);
-        out.write(TextureDesc {
-            width: desc.Width,
-            height: desc.Height,
-            format: desc.Format.0 as u32,
-            samples: desc.SampleDesc.Count,
-            array_size: desc.ArraySize,
-        });
-    }
-    1
+    unsafe { texture.GetDesc(&mut desc) };
+    Some(TextureDesc {
+        width: desc.Width,
+        height: desc.Height,
+        format: desc.Format.0 as u32,
+        samples: desc.SampleDesc.Count,
+        array_size: desc.ArraySize,
+    })
 }
 pub(super) unsafe extern "C" fn same_context(context: Handle, context4: Handle) -> i32 {
     let found = unsafe { borrow::<ID3D11DeviceContext>(&context) }.cast::<ID3D11DeviceContext4>();
@@ -201,7 +193,7 @@ pub(super) unsafe extern "C" fn surface_create(
     width: u32,
     height: u32,
     format: u32,
-    log: Log,
+    log: rsf_backend_log_fn,
     log_user: Handle,
 ) -> Handle {
     let setup = SurfaceSetup {
@@ -225,7 +217,7 @@ pub(super) unsafe extern "C" fn surface_create(
 pub(super) unsafe extern "C" fn fence_create(
     device11: Handle,
     device12: Handle,
-    log: Log,
+    log: rsf_backend_log_fn,
     user: Handle,
 ) -> Handle {
     let mut fence = null_mut();

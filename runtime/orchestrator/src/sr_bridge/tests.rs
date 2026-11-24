@@ -217,18 +217,10 @@ pub(super) unsafe extern "C" fn close_event(handle: Handle) {
     event(format!("close {}", name(handle)));
     close(handle);
 }
-pub(super) unsafe extern "C" fn describe(
-    texture: Handle,
-    device: Handle,
-    out: *mut TextureDesc,
-) -> i32 {
-    match world(|world| world.descs.get(&(texture as usize)).copied()) {
-        Some((desc, owner)) if owner == device => {
-            unsafe { out.write(desc) };
-            1
-        }
-        _ => 0,
-    }
+pub(super) unsafe fn describe(texture: Handle, device: Handle) -> Option<TextureDesc> {
+    world(|world| world.descs.get(&(texture as usize)).copied())
+        .filter(|&(_, owner)| owner == device)
+        .map(|(desc, _)| desc)
 }
 pub(super) unsafe extern "C" fn same_context(pointer: Handle, context: Handle) -> i32 {
     i32::from(pointer == context)
@@ -320,7 +312,7 @@ pub(super) unsafe extern "C" fn surface_create(
     width: u32,
     height: u32,
     format: u32,
-    _: Log,
+    _: rsf_backend_log_fn,
     _: Handle,
 ) -> Handle {
     let slot = world(|world| {
@@ -347,7 +339,7 @@ pub(super) unsafe extern "C" fn surface_d3d11(surface: Handle) -> Handle {
 pub(super) unsafe extern "C" fn surface_d3d12(surface: Handle) -> Handle {
     child(surface, true)
 }
-pub(super) unsafe extern "C" fn fence_create(_: Handle, _: Handle, _: Log, _: Handle) -> Handle {
+pub(super) unsafe extern "C" fn fence_create(_: Handle, _: Handle, _: rsf_backend_log_fn, _: Handle) -> Handle {
     let fence = created("fence");
     let children = (object("fence11"), object("fence12"));
     world(|world| world.children.insert(fence as usize, children));
