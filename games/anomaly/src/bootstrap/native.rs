@@ -3,8 +3,7 @@
 //! motion_stage_platform.c, fg_stage_platform.c, bootstrap_platform.c, native_hooks_platform.c) and the Rust stages.
 use super::*;
 pub(super) use crate::adapter_options::register as register_options;
-use crate::engine_guards::{Image, Read};
-use crate::engine_slots::Exchange;
+use crate::engine_guards::{Image, guarded_copy};
 use crate::executable::running_build;
 pub(super) use crate::fg_stage::rsf_anomaly_fg_installed as fg_installed;
 use crate::fg_stage::rsf_anomaly_fg_set_overlay_sink;
@@ -39,7 +38,6 @@ const RUNTIME_MISSING: u32 = 3;
 const MODE_REFUSED: u32 = 7;
 const FAULT: u32 = 8;
 
-pub(super) use self::rsf_anomaly_bootstrap_input_hook as input_hook;
 pub(super) use crate::motion::stage::configure as motion;
 
 pub(super) unsafe fn sr(ini: *const u16, apply: bool, log: rsf_game_log_fn) -> bool {
@@ -56,12 +54,7 @@ unsafe extern "C" {
         depth_rva: u32,
         log: rsf_game_log_fn,
     ) -> bool;
-    /// Installs the CInput detour (its unwind boundary is C) through `rsf_anomaly_bootstrap_install_input`.
-    pub(super) fn rsf_anomaly_bootstrap_input_hook(
-        image: HMODULE,
-        build: usize,
-        reason: *mut *const c_char,
-    ) -> bool;
+
 }
 
 pub(super) unsafe fn fg(
@@ -83,34 +76,34 @@ pub(super) fn input_observation() -> Result<(), &'static std::ffi::CStr> {
 pub(super) unsafe fn overlay(runtime: HMODULE, ini: *const u16, log: rsf_game_log_fn) -> bool {
     unsafe { start_overlay(runtime, ini, log, &MINHOOK) }
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_bootstrap_install_input(
-    image: *mut c_void,
-    build: usize,
-    replacement: *mut c_void,
-    exchange: Exchange,
-    copy: Read,
-    reason: Option<&mut *const c_char>,
-) -> bool {
+/// Installs the CInput detour (bootstrap_platform.c; its unwind boundary is C).
+pub(super) unsafe fn input_hook(image: HMODULE, build: usize, reason: *mut *const c_char) -> bool {
+    unsafe extern "C" {
+        fn rsf_anomaly_bootstrap_input_frame(this: *mut c_void);
+        fn rsf_anomaly_compare_slot(
+            address: *mut c_void,
+            expected: *mut c_void,
+            value: *mut c_void,
+            previous: *mut *mut c_void,
+        ) -> bool;
+    }
+    let reason = unsafe { reason.as_mut() };
     let Some(profile) = PROFILES.get(build) else {
         if let Some(reason) = reason {
             *reason = c"unknown CInput build".as_ptr();
         }
         return false;
     };
-    let image = Image::new(image.cast(), profile.image_size, copy);
-    {
-        rsf_anomaly_input_install(
-            &image,
-            build,
-            profile.device_frame_rva,
-            replacement,
-            exchange,
-            reason,
-        )
-    }
+    let image = Image::new(image.cast(), profile.image_size, guarded_copy);
+    rsf_anomaly_input_install(
+        &image,
+        build,
+        profile.device_frame_rva,
+        rsf_anomaly_bootstrap_input_frame as *mut c_void,
+        rsf_anomaly_compare_slot,
+        reason,
+    )
 }
-
 unsafe extern "C" fn input_received(kind: u8) {
     rsf_anomaly_input_received(kind, rsf_anomaly_fg_stage_input_received);
 }
