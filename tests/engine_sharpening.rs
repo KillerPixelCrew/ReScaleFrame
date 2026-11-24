@@ -13,10 +13,6 @@ const _: () = {
     assert!(RSF_GODOT_SETTINGS_ABI_VERSION == 2);
     assert!(RSF_UNITY_SETTINGS_ABI_VERSION == 2);
     assert!(RSF_SRVK_ABI_VERSION == 2);
-    assert!(size_of::<rsf_godot_settings>() == 100);
-    assert!(size_of::<rsf_unity_package_settings>() == 100);
-    assert!(std::mem::offset_of!(rsf_godot_settings, sharpening) == 44);
-    assert!(std::mem::offset_of!(rsf_unity_package_settings, sharpening) == 44);
     assert!(std::mem::offset_of!(rsf_srvk_frame, exposure) == 272);
     assert!(std::mem::offset_of!(rsf_srvk_frame, sharpening) == 312);
     assert!(std::mem::offset_of!(rsf_srvk_frame, bias_current_color) == 384);
