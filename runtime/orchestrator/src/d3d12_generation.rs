@@ -175,8 +175,10 @@ fn setup_log(setup: &Setup) -> Log {
     Log::new(setup.chain.log, setup.chain.log_user)
 }
 
-fn version_name(status: &mut Status, name: &str) {
-    for (dst, &byte) in status.version_name.iter_mut().zip(name.as_bytes()) {
+// Copies `name` into the zeroed version field, keeping its terminating NUL.
+fn version_name(status: &mut Status, name: &[u8]) {
+    let capacity = status.version_name.len() - 1;
+    for (dst, &byte) in status.version_name[..capacity].iter_mut().zip(name) {
         *dst = byte as c_char;
     }
 }

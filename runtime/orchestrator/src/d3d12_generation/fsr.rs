@@ -755,11 +755,7 @@ unsafe fn rsf_core_fsr12_create(setup: *const Setup, out: *mut Raw, chain: *mut 
     };
     initial.version_id = version.id;
     if !version.name.is_null() {
-        let name = unsafe { CStr::from_ptr(version.name) }.to_bytes();
-        let capacity = initial.version_name.len() - 1;
-        for (out, &byte) in initial.version_name[..capacity].iter_mut().zip(name) {
-            *out = byte as c_char;
-        }
+        version_name(&mut initial, unsafe { CStr::from_ptr(version.name) }.to_bytes());
     }
     let session = crate::allocate_handle(Fsr {
         sdk,

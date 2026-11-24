@@ -16,11 +16,6 @@ const UI_COMPLETE: u32 = 5;
 // The existing FG ABI admission cutoff, rounded to f32.
 const MAX_VERTICAL_FOV: f32 = f32::from_bits(0x4049_0fdc);
 
-// Read only the size field until the caller proves the rest of the record is present.
-unsafe fn sized<T>(raw: *const T) -> bool {
-    !raw.is_null() && unsafe { raw.cast::<u32>().read() } as usize >= size_of::<T>()
-}
-
 unsafe extern "C" fn rsf_core_fg12_setup(setup: *const Setup) -> i32 {
     let setup = unsafe { &*setup };
     let chain = &setup.chain;
@@ -101,11 +96,11 @@ fn frame_resource(
 }
 
 pub(crate) unsafe extern "C" fn rsf_core_fg12_frame(frame: *const Frame, device: Raw) -> i32 {
-    if !unsafe { sized(frame) } {
+    if !unsafe { has_capacity(frame) } {
         return INVALID_ARGUMENT;
     }
     let frame = unsafe { &*frame };
-    if !unsafe { sized(frame.record) } {
+    if !unsafe { has_capacity(frame.record) } {
         return INVALID_ARGUMENT;
     }
     let record = unsafe { &*frame.record };
@@ -197,7 +192,7 @@ pub(crate) unsafe extern "C" fn rsf_core_fg12_setup_header(
             unsafe { output.write(null_mut()) };
         }
     }
-    if out.is_null() || chain.is_null() || !unsafe { sized(setup) } {
+    if out.is_null() || chain.is_null() || !unsafe { has_capacity(setup) } {
         return INVALID_ARGUMENT;
     }
     let setup = unsafe { &*setup };
@@ -239,8 +234,7 @@ pub(super) unsafe extern "C" fn load_library(setup: &Setup, name: *const u16) ->
     let (module, error) = unsafe { load_system_library(&path) };
     if module.is_null() {
         let path = String::from_utf16_lossy(&path[..path.len() - 1]);
-        crate::input_dump::Log::new(setup.chain.log, setup.chain.log_user)
-            .say(&format!("could not load {path} (Windows error {error})"));
+        setup_log(setup).say(&format!("could not load {path} (Windows error {error})"));
     }
     module
 }

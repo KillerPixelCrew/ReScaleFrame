@@ -168,7 +168,7 @@ impl Xess {
             | u64::from(version.patch);
         version_name(
             &mut initial,
-            &format!("XeFG {}.{}.{}", version.major, version.minor, version.patch),
+            format!("XeFG {}.{}.{}", version.major, version.minor, version.patch).as_bytes(),
         );
         if setup.version_id != 0 && setup.version_id != initial.version_id {
             return NOT_SUPPORTED;

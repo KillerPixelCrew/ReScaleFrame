@@ -5,10 +5,7 @@ use rsf_game_sys::backend_result::MISSING_ENTRY_POINT;
 
 use rsf_vk_xess_fg::sdk::*;
 use std::ffi::CStr;
-use windows::Win32::{
-    Foundation::HANDLE,
-    Graphics::{Direct3D12::*, Dxgi::*},
-};
+use windows::Win32::Graphics::{Direct3D12::*, Dxgi::*};
 use windows::core::{GUID, Interface};
 use windows_sys::Win32::{
     Foundation::S_OK,
@@ -210,20 +207,9 @@ pub(super) unsafe extern "C" fn drain(queue: Raw, fence: Raw, event: Raw, serial
     if let Err(err) = unsafe { queue.Signal(fence, serial) } {
         return err.code().0;
     }
-    if serial != 0 {
-        let result = crate::d3d12_fence::wait_for_value(
-            serial,
-            10_000,
-            || unsafe { fence.GetCompletedValue() },
-            || {
-                unsafe { fence.SetEventOnCompletion(serial, HANDLE(event)) }
-                    .map_or_else(|err| err.code().0, |()| S_OK)
-            },
-            |remaining| unsafe { crate::d3d12_fence::wait_event(event, remaining) },
-        );
-        if result < 0 {
-            return result;
-        }
+    let result = unsafe { crate::d3d12_fence::wait_fence(fence.as_raw(), serial, event, 10_000) };
+    if result < 0 {
+        return result;
     }
     match crate::d3d12_fence::FenceState::check(unsafe { fence.GetCompletedValue() }, serial) {
         crate::d3d12_fence::FenceState::DeviceRemoved => DXGI_ERROR_DEVICE_REMOVED.0,
