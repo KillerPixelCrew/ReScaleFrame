@@ -14,7 +14,7 @@ set(RSF_UNITY_NATIVE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/unity-native/include" C
     "Unity native-plugin headers; untracked, see docs/dependencies.md")
 set(RSF_VULKAN_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/engine/thirdparty/vulkan/include" CACHE PATH
     "Vulkan headers for native Vulkan services")
-set(RSF_FFX_VK_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/fidelityfx-vulkan/ffx-api/include" CACHE PATH
+set(RSF_FFX_VK_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/fidelityfx-vulkan/ffx-api/include" CACHE PATH
     "Pinned FidelityFX Vulkan API headers")
 
 function(rsf_have name)

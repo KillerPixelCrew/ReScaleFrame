@@ -1,4 +1,4 @@
-param([string]$SdkRoot = (Join-Path $PSScriptRoot '../references/godot/fidelityfx-vulkan'))
+param([string]$SdkRoot = (Join-Path $PSScriptRoot '../vendor/fidelityfx-vulkan'))
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repo = Split-Path -Parent $PSScriptRoot

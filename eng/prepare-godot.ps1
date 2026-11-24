@@ -3,7 +3,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'godot-artifacts.ps1')
-$taskLock = Get-Content -Raw -LiteralPath (Join-Path $taskRoot 'integrations/godot/dependencies.json') | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'common.ps1')
+$taskLock = Get-Content -Raw -LiteralPath (Join-Path $taskRoot 'eng/dependencies.json') | ConvertFrom-Json
 $taskLocal = Join-Path $taskRoot '.local/godot'
 $taskUv = Get-Command uv.exe -ErrorAction SilentlyContinue
 if (!$taskUv) { throw 'The Godot build environment needs uv and Python 3.14. No user-wide installation was changed.' }
@@ -42,18 +43,8 @@ function Get-PinnedCheckout([string]$Url, [string]$Revision, [string]$Destinatio
 New-Item -ItemType Directory -Force -Path $taskLocal,(Join-Path $taskRoot 'references/godot') | Out-Null
 Get-PinnedCheckout $taskLock.engine.repository $taskLock.engine.revision (Join-Path $taskRoot 'references/godot/engine') $true
 Get-PinnedCheckout $taskLock.bindings.repository $taskLock.bindings.revision (Join-Path $taskRoot 'references/godot/godot-cpp')
-Get-PinnedCheckout $taskLock.vendor.streamline_source.repository $taskLock.vendor.streamline_source.revision (Join-Path $taskRoot 'references/godot/streamline')
-Get-PinnedCheckout $taskLock.vendor.fidelityfx.repository $taskLock.vendor.fidelityfx.revision (Join-Path $taskRoot 'vendor/fidelityfx')
-Get-PinnedCheckout $taskLock.vendor.fidelityfx_vulkan.repository $taskLock.vendor.fidelityfx_vulkan.revision (Join-Path $taskRoot 'references/godot/fidelityfx-vulkan')
-Get-PinnedCheckout $taskLock.vendor.xess.repository $taskLock.vendor.xess.revision (Join-Path $taskRoot 'vendor/xess')
-function Get-PinnedArchive([string]$Url, [string]$Sha512, [string]$Archive, [string]$Destination, [string]$Marker) {
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Archive) | Out-Null
-    if (!(Test-Path -LiteralPath $Archive)) { Invoke-WebRequest $Url -OutFile $Archive }
-    if ((Get-FileHash -LiteralPath $Archive -Algorithm SHA512).Hash -ine $Sha512) { throw "Archive checksum mismatch: $Archive" }
-    if (!(Test-Path -LiteralPath (Join-Path $Destination $Marker))) { Expand-Archive -LiteralPath $Archive -DestinationPath $Destination }
-}
-Get-PinnedArchive $taskLock.vendor.streamline.url $taskLock.vendor.streamline.sha512 (Join-Path $taskRoot '.local/streamline/sdk.zip') (Join-Path $taskRoot '.local/streamline/sdk') 'include/sl.h'
-Copy-RsfGodotAddon (Join-Path $taskRoot '.local/streamline/sdk/include') (Join-Path $taskRoot 'vendor/streamline/include')
+# The vendor SDK sources are submodules; this checks them and fetches the signed Streamline runtime.
+& (Join-Path $PSScriptRoot 'fetch-vendor.ps1')
 Get-PinnedArchive $taskLock.mesa.url $taskLock.mesa.sha512 (Join-Path $taskLocal 'build-deps/mesa.zip') (Join-Path $taskLocal 'build-deps/mesa-x86_64-msvc') 'bin/libNIR.windows.x86_64.lib'
 foreach ($taskArchive in $taskLock.archives) {
     $taskZip = Join-Path $taskLocal $taskArchive.file

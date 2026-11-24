@@ -11,8 +11,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'common.ps1')
-# The Streamline SDK with bin/x64 (vendor/streamline may hold headers only).
-$taskStreamline = if ($StreamlineRoot) { (Resolve-Path -LiteralPath $StreamlineRoot).Path } else { Join-Path $taskRoot 'vendor/streamline' }
+# The Streamline release with bin/x64 (eng/fetch-vendor.ps1 fills vendor/streamline-sdk).
+$taskStreamline = if ($StreamlineRoot) { (Resolve-Path -LiteralPath $StreamlineRoot).Path } else { Join-Path $taskRoot 'vendor/streamline-sdk' }
 $taskGame = if ($GameDirectory) { (Resolve-Path -LiteralPath $GameDirectory).Path } else { $null }
 $taskDeployment = if ($taskGame) { Get-Content -Raw -LiteralPath (Join-Path $taskGame 'ReScaleFrame/deployment.json') | ConvertFrom-Json } else { $null }
 $taskVersion = (Get-Content -LiteralPath "$taskRoot/VERSION" -Raw).Trim()

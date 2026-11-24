@@ -15,7 +15,7 @@ function Add-Payload([string]$Source,[string]$Relative) {
 }
 Add-Payload "$repo/build/windows-x64/bin/$Configuration/ReScaleFrame.Minecraft.dll" 'ReScaleFrame.Minecraft.dll'
 Add-Payload "$repo/build/windows-x64/bin/$Configuration/rescaleframe_overlay.dll" 'rescaleframe_overlay.dll'
-$sl="$sdk/.local/streamline/sdk"
+$sl="$sdk/vendor/streamline-sdk"
 foreach($leaf in @('sl.interposer.dll','sl.common.dll','sl.dlss.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlss.dll','nvngx_dlssg.dll','nvngx_dlss.license.txt','reflex.license.txt')) {
     Add-Payload "$sl/bin/x64/$leaf" "streamline/$leaf"
 }

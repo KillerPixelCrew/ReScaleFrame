@@ -10,7 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXES = ROOT / "runtime/vulkan/streamline/sdk-fixes"
-SDK = ROOT / "references/godot/streamline"
+SDK = ROOT / "vendor/streamline"
 SPEC = importlib.util.spec_from_file_location("selected_device", FIXES / "selected_device.py")
 PATCH = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PATCH)
