@@ -599,19 +599,19 @@ impl Package {
         let mut state = self.lock();
         let requested = state.settings.sr_backend;
         let status = &mut state.status;
-        if view_backend != 0 || requested == RSF_SR_NONE || requested == RSF_SR_SPATIAL {
+        let refused = result != backend_result::OK;
+        if refused || view_backend != 0 || matches!(requested, RSF_SR_NONE | RSF_SR_SPATIAL) {
             status.sr_result = result;
         }
-        if result == backend_result::OK {
+        if refused {
+            status.refused_frames = status.refused_frames.wrapping_add(1);
+        } else {
             status.evaluated_frames = status.evaluated_frames.wrapping_add(1);
             status.active_sr = if requested == RSF_SR_SPATIAL {
                 RSF_SR_SPATIAL
             } else {
                 view_backend
             };
-        } else {
-            status.refused_frames = status.refused_frames.wrapping_add(1);
-            status.sr_result = result;
         }
     }
 
