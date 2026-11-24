@@ -143,3 +143,12 @@ descriptor slots, and checked the RCAS, Depth RCAS and Depth DAS
 output. It also verified that the depth modes kept the sharpening
 response off the opposite side of a depth edge. The CTest log and
 hashes are in `build/rust-migration-streamline/evidence/9367f1306570/`.
+
+## Later change (2026-11-24)
+
+The `rsf_core_sharpenvk_*` create, destroy, record, retire and clear wrappers
+are gone. `vulkan_sharpening::Host` owns `Option<Box<Owner>>` (created on the
+first `run` with `try_box`) instead of a type-erased pointer, and the
+`rsf_sharpenvk_host_*` entries call the owner directly; their signatures, and
+the one-time failure report, are unchanged. None of these names was ever a DLL
+export.

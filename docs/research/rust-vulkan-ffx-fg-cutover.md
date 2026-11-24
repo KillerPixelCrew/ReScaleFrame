@@ -31,7 +31,7 @@ was the reference for shared ordering.
 - Preparation and HUD-less validation, the order of their checks and every
   returned result match the baseline. A disabled owner with no capture request
   still returns OK without recording.
-- A slot is reused only after `rsf_core_vkfg_prepare_fences` has waited for
+- A slot is reused only after `vulkan_fg_resources::prepare_fences` (then `rsf_core_vkfg_prepare_fences`) has waited for
   both its source and consumer fences. Unknown completion keeps the slot
   unavailable. Superseded command-buffer recordings are discarded by the shared
   ledger, and a discarded HUD-less copy loses its initialized layout.

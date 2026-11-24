@@ -57,7 +57,7 @@ CMake target, `eng/` script or packager invokes it. `build-sdk.ps1`, the
 | Concern | Owner |
 | --- | --- |
 | Runtime binding | Rust. `VulkanStoryFsr3Open` still returns -1 for a null module, 0 for the bound module and -2 for another module or any missing `ffxCreateContext`, `ffxDestroyContext`, `ffxQuery`, `ffxDispatch` or `ffxConfigure` export. Missing exports leave the bridge unbound. The module stays caller-owned, with no reference acquired or released. The table is a set-once `OnceLock`. The native `resolve` leaf is `GetProcAddress`. |
-| Shared SDK availability | `rsf_core_fsr3_sdk()` returns the bound table, or an all-null table before Open. Rust reads it for every admission and passes each leaf the entry it calls. Only the native presentation callback reads it itself, through `Sdk()`. |
+| Shared SDK availability | The bound table, or an all-null table before Open (`rsf_core_fsr3_sdk()` exposes it to the unit tests). Rust reads it for every admission and passes each leaf the entry it calls. Only the native presentation callback reads it itself, through `Sdk()`. |
 | SR Plan | Rust refuses with -1 without a bound query or either output slot. The native leaf builds `ffxQueryDescUpscaleGetRenderResolutionFromQualityMode` with a null context and returns the SDK result. |
 | SR Create | Rust checks prerequisites (-1: unbound create, null result, device or physical device, any zero extent), allocation (-2) and Vulkan readiness (-3), then calls the native create leaf. It releases every partial owner on failure and writes `result` only on success. |
 | Vulkan lookup | Native. `BindVulkanLoader` rebinds the shared `vkGetDeviceProcAddr` from the loaded `vulkan-1.dll`. `Fsr3GetDeviceProcAddr` keeps the fallback from `vkGetBufferMemoryRequirements2KHR` to the promoted core entry. SR create reports both facts as bits and Rust requires both. FG create has its own `fg_bind_vulkan` leaf that only rebinds the loader, as before, and Rust maps its failure to -3. |
@@ -195,3 +195,16 @@ and device or game behavior await user verification.
 The earlier note that FG and WSI were interlinked through `activeFg` and the
 swapchain pointer and should move together remains correct; this slice moved
 them together as one ownership boundary.
+
+## Later change (2026-11-24)
+
+`exports.rs` is gone. The 17 `rsf_core_fsr3_*` functions that its exports only
+forwarded now carry the exported `rsf_vk_fsr3_*` names and signatures in
+`owner.rs` (the `fsr3.def` names are unchanged). The three create entries keep
+a separate exported function that packs its scalar arguments into the request
+record for `create_sr`, `create_swapchain` and `create_fg`, and the void
+`rsf_vk_fsr3_swapchain_destroy_chain` still logs a refusal from the checked
+variant. The platform probes (`has_effect`, `wsi_complete`, `wsi_has_context`,
+`fg_has_effect`, `fg_bind_vulkan`, `bind_vulkan`) return bool; a missing loader
+or buffer-requirements entry still refuses SR creation with -3. All of
+`platform.rs` is Rust, so "native leaf" above means that module.

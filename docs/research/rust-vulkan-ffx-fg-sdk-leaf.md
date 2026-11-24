@@ -81,7 +81,7 @@ Two status assertions in `ffx.rs` that never compiled
 
 Once the scenarios compiled, the submission scenario showed a stale
 expectation. After a HUD-less submission whose prior source fence timed out,
-`rsf_core_vkfg_fence_submission` marks the slot `completion_unknown`. No fence
+`fence_submission` (then `rsf_core_vkfg_fence_submission`) marks the slot `completion_unknown`. No fence
 covers that copy, so the slot is never reused before teardown drains the
 device. The scenario still reused that slot as frame 7 of session 99, which
 the ported C++ scenario did against an older owner. It now asserts that the
@@ -123,3 +123,13 @@ compiles it directly and gives its static entries linkage.
 - The C11 WSI fixture, compiled by hand against the `wsi-dispatch` fixture
   archive and the Vulkan SDK 1.4.357 headers, built with `/W4 /WX` and exited
   with 0.
+
+## Later change (2026-11-24)
+
+The host gate is now the crate's `ffx-vk` feature. `rsf_ffxgvk_create` passes
+`cfg!(feature = "ffx-vk").then_some(&sdk::NATIVE_HOST)` straight to the owner's
+`create`, which takes `Option<&Host>`; the `rsf_core_ffxgvk_create_sdk` pointer
+forwarder is gone, and the FFX fixture calls `create(Some(&HOST), ...)`. A
+`None` host still validates the arguments and reports `NOT_COMPILED`. The slot
+ledger the fence step updates (`vulkan_fg_frames::FrameSlot`) now holds bool
+flags and its operations are slot and timeline methods.
