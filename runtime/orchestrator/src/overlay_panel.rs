@@ -3,7 +3,8 @@
 #![cfg_attr(test, allow(dead_code))]
 use crate::sys::{rsf_overlay, rsf_overlay_draw_data, rsf_overlay_input};
 use crate::sys::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
-use std::ffi::{CStr, c_void};
+use rsf_game_sys::win32::typed_export;
+use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::Mutex;
 use windows_sys::Win32::{
@@ -12,7 +13,7 @@ use windows_sys::Win32::{
         Environment::GetEnvironmentVariableW,
         LibraryLoader::{
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            GetModuleFileNameW, GetModuleHandleExW, GetProcAddress, LoadLibraryW,
+            GetModuleFileNameW, GetModuleHandleExW, LoadLibraryW,
         },
     },
 };
@@ -114,20 +115,14 @@ fn panel_path() -> Option<Vec<u16>> {
 }
 
 fn exports(module: HMODULE) -> Option<PanelEntries> {
-    type Export = unsafe extern "system" fn() -> isize;
-    let get = |name: &CStr| unsafe { GetProcAddress(module, name.as_ptr().cast()) };
     // The panel's five C exports have the signatures declared in overlay.h.
     unsafe {
         Some(PanelEntries {
-            create: std::mem::transmute::<Export, Create>(get(c"rsf_overlay_create")?),
-            destroy: std::mem::transmute::<Export, Destroy>(get(c"rsf_overlay_destroy")?),
-            frame: std::mem::transmute::<Export, Frame>(get(c"rsf_overlay_frame")?),
-            texture_updates: std::mem::transmute::<Export, TextureUpdates>(get(
-                c"rsf_overlay_texture_updates",
-            )?),
-            textures_to_free: std::mem::transmute::<Export, TexturesToFree>(get(
-                c"rsf_overlay_textures_to_free",
-            )?),
+            create: typed_export(module, c"rsf_overlay_create")?,
+            destroy: typed_export(module, c"rsf_overlay_destroy")?,
+            frame: typed_export(module, c"rsf_overlay_frame")?,
+            texture_updates: typed_export(module, c"rsf_overlay_texture_updates")?,
+            textures_to_free: typed_export(module, c"rsf_overlay_textures_to_free")?,
         })
     }
 }
