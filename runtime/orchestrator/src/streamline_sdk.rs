@@ -33,9 +33,7 @@ pub(crate) use rsf_streamline_vk::sdk_api::{
 };
 pub(crate) use rsf_streamline_vk::sdk_camera_defaults::constants as default_constants;
 pub(crate) use rsf_streamline_vk::sdk_fg_options::{pack as fg_options, state as dlssg_state};
-pub(crate) use rsf_streamline_vk::sdk_records::{
-    reflex_options, rsf_slvk_pack_pcl_options as pcl_options,
-};
+pub(crate) use rsf_streamline_vk::sdk_records::{pcl_options, reflex_options};
 
 type Handle = *mut c_void;
 

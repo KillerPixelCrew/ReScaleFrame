@@ -9,10 +9,10 @@ use crate::frame_generation::Options;
 use crate::lifecycle::feature_mask;
 use crate::sdk_api::{self, Entries, FEATURE_DLSS_G, FEATURE_PCL, FEATURE_REFLEX, OK, guarded};
 use crate::sdk_fg_options::{self, Packed, Sample, State};
-use crate::sdk_records::{self, rsf_slvk_pack_legacy_camera, rsf_slvk_pack_legacy_tags};
+use crate::sdk_records::{self, legacy_camera, legacy_tags};
 use crate::sys::{
-    rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_constants, rsf_slvk_sdk_pcl_options, rsf_slvk_sdk_pcl_state, rsf_slvk_sdk_reflex_options,
-    rsf_slvk_sdk_reflex_state, rsf_slvk_sdk_tag_batch,
+    rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_pcl_options,
+    rsf_slvk_sdk_pcl_state, rsf_slvk_sdk_reflex_options, rsf_slvk_sdk_reflex_state,
 };
 use std::ffi::{CStr, c_char, c_void};
 use std::marker::PhantomData;
@@ -369,8 +369,7 @@ extern "C" fn rsf_vk_sl_bind_pcl() -> i32 {
         let Some(apply) = PCL_OPTIONS.get() else {
             return -3;
         };
-        let mut options = rsf_slvk_sdk_pcl_options::default();
-        sdk_records::rsf_slvk_pack_pcl_options(unsafe { GetCurrentThreadId() }, &mut options);
+        let options = sdk_records::pcl_options(unsafe { GetCurrentThreadId() });
         guarded(|| unsafe { apply(&options) })
     })
 }
@@ -516,10 +515,7 @@ fn submit_tags(
     let Some(set_tags) = core().set_tag_for_frame else {
         return -1;
     };
-    let mut batch = rsf_slvk_sdk_tag_batch::default();
-    unsafe {
-        rsf_slvk_pack_legacy_tags(images.map_or(null(), |images| images.as_ptr()), &mut batch)
-    };
+    let mut batch = unsafe { legacy_tags(images) };
     if images.is_some() {
         for (tag, resource) in batch.tags.iter_mut().zip(&mut batch.resources) {
             tag.resource = ptr::from_mut(resource).cast();
@@ -553,10 +549,9 @@ unsafe extern "C" fn rsf_vk_sl_tag_frame(
         if images.iter().any(|image| image.is_null()) {
             return -1;
         }
-        let mut constants = rsf_slvk_sdk_constants::default();
-        if unsafe { rsf_slvk_pack_legacy_camera(camera, &mut constants) } == 0 {
+        let Some(constants) = (unsafe { legacy_camera(camera) }) else {
             return -1;
-        }
+        };
         let viewport = sdk_api::viewport(VIEWPORT);
         let result = guarded(|| unsafe { set_constants(&constants, frame, &viewport) });
         if result != OK {

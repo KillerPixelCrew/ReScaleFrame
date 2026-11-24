@@ -446,9 +446,8 @@ unsafe extern "C" fn prepare_mfg(handle: Handle) {
 
 unsafe extern "C" fn pcl_defaults(handle: Handle) {
     let host = unsafe { native(handle) };
-    let mut options = sdk::PclOptions::default();
     // eUsePingMessage with no marker thread.
-    sdk::pcl_options(0, &mut options);
+    let options = sdk::pcl_options(0);
     if let Some(set) = host.pcl_options {
         unsafe { set(&options) };
     }

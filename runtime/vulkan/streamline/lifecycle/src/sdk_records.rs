@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Data construction for the pinned Streamline 2.14.1 call leaves.
-use crate::sdk_api::{PREFERENCES, RESOURCE, TAG};
+use crate::sdk_api::{PREFERENCES, RESOURCE, TAG, header};
 use crate::sdk_camera_defaults;
 use crate::sys::{
-    rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_constants, rsf_slvk_sdk_header,
-    rsf_slvk_sdk_log, rsf_slvk_sdk_pcl_options, rsf_slvk_sdk_preferences,
-    rsf_slvk_sdk_reflex_options, rsf_slvk_sdk_resource, rsf_slvk_sdk_tag, rsf_slvk_sdk_tag_batch,
+    rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_constants, rsf_slvk_sdk_log,
+    rsf_slvk_sdk_pcl_options, rsf_slvk_sdk_preferences, rsf_slvk_sdk_reflex_options,
+    rsf_slvk_sdk_resource, rsf_slvk_sdk_tag, rsf_slvk_sdk_tag_batch,
 };
 use std::ffi::c_char;
-use std::ptr;
 
 pub(crate) fn features(mask: u32) -> impl Iterator<Item = u32> {
     // PCL, Reflex, DLSS-G and DLSS SR. Order matches the native startup leaf.
@@ -45,14 +44,13 @@ pub(crate) fn preferences(
 
 pub fn reflex_options(mode: u32, interval_us: u32, thread_id: u32) -> rsf_slvk_sdk_reflex_options {
     rsf_slvk_sdk_reflex_options {
-        base: rsf_slvk_sdk_header {
-            next: ptr::null_mut(),
-            type_lo: 0xf03a_f81a,
-            type_mid: 0x6d0b,
-            type_hi: 0x4902,
-            type_tail: [0xa6, 0x51, 0xc4, 0x96, 0x5e, 0x21, 0x54, 0x34],
-            version: 1,
-        },
+        base: header(
+            0xf03a_f81a,
+            0x6d0b,
+            0x4902,
+            [0xa6, 0x51, 0xc4, 0x96, 0x5e, 0x21, 0x54, 0x34],
+            1,
+        ),
         mode,
         interval_us,
         optimize_markers: 0,
@@ -61,60 +59,44 @@ pub fn reflex_options(mode: u32, interval_us: u32, thread_id: u32) -> rsf_slvk_s
     }
 }
 
-pub fn rsf_slvk_pack_pcl_options(thread_id: u32, output: &mut rsf_slvk_sdk_pcl_options) {
-    *output = rsf_slvk_sdk_pcl_options {
-        base: rsf_slvk_sdk_header {
-            next: ptr::null_mut(),
-            type_lo: 0xcfa3_2f9b,
-            type_mid: 0x023c,
-            type_hi: 0x420e,
-            type_tail: [0x90, 0x56, 0x68, 0x32, 0xb7, 0x4f, 0x89, 0xb4],
-            version: 1,
-        },
+pub fn pcl_options(thread_id: u32) -> rsf_slvk_sdk_pcl_options {
+    rsf_slvk_sdk_pcl_options {
+        base: header(
+            0xcfa3_2f9b,
+            0x023c,
+            0x420e,
+            [0x90, 0x56, 0x68, 0x32, 0xb7, 0x4f, 0x89, 0xb4],
+            1,
+        ),
         hotkey: 0, // eUsePingMessage
         thread_id,
-    };
+    }
 }
 
 /// Matrix buffers borrow one live managed frame and are copied into the SDK's
 /// row storage. The managed column-vector representation already has this
-/// linear order when read as Streamline row-vector matrices.
-pub(crate) unsafe fn rsf_slvk_pack_legacy_camera(
+/// linear order when read as Streamline row-vector matrices. None for a null
+/// camera or matrix.
+pub(crate) unsafe fn legacy_camera(
     camera: *const rsf_slvk_legacy_camera,
-    output: *mut rsf_slvk_sdk_constants,
-) -> u32 {
-    let Some(camera) = (unsafe { camera.as_ref() }) else {
-        return 0;
-    };
-    let [
-        view_to_clip,
-        clip_to_view,
-        clip_to_previous,
-        previous_to_clip,
-    ] = [
+) -> Option<rsf_slvk_sdk_constants> {
+    let camera = unsafe { camera.as_ref() }?;
+    let matrices = [
         camera.view_to_clip,
         camera.clip_to_view,
         camera.clip_to_previous,
         camera.previous_to_clip,
     ];
-    if output.is_null()
-        || [
-            view_to_clip,
-            clip_to_view,
-            clip_to_previous,
-            previous_to_clip,
-        ]
-        .iter()
-        .any(|matrix| matrix.is_null())
-    {
-        return 0;
+    if matrices.iter().any(|matrix| matrix.is_null()) {
+        return None;
     }
-    let copy = |matrix: *const f32| unsafe { matrix.cast::<[f32; 16]>().read() };
-    let constants = rsf_slvk_sdk_constants {
-        view_to_clip: copy(view_to_clip),
-        clip_to_view: copy(clip_to_view),
-        clip_to_previous: copy(clip_to_previous),
-        previous_to_clip: copy(previous_to_clip),
+    let [view_to_clip, clip_to_view, clip_to_previous, previous_to_clip] =
+        matrices.map(|matrix| unsafe { matrix.cast::<[f32; 16]>().read() });
+    Some(rsf_slvk_sdk_constants {
+        view_to_clip,
+        clip_to_view,
+        clip_to_previous,
+        previous_to_clip,
         jitter: camera.jitter,
         motion_scale: camera.motion_scale,
         position: camera.position,
@@ -127,16 +109,15 @@ pub(crate) unsafe fn rsf_slvk_pack_legacy_camera(
         aspect: camera.aspect,
         reset: u8::from(camera.reset != 0),
         ..sdk_camera_defaults::constants()
-    };
-    unsafe { output.write(constants) };
-    1
+    })
 }
 
-pub(crate) unsafe fn rsf_slvk_pack_legacy_tags(
-    images: *const *const rsf_slvk_legacy_image,
-    output: &mut rsf_slvk_sdk_tag_batch,
-) {
-    let images = unsafe { images.cast::<[*const rsf_slvk_legacy_image; 4]>().as_ref() };
+/// The tag batch for `images`, or the invalidation batch without them. The caller points each tag
+/// at its resource once the batch is in place.
+pub(crate) unsafe fn legacy_tags(
+    images: Option<&[*const rsf_slvk_legacy_image; 4]>,
+) -> rsf_slvk_sdk_tag_batch {
+    let mut output = rsf_slvk_sdk_tag_batch::default();
     // Depth, motion vectors, HUD-less color, UI and alpha.
     for (index, kind) in [0, 1, 2, 23].into_iter().enumerate() {
         let mut tag = rsf_slvk_sdk_tag {
@@ -165,9 +146,9 @@ pub(crate) unsafe fn rsf_slvk_pack_legacy_tags(
             tag.width = image.width;
             tag.height = image.height;
         }
-        // The bridge installs the pointer to the batch's resource.
         output.tags[index] = tag;
     }
+    output
 }
 
 #[cfg(test)]
@@ -182,8 +163,7 @@ mod tests {
             (2, 8_333, 19)
         );
         assert_eq!((reflex.optimize_markers, reflex.hotkey), (0, 0));
-        let mut pcl = rsf_slvk_sdk_pcl_options::default();
-        rsf_slvk_pack_pcl_options(23, &mut pcl);
+        let pcl = pcl_options(23);
         assert_eq!((pcl.hotkey, pcl.thread_id), (0, 23));
     }
 
@@ -200,22 +180,15 @@ mod tests {
             reset: 4,
             ..Default::default()
         };
-        let mut packed = rsf_slvk_sdk_constants::default();
-        assert_eq!(
-            unsafe { rsf_slvk_pack_legacy_camera(&camera, &mut packed) },
-            1
-        );
+        let packed = unsafe { legacy_camera(&camera) }.unwrap();
         assert_eq!(packed.view_to_clip, matrix);
         assert_eq!(packed.previous_to_clip, matrix);
         assert_eq!(packed.clip_to_lens, [f32::MAX; 16]);
         assert_eq!(packed.jitter, camera.jitter);
         assert_eq!(packed.motion_scale, camera.motion_scale);
         assert_eq!(packed.reset, 1);
-        camera.view_to_clip = ptr::null();
-        assert_eq!(
-            unsafe { rsf_slvk_pack_legacy_camera(&camera, &mut packed) },
-            0
-        );
+        camera.view_to_clip = std::ptr::null();
+        assert!(unsafe { legacy_camera(&camera) }.is_none());
     }
 
     #[test]
@@ -229,15 +202,14 @@ mod tests {
             height: 720,
             usage: 7,
         };
-        let images = [ptr::from_ref(&image); 4];
-        let mut batch = rsf_slvk_sdk_tag_batch::default();
-        unsafe { rsf_slvk_pack_legacy_tags(images.as_ptr(), &mut batch) };
+        let images = [std::ptr::from_ref(&image); 4];
+        let batch = unsafe { legacy_tags(Some(&images)) };
         assert_eq!(batch.tags.map(|tag| tag.type_), [0, 1, 2, 23]);
         assert_eq!(batch.tags[0].lifecycle, 0);
         assert_eq!([batch.tags[0].width, batch.tags[0].height], [1280, 720]);
         assert_eq!(batch.resources[0].image.addr(), 40);
         assert_eq!(batch.resources[0].view.addr(), 41);
-        unsafe { rsf_slvk_pack_legacy_tags(ptr::null(), &mut batch) };
+        let batch = unsafe { legacy_tags(None) };
         assert_eq!(batch.tags.map(|tag| tag.lifecycle), [1; 4]);
         assert!(
             batch
