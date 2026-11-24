@@ -13,7 +13,7 @@ use super::particles::{hooked_beam_fill, tag_beam_vertices, tag_trail_vertices};
 use super::translucency::{ParticleBindingCommand, hooked_mesh_particle_parameters};
 use super::views::{hooked_visibility, prepare_owned_views};
 use super::{
-    Guard, INSTALLED, Renderer, SITES, TEST_ENGINE, TEST_MODULE, TEST_TRUESKY_MODULE, copy,
+    Guard, INSTALLED, Renderer, SITES, TEST_ENGINE, TEST_MODULE, TEST_TRUESKY_MODULE,
     drain_retired, function, hook, key, method, pool_ref, read,
 };
 use crate::sys::RSF_AC7_VIEW_BUFFER_BYTES;
@@ -290,10 +290,12 @@ fn scene_bytes() -> *mut u8 {
     harness().scene.get().cast()
 }
 
+fn get<T: Copy>(address: *const u8) -> T {
+    unsafe { address.cast::<T>().read_unaligned() }
+}
+
 fn rect(address: *const u8) -> [i32; 4] {
-    let mut rect = [0i32; 4];
-    copy(rect.as_mut_ptr().cast(), address.cast(), 16);
-    rect
+    get(address)
 }
 
 fn put<T: Copy>(address: *mut u8, value: T) {
@@ -601,14 +603,8 @@ unsafe extern "C" fn original_context(raw_context: *mut c_void, raw_root: *mut c
         current[2] == 4 && current[3] == 4,
         c"post-SR consumers get output rectangle in same graph",
     );
-    let mut size = [0i32; 2];
-    copy(
-        size.as_mut_ptr().cast(),
-        scene_bytes().wrapping_add(0x208).cast(),
-        8,
-    );
     verify(
-        size == [4, 4],
+        get::<[i32; 2]>(scene_bytes().wrapping_add(0x208)) == [4, 4],
         c"post-SR shader source size is native output size",
     );
     verify(
@@ -1060,24 +1056,13 @@ fn replay_graph(calls: &Calls, device: &ID3D11Device, immediate: &ID3D11DeviceCo
         !registered.is_null() && harness.fallback_draws.get() == 1,
         c"graph has native SR node and complete spatial fallback",
     );
-    let mut buffer = [0i32; 2];
-    copy(
-        buffer.as_mut_ptr().cast(),
-        scene.wrapping_add(0x208).cast(),
-        8,
-    );
     verify(
-        rect(view.wrapping_add(0x70)) == render && buffer == internal,
+        rect(view.wrapping_add(0x70)) == render
+            && get::<[i32; 2]>(scene.wrapping_add(0x208)) == internal,
         c"CPU view/scene sizes restored after graph construction",
     );
-    let mut restored_uniform = 0u64;
-    copy(
-        (&raw mut restored_uniform).cast(),
-        view.wrapping_add(0x10).cast(),
-        8,
-    );
     verify(
-        harness.uniform_rebuilds.get() == 1 && restored_uniform == old_uniform,
+        harness.uniform_rebuilds.get() == 1 && get::<u64>(view.wrapping_add(0x10)) == old_uniform,
         c"only shader parameters rebuilt; original native uniform ownership restored",
     );
     if registered.is_null() {
@@ -1192,14 +1177,8 @@ fn replay_graph(calls: &Calls, device: &ID3D11Device, immediate: &ID3D11DeviceCo
             null_mut(),
         )
     };
-    let mut restored_mode = 0u32;
-    copy(
-        (&raw mut restored_mode).cast(),
-        views.wrapping_add(0x13c0).cast(),
-        4,
-    );
     verify(
-        restored_mode == 1,
+        get::<u32>(views.wrapping_add(0x13c0)) == 1,
         c"native AA graph choice restored after jitter producer",
     );
     harness.configured_output.set(4);
