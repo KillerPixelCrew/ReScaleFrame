@@ -4,62 +4,26 @@
 // ordering, admission and fallback policy only.
 use super::*;
 use crate::sys::RSF_FG_FIXED;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-// Read only through the COM calls in com_ref.cpp.
-#[allow(dead_code)]
-#[repr(C)]
-struct Vtable {
-    query: unsafe extern "system" fn(*mut Fake, *const c_void, *mut Handle) -> i32,
-    add_ref: unsafe extern "system" fn(*mut Fake) -> u32,
-    release: unsafe extern "system" fn(*mut Fake) -> u32,
-}
-
-// IUnknown layout: the vtable pointer first.
-#[allow(dead_code)]
+// IUnknown layout: the shared fake first, so a COM pointer is also a pointer to this record.
 #[repr(C)]
 struct Fake {
-    vtable: &'static Vtable,
-    refs: Cell<u32>,
+    com: com_ref::test::Fake,
     name: &'static str,
 }
 
-unsafe extern "system" fn query(_: *mut Fake, _: *const c_void, out: *mut Handle) -> i32 {
-    unsafe { out.write(ptr::null_mut()) };
-    0x8000_4002_u32 as i32
+unsafe fn released(object: *mut com_ref::test::Fake) {
+    event(format!("release {}", unsafe { (*object.cast::<Fake>()).name }));
 }
-
-unsafe extern "system" fn add_ref(this: *mut Fake) -> u32 {
-    let refs = unsafe { &(*this).refs };
-    refs.set(refs.get() + 1);
-    refs.get()
-}
-
-unsafe extern "system" fn release(this: *mut Fake) -> u32 {
-    let fake = unsafe { &*this };
-    assert!(fake.refs.get() > 0, "over-released fake");
-    fake.refs.set(fake.refs.get() - 1);
-    if fake.refs.get() == 0 {
-        event(format!("release {}", fake.name));
-    }
-    fake.refs.get()
-}
-
-static VTABLE: Vtable = Vtable {
-    query,
-    add_ref,
-    release,
-};
 
 fn fake_com(name: &'static str) -> *mut Fake {
     Box::into_raw(Box::new(Fake {
-        vtable: &VTABLE,
-        refs: Cell::new(1),
+        com: com_ref::test::Fake::with_last_release(Some(released)),
         name,
     }))
 }
-
 #[derive(Default)]
 struct World {
     refused_preset: Option<u32>,

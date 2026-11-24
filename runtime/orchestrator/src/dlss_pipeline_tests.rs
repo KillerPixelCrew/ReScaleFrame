@@ -2,49 +2,15 @@
 // Synthetic D3D11 SR pipeline contracts: fake COM objects, the fake leaves and the legacy
 // adapter over a fake bridge. No device, window, SDK or shader is touched.
 use super::*;
+use crate::com_ref::test::Fake;
 use crate::sr_legacy::fake as legacy;
 use crate::sys::rsf_motion_resolve_params;
 use std::cell::{Cell, RefCell};
 use std::ptr;
 
-#[repr(C)]
-struct Vtable {
-    query_interface: usize,
-    add_ref: unsafe extern "system" fn(*mut Fake) -> u32,
-    release: unsafe extern "system" fn(*mut Fake) -> u32,
-}
-
-#[repr(C)]
-struct Fake {
-    vtable: &'static Vtable,
-    refs: Cell<u32>,
-}
-
-unsafe extern "system" fn add_ref(object: *mut Fake) -> u32 {
-    let refs = unsafe { &(*object).refs };
-    refs.set(refs.get() + 1);
-    refs.get()
-}
-
-unsafe extern "system" fn release(object: *mut Fake) -> u32 {
-    let refs = unsafe { &(*object).refs };
-    refs.set(refs.get() - 1);
-    refs.get()
-}
-
-static VTABLE: Vtable = Vtable {
-    query_interface: 0,
-    add_ref,
-    release,
-};
-
 // Leaked: fake objects outlive every pipeline field that retains them.
 fn fake() -> Raw {
-    Box::into_raw(Box::new(Fake {
-        vtable: &VTABLE,
-        refs: Cell::new(1),
-    }))
-    .cast()
+    Box::into_raw(Box::new(Fake::new())).cast()
 }
 
 fn refs(object: Raw) -> u32 {

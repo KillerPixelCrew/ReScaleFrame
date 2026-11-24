@@ -4,7 +4,8 @@
 // lifetime and recovery policy only. The fence completes only when the CPU waits for a value the
 // queue or GL has been asked to signal, so a lease release proves an observed completion.
 use super::*;
-use std::cell::{Cell, RefCell};
+use crate::com_ref::test::{add_ref, release};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ffi::{c_char, c_int};
 
@@ -12,46 +13,18 @@ const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 const GL_CONTEXT: Handle = 0x77 as Handle;
 const LUID: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 
-// Read only through the COM calls in com_ref.cpp.
-#[allow(dead_code)]
-#[repr(C)]
-struct Vtable {
-    query: usize,
-    add_ref: unsafe extern "system" fn(*mut Fake) -> u32,
-    release: unsafe extern "system" fn(*mut Fake) -> u32,
-}
-
-// IUnknown layout: the vtable pointer first.
+// IUnknown layout: the shared fake first, so a COM pointer is also a pointer to this record.
 #[repr(C)]
 struct Fake {
-    vtable: &'static Vtable,
-    refs: Cell<u32>,
+    com: com_ref::test::Fake,
     name: String,
 }
 
-unsafe extern "system" fn add_ref(this: *mut Fake) -> u32 {
-    let refs = unsafe { &(*this).refs };
-    refs.set(refs.get() + 1);
-    refs.get()
+unsafe fn released(object: *mut com_ref::test::Fake) {
+    let name = unsafe { &(*object.cast::<Fake>()).name };
+    event(format!("release {name}"));
+    world(|world| world.com.remove(name));
 }
-
-unsafe extern "system" fn release(this: *mut Fake) -> u32 {
-    let fake = unsafe { &*this };
-    assert!(fake.refs.get() > 0, "over-released {}", fake.name);
-    fake.refs.set(fake.refs.get() - 1);
-    if fake.refs.get() == 0 {
-        event(format!("release {}", fake.name));
-        world(|world| world.com.remove(&fake.name));
-    }
-    fake.refs.get()
-}
-
-static VTABLE: Vtable = Vtable {
-    query: 0,
-    add_ref,
-    release,
-};
-
 fn com(kind: &str) -> Handle {
     let name = world(|world| {
         world.next += 1;
@@ -63,15 +36,14 @@ fn com(kind: &str) -> Handle {
 fn named_com(name: String) -> Handle {
     world(|world| assert!(world.com.insert(name.clone())));
     Box::into_raw(Box::new(Fake {
-        vtable: &VTABLE,
-        refs: Cell::new(1),
+        com: com_ref::test::Fake::with_last_release(Some(released)),
         name,
     }))
     .cast()
 }
 
 fn refs(object: Handle) -> u32 {
-    unsafe { (*object.cast::<Fake>()).refs.get() }
+    unsafe { (*object.cast::<Fake>()).com.refs.get() }
 }
 
 fn com_name(object: Handle) -> String {
