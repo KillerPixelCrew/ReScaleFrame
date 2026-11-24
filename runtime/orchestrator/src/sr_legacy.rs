@@ -17,49 +17,27 @@ use crate::motion_resolve::Pass as Resolve;
 use crate::sr_bridge::Bridge;
 type Frame = rsf_dlss_frame;
 
-#[repr(C)]
-struct Services {
-    create: unsafe extern "C" fn(*const rsf_sr_session_setup, *mut *mut Bridge) -> i32,
-    select: unsafe extern "C" fn(*mut Bridge, u32, u32, u64) -> i32,
-    status: unsafe extern "C" fn(*const Bridge, *mut rsf_sr_session_status) -> i32,
-    exposure: unsafe extern "C" fn(*mut Bridge, u32) -> i32,
-    evaluate: unsafe extern "C" fn(*mut Bridge, *mut c_void, *const rsf_sr_frame) -> i32,
-    warm_up: unsafe extern "C" fn(*mut Bridge, u32, u32, u32, u32, u32) -> i32,
-    destroy: unsafe extern "C" fn(*mut Bridge),
-    create_resolve: unsafe extern "C" fn(*mut c_void, u32, u32, *mut *mut Resolve) -> i32,
-    resolve: unsafe extern "C" fn(
-        *const Resolve,
-        *mut c_void,
-        *mut c_void,
-        *mut c_void,
-        *const rsf_motion_resolve_params,
-    ) -> i32,
-    depth: unsafe extern "C" fn(*const Resolve) -> *mut c_void,
-    motion: unsafe extern "C" fn(*const Resolve) -> *mut c_void,
-    destroy_resolve: unsafe extern "C" fn(*mut Resolve),
-    dump_active: unsafe extern "C" fn() -> i32,
-    dump_frame: unsafe extern "C" fn(*mut c_void, *const Frame, u32),
-}
-const _: () = assert!(size_of::<Services>() == 14 * size_of::<*const c_void>());
-
+// Production calls the SR bridge, motion resolve and input dump directly; unit tests call the
+// same-named fakes in `fake`.
 #[cfg(not(test))]
-static SERVICES: Services = Services {
-    create: crate::sr_bridge::rsf_sr_bridge_create,
-    select: crate::sr_bridge::rsf_sr_bridge_select,
-    status: crate::sr_bridge::rsf_sr_bridge_get_status,
-    exposure: crate::sr_bridge::rsf_sr_bridge_set_auto_exposure,
-    evaluate: crate::sr_bridge::rsf_sr_bridge_evaluate,
-    warm_up: crate::sr_bridge::rsf_sr_bridge_warm_up,
-    destroy: crate::sr_bridge::rsf_sr_bridge_destroy,
-    create_resolve: crate::motion_resolve::rsf_motion_resolve_create,
-    resolve: crate::motion_resolve::rsf_motion_resolve_run,
-    depth: crate::motion_resolve::rsf_motion_resolve_depth,
-    motion: crate::motion_resolve::rsf_motion_resolve_motion,
-    destroy_resolve: crate::motion_resolve::rsf_motion_resolve_destroy,
-    dump_active: crate::input_dump::rsf_input_dump_active,
-    dump_frame: crate::input_dump::rsf_input_dump_sr,
-};
-
+mod leaf {
+    pub(super) use crate::input_dump::{
+        rsf_input_dump_active as dump_active, rsf_input_dump_sr as dump_frame,
+    };
+    pub(super) use crate::motion_resolve::{
+        rsf_motion_resolve_create as create_resolve, rsf_motion_resolve_depth as depth,
+        rsf_motion_resolve_destroy as destroy_resolve, rsf_motion_resolve_motion as motion,
+        rsf_motion_resolve_run as resolve,
+    };
+    pub(super) use crate::sr_bridge::{
+        rsf_sr_bridge_create as create, rsf_sr_bridge_destroy as destroy,
+        rsf_sr_bridge_evaluate as evaluate, rsf_sr_bridge_get_status as status,
+        rsf_sr_bridge_select as select, rsf_sr_bridge_set_auto_exposure as exposure,
+        rsf_sr_bridge_warm_up as warm_up,
+    };
+}
+#[cfg(test)]
+use fake as leaf;
 #[cfg(not(test))]
 #[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn rsf_sr_legacy_create(
@@ -94,16 +72,7 @@ pub(super) unsafe fn rsf_sr_legacy_create(
     setup.fsr3_directory_utf8 = fsr3;
     setup.fsr4_directory_utf8 = fsr4;
     setup.xess_directory_utf8 = xess;
-    unsafe {
-        create_adapter(
-            &setup,
-            units_to_meters,
-            standard_depth,
-            auto_exposure,
-            &SERVICES,
-            out,
-        )
-    }
+    unsafe { create_adapter(&setup, units_to_meters, standard_depth, auto_exposure, out) }
 }
 
 struct Exposure {
@@ -140,7 +109,6 @@ impl Exposure {
 }
 
 pub(super) struct Adapter {
-    services: &'static Services,
     bridge: *mut Bridge,
     resolve: *mut Resolve,
     device: *mut c_void,
@@ -157,8 +125,8 @@ pub(super) struct Adapter {
 impl Drop for Adapter {
     fn drop(&mut self) {
         unsafe {
-            (self.services.destroy)(self.bridge);
-            (self.services.destroy_resolve)(self.resolve);
+            leaf::destroy(self.bridge);
+            leaf::destroy_resolve(self.resolve);
         }
     }
 }
@@ -174,7 +142,6 @@ unsafe fn create_adapter(
     units_to_meters: f32,
     standard_depth: u32,
     auto_exposure: u32,
-    services: &'static Services,
     out: *mut *mut Adapter,
 ) -> i32 {
     if out.is_null() || !crate::sr_session::valid_unit_scale(units_to_meters) {
@@ -192,7 +159,6 @@ unsafe fn create_adapter(
     setup.open.auto_exposure = u32::from(auto_exposure != 0);
     setup.open.inverted_depth = u32::from(standard_depth == 0);
     let mut adapter = Adapter {
-        services,
         bridge: ptr::null_mut(),
         resolve: ptr::null_mut(),
         device: setup.open.device,
@@ -209,7 +175,7 @@ unsafe fn create_adapter(
             fresh: true,
         },
     };
-    let result = unsafe { (services.create)(&setup, &mut adapter.bridge) };
+    let result = unsafe { leaf::create(&setup, &mut adapter.bridge) };
     if result != 0 {
         return result;
     }
@@ -230,7 +196,7 @@ impl Adapter {
             struct_size: size_of::<rsf_sr_session_status>() as u32,
             ..unsafe { std::mem::zeroed() }
         };
-        unsafe { (self.services.status)(self.bridge, &mut status) };
+        unsafe { leaf::status(self.bridge, &mut status) };
         status
     }
 
@@ -283,18 +249,18 @@ impl Adapter {
         if self.resolve.is_null() || self.resolve_extent != extent {
             let mut replacement = ptr::null_mut();
             let created = unsafe {
-                (self.services.create_resolve)(self.device, extent[0], extent[1], &mut replacement)
+                leaf::create_resolve(self.device, extent[0], extent[1], &mut replacement)
             };
             if created == 0 || replacement.is_null() {
                 if !replacement.is_null() {
-                    unsafe { (self.services.destroy_resolve)(replacement) };
+                    unsafe { leaf::destroy_resolve(replacement) };
                 }
                 return INIT_FAILED;
             }
             let previous = std::mem::replace(&mut self.resolve, replacement);
             self.resolve_extent = extent;
             self.generation = self.generation.wrapping_add(1);
-            unsafe { (self.services.destroy_resolve)(previous) };
+            unsafe { leaf::destroy_resolve(previous) };
         }
         let params = dense_resolve_params(
             input.clip_to_prev_clip,
@@ -304,9 +270,7 @@ impl Adapter {
             input.motion_depth_layer,
             [0.0; 2],
         );
-        if unsafe {
-            (self.services.resolve)(self.resolve, context, input.motion, input.depth, &params)
-        } == 0
+        if unsafe { leaf::resolve(self.resolve, context, input.motion, input.depth, &params) } == 0
         {
             return FEATURE_FAILED;
         }
@@ -324,7 +288,7 @@ impl Adapter {
         let result = self
             .exposure
             .update(input.exposure.is_null(), |auto| unsafe {
-                (self.services.exposure)(self.bridge, u32::from(auto))
+                leaf::exposure(self.bridge, u32::from(auto))
             });
         if result != 0 {
             return result;
@@ -334,8 +298,8 @@ impl Adapter {
             return result;
         }
         let record = self.record(input);
-        let depth = unsafe { (self.services.depth)(self.resolve) };
-        let motion = unsafe { (self.services.motion)(self.resolve) };
+        let depth = unsafe { leaf::depth(self.resolve) };
+        let motion = unsafe { leaf::motion(self.resolve) };
         let render_resource =
             |texture| self.resource(texture, input.render_width, input.render_height);
         let mut frame = rsf_sr_frame {
@@ -372,11 +336,11 @@ impl Adapter {
             camera_motion_included: 1,
             ..*input
         };
-        if unsafe { (self.services.dump_active)() } != 0 {
-            unsafe { (self.services.dump_frame)(context, submitted, self.status().effective) };
+        if leaf::dump_active() != 0 {
+            unsafe { leaf::dump_frame(context, submitted, self.status().effective) };
         }
         // These normalized textures are borrowed by the bridge only for this call.
-        unsafe { (self.services.evaluate)(self.bridge, context, &frame) }
+        unsafe { leaf::evaluate(self.bridge, context, &frame) }
     }
 }
 
@@ -390,7 +354,7 @@ pub(super) unsafe fn rsf_sr_legacy_select(
     let Some(adapter) = (unsafe { adapter.as_mut() }) else {
         return INVALID_ARGUMENT;
     };
-    let result = unsafe { (adapter.services.select)(adapter.bridge, backend, quality, 0) };
+    let result = unsafe { leaf::select(adapter.bridge, backend, quality, 0) };
     if result == 0 {
         adapter.exposure.fresh = true;
         let status = adapter.status();
@@ -429,7 +393,7 @@ pub(super) unsafe fn rsf_sr_legacy_warm_up(
         return INVALID_ARGUMENT;
     };
     unsafe {
-        (adapter.services.warm_up)(
+        leaf::warm_up(
             adapter.bridge,
             render_width,
             render_height,
@@ -457,12 +421,7 @@ pub(super) unsafe fn rsf_sr_legacy_fg_inputs(
     if adapter.resolve.is_null() || depth.is_null() || motion.is_null() {
         return 0;
     }
-    let (d, m) = unsafe {
-        (
-            (adapter.services.depth)(adapter.resolve),
-            (adapter.services.motion)(adapter.resolve),
-        )
-    };
+    let (d, m) = unsafe { (leaf::depth(adapter.resolve), leaf::motion(adapter.resolve)) };
     unsafe {
         depth.write(d);
         motion.write(m);
@@ -488,14 +447,20 @@ pub(super) mod fake {
     pub(crate) const DEPTH: *mut c_void = ptr::without_provenance_mut(0x90);
     pub(crate) const MOTION: *mut c_void = ptr::without_provenance_mut(0xa0);
 
-    unsafe extern "C" fn create(_: *const rsf_sr_session_setup, out: *mut *mut Bridge) -> i32 {
+    pub(super) unsafe extern "C" fn create(
+        _: *const rsf_sr_session_setup,
+        out: *mut *mut Bridge,
+    ) -> i32 {
         unsafe { out.write(BRIDGE) };
         0
     }
-    unsafe extern "C" fn select(_: *mut Bridge, _: u32, _: u32, _: u64) -> i32 {
+    pub(super) unsafe extern "C" fn select(_: *mut Bridge, _: u32, _: u32, _: u64) -> i32 {
         SELECT.get()
     }
-    unsafe extern "C" fn status(_: *const Bridge, out: *mut rsf_sr_session_status) -> i32 {
+    pub(super) unsafe extern "C" fn status(
+        _: *const Bridge,
+        out: *mut rsf_sr_session_status,
+    ) -> i32 {
         let [width, height] = RENDER.get();
         unsafe {
             (*out).render_width = width;
@@ -503,20 +468,31 @@ pub(super) mod fake {
         }
         0
     }
-    unsafe extern "C" fn exposure(_: *mut Bridge, _: u32) -> i32 {
+    pub(super) unsafe extern "C" fn exposure(_: *mut Bridge, _: u32) -> i32 {
         0
     }
-    unsafe extern "C" fn evaluate(_: *mut Bridge, _: *mut c_void, _: *const rsf_sr_frame) -> i32 {
+    pub(super) unsafe extern "C" fn evaluate(
+        _: *mut Bridge,
+        _: *mut c_void,
+        _: *const rsf_sr_frame,
+    ) -> i32 {
         EVALUATIONS.set(EVALUATIONS.get() + 1);
         EVALUATE_RESULT.get()
     }
-    unsafe extern "C" fn warm_up(_: *mut Bridge, _: u32, _: u32, _: u32, _: u32, _: u32) -> i32 {
+    pub(super) unsafe extern "C" fn warm_up(
+        _: *mut Bridge,
+        _: u32,
+        _: u32,
+        _: u32,
+        _: u32,
+        _: u32,
+    ) -> i32 {
         0
     }
-    unsafe extern "C" fn destroy(_: *mut Bridge) {
+    pub(super) unsafe extern "C" fn destroy(_: *mut Bridge) {
         DESTROYED.set(DESTROYED.get() + 1);
     }
-    unsafe extern "C" fn create_resolve(
+    pub(super) unsafe extern "C" fn create_resolve(
         _: *mut c_void,
         _: u32,
         _: u32,
@@ -525,7 +501,7 @@ pub(super) mod fake {
         unsafe { resolve.write(RESOLVE) };
         1
     }
-    unsafe extern "C" fn resolve(
+    pub(super) unsafe extern "C" fn resolve(
         _: *const Resolve,
         _: *mut c_void,
         _: *mut c_void,
@@ -534,39 +510,22 @@ pub(super) mod fake {
     ) -> i32 {
         1
     }
-    unsafe extern "C" fn depth(_: *const Resolve) -> *mut c_void {
+    pub(super) unsafe extern "C" fn depth(_: *const Resolve) -> *mut c_void {
         DEPTH
     }
-    unsafe extern "C" fn motion(_: *const Resolve) -> *mut c_void {
+    pub(super) unsafe extern "C" fn motion(_: *const Resolve) -> *mut c_void {
         MOTION
     }
-    unsafe extern "C" fn destroy_resolve(_: *mut Resolve) {}
-    unsafe extern "C" fn dump_active() -> i32 {
+    pub(super) unsafe extern "C" fn destroy_resolve(_: *mut Resolve) {}
+    pub(super) extern "C" fn dump_active() -> i32 {
         0
     }
-    unsafe extern "C" fn dump_frame(_: *mut c_void, _: *const Frame, _: u32) {}
-
-    static SERVICES: Services = Services {
-        create,
-        select,
-        status,
-        exposure,
-        evaluate,
-        warm_up,
-        destroy,
-        create_resolve,
-        resolve,
-        depth,
-        motion,
-        destroy_resolve,
-        dump_active,
-        dump_frame,
-    };
+    pub(super) unsafe extern "C" fn dump_frame(_: *mut c_void, _: *const Frame, _: u32) {}
 
     pub(crate) fn adapter() -> *mut Adapter {
         let setup: rsf_sr_session_setup = unsafe { std::mem::zeroed() };
         let mut out = ptr::null_mut();
-        let result = unsafe { create_adapter(&setup, 1.0, 0, 1, &SERVICES, &mut out) };
+        let result = unsafe { create_adapter(&setup, 1.0, 0, 1, &mut out) };
         assert_eq!(result, 0);
         out
     }
