@@ -33,6 +33,7 @@ mod cpu_native;
 mod cpu_policy;
 mod cpu_sources;
 mod creation;
+mod discovery;
 mod hook_set;
 mod layout;
 mod observers;

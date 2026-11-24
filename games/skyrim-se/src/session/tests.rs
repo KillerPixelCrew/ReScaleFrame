@@ -23,6 +23,12 @@ pub(super) mod subsystems {
     pub(in crate::session) fn admit_observers() -> i32 {
         i32::from(record("admit_observers", true))
     }
+    pub(in crate::session) fn discovery_refusal() -> *const c_char {
+        ptr::null()
+    }
+    pub(in crate::session) fn executable_sha256() -> &'static CStr {
+        c""
+    }
     pub(in crate::session) fn observers_busy() -> bool {
         record("observers_busy", OBSERVER_BUSY.get())
     }

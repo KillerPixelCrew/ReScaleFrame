@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-//! Admission and lifetime of the 13 CPU producer hooks for Skyrim SE 1.7.104.0.
+//! Admission and lifetime of the 13 CPU producer hooks for Skyrim SE at their discovered sites.
 //! Native detours keep the engine ABI, caller addresses and original calls on their own frames.
 
 use crate::cpu_policy::bad_screen_query;
 use crate::cpu_sources::clear_proof;
+use crate::discovery::{self, Site, rva};
 use crate::hook_set::HookSet;
 use crate::platform::Platform;
 use rsf_game_sys::ffi_util::lock_or_recover;
@@ -14,102 +15,21 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use windows_sys::Win32::System::Performance::QueryPerformanceFrequency;
 
-const NAMED_CALLBACK_SLOT: u32 = 0x20b5130;
-const NAMED_POLL: u32 = 0x6e6030;
-
-// Indexed by the native detour table in cpu_events.c.
-const HOOKS: [(u32, [u8; 19]); 13] = [
-    (
-        0x658870,
-        [
-            0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81,
-            0xec, 0x30, 0x01, 0x00, 0x00,
-        ],
-    ), // tick
-    (
-        0xcf95f0,
-        [
-            0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec,
-            0x30, 0x0f, 0x29, 0x74, 0x24,
-        ],
-    ), // poll
-    (
-        0x6565b0,
-        [
-            0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec,
-            0x60, 0x01, 0x00, 0x00, 0x48,
-        ],
-    ), // render
-    (
-        0xcfa650,
-        [
-            0x48, 0x8b, 0xc4, 0x48, 0x89, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
-            0x41, 0x56, 0x41, 0x57, 0x48,
-        ],
-    ), // dispatch
-    (
-        0x656e60,
-        [
-            0x48, 0x8b, 0xc4, 0x89, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41,
-            0x56, 0x41, 0x57, 0x48, 0x8d,
-        ],
-    ), // world
-    (
-        0x7ad900,
-        [
-            0x48, 0x8b, 0xc4, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec,
-            0x80, 0x00, 0x00, 0x00, 0x48,
-        ],
-    ), // controls
-    (
-        0x8fd590,
-        [
-            0x40, 0x57, 0x48, 0x83, 0xec, 0x70, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff,
-            0xff, 0x48, 0x89, 0x9c, 0x24,
-        ],
-    ), // camera_update
-    (
-        0x60eaf0,
-        [
-            0x48, 0x83, 0xec, 0x28, 0x48, 0x83, 0x3d, 0x94, 0x1f, 0xc1, 0x02, 0x00, 0x74, 0x69,
-            0x48, 0x89, 0x5c, 0x24, 0x30,
-        ],
-    ), // jobs_submit
-    (
-        0x60eb80,
-        [
-            0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x1d, 0x03, 0x1f, 0xc1, 0x02, 0x48,
-            0x85, 0xdb, 0x74, 0x26, 0x83,
-        ],
-    ), // jobs_join
-    (
-        NAMED_POLL,
-        [
-            0x48, 0x8b, 0x0d, 0xf9, 0xa4, 0xb4, 0x02, 0xe9, 0xb4, 0x3d, 0xf7, 0xff, 0xcc, 0xcc,
-            0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
-        ],
-    ), // named_poll
-    (
-        0x776290,
-        [
-            0x48, 0x8b, 0xc4, 0x41, 0x56, 0x48, 0x81, 0xec, 0xe0, 0x00, 0x00, 0x00, 0x48, 0xc7,
-            0x44, 0x24, 0x30, 0xfe, 0xff,
-        ],
-    ), // movement
-    (
-        0x745200,
-        [
-            0x48, 0x8b, 0xc4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
-            0x48, 0x8d, 0xa8, 0x98, 0xfe,
-        ],
-    ), // player_update
-    (
-        0x558e70,
-        [
-            0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff,
-            0xff, 0x48, 0x89, 0x5c, 0x24,
-        ],
-    ), // player_camera_update
+// Indexed by the native detour table in cpu_events.c. Each is verified at its discovered site.
+const HOOKS: [Site; 13] = [
+    Site::Tick,
+    Site::Poll,
+    Site::Render,
+    Site::Dispatch,
+    Site::World,
+    Site::Controls,
+    Site::CameraUpdate,
+    Site::JobsSubmit,
+    Site::JobsJoin,
+    Site::NamedPoll,
+    Site::Movement,
+    Site::PlayerUpdate,
+    Site::PlayerCameraUpdate,
 ];
 
 const _: () = assert!(HOOKS.len() == crate::sys::RSF_SKYRIM_CPU_HOOK_COUNT as usize);
@@ -213,34 +133,49 @@ const ENTERED: u32 = ACTIVE - 1;
 static PRODUCERS: AtomicU32 = AtomicU32::new(0);
 
 fn target(base: usize, index: usize) -> usize {
-    base + HOOKS[index].0 as usize
+    base + rva(HOOKS[index])
 }
 
 fn admission(platform: &Platform, base: usize) -> Result<(), StartRefusal> {
-    let named_slot = base.checked_add(NAMED_CALLBACK_SLOT as usize);
-    let named_poll = base.checked_add(NAMED_POLL as usize);
+    // The engine must still call the discovered poll through its named callback slot.
+    let named_slot = base.checked_add(rva(Site::NamedCallbackSlot));
+    let named_poll = base.checked_add(rva(Site::NamedPoll));
     if base == 0
-        || named_poll.is_none()
+        || rva(Site::NamedPoll) == 0
         || named_slot.and_then(|address| platform.read_usize(address)) != named_poll
     {
-        return Err(StartRefusal::new("named callback", NAMED_CALLBACK_SLOT, 0));
+        return Err(StartRefusal::new(
+            "named callback",
+            Site::NamedCallbackSlot,
+            0,
+        ));
     }
-    let screen_rva = bad_screen_query(platform, base);
-    if screen_rva != 0 {
-        return Err(StartRefusal::new("screen query bytes", screen_rva, 0));
+    if let Some(site) = bad_screen_query(platform, base) {
+        return Err(StartRefusal::new("screen query bytes", site, 0));
     }
-    for (rva, bytes) in &HOOKS {
-        // Every hook RVA is below the checked named slot.
-        if !platform.matches(base + *rva as usize, bytes) {
-            return Err(StartRefusal::new("hook bytes", *rva, 0));
+    for site in HOOKS {
+        if !discovery::verify(platform, base, site) {
+            return Err(StartRefusal::new("hook bytes", site, 0));
         }
     }
     Ok(())
 }
 
 impl StartRefusal {
-    fn new(stage: &'static str, rva: u32, status: i32) -> Self {
-        Self { stage, rva, status }
+    fn new(stage: &'static str, site: Site, status: i32) -> Self {
+        Self {
+            stage,
+            rva: rva(site) as u32,
+            status,
+        }
+    }
+
+    fn unsited(stage: &'static str) -> Self {
+        Self {
+            stage,
+            rva: 0,
+            status: 0,
+        }
     }
 }
 
@@ -303,15 +238,15 @@ impl Control {
 
     fn start(&mut self, platform: &Platform) -> Result<(), StartRefusal> {
         if active() || busy() {
-            return Err(StartRefusal::new("active or entered", 0, 0));
+            return Err(StartRefusal::unsited("active or entered"));
         }
         // Disabled targets are the only ones whose live prologues can be checked.
         if let Some(index) = self.hooks.first_unavailable() {
-            return Err(StartRefusal::new("hook state", HOOKS[index].0, 0));
+            return Err(StartRefusal::new("hook state", HOOKS[index], 0));
         }
         let base = platform.main_module();
         if !self.pinned || base != self.base || lock_or_recover(&SERVICES).is_none() {
-            return Err(StartRefusal::new("hook state", 0, 0));
+            return Err(StartRefusal::unsited("hook state"));
         }
         admission(platform, base)?;
 
@@ -321,7 +256,7 @@ impl Control {
         }) {
             // Keep preparation and any hook whose disable refused so stop can retry.
             self.disable_hooks();
-            return Err(StartRefusal::new("hook enable", HOOKS[index].0, status));
+            return Err(StartRefusal::new("hook enable", HOOKS[index], status));
         }
         PRODUCERS.fetch_or(ACTIVE, Ordering::Release);
         Ok(())

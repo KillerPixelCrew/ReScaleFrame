@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Owns Skyrim's engine render ratios, jitter and temporary output viewport.
 
-use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
+use crate::discovery::{Site, rva};
 use crate::platform::Platform;
 use crate::render_inputs::renderer_thread;
 use crate::render_native::{call_render_config, call_upscale, retain, thread};
@@ -19,16 +19,9 @@ use std::sync::{Mutex, MutexGuard};
 use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 
-const RENDER_STATE: usize = 0x333_63a0;
-const RENDERER: usize = 0x333_1f40;
 const RATIO: usize = 0x114;
 const RATIO_LOCK: usize = 0x128;
 const JITTER: usize = 0x44;
-const UPLOAD_DIRTY: usize = 0x333_6400;
-const UPLOAD: usize = 0x100_ae80;
-const VIEWPORT: usize = 0x100_9960;
-const TAA_MANAGER: usize = 0x33d_40a0;
-const IMMEDIATE_CONTEXT: usize = 0x333_1f30;
 
 #[derive(Clone, Copy)]
 struct Owner {
@@ -83,7 +76,7 @@ fn words<const N: usize>(platform: &Platform, address: usize) -> Option<[u32; N]
 }
 
 fn reset_history(platform: &Platform, base: usize) -> Option<()> {
-    let manager = platform.read_usize(base + TAA_MANAGER)?;
+    let manager = platform.read_usize(base + rva(Site::TaaManager))?;
     let taa = taa::owner(platform, manager).filter(|&taa| taa != 0)?;
     taa::clear_main_history(platform, taa)
 }
@@ -102,10 +95,10 @@ fn reconfigure(
         return None;
     }
     if let Some(window) = platform
-        .read_usize(base + ACTIVE_WINDOW)
+        .read_usize(base + rva(Site::ActiveWindow))
         .filter(|&window| window != 0)
         && let Some(context) = platform
-            .read_usize(base + IMMEDIATE_CONTEXT)
+            .read_usize(base + rva(Site::ImmediateContext))
             .filter(|&context| context != 0)
         && let Some(chain) = window
             .checked_add(0x18)
@@ -137,7 +130,7 @@ pub(crate) fn configure(
 ) -> Option<()> {
     let _transaction = MUTATION.try_lock().ok()?;
     let base = platform.main_module();
-    if base == 0 || pointer != base + RENDER_STATE || state().output.is_some() {
+    if base == 0 || pointer != base + rva(Site::RenderState) || state().output.is_some() {
         return None;
     }
     let output = words::<2>(platform, pointer + 0x24)?;
@@ -159,7 +152,7 @@ pub(crate) fn configure(
         }
         return Some(());
     };
-    let [frame] = words(platform, base + NATIVE_FRAME)?;
+    let [frame] = words(platform, base + rva(Site::NativeFrame))?;
     let ratios = [
         render[0] as f32 / output[0] as f32,
         render[1] as f32 / output[1] as f32,
@@ -227,12 +220,12 @@ unsafe fn write_values<const N: usize>(address: usize, values: &[f32; N]) {
 fn upload(base: usize, extent: [u32; 2], flags: u8) {
     type Upload = unsafe extern "C" fn(*mut c_void, u8);
     type Viewport = unsafe extern "C" fn(*mut c_void, u32, u32, u8) -> usize;
-    let renderer = ptr::with_exposed_provenance_mut(base + RENDERER);
+    let renderer = ptr::with_exposed_provenance_mut(base + rva(Site::Renderer));
     // This exact renderer and the two native entries were admitted by the observer guards.
     unsafe {
-        ptr::with_exposed_provenance_mut::<u8>(base + UPLOAD_DIRTY).write(1);
-        let upload: Upload = std::mem::transmute(base + UPLOAD);
-        let viewport: Viewport = std::mem::transmute(base + VIEWPORT);
+        ptr::with_exposed_provenance_mut::<u8>(base + rva(Site::UploadDirty)).write(1);
+        let upload: Upload = std::mem::transmute(base + rva(Site::Upload));
+        let viewport: Viewport = std::mem::transmute(base + rva(Site::Viewport));
         upload(renderer, flags);
         viewport(renderer, extent[0], extent[1], 0);
     }
@@ -264,7 +257,8 @@ pub(crate) fn record_per_frame_flags(session: u64, frame: u32, flags: u8) {
 
 fn current_flags(platform: &Platform, owner: Owner, pass: &rsf_game_render_pass) -> Option<u8> {
     let observation = FRAME_FLAGS.get()?;
-    let frame = platform.read_u32(owner.pointer - RENDER_STATE + NATIVE_FRAME)?;
+    let frame =
+        platform.read_u32(owner.pointer - rva(Site::RenderState) + rva(Site::NativeFrame))?;
     (frame == observation.frame
         && u64::from(frame) == pass.native_frame
         && owner.session == observation.session
@@ -302,7 +296,7 @@ pub(crate) fn enter(platform: &Platform, pass: &rsf_game_render_pass) -> bool {
         return false;
     };
     unsafe { write_values(owner.pointer + RATIO, &[1.0; 4]) };
-    upload(owner.pointer - RENDER_STATE, owner.output, flags);
+    upload(owner.pointer - rva(Site::RenderState), owner.output, flags);
     state().output = Some(Output {
         producer_ratios: numbers.map(f32::from_bits),
         thread,
@@ -329,7 +323,11 @@ pub(crate) fn leave() -> bool {
         return false;
     }
     unsafe { write_values(owner.pointer + RATIO, &output.producer_ratios) };
-    upload(owner.pointer - RENDER_STATE, owner.render, output.flags);
+    upload(
+        owner.pointer - rva(Site::RenderState),
+        owner.render,
+        output.flags,
+    );
     state().output = None;
     true
 }

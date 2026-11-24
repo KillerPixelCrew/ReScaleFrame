@@ -2,7 +2,7 @@
 //! Native renderer jitter, frame-upload and end-of-render observations for Skyrim.
 
 use crate::compatibility::render_allowed;
-use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
+use crate::discovery::{Site, rva};
 use crate::platform::Platform;
 use crate::session;
 use crate::{auxiliary, presentation, resolution, sampling};
@@ -13,8 +13,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use windows_sys::Win32::UI::WindowsAndMessaging::GetClassNameW;
 
 const SWAPCHAIN: usize = 0x18;
-const RENDERER: usize = 0x333_1f40;
-const UPLOAD_DIRTY: usize = 0x333_6400;
 const JITTER_OBSERVATIONS: u64 = 16;
 const WINDOW_CLASS: &[u8] = b"Skyrim Special Edition";
 
@@ -41,7 +39,7 @@ fn swapchain(platform: &Platform) -> Option<usize> {
     if base == 0 {
         return None;
     }
-    let window = platform.read_usize(base + ACTIVE_WINDOW)?;
+    let window = platform.read_usize(base + rva(Site::ActiveWindow))?;
     if window == 0 {
         return None;
     }
@@ -85,8 +83,8 @@ extern "C" fn rsf_skyrim_render_upload_enter(
     let base = platform.main_module();
     let mut dirty = [0];
     if base == 0
-        || base.checked_add(RENDERER) != Some(renderer)
-        || !platform.read(base + UPLOAD_DIRTY, &mut dirty)
+        || base.checked_add(rva(Site::Renderer)) != Some(renderer)
+        || !platform.read(base + rva(Site::UploadDirty), &mut dirty)
         || dirty[0] == 0
         || !session::accepting()
     {
@@ -94,7 +92,7 @@ extern "C" fn rsf_skyrim_render_upload_enter(
     }
     let mut host: rsf_game_host_services = unsafe { std::mem::zeroed() };
     unsafe { session::lease(true, &mut host) };
-    let Some(frame) = platform.read_u32(base + NATIVE_FRAME) else {
+    let Some(frame) = platform.read_u32(base + rva(Site::NativeFrame)) else {
         return false;
     };
     if host.session_id == 0 {

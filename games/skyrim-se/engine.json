@@ -15,7 +15,7 @@
   "engine": {
     "family": "Creation Engine",
     "version": null,
-    "evidence": "Exact installed fingerprint, native shader and jitter instruction matching, and bounded live jitter observation"
+    "evidence": "Recorded installed build, native shader and jitter instruction matching, and bounded live jitter observation"
   },
   "plugin": {
     "status": "Experimental reduced-resolution SR, FSR FG and bounded INPUT_TIMELINE DLSS FG/Reflex observed; broad timing and general readiness incomplete",
@@ -43,6 +43,20 @@
     "community_shaders_latest_audit": "038a0a04ce9db5b84707ec662ddfe7824cdac3dd"
   },
   "research": "../../docs/research/skyrim-se-integration.md",
+  "site_discovery": {
+    "status": "Every SkyrimSE.exe site the adapter hooks, patches, calls or reads is found at admission by signature; the file SHA-256 and build are evidence only and gate nothing",
+    "implementation": "games/skyrim-se/src/discovery.rs with the rsf-game-sys signature scanner; patterns from tools/derive-site-patterns.py",
+    "method": "56 patterns unique in the executable sections (rel32 branches and RIP displacements wildcarded): 28 code sites matched at the site (four are call sites whose return address is checked), the CPU dispatch found through its only call with its prologue checked, and 27 globals decoded from the RIP-relative operand of an instruction that uses them",
+    "derived": {
+      "create_thunk": "the only FF 25 jump through the D3D11CreateDeviceAndSwapChain import address table slot, which is read from the import directory",
+      "named_poll": "the function stored before the pointer to the \"Poll controls\" name in the engine's named callback table; its thunk must forward the discovered main global",
+      "target_slots": "renderer + 0xa58, a documented field offset: no instruction addresses it directly"
+    },
+    "structural_checks": "UI pattern fixes the pause counter at +0x160, UI names pattern the loading-menu name at +0xe8; observer, CPU and creation sites re-match their pattern in live memory before any hook is created or enabled",
+    "refusal": "a site that is missing, ambiguous or whose live bytes changed refuses admission and is named in the prepare log",
+    "verified": "2026-11-24: all 60 sites resolved uniquely to the recorded RVAs in the installed 1.7.104.0 SkyrimSE.exe (discovery::tests::every_site_resolves_in_the_installed_executable)",
+    "needs_game_run": "live-memory discovery, admission and hook installation have not yet run in the game"
+  },
   "native_preflight": {
     "status": "Guarded jitter/pre-HDR and CPU hooks; synchronous main-camera D3D11 leases evaluated at native resolution",
     "table_sha256": "a75879011dce7f810992a86acf811daed2ed75813ecee9a3903aec1242c272ce",

@@ -5,6 +5,7 @@ use crate::cpu_hooks::{self, Services, active};
 use crate::cpu_native::*;
 use crate::cpu_policy::*;
 use crate::cpu_sources::*;
+use crate::discovery::{Site, rva};
 use crate::platform;
 use crate::render_native::{call_render_pass, thread};
 use crate::sys::*;
@@ -14,10 +15,6 @@ use std::ffi::CStr;
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
-
-const SUBMIT_RETURN: usize = 0x658b14;
-const JOIN_RETURN: usize = 0x659334;
-const NAMED_POLL_RETURN: usize = 0xebc248;
 
 unsafe extern "C" {
     fn rsf_skyrim_query_menus(
@@ -270,7 +267,7 @@ fn begin_submit(caller: usize) -> Receipt {
     let mut ticket = JobTicket::EMPTY;
     if active() {
         if let Some(mut frame) = FRAME.get().filter(|frame| {
-            from_site(caller, SUBMIT_RETURN)
+            from_site(caller, rva(Site::SubmitReturn))
                 && cpu_manager_state(&mut before)
                 && before.main == unsafe { frame.as_ref().main }
                 && before.requested == 0
@@ -331,7 +328,7 @@ fn begin_join(caller: usize) -> Receipt {
     let owns_wait = FRAME.get().is_some_and(|frame| {
         let frame = unsafe { frame.as_ref() };
         ticket = frame.jobs;
-        from_site(caller, JOIN_RETURN)
+        from_site(caller, rva(Site::JoinReturn))
             && cpu_manager_state(&mut before)
             && before.main == frame.main
             && before.manager == ticket.manager
@@ -388,7 +385,7 @@ fn begin_named_poll(caller: usize) -> Receipt {
     let mut native = ManagerState::default();
     let ticket = job();
     if active()
-        && from_site(caller, NAMED_POLL_RETURN)
+        && from_site(caller, rva(Site::NamedPollReturn))
         && previous.generation == 0
         && cpu_manager_state(&mut native)
         && native.manager == ticket.manager

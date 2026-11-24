@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Native auxiliary surface selection and the scoped handoff to the Runtime.
 
+use crate::discovery::{Site, rva};
 use crate::layout::target_slot;
 use crate::platform::Platform;
 use crate::render_native::{desc, retain, thread, viewport};
@@ -23,7 +24,6 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::core::Interface;
 
-const DOF_SELECTOR: usize = 0x343_6358;
 type Upscale = unsafe extern "C" fn(*mut c_void, *mut c_void, &Pass) -> i32;
 type Restore = unsafe extern "C" fn(*mut c_void, &Scope) -> i32;
 type CaptureTexture = unsafe extern "C" fn(*mut c_void, *mut c_void, &Capture) -> i32;
@@ -296,7 +296,7 @@ pub(crate) fn observe(
         return;
     }
     let mut selector = [0; 4];
-    if !platform.read(base + DOF_SELECTOR, &mut selector) {
+    if !platform.read(base + rva(Site::DofSelector), &mut selector) {
         return;
     }
     let selector = u32::from_le_bytes(selector);
@@ -361,13 +361,13 @@ fn report_restore(platform: &Platform, host: &rsf_game_host_services, frame: u64
         return;
     }
     let Some(context) = platform
-        .read_usize(base + 0x333_1f30)
+        .read_usize(base + rva(Site::ImmediateContext))
         .filter(|&context| context != 0)
     else {
         return;
     };
     let mut ratios = [[0; 4]; 4];
-    if !platform.read(base + 0x333_64b4, ratios.as_flattened_mut()) {
+    if !platform.read(base + rva(Site::RasterRatio), ratios.as_flattened_mut()) {
         return;
     }
     let [x, y, previous_x, previous_y] = ratios.map(f32::from_le_bytes);

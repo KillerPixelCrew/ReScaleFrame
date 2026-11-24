@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Cold native creation and Steam Present cooperation for Skyrim SE.
 //!
-//! The game creates its device and swapchain once through the import thunk in `layout.rs`. Only
+//! The game creates its device and swapchain once through its discovered import thunk. Only
 //! the exact game call, or the exact Display Tweaks 0.5.25 relay of it, may open the Runtime's
 //! mode-3 creation scope around the complete original call; any outer wrapper keeps its arguments,
 //! outputs and HRESULT. The Steam overlay forwarding is installed through the shared Steam facade
 //! only while the game's renderer owner has no device (the cold owner). Anything else refuses
 //! admission and the game's native creation and Present run unchanged.
+use crate::discovery::{self, Site, rva};
 use crate::layout::*;
 use crate::platform::{CreationCall, CreationScope, NativeChain, Platform};
 use rsf_game_sys::ffi_util::lock_or_recover;
@@ -43,7 +44,7 @@ const DISPLAY_RELAY: &CStr =
 const THUNK_REFUSED: &CStr = c"Native creation thunk bytes refused.";
 const UNEXPECTED_CALLER: &CStr = c"Native creation refused: unexpected guarded-route caller.";
 const DISPLAY_MATCHED: &CStr = c"Skyrim native creation matched exact Display Tweaks0.5.25 pre/native/post route; native thunk and game outputs retained.";
-const PREPARED: &CStr = c"Skyrim native creation root prepared: game thunk15B9412 -> current IAT17C92E0; guarded native or exact Display Tweaks call route; scoped inner creation, outer chain retained; no graphics created yet.";
+const PREPARED: &CStr = c"Skyrim native creation root prepared: discovered game import thunk -> current D3D11 IAT slot; guarded native or exact Display Tweaks call route; scoped inner creation, outer chain retained; no graphics created yet.";
 
 /// Process-lived trampoline of the game thunk. Published before the hook can be enabled.
 static ORIGINAL: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
@@ -80,7 +81,12 @@ fn shared() -> Shared {
 }
 
 fn thunk(platform: &Platform) -> usize {
-    platform.main_module().wrapping_add(CREATE_THUNK)
+    platform.main_module().wrapping_add(rva(Site::CreateThunk))
+}
+
+/// The return address of the game's creation call.
+fn create_return(base: usize) -> usize {
+    base.wrapping_add(rva(Site::CreateCall) + CREATE_CALL_LENGTH)
 }
 
 /// Readable committed memory for the whole range, optionally executable and inside `allocation`.
@@ -106,12 +112,17 @@ fn mapped(platform: &Platform, address: usize, size: usize, allocation: usize, c
 /// Display Tweaks relay to its wrapper's call of the unchanged thunk.
 fn creation_caller(platform: &Platform) -> Result<usize, &'static CStr> {
     let base = platform.main_module();
-    let mut call = [0; CREATE_CALL_BYTES.len()];
-    if !platform.read(base.wrapping_add(CREATE_CALL), &mut call) {
+    let mut call = [0; CREATE_CALL_LENGTH];
+    if !platform.read(base.wrapping_add(rva(Site::CreateCall)), &mut call) {
         return Err(CALLER_UNREADABLE);
     }
-    if call == CREATE_CALL_BYTES {
-        return Ok(base.wrapping_add(CREATE_RETURN));
+    // The discovered call site, its displacement either the game's own or a relay's.
+    if !discovery::verify(platform, base, Site::CreateCall) {
+        return Err(CALLER_DIFFERS);
+    }
+    let target = rel32_target(create_return(base), [call[1], call[2], call[3], call[4]]);
+    if target == thunk(platform) {
+        return Ok(create_return(base));
     }
     let module = platform.module_handle(DISPLAY_TWEAKS_MODULE);
     if module == 0 || call[0] != 0xe8 {
@@ -127,10 +138,8 @@ fn creation_caller(platform: &Platform) -> Result<usize, &'static CStr> {
     }
     // The exact build patches only the game's E8 displacement. Its SKSE relay jumps to Display
     // pre/post work, which calls the unchanged native thunk.
-    let relay = rel32_target(
-        base.wrapping_add(CREATE_RETURN),
-        [call[1], call[2], call[3], call[4]],
-    );
+    let relay = target;
+
     let mut relay_bytes = [0; RELAY_LENGTH];
     if !mapped(platform, relay, RELAY_LENGTH, 0, true)
         || !platform.read(relay, &mut relay_bytes)
@@ -149,7 +158,7 @@ fn creation_caller(platform: &Platform) -> Result<usize, &'static CStr> {
         || !mapped(platform, retained, size_of::<usize>(), module, false)
         || !platform.matches(destination, &DISPLAY_PROLOGUE)
         || !platform.matches(invoke, &DISPLAY_INVOKE_BYTES)
-        || platform.read_usize(retained) != Some(base.wrapping_add(CREATE_THUNK))
+        || platform.read_usize(retained) != Some(thunk(platform))
     {
         return Err(DISPLAY_RELAY);
     }
@@ -157,7 +166,7 @@ fn creation_caller(platform: &Platform) -> Result<usize, &'static CStr> {
 }
 
 fn guard(platform: &Platform) -> Result<usize, &'static CStr> {
-    if !platform.matches(thunk(platform), &CREATE_THUNK_BYTES) {
+    if !discovery::verify(platform, platform.main_module(), Site::CreateThunk) {
         return Err(THUNK_REFUSED);
     }
     creation_caller(platform)
@@ -282,7 +291,7 @@ fn owned_call(
     services: &rsf_game_host_services,
 ) -> Option<(usize, usize)> {
     let owner = platform
-        .read_usize(platform.main_module().wrapping_add(OWNER))
+        .read_usize(platform.main_module().wrapping_add(rva(Site::Owner)))
         .filter(|&owner| owner != 0)?;
     // Only this verified game owner may admit inner creation. The original call still uses the
     // current IAT and all original arguments, including outputs.
@@ -342,7 +351,7 @@ pub(crate) fn enter(platform: &Platform, call: &mut CreationCall) {
         && shared.begin != 0
         && let Some((owner, window)) = owned_call(platform, call, services)
     {
-        if call.caller != platform.main_module().wrapping_add(CREATE_RETURN) {
+        if call.caller != create_return(platform.main_module()) {
             platform.log(services, DISPLAY_MATCHED);
         }
         call.owner = owner;
@@ -371,7 +380,7 @@ pub(crate) fn leave(platform: &Platform, call: &mut CreationCall) {
                     .read_usize(address as usize)
                     .filter(|&value| value != 0)
             };
-            if platform.read_usize(base.wrapping_add(OWNER)) == Some(call.owner)
+            if platform.read_usize(base.wrapping_add(rva(Site::Owner))) == Some(call.owner)
                 && platform.read_usize(call.owner.wrapping_add(OWNER_WINDOW))
                     == Some(call.window as usize)
                 && let Some(device) = read(call.device)

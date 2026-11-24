@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The GameSDK lifecycle and its process-lived Runtime session.
 //!
-//! Prepare admits the exact build and the observer sites, arms the Community Shaders
+//! Prepare discovers the native sites and admits the observer sites, arms the Community Shaders
 //! checkpoint, requests per-monitor-v2 DPI once per process, creates the observer hooks and the
 //! CPU hooks, then creates the Runtime's scoped D3D11 host once per process. A later prepare must
 //! present the original session. Start enables observers, sampling, presentation inputs, CPU
@@ -14,7 +14,7 @@
 use crate::creation;
 use crate::observers::Control;
 use crate::platform::{self, Platform};
-use crate::plugin::{INVALID_ARGUMENT, SHA256};
+use crate::plugin::INVALID_ARGUMENT;
 use rsf_game_sys::call_header::validate;
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_motion_decode_params as MotionDecode;
@@ -49,7 +49,7 @@ const CAP_INPUT_TIMELINE: u32 = 2;
 
 const NOT_PREPARED: &CStr = c"Native hooks not prepared; native-resolution SR is experimental; FG and latency remain incomplete.";
 const OBSERVER_REFUSED: &CStr =
-    c"Skyrim native observer refused: executable identity or native hook bytes differ.";
+    c"Skyrim native observer refused: executable name or native hook bytes differ.";
 const CPU_REFUSED: &CStr =
     c"Skyrim CPU event hooks refused: expected bytes, hook ownership or clock unavailable.";
 const PROCESS_LIVED: &CStr =
@@ -58,7 +58,7 @@ const CREATION_REFUSED: &CStr = c"Native creation root refused: cold owner, expe
 const PREPARED: &CStr =
     c"Native pre-HDR SR prepared at native resolution; FG and latency ownership remain incomplete.";
 const START_IDENTITY: &CStr =
-    c"Skyrim start refused: executable identity or jitter101E360 guard changed before enable.";
+    c"Skyrim start refused: executable or a native observer site changed before enable.";
 const ACTIVE: &CStr = c"Experimental native-resolution SR active with native temporal fallback; FG and latency ownership remain incomplete.";
 const STOPPED: &CStr = c"Native observer stopped; no host services retained.";
 
@@ -76,6 +76,7 @@ mod subsystems {
         bind as cpu_bind, busy as cpu_busy, disable as cpu_disable, prepare as cpu_prepare,
         quiesce as cpu_quiesce, stop as cpu_stop,
     };
+    pub(super) use crate::discovery::{executable_sha256, refusal as discovery_refusal};
     pub(super) use crate::observers::busy as observers_busy;
     pub(super) use crate::plugin::admit_observers;
     pub(super) use crate::postprocess::cleanup_pending as auxiliaries_pending;
@@ -344,7 +345,14 @@ impl Session {
             return Ok(NOT_READY);
         }
         if admitted == 0 {
-            self.reason = OBSERVER_REFUSED.as_ptr();
+            // A site discovery refusal names the site.
+            let refusal = subsystems::discovery_refusal();
+            self.reason = if refusal.is_null() {
+                OBSERVER_REFUSED.as_ptr()
+            } else {
+                refusal
+            };
+            log(host, self.reason)?;
             return Ok(NATIVE_REFUSED);
         }
         if !subsystems::checkpoint(&mut self.reason, true) {
@@ -399,7 +407,7 @@ impl Session {
             configuration_section: section.as_ptr(),
             runtime_directory: directory.as_ptr(),
             identity_utf8: c"skyrim-se".as_ptr(),
-            executable_sha256: SHA256.as_ptr(),
+            executable_sha256: subsystems::executable_sha256().as_ptr(),
             engine_type: 0,
             engine_version_utf8: ENGINE_VERSION.as_ptr(),
             project_id_utf8: PROJECT_ID.as_ptr(),

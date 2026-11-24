@@ -11,6 +11,7 @@ use rsf_game_sys::pe32_plus;
 use std::cell::Cell;
 use std::ffi::c_void;
 
+use crate::discovery::{Site, rva};
 use crate::layout;
 
 const SHA256: &[u8; 64] = b"10ba95e6b1cd6b675ce74d1d681fae41e667bdd8b7b5ba8c362e657511097827";
@@ -22,11 +23,9 @@ const SECTION_EXECUTE: u32 = 0x2000_0000;
 const CONFIGURE: usize = 0x3a_4b30;
 const INITIALIZE: usize = 0x63_1800;
 const HDR_PROCESS: usize = 0x45_cbd0;
-const CALLER: usize = 0x153_adec;
 const HDR_CALL: usize = 0x45_cc07;
 const HDR_RETURN: usize = 0x45_cc0d;
 const HDR_CALLEE: usize = 0x13f_ec40;
-const PROCESS_MAIN: usize = 0x14e_dbf0;
 const UPSCALING: usize = 0x13d_cf40;
 const HDR_DISPLAY: usize = 0x13d_cda0;
 const STREAMLINE: usize = 0xfd_9160;
@@ -79,6 +78,18 @@ const GUARDS: [(usize, [u8; 19]); 6] = [
 ];
 
 type Read = unsafe extern "C" fn(usize, *mut c_void, usize) -> bool;
+
+/// The game's main pre-HDR call returns here (the discovered call plus its five bytes).
+fn native_caller(game: usize) -> Option<usize> {
+    let call = rva(Site::ProcessCall);
+    (game != 0 && call != 0).then(|| game.checked_add(call + 5))?
+}
+
+/// The game's main post-processing entry, which CS's HDR chain must still call.
+fn process_main(game: usize) -> Option<usize> {
+    let process = rva(Site::Process);
+    (game != 0 && process != 0).then(|| game.checked_add(process))?
+}
 
 fn read_native<const N: usize>(read: Read, address: usize) -> Option<[u8; N]> {
     let mut bytes = [0; N];
@@ -177,7 +188,7 @@ unsafe extern "C" fn rsf_skyrim_cs_hdr_enter(game: usize, call: &HdrCall, saved:
     let prev = HDR_SCOPE.get();
     HDR_SCOPE.set(Some(Scope {
         call: *call,
-        primary: prev.is_none() && game != 0 && game.checked_add(CALLER) == Some(call.caller),
+        primary: prev.is_none() && native_caller(game) == Some(call.caller),
         active: true,
     }));
     unsafe {
@@ -198,7 +209,7 @@ fn allowed(game: usize, module: usize, excluded: bool, call: &HdrCall, read: Rea
     if game == 0 {
         return None;
     }
-    let native_caller = game.checked_add(CALLER) == Some(call.caller);
+    let native_caller = native_caller(game) == Some(call.caller);
     let Some(scope) = HDR_SCOPE.get() else {
         return native_caller.then_some(());
     };
@@ -216,5 +227,5 @@ fn allowed(game: usize, module: usize, excluded: bool, call: &HdrCall, read: Rea
         return None;
     }
     let original = usize::from_le_bytes(read_native(read, module.checked_add(HDR_CALLEE)?)?);
-    (game.checked_add(PROCESS_MAIN) == Some(original)).then_some(())
+    (process_main(game) == Some(original)).then_some(())
 }

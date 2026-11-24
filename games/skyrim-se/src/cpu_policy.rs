@@ -5,9 +5,9 @@
 #[cfg(feature = "fixtures")]
 mod fixture;
 
-use crate::cpu_native::{JOB_MANAGER, MAIN, PLAYER, REQUESTED_MODE, RUNNING_MODE};
+use crate::cpu_native::{REQUESTED_MODE, RUNNING_MODE};
 use crate::cpu_sources::{self, Consumer, Stamp};
-use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
+use crate::discovery::{self, Site, rva};
 use crate::platform::Platform;
 use crate::sys::rsf_skyrim_menu_observation;
 use rsf_game_sys::{
@@ -23,30 +23,8 @@ use rsf_game_sys::{
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const WORLD_RETURN: usize = 0x65_6e32;
-const UI: usize = 0x219_e5c0;
-const UI_NAMES: usize = 0x21a_05c8;
-const CAMERA_ROOT: usize = 0x323_0740;
-const MENU_OPEN: usize = 0x116_9530;
-const FROZEN_BACKGROUND: usize = 0x116_9590;
 const LOADING_NAME_OFFSET: usize = 0xe8;
 const MAIN_NAME_OFFSET: usize = 0xa8;
-const MENU_QUERIES: [(usize, [u8; 19]); 2] = [
-    (
-        MENU_OPEN,
-        [
-            0x40, 0x53, 0x48, 0x83, 0xec, 0x40, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff,
-            0xff, 0x33, 0xc0, 0x48, 0x89,
-        ],
-    ),
-    (
-        FROZEN_BACKGROUND,
-        [
-            0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24,
-            0x20, 0x57, 0x41, 0x56, 0x41,
-        ],
-    ),
-];
 
 static NEXT_SOURCE: AtomicU64 = AtomicU64::new(1);
 static NEXT_RENDER_SCOPE: AtomicU64 = AtomicU64::new(1);
@@ -217,13 +195,13 @@ struct NativeScreen {
 impl NativeScreen {
     fn read(platform: &Platform, base: usize) -> Option<Self> {
         let nonzero = |address| platform.read_usize(address).filter(|value| *value != 0);
-        let main = nonzero(base + MAIN)?;
-        let ui = nonzero(base + UI)?;
-        let names = nonzero(base + UI_NAMES)?;
+        let main = nonzero(base + rva(Site::Main))?;
+        let ui = nonzero(base + rva(Site::Ui))?;
+        let names = nonzero(base + rva(Site::UiNames))?;
         let loading_name = nonzero(names.checked_add(LOADING_NAME_OFFSET)?)?;
         let main_name = nonzero(names.checked_add(MAIN_NAME_OFFSET)?)?;
-        let player = nonzero(base + PLAYER)?;
-        let manager = nonzero(base + JOB_MANAGER)?;
+        let player = nonzero(base + rva(Site::Player))?;
+        let manager = nonzero(base + rva(Site::JobManager))?;
         let cell = platform.read_usize(player.checked_add(0x60)?)?;
         let pause = platform.read_u32(ui.checked_add(0x160)?)?;
         let mut freeze = [0];
@@ -256,11 +234,11 @@ type MenuQueries = unsafe extern "C" fn(
     &mut rsf_skyrim_menu_observation,
 ) -> bool;
 
-pub(crate) fn bad_screen_query(platform: &Platform, base: usize) -> u32 {
-    MENU_QUERIES
-        .iter()
-        .find(|(rva, bytes)| !platform.matches(base + rva, bytes))
-        .map_or(0, |(rva, _)| *rva as u32)
+/// The first native menu query whose live bytes no longer match its discovered pattern.
+pub(crate) fn bad_screen_query(platform: &Platform, base: usize) -> Option<Site> {
+    [Site::MenuOpen, Site::FrozenBackground]
+        .into_iter()
+        .find(|&site| !discovery::verify(platform, base, site))
 }
 
 pub(crate) fn cpu_screen(main: usize, primary: bool, menus: MenuQueries) -> rsf_screen_class {
@@ -277,8 +255,8 @@ pub(crate) fn cpu_screen(main: usize, primary: bool, menus: MenuQueries) -> rsf_
     // Native menu calls take the engine's own map synchronization and borrow its names.
     if !unsafe {
         menus(
-            base + MENU_OPEN,
-            base + FROZEN_BACKGROUND,
+            base + rva(Site::MenuOpen),
+            base + rva(Site::FrozenBackground),
             before.ui,
             before.names + LOADING_NAME_OFFSET,
             before.names + MAIN_NAME_OFFSET,
@@ -336,7 +314,7 @@ pub(crate) fn cpu_begin_world(
     caller: usize,
     output: u32,
 ) -> bool {
-    if base.checked_add(WORLD_RETURN) != Some(caller)
+    if base.checked_add(rva(Site::WorldReturn)) != Some(caller)
         || output != 0
         || pass.source_frame_id == 0
         || pass.view_key == 0
@@ -385,9 +363,13 @@ pub(crate) fn cpu_render_fact(pass: &mut rsf_game_render_pass, session: u64) {
     let base = platform.main_module();
     pass.session_id = session;
     pass.flags |= RSF_GAME_RENDER_PRIMARY;
-    pass.native_frame = u64::from(platform.read_u32(base + NATIVE_FRAME).unwrap_or(0));
+    pass.native_frame = u64::from(
+        platform
+            .read_u32(base + rva(Site::NativeFrame))
+            .unwrap_or(0),
+    );
     let camera = platform
-        .read_usize(base + CAMERA_ROOT)
+        .read_usize(base + rva(Site::CameraRoot))
         .filter(|root| *root != 0)
         .and_then(|root| platform.read_usize(root.checked_add(296)?))
         .unwrap_or(0) as u64;
@@ -395,7 +377,7 @@ pub(crate) fn cpu_render_fact(pass: &mut rsf_game_render_pass, session: u64) {
     pass.view_key = camera;
     pass.history_key = camera;
     if let Some(window) = platform
-        .read_usize(base + ACTIVE_WINDOW)
+        .read_usize(base + rva(Site::ActiveWindow))
         .filter(|window| *window != 0)
     {
         pass.viewport_key = window as u64;

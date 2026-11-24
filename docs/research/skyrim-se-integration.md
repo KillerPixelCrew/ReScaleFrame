@@ -1864,3 +1864,54 @@ Reproduction uses the explicit target, not the routine gate:
 cmake --build build/windows-x64 --config Release --target rsf_d3d11_host_shared_sr_device
 ./build/windows-x64/bin/Release/rsf_d3d11_host_shared_sr_device.exe .local/shared-sr-device-20261115
 ```
+
+## Site discovery instead of a pinned build, 24 November 2026
+
+Question: can the adapter find every SkyrimSE.exe site it hooks, patches, calls or reads without
+the whole-file SHA-256 gate and fixed RVAs, so a game update that only moves code keeps working
+and a real change still refuses?
+
+Approach: each site gets a byte pattern that is unique in the executable sections, with rel32
+branch targets and RIP-relative displacements as `??` wildcards. Admission
+(`plugin::admit_observers`, first step of prepare and start) copies the loaded executable's
+sections once and resolves every pattern in one pass (`rsf_game_sys::signature`,
+`games/skyrim-se/src/discovery.rs`). Immediates and struct displacements stay fixed bytes, so a
+pattern also checks the offsets its instruction uses. Before a site is hooked or patched its
+pattern is matched again against live memory; another hook or a wrong match refuses. A missing,
+ambiguous or changed site refuses admission and the prepare log names it ("Skyrim native sites
+refused: site 'jitter' matched more than once."). Detection now recognizes `SkyrimSE.exe` by
+name; the file SHA-256 is computed once for the host setup and logs and gates nothing.
+
+How the patterns were found: `tools/derive-site-patterns.py` (capstone, read-only) grew the
+shortest unique pattern from each recorded RVA in the installed 1.7.104.0 executable, or for a
+global from an instruction whose RIP-relative operand addresses it, trying further references
+when a short one was not unique. Long or function-crossing results were replaced by a reference
+through a caller (the CPU dispatch hook, whose own prologue is not unique, is found through its
+only call and its prologue is checked separately) or by a more specific reference (`UI`, whose
+pattern also fixes the pause counter at +0x160).
+
+| Kind | Sites | How found |
+| --- | --- | --- |
+| Hooked or verified code | 24 entries and call sites (observers, creation call, flush, interface, menus, 11 CPU hooks) | pattern at the site |
+| Return addresses | jobs submit/join, world, named poll | pattern at the call; site = call + 5 or + 3 |
+| CPU dispatch | 1 | rel32 target of its only call, prologue checked |
+| Globals | 27 (renderer owner, frame, window, render state, samplers, UI, singletons, ...) | RIP-relative operand of a using instruction |
+| D3D11 creation thunk | 1 | the only `FF 25` through the `D3D11CreateDeviceAndSwapChain` IAT slot from the import directory |
+| Named poll and its slot | 2 | the function stored before the pointer to `"Poll controls"` in the named callback table; its thunk must forward the discovered `main` |
+| Render-target slots | renderer + 0xa58 | documented offset: no instruction addresses the field directly |
+
+Evidence: `discovery::tests::every_site_resolves_in_the_installed_executable` resolves all 60
+sites in the installed executable (found through the Steam library list) and, for the recorded
+build (PE timestamp `0x6a8c7046`), compares them with the RVAs recorded before this change: all
+match. It also checks every guard pattern at its site and that the unpatched creation call reaches
+the discovered thunk. On another build it reports that the sites resolved and skips the RVA
+comparison; without an installation it is skipped.
+
+Not changed: the Community Shaders 1.9.1 and SSE Display Tweaks 0.5.25 profiles are exact
+third-party module profiles (file SHA-256 and module RVAs). They describe another mod's internals
+and still refuse any other version. Struct offsets the code does not address through a global
+remain documented constants.
+
+Uncertainty: discovery has not yet run inside the game. Live-memory section copies, admission
+timing and the hook installation at discovered addresses need a game run. Patterns were derived
+from one build, so their survival across an update is untested until one ships.

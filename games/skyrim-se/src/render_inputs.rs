@@ -5,7 +5,8 @@ use crate::cpu_events::{render_diagnostic, render_eligible, render_identity};
 
 use crate::auxiliary;
 use crate::camera::render::{RenderCamera, accept_sr, read_frame};
-use crate::layout::{NATIVE_FRAME, target_slot};
+use crate::discovery::{Site, rva};
+use crate::layout::target_slot;
 use crate::platform::Platform;
 use crate::presentation::{begin_inputs, empty_pass, identify, same_source};
 use crate::render_native::{call_render_pass, call_upscale, desc, retain, thread, viewport};
@@ -21,11 +22,6 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use windows::core::Interface;
 
-const PRE_HDR_CALL: u64 = 0x153_ade7;
-const IMMEDIATE_CONTEXT: usize = 0x333_1f30;
-
-const MAIN_DEPTH: usize = 0x333_3f58;
-const RATIO_LOCK: usize = 0x333_64c8;
 const GAMEPLAY: u32 = 8;
 const R11G11B10_FLOAT: u32 = 26;
 const R16G16B16A16_FLOAT: u32 = 10;
@@ -93,7 +89,7 @@ fn log_viewport(
     if LOGGED_EXTENT.load(Ordering::Relaxed) == key {
         return;
     }
-    let Some(lock) = platform.read_u32(base + RATIO_LOCK) else {
+    let Some(lock) = platform.read_u32(base + rva(Site::ShadowView)) else {
         return;
     };
     LOGGED_EXTENT.store(key, Ordering::Relaxed);
@@ -122,10 +118,10 @@ fn read_inputs(
     host: &rsf_game_host_services,
     fg: bool,
 ) -> Option<Inputs> {
-    let context = platform.read_usize(base + IMMEDIATE_CONTEXT)?;
+    let context = platform.read_usize(base + rva(Site::ImmediateContext))?;
     let colour = platform.read_usize(target_slot(base, 1))?;
     let motion = platform.read_usize(target_slot(base, 7))?;
-    let depth = platform.read_usize(base + MAIN_DEPTH)?;
+    let depth = platform.read_usize(base + rva(Site::MainDepth))?;
     let chain = platform.read_usize(view.window.checked_add(0x18)?)?;
     let (context, colour, depth, motion, chain) = unsafe {
         (
@@ -197,7 +193,7 @@ fn pass_identity(pass: &mut rsf_game_render_pass, view: &RenderCamera, session: 
     pass.family_key = key;
     pass.view_key = key;
     pass.history_key = key;
-    pass.pass_key = PRE_HDR_CALL;
+    pass.pass_key = rva(Site::ProcessCall) as u64;
     pass.native_frame = u64::from(view.frame);
     pass.flags |= RSF_GAME_RENDER_PRIMARY;
 }
@@ -259,7 +255,7 @@ pub(crate) fn produce(
         }
         bind_inputs(&mut pass, &view, &inputs);
         let mut current = empty_pass();
-        if platform.read_u32(base + NATIVE_FRAME) != Some(view.frame)
+        if platform.read_u32(base + rva(Site::NativeFrame)) != Some(view.frame)
             || !render_identity(&mut current)
             || !same_source(&current, &pass)
         {

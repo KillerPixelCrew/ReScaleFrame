@@ -2,7 +2,7 @@
 //! Pre-HDR identity, HUD-less handoff and matching window pass for Skyrim.
 
 use crate::cpu_events::{render_diagnostic, render_identity};
-use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
+use crate::discovery::{self, Site, rva};
 use crate::platform::Platform;
 use crate::render_hook::RenderHook;
 use crate::render_native::{backbuffer, call_render_pass, desc, retain};
@@ -18,13 +18,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use windows::core::Interface;
-
-const DRAW_INTERFACE: usize = 0x116_ac80;
-const INTERFACE_BYTES: [u8; 15] = [
-    0x4c, 0x8b, 0xdc, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x57, 0x48, 0x83, 0xec, 0x50,
-];
-const PRIMARY_UI: usize = 0x219_e5c0;
-const IMMEDIATE_CONTEXT: usize = 0x333_1f30;
 
 #[derive(Clone, Copy)]
 struct Binding {
@@ -140,7 +133,7 @@ pub(crate) fn same_source(a: &rsf_game_render_pass, b: &rsf_game_render_pass) ->
 impl Binding {
     fn native_frame(self) -> Option<u64> {
         self.platform
-            .read_u32(self.base + NATIVE_FRAME)
+            .read_u32(self.base + rva(Site::NativeFrame))
             .map(u64::from)
     }
 
@@ -246,14 +239,16 @@ fn snapshot(binding: Binding, after: bool) -> Option<()> {
     {
         return None;
     }
-    let window = binding.platform.read_usize(binding.base + ACTIVE_WINDOW)?;
+    let window = binding
+        .platform
+        .read_usize(binding.base + rva(Site::ActiveWindow))?;
     if window == 0 {
         return None;
     }
     let chain = binding.platform.read_usize(window.checked_add(0x18)?)?;
     let context = binding
         .platform
-        .read_usize(binding.base + IMMEDIATE_CONTEXT)?;
+        .read_usize(binding.base + rva(Site::ImmediateContext))?;
     if chain == 0 || chain != scene.chain || context == 0 {
         return None;
     }
@@ -393,7 +388,7 @@ pub(crate) fn finish() {
 pub(crate) fn presentation_guard() -> bool {
     let platform = &Platform;
     let base = platform.main_module();
-    base != 0 && platform.matches(base + DRAW_INTERFACE, &INTERFACE_BYTES)
+    discovery::verify(platform, base, Site::DrawInterface)
 }
 
 /// Lifecycle calls are serialized by the adapter session.
@@ -405,11 +400,11 @@ pub(crate) fn start(host: &rsf_game_host_services) -> bool {
     let base = platform.main_module();
     if base == 0
         || (!HOOK.live.load(Ordering::Acquire)
-            && !platform.matches(base + DRAW_INTERFACE, &INTERFACE_BYTES))
+            && !discovery::verify(platform, base, Site::DrawInterface))
     {
         return false;
     }
-    let target = base + DRAW_INTERFACE;
+    let target = base + rva(Site::DrawInterface);
     let runtime = platform.module_handle("ReScaleFrame.Runtime.dll");
     let capture = platform.export_address(runtime, c"rsf_d3d11_host_capture_texture");
     let binding = Binding {
@@ -441,13 +436,13 @@ pub(crate) fn stop() -> bool {
     }
     let platform = &Platform;
     let base = platform.main_module();
-    base != 0 && platform.hook_disable(base + DRAW_INTERFACE) && !busy()
+    base != 0 && platform.hook_disable(base + rva(Site::DrawInterface)) && !busy()
 }
 
 fn enter(ui: usize, primary: &mut bool) -> *mut c_void {
     CALLS.fetch_add(1, Ordering::AcqRel);
     if let Some(binding) = binding()
-        && binding.platform.read_usize(binding.base + PRIMARY_UI) == Some(ui)
+        && binding.platform.read_usize(binding.base + rva(Site::Ui)) == Some(ui)
     {
         *primary = true;
         let _ = snapshot(binding, false);

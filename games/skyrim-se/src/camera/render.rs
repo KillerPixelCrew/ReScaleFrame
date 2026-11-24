@@ -2,7 +2,7 @@
 //! One native camera-cache reader for Skyrim's pre-HDR SR and FG producers.
 
 use super::{Matrix, NativeCamera, decode};
-use crate::layout::{ACTIVE_WINDOW, NATIVE_FRAME};
+use crate::discovery::{Site, rva};
 use crate::taa;
 use crate::{platform::Platform, resolution};
 use rsf_game_sys::camera_math::finite_matrix_close;
@@ -11,8 +11,6 @@ use rsf_game_sys::{RSF_GAME_RENDER_RESET, rsf_game_host_services, rsf_game_rende
 use std::sync::Mutex;
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
-const RENDER_STATE: usize = 0x333_63a0;
-const ACTIVE_CAMERA: usize = 0x33d_3d28;
 const CACHE_STRIDE: usize = 0x290;
 
 pub(crate) struct RenderCamera {
@@ -86,12 +84,12 @@ fn read_cache(
     base: usize,
     manager: usize,
 ) -> Option<(RenderCamera, NativeCamera)> {
-    let state = base + RENDER_STATE;
+    let state = base + rva(Site::RenderState);
     let taa = taa::owner(platform, manager)?;
     if taa == 0 || read::<1>(platform, taa.checked_add(taa::ENABLED)?)? == [0] {
         return None;
     }
-    let camera = platform.read_usize(base + ACTIVE_CAMERA)?;
+    let camera = platform.read_usize(base + rva(Site::ActiveCamera))?;
     let cache = platform.read_usize(state + 0xb8)?;
     let count = platform.read_u32(state + 0xc8)?;
     let width = platform.read_u32(state + 0x24)?;
@@ -105,8 +103,8 @@ fn read_cache(
         return None;
     }
     let ratios = read_floats(platform, state + 0x114)?;
-    let frame = platform.read_u32(base + NATIVE_FRAME)?;
-    let window = platform.read_usize(base + ACTIVE_WINDOW)?;
+    let frame = platform.read_u32(base + rva(Site::NativeFrame))?;
+    let window = platform.read_usize(base + rva(Site::ActiveWindow))?;
     if window == 0 {
         return None;
     }
@@ -232,9 +230,9 @@ pub(crate) fn describe_inputs(platform: &Platform, base: usize, host: &rsf_game_
     use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
     use windows::core::Interface;
 
-    let state = base + RENDER_STATE;
+    let state = base + rva(Site::RenderState);
     let camera = platform
-        .read_usize(base + ACTIVE_CAMERA)
+        .read_usize(base + rva(Site::ActiveCamera))
         .unwrap_or_default();
     let cache = platform.read_usize(state + 0xb8).unwrap_or_default();
     let count = platform.read_u32(state + 0xc8).unwrap_or_default();
@@ -257,7 +255,9 @@ pub(crate) fn describe_inputs(platform: &Platform, base: usize, host: &rsf_game_
     let readable = u8::from(numbers.is_some());
     let (projection, current, previous, origins, planes, jitter, scale) =
         numbers.unwrap_or_default();
-    let depth = platform.read_usize(base + 0x333_3f58).unwrap_or_default();
+    let depth = platform
+        .read_usize(base + rva(Site::MainDepth))
+        .unwrap_or_default();
     let mut desc = Default::default();
     let native = ptr::with_exposed_provenance_mut::<std::ffi::c_void>(depth);
     if let Some(native) = unsafe { ID3D11Texture2D::from_raw_borrowed(&native) } {

@@ -6,22 +6,6 @@ fn displacement(bytes: &[u8]) -> [u8; 4] {
 }
 
 #[test]
-fn game_call_reaches_thunk_and_thunk_reads_iat() {
-    assert_eq!(CREATE_CALL + CREATE_CALL_BYTES.len(), CREATE_RETURN);
-    assert_eq!(
-        rel32_target(CREATE_RETURN, displacement(&CREATE_CALL_BYTES[1..])),
-        CREATE_THUNK
-    );
-    assert_eq!(
-        rel32_target(
-            CREATE_THUNK + CREATE_THUNK_BYTES.len(),
-            displacement(&CREATE_THUNK_BYTES[2..])
-        ),
-        0x17c_92e0
-    );
-}
-
-#[test]
 fn display_invoke_reads_retained_slot_and_returns_at_profile_return() {
     // mov r10,[rip+disp32] is seven bytes; call r10 ends two bytes before the guarded tail.
     assert_eq!(
@@ -54,21 +38,15 @@ fn negative_displacement_wraps_backwards() {
 
 #[test]
 fn cold_owner_requires_readable_checked_addresses() {
+    // Unit tests never discover the owner global, so the image owner is unknown.
     assert_eq!(before_device(0, |_| panic!()), None);
-    assert_eq!(before_device(usize::MAX, |_| panic!()), None);
-    assert_eq!(before_device(1, |_| None), None);
-    assert_eq!(before_device(1, |_| Some(0)), Some(true));
-    assert_eq!(before_device(1, |_| Some(usize::MAX)), None);
+    assert_eq!(before_device(0x1_4000_0000, |_| panic!()), None);
+    assert_eq!(cold_owner(1, |_| None), None);
+    assert_eq!(cold_owner(1, |_| Some(0)), Some(true));
+    assert_eq!(cold_owner(1, |_| Some(usize::MAX)), None);
+    assert_eq!(cold_owner(1, |address| (address == 1).then_some(100)), None);
     assert_eq!(
-        before_device(1, |address| (address == 1 + OWNER).then_some(100)),
-        None
-    );
-    assert_eq!(
-        before_device(1, |address| Some(if address == 1 + OWNER {
-            100
-        } else {
-            1
-        })),
+        cold_owner(1, |address| Some(if address == 1 { 100 } else { 1 })),
         Some(false)
     );
 }

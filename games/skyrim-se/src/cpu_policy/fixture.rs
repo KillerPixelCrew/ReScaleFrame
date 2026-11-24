@@ -19,7 +19,8 @@ extern "C" fn rsf_skyrim_input_fixture(read: ReadNative) -> i32 {
 
 fn render_scope(check: &mut impl FnMut(bool, &str)) {
     let base = 0x1000_0000;
-    let caller = base + WORLD_RETURN;
+    // Discovery does not run in the fixture, so the world return resolves to the image base.
+    let caller = base + rva(Site::WorldReturn);
     let (session, source) = (9, 17);
     // These C records contain integers, booleans and raw pointers. Zero is their empty state.
     let (mut state, mut pass): (RenderState, rsf_game_render_pass) = unsafe { std::mem::zeroed() };

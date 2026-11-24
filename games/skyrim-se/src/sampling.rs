@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Skyrim's native PS sampler selection and restoration around the cached-state flush.
 
+use crate::discovery::{self, Site, rva};
 use crate::platform::Platform;
 use crate::render_hook::RenderHook;
 use crate::render_inputs::renderer_thread;
@@ -12,19 +13,6 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-const FLUSH: usize = 0x101_0de0;
-const FLUSH_BYTES: [u8; 18] = [
-    0x4c, 0x8b, 0xdc, 0x41, 0x56, 0x48, 0x81, 0xec, 0xa0, 0, 0, 0, 0x8b, 0x15, 0x0e, 0xee, 0x0b,
-    0x01,
-];
-const SURFACE_WIDTH: usize = 0x333_63c4;
-const COLOUR_TARGET: usize = 0x20c_fc18;
-const DEPTH_TARGET: usize = 0x20c_fc38;
-const RASTER_RATIO: usize = 0x333_64b4;
-const SHADOW_VIEW: usize = 0x333_64c8;
-const ADDRESS_MODES: usize = 0x20c_fcbc;
-const SAMPLER_TABLE: usize = 0x333_1990;
-const IMMEDIATE_CONTEXT: usize = 0x333_1f30;
 const SLOTS: usize = 16;
 const ADDRESSES: usize = 6;
 const FILTERS: usize = 5;
@@ -54,12 +42,12 @@ impl Binding {
         // Primary colour1/depth0 select the scene raster. Postprocess and UI change colour
         // targets and shadow views change depth. The live ratios must also show reduction.
         (rw < width
-            && self.platform.read_u32(self.base + COLOUR_TARGET) == Some(1)
-            && self.platform.read_u32(self.base + DEPTH_TARGET) == Some(0)
-            && self.platform.read_u32(self.base + SHADOW_VIEW) == Some(0)
+            && self.platform.read_u32(self.base + rva(Site::ColourTarget)) == Some(1)
+            && self.platform.read_u32(self.base + rva(Site::DepthTarget)) == Some(0)
+            && self.platform.read_u32(self.base + rva(Site::ShadowView)) == Some(0)
             && self
                 .platform
-                .read_u32(self.base + RASTER_RATIO)
+                .read_u32(self.base + rva(Site::RasterRatio))
                 .is_some_and(|ratio| f32::from_bits(ratio) < 1.0))
         .then_some((rw, rh))
     }
@@ -68,13 +56,13 @@ impl Binding {
         let mut modes = [[0; 4]; 2 * SLOTS];
         let mut table = [[0; size_of::<usize>()]; ADDRESSES * FILTERS];
         // Cached address and filter arrays are consecutive. The table is address-major.
-        if !self
-            .platform
-            .read(self.base + ADDRESS_MODES, modes.as_flattened_mut())
-            || !self
-                .platform
-                .read(self.base + SAMPLER_TABLE, table.as_flattened_mut())
-        {
+        if !self.platform.read(
+            self.base + rva(Site::AddressModes),
+            modes.as_flattened_mut(),
+        ) || !self.platform.read(
+            self.base + rva(Site::SamplerTable),
+            table.as_flattened_mut(),
+        ) {
             return None;
         }
         let mut request = Bias {
@@ -110,7 +98,7 @@ impl Binding {
         let mut dimensions = [0; 8];
         if !self
             .platform
-            .read(self.base + SURFACE_WIDTH, &mut dimensions)
+            .read(self.base + rva(Site::SurfaceWidth), &mut dimensions)
         {
             return None;
         }
@@ -134,7 +122,9 @@ impl Binding {
         if request.slot_mask == 0 && !pending {
             return None;
         }
-        let context = self.platform.read_usize(self.base + IMMEDIATE_CONTEXT)?;
+        let context = self
+            .platform
+            .read_usize(self.base + rva(Site::ImmediateContext))?;
         let result = unsafe {
             (self.bind)(
                 self.host.user,
@@ -174,7 +164,7 @@ fn apply(restore: bool) {
 pub(crate) fn sampling_guard() -> bool {
     let platform = &Platform;
     let base = platform.main_module();
-    base != 0 && platform.matches(base + FLUSH, &FLUSH_BYTES)
+    discovery::verify(platform, base, Site::Flush)
 }
 
 /// Lifecycle calls are serialized by the adapter session.
@@ -184,8 +174,8 @@ pub(crate) fn start(host: &rsf_game_host_services) -> bool {
     if base == 0 {
         return false;
     }
-    let target = base + FLUSH;
-    if !HOOK.live.load(Ordering::Acquire) && !platform.matches(target, &FLUSH_BYTES) {
+    let target = base + rva(Site::Flush);
+    if !HOOK.live.load(Ordering::Acquire) && !discovery::verify(platform, base, Site::Flush) {
         return false;
     }
     let runtime = platform.module_handle("ReScaleFrame.Runtime.dll");
@@ -224,7 +214,7 @@ pub(crate) fn stop() -> bool {
     }
     let platform = &Platform;
     let base = platform.main_module();
-    base != 0 && platform.hook_disable(base + FLUSH) && !busy()
+    base != 0 && platform.hook_disable(base + rva(Site::Flush)) && !busy()
 }
 
 unsafe extern "C" fn observe(preserve_input_layout: u8) -> usize {
@@ -240,7 +230,7 @@ unsafe extern "C" fn observe(preserve_input_layout: u8) -> usize {
     if original.is_null() {
         return 0;
     }
-    // The exact-build guard establishes this native flush signature.
+    // The discovered flush pattern establishes this native signature.
     let flush: unsafe extern "C" fn(u8) -> usize = unsafe { std::mem::transmute(original) };
     let result = unsafe { flush(preserve_input_layout) };
     apply(false);

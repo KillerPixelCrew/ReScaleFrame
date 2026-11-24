@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! GameSDK identity and the exact-build admission of the native observers.
-use crate::layout::{END, JITTER, PROCESS, PROCESS_CALL, RESET, RESOLUTION, UPLOAD, VIEWPORT};
+//! GameSDK identity and the admission of the native observers at their discovered sites.
+use crate::discovery::{self, Site};
 use crate::platform::Platform;
 use crate::session;
 use rsf_game_sys::session::{Probe, publish_api};
@@ -14,13 +14,12 @@ use std::ffi::CStr;
 
 pub(crate) use rsf_game_sys::RSF_ERROR_INVALID_ARGUMENT as INVALID_ARGUMENT;
 const EXECUTABLE: &CStr = c"SkyrimSE.exe";
-pub(crate) const SHA256: &CStr =
-    c"846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f";
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 const STATUS: &CStr =
     c"Experimental native-resolution SR; reduced-resolution SR, FG and latency remain incomplete.";
 
-/// The public lifecycle serializes observer admission and installation.
+/// The public lifecycle serializes observer admission and installation. Admission discovers
+/// every site (once) and checks the observer sites' live bytes.
 pub(crate) fn admit_observers() -> i32 {
     let Some(path) = (unsafe { module_path(std::ptr::null_mut()) }) else {
         return 0;
@@ -30,41 +29,50 @@ pub(crate) fn admit_observers() -> i32 {
     }
     let platform = &Platform;
     let base = platform.main_module();
-    if base == 0
-        || platform
-            .module_sha256(base)
-            .as_ref()
-            .map(|digest| digest.as_slice())
-            != Some(SHA256.to_bytes())
-        || !platform.matches(base.wrapping_add(JITTER.rva), JITTER.bytes)
-    {
+    if base == 0 || !discovery::admit(platform) {
         return 0;
     }
     if !crate::sampling::sampling_guard() || !crate::presentation::presentation_guard() {
         return 0;
     }
     if ![
-        PROCESS,
-        PROCESS_CALL,
-        RESET,
-        RESOLUTION,
-        END,
-        VIEWPORT,
-        UPLOAD,
+        Site::Jitter,
+        Site::Process,
+        Site::ProcessCall,
+        Site::Reset,
+        Site::Resolution,
+        Site::End,
+        Site::Viewport,
+        Site::Upload,
     ]
     .into_iter()
-    .all(|site| platform.matches(base.wrapping_add(site.rva), site.bytes))
+    .all(|site| discovery::verify(platform, base, site))
     {
         return 0;
     }
     crate::observers::bind_targets(
-        [JITTER, PROCESS, RESOLUTION, END, UPLOAD].map(|site| base.wrapping_add(site.rva)),
+        [
+            Site::Jitter,
+            Site::Process,
+            Site::Resolution,
+            Site::End,
+            Site::Upload,
+        ]
+        .map(|site| base.wrapping_add(discovery::rva(site))),
     );
     1
 }
 
+/// Recognized by name; whether this build is usable is decided by site discovery at prepare.
 unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> rsf_detection {
-    unsafe { Probe::detect(probe, |probe| probe.matches(EXECUTABLE, SHA256)) }
+    unsafe {
+        Probe::detect(probe, |probe| {
+            probe
+                .executable
+                .to_bytes()
+                .eq_ignore_ascii_case(EXECUTABLE.to_bytes())
+        })
+    }
 }
 
 /// Publishes the GameSDK table backed by the Rust session. A short output may contain only size.

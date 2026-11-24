@@ -2,16 +2,11 @@
 //! Guarded Skyrim CPU producer and consumer observations.
 //! Evidence: docs/research/skyrim-se-integration.md.
 
+use crate::discovery::{Site, rva};
 use crate::platform::Platform;
 
-pub(crate) const MAIN: usize = 0x323_0530;
-pub(crate) const PLAYER: usize = 0x323_0778;
-pub(crate) const JOB_MANAGER: usize = 0x322_0a90;
 pub(crate) const REQUESTED_MODE: usize = 0x68;
 pub(crate) const RUNNING_MODE: usize = 0x6c;
-const INPUT_MANAGER: usize = 0x320_4b30;
-const PLAYER_CONTROLS: usize = 0x31a_5698;
-const PLAYER_CAMERA: usize = 0x31a_5478;
 
 #[repr(C)]
 #[derive(Default)]
@@ -26,10 +21,10 @@ const _: () = assert!(size_of::<ManagerState>() == 24);
 
 impl ManagerState {
     fn read(platform: &Platform, base: usize) -> Option<Self> {
-        let manager = singleton(platform, base, JOB_MANAGER)?;
+        let manager = singleton(platform, base, rva(Site::JobManager))?;
         Some(Self {
             manager,
-            main: singleton(platform, base, MAIN)?,
+            main: singleton(platform, base, rva(Site::Main))?,
             requested: platform.read_u32(manager.checked_add(REQUESTED_MODE)?)?,
             running: platform.read_u32(manager.checked_add(RUNNING_MODE)?)?,
         })
@@ -61,7 +56,7 @@ pub(crate) fn poll_managers_match(job_manager: usize, poll_manager: usize) -> bo
     let base = platform.main_module();
     ManagerState::read(platform, base).is_some_and(|state| {
         state.manager == job_manager && state.requested <= 1 && state.running == 1
-    }) && singleton(platform, base, INPUT_MANAGER) == Some(poll_manager)
+    }) && singleton(platform, base, rva(Site::InputManager)) == Some(poll_manager)
 }
 
 fn matches_singleton(address: usize, offset: usize) -> bool {
@@ -69,19 +64,19 @@ fn matches_singleton(address: usize, offset: usize) -> bool {
 }
 
 pub(crate) fn cpu_is_input_manager(address: usize) -> bool {
-    matches_singleton(address, INPUT_MANAGER)
+    matches_singleton(address, rva(Site::InputManager))
 }
 
 pub(crate) fn cpu_is_player_controls(address: usize) -> bool {
-    matches_singleton(address, PLAYER_CONTROLS)
+    matches_singleton(address, rva(Site::PlayerControls))
 }
 
 pub(crate) fn cpu_is_player(address: usize) -> bool {
-    matches_singleton(address, PLAYER)
+    matches_singleton(address, rva(Site::Player))
 }
 
 pub(crate) fn cpu_is_player_camera(address: usize) -> bool {
-    matches_singleton(address, PLAYER_CAMERA)
+    matches_singleton(address, rva(Site::PlayerCamera))
 }
 
 pub(crate) fn cpu_camera_consumes(address: usize) -> bool {
@@ -90,7 +85,7 @@ pub(crate) fn cpu_camera_consumes(address: usize) -> bool {
 
 pub(crate) fn queued_move() -> Option<bool> {
     let p = &Platform;
-    let player = singleton(p, p.main_module(), PLAYER)?;
+    let player = singleton(p, p.main_module(), rva(Site::Player))?;
     let flags = byte(p, player.checked_add(0xbec)?)?;
     let pending = byte(p, player.checked_add(0x692)?)?;
     Some(flags & 0x40 != 0 || pending != 0)
@@ -98,7 +93,7 @@ pub(crate) fn queued_move() -> Option<bool> {
 
 pub(crate) fn free_camera() -> Option<bool> {
     let p = &Platform;
-    let camera = singleton(p, p.main_module(), PLAYER_CAMERA)?;
+    let camera = singleton(p, p.main_module(), rva(Site::PlayerCamera))?;
     let state = p.read_usize(camera.checked_add(0x28)?)?;
     let free = p.read_usize(camera.checked_add(0xd0)?)?;
     // The matched engine compares both pointers, including when both are null.
