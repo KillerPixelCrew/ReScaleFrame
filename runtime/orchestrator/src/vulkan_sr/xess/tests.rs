@@ -656,40 +656,48 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
         edit_state(|fake| fake.velocity = -4);
         assert_eq!(run([1280, 720], 4, &|_| {}), FEATURE_FAILED);
         assert_eq!(calls(), [Call::Velocity]);
-        edit_state(|fake| fake.velocity = XESS_SUCCESS);
-        edit_state(|fake| fake.execute = -6);
+        edit_state(|fake| {
+            fake.velocity = XESS_SUCCESS;
+            fake.execute = -6;
+        });
         assert_eq!(run([1280, 720], 4, &|_| {}), FEATURE_FAILED);
         assert_eq!(
             calls().last(),
             Some(&Call::Execute(1280, 720, 1920, 1080, 0)),
         );
         // A refused dispatch forgets history, even for the next sequential frame.
-        edit_state(|fake| fake.execute = XESS_SUCCESS);
-        edit_state(|fake| fake.sharpen = 0);
+        edit_state(|fake| {
+            fake.execute = XESS_SUCCESS;
+            fake.sharpen = 0;
+        });
         assert_eq!(run([1280, 720], 5, &|_| {}), 0);
         assert!(calls().contains(&Call::Execute(1280, 720, 1920, 1080, 1)));
         assert!(calls().contains(&Call::Copy(output_copy)));
         assert_eq!(run([1280, 720], 6, &|_| {}), 0);
         assert!(calls().contains(&Call::Copy(output_copy)));
         assert!(calls().contains(&Call::Execute(1280, 720, 1920, 1080, 0)));
-        let flagged = |frame: u64| {
-            let mut value = record([1280, 720], frame);
-            value.flags = RSF_FRAME_FLAG_RESET;
-            let input = frame_input(&value);
-            edit_state(|fake| fake.calls.clear());
-            assert_eq!(rsf_srvk_evaluate(owner.cast(), commands, &input), 0);
-            calls().contains(&Call::Execute(1280, 720, 1920, 1080, 1))
-        };
-        assert!(flagged(7));
+        // A reset flag resets history on the next sequential frame.
+        let mut flagged = record([1280, 720], 7);
+        flagged.flags = RSF_FRAME_FLAG_RESET;
+        edit_state(|fake| fake.calls.clear());
+        assert_eq!(
+            rsf_srvk_evaluate(owner.cast(), commands, &frame(&flagged)),
+            0
+        );
+        assert!(calls().contains(&Call::Execute(1280, 720, 1920, 1080, 1)));
 
         rsf_srvk_retire_commands(owner.cast(), commands);
         assert_eq!(calls().last(), Some(&Call::Retire(commands as usize)));
-        edit_state(|fake| fake.calls.clear());
-        edit_state(|fake| fake.destroy = -6);
+        edit_state(|fake| {
+            fake.calls.clear();
+            fake.destroy = -6;
+        });
         assert_eq!(rsf_srvk_destroy(owner.cast()), FEATURE_FAILED);
         assert_eq!(calls(), [Call::Flush, Call::Destroy]);
-        edit_state(|fake| fake.destroy = XESS_SUCCESS);
-        edit_state(|fake| fake.calls.clear());
+        edit_state(|fake| {
+            fake.destroy = XESS_SUCCESS;
+            fake.calls.clear();
+        });
         assert_eq!(rsf_srvk_destroy(owner.cast()), 0);
         assert_eq!(
             calls(),
@@ -716,10 +724,6 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
     });
 }
 
-fn frame_input(record: &rsf_frame_record) -> Frame {
-    frame(record)
-}
-
 #[test]
 fn refused_creation_unwinds_partial_state_and_releases_the_sdk_reference() {
     with_state(|| unsafe {
@@ -727,8 +731,10 @@ fn refused_creation_unwinds_partial_state_and_releases_the_sdk_reference() {
         let mut owner = ptr::null_mut();
         let setup = setup();
         // The recommendation must sit inside the SDK's own range.
-        edit_state(|fake| fake.range = [1000, 636, 1024, 576, 1280, 720]);
-        edit_state(|fake| fake.calls.clear());
+        edit_state(|fake| {
+            fake.range = [1000, 636, 1024, 576, 1280, 720];
+            fake.calls.clear();
+        });
         assert_eq!(
             rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut owner),
             INIT_FAILED
@@ -744,9 +750,11 @@ fn refused_creation_unwinds_partial_state_and_releases_the_sdk_reference() {
                 Call::Close,
             ]
         );
-        edit_state(|fake| fake.range = Fake::default().range);
-        edit_state(|fake| fake.fail_allocation = 12);
-        edit_state(|fake| fake.calls.clear());
+        edit_state(|fake| {
+            fake.range = Fake::default().range;
+            fake.fail_allocation = 12;
+            fake.calls.clear();
+        });
         assert_eq!(
             rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut owner),
             INIT_FAILED

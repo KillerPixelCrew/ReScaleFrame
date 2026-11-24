@@ -3,6 +3,7 @@ use super::*;
 use crate::capture_test_sink::Sink;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::Path;
 
 const COPIED: u8 = 0x5a;
 const NEVER_COPIED: u8 = 0xef;
@@ -463,17 +464,19 @@ fn legacy_directory(tag: &str) -> PathBuf {
     directory
 }
 
+/// Legacy dumps of frame 9 only, into `directory`.
+fn legacy(directory: &Path) -> Legacy {
+    Legacy {
+        directory: Some(directory.to_path_buf()),
+        first: 9,
+        count: 1,
+    }
+}
+
 #[test]
 fn legacy_publishes_only_after_drain() {
     let directory = legacy_directory("legacy");
-    let owner = owner(
-        false,
-        Legacy {
-            directory: Some(directory.clone()),
-            first: 9,
-            count: 1,
-        },
-    );
+    let owner = owner(false, legacy(&directory));
     unsafe { rsf_core_capture_vk_provider(&owner, 77, 3, 1) };
     let (done, ticket) = record(&owner, 1, c"fg-hudless-color", 0);
     assert!(done && ticket == 0);
@@ -497,14 +500,7 @@ fn legacy_publishes_only_after_drain() {
 fn core_and_legacy_use_the_same_execution_proof() {
     core();
     let directory = legacy_directory("both");
-    let owner = owner(
-        false,
-        Legacy {
-            directory: Some(directory.clone()),
-            first: 9,
-            count: 1,
-        },
-    );
+    let owner = owner(false, legacy(&directory));
     let (_, ticket) = record(&owner, 1, c"sr-depth", 0);
     assert!(poll(&owner));
     assert!(!flush(&owner));
@@ -519,14 +515,7 @@ fn core_and_legacy_use_the_same_execution_proof() {
 #[test]
 fn legacy_artifacts_distinguish_views_generations_and_repeated_evaluations() {
     let directory = legacy_directory("identity");
-    let owner = owner(
-        false,
-        Legacy {
-            directory: Some(directory.clone()),
-            first: 9,
-            count: 1,
-        },
-    );
+    let owner = owner(false, legacy(&directory));
     let mut identity = frame(9);
     for (view, generation) in [(1, 2), (2, 2), (1, 3), (1, 2)] {
         identity.view_id = view;
@@ -562,14 +551,7 @@ fn legacy_artifacts_distinguish_views_generations_and_repeated_evaluations() {
 #[test]
 fn legacy_failure_log_names_frame_and_role() {
     let directory = legacy_directory("errors");
-    let owner = owner(
-        false,
-        Legacy {
-            directory: Some(directory.clone()),
-            first: 9,
-            count: 1,
-        },
-    );
+    let owner = owner(false, legacy(&directory));
     let mut source = image(37);
     source.copy_source = 0;
     let mut ticket = 0;

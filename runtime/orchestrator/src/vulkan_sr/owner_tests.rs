@@ -516,8 +516,13 @@ pub(super) static PLATFORM: Platform = Platform {
     dump_result: leaf!(|_: *const rsf_frame_record, _: *const c_char, _: u32, _: i32| -> () {}),
 };
 
-#[cfg_attr(test, allow(dead_code))]
-unsafe extern "C" fn unused() {}
+/// Whether the device still has a Vulkan dispatch registration.
+fn registered(setup: &Setup) -> bool {
+    DISPATCH
+        .lock()
+        .unwrap()
+        .contains_key(&(setup.device as usize))
+}
 
 fn frame_record() -> rsf_frame_record {
     let mut record: rsf_frame_record = unsafe { std::mem::zeroed() };
@@ -671,12 +676,7 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
     state.destroy_result = FAILED;
     assert_eq!(unsafe { rsf_srvk_destroy(owner) }, FAILED);
     assert!(state.calls.ends_with(&[Call::Flush, Call::Destroy]));
-    assert!(
-        DISPATCH
-            .lock()
-            .unwrap()
-            .contains_key(&(setup.device as usize))
-    );
+    assert!(registered(&setup));
     assert!(!state.calls.contains(&Call::Close));
     state.destroy_result = 0;
     assert_eq!(unsafe { rsf_srvk_destroy(owner) }, 0);
@@ -689,12 +689,7 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
         Call::ReleaseMemory(115),
         Call::Close
     ]));
-    assert!(
-        !DISPATCH
-            .lock()
-            .unwrap()
-            .contains_key(&(setup.device as usize))
-    );
+    assert!(!registered(&setup));
 }
 
 #[test]
@@ -726,12 +721,7 @@ fn ffx_creation_refusal_unwinds_partial_resources_and_native_aa_skips_the_query(
             Call::Close,
         ]
     );
-    assert!(
-        !DISPATCH
-            .lock()
-            .unwrap()
-            .contains_key(&(setup.device as usize))
-    );
+    assert!(!registered(&setup));
 
     state.calls.clear();
     state.effective = 33;
@@ -769,12 +759,7 @@ fn ffx_create_preserves_cleanup_owner_when_the_effect_refuses_rollback() {
     assert_eq!(state.calls.last(), Some(&Call::Destroy));
     assert!(!state.calls.contains(&Call::Close));
     assert!(!state.calls.contains(&Call::ReleaseImage(14)));
-    assert!(
-        DISPATCH
-            .lock()
-            .unwrap()
-            .contains_key(&(setup.device as usize))
-    );
+    assert!(registered(&setup));
 
     let (mut width, mut height) = (0, 0);
     assert_eq!(
@@ -795,12 +780,7 @@ fn ffx_create_preserves_cleanup_owner_when_the_effect_refuses_rollback() {
         Call::ReleaseMemory(114),
         Call::Close
     ]));
-    assert!(
-        !DISPATCH
-            .lock()
-            .unwrap()
-            .contains_key(&(setup.device as usize))
-    );
+    assert!(!registered(&setup));
 }
 
 #[test]

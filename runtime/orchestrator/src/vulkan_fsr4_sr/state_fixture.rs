@@ -100,6 +100,15 @@ fn extent(index: usize) -> (u32, u32) {
 pub(crate) mod interop {
     use super::*;
 
+    // Only the output image is written by the SDK.
+    fn expected_usage(index: usize) -> u32 {
+        if index == 3 {
+            STORAGE_USAGE | SAMPLED_USAGE
+        } else {
+            0
+        }
+    }
+
     pub(crate) use super::open;
 
     pub(crate) unsafe extern "C" fn adapter_luid(_: *const Setup, out: *mut u64) -> i32 {
@@ -142,15 +151,7 @@ pub(crate) mod interop {
     ) -> i32 {
         with(|c| {
             check!(c, FORMATS.get(c.queries) == Some(&format));
-            check!(
-                c,
-                usage
-                    == if c.queries == 3 {
-                        STORAGE_USAGE | SAMPLED_USAGE
-                    } else {
-                        0
-                    }
-            );
+            check!(c, usage == expected_usage(c.queries));
             c.queries += 1;
         });
         unsafe {
@@ -173,15 +174,7 @@ pub(crate) mod interop {
             let index = c.images;
             c.images += 1;
             check!(c, FORMATS.get(index) == Some(&format));
-            check!(
-                c,
-                usage
-                    == if index == 3 {
-                        STORAGE_USAGE | SAMPLED_USAGE
-                    } else {
-                        0
-                    }
-            );
+            check!(c, usage == expected_usage(index));
             check!(c, (width, height) == extent(index));
             index
         });
@@ -340,11 +333,7 @@ pub(crate) unsafe extern "C" fn release_image(_: Handle) {
     with(|c| c.retirement.push(Step::Com))
 }
 
-pub(crate) unsafe fn capture_initialize(
-    _: Handle,
-    _: *const Setup,
-    provider: u64,
-) -> i32 {
+pub(crate) unsafe fn capture_initialize(_: Handle, _: *const Setup, provider: u64) -> i32 {
     with(|c| check!(c, provider == VERSION));
     0
 }
@@ -593,16 +582,11 @@ impl Fixture {
                                  _: *mut Handle|
              -> i32 { -1 }),
         };
-        let mut record: Record = unsafe { std::mem::zeroed() };
-        record.struct_size = size_of::<Record>() as u32;
-        record.abi_version = rsf_game_sys::RSF_GAME_FRAME_ABI_VERSION;
-        record.session_id = 10;
-        record.view_id = 11;
-        record.frame_id = 42;
-        record.resource_generation = 12;
-        (record.render_width, record.render_height) = RENDER;
-        (record.output_width, record.output_height) = OUTPUT;
-        record.frame_time_ms = 16.5;
+        let mut record = Record {
+            resource_generation: 12,
+            frame_time_ms: 16.5,
+            ..rsf_test_support::frame_record(10, 42, 11, RENDER.into(), OUTPUT.into())
+        };
         let camera = &mut record.camera;
         camera.struct_size = size_of_val(camera) as u32;
         camera.abi_version = rsf_game_sys::RSF_GAME_CAMERA_ABI_VERSION;

@@ -97,11 +97,7 @@ pub(super) unsafe fn versions(_: Handle, out: *mut Version, count: *mut u64) -> 
     0
 }
 
-pub(super) unsafe fn create_generation(
-    _: Handle,
-    _: *const BridgeCreate,
-    provider: u64,
-) -> i32 {
+pub(super) unsafe fn create_generation(_: Handle, _: *const BridgeCreate, provider: u64) -> i32 {
     with(|c| {
         check!(c, provider == PROVIDER);
         c.objects |= GENERATION;
@@ -249,12 +245,7 @@ pub(super) unsafe fn shader_read(_: Handle, image: Handle, enter: u32) {
     });
 }
 
-pub(super) unsafe fn prepare(
-    _: Handle,
-    _: *const BridgeFrame,
-    sequence: u64,
-    reset: u32,
-) -> i32 {
+pub(super) unsafe fn prepare(_: Handle, _: *const BridgeFrame, sequence: u64, reset: u32) -> i32 {
     with(|c| {
         check!(c, sequence == c.sequence);
         c.resets.push(reset);
@@ -371,10 +362,7 @@ fn create() -> (i32, *mut Bridge) {
         generated_count: 1,
     };
     let mut bridge = ptr::null_mut();
-    (
-        unsafe { RsfFsr4FgCreate(&setup, &mut bridge) },
-        bridge,
-    )
+    (unsafe { RsfFsr4FgCreate(&setup, &mut bridge) }, bridge)
 }
 
 fn reset(provider: u64) {
@@ -433,16 +421,10 @@ fn terminal() {
     expect!(unsafe { RsfFsr4FgCreateFence(bridge.cast(), &mut fence) } == 0 && !fence.is_null());
     expect!(unsafe { RsfFsr4FgStart(bridge, fake(3)) } == 0);
     with(|c| c.steps.clear());
-    let mut source: Record = unsafe { std::mem::zeroed() };
-    source.struct_size = size_of::<Record>() as u32;
-    source.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    source.frame_id = 1;
-    source.session_id = 1;
-    source.render_width = 320;
-    source.render_height = 180;
-    source.output_width = 640;
-    source.output_height = 360;
-    source.frame_time_ms = 16.7;
+    let mut source = Record {
+        frame_time_ms: 16.7,
+        ..rsf_test_support::frame_record(1, 1, 0, [320, 180], [640, 360])
+    };
     source.camera.struct_size = size_of_val(&source.camera) as u32;
     source.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
     source.camera.depth_inverted = 1;
