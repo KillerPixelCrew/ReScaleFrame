@@ -103,7 +103,7 @@ Check the environment before recommending installation. [docs/tooling.md](docs/t
 
 ## Project boundaries
 
-- Keep all first-party code in this monorepo. Do not split the loader, orchestrator, SDK, UI, or game plugins into separate repositories or submodules.
+- Keep all first-party code in this monorepo. Do not split the loader, orchestrator, SDK, UI, or game plugins into separate repositories or submodules. The rule is about first-party code: vendor SDK sources are pinned shallow submodules under `vendor/` (see Out-of-tree material).
 - The orchestrator owns plugin lifecycle, vendor SDKs, graphics interoperability, settings, and presentation. A game plugin owns its game detection, hooks, renderer preparation, input conventions, and output reinsertion.
 - Loading the orchestrator is distinct from activating a graphics pipeline. It selects/prepares the plugin first.
 - Keep public native interfaces as C ABI contracts. Do not pass STL containers, Rust types, ownership-ambiguous allocations, or exceptions across DLL boundaries.
@@ -132,7 +132,7 @@ Check the environment before recommending installation. [docs/tooling.md](docs/t
 
 ## Build and verify
 
-`eng/verify.ps1` is the final pre-release native/lint gate and matches CI. Run it at the end of a work session before releasing, not mid-work where its fixtures can disrupt the user’s computer work. It compares `VERSION` against the Cargo workspace
+`eng/verify.ps1` is the final pre-release native/lint gate and matches CI. Run it at the end of a work session before releasing, not mid-work where its fixtures can disrupt the userï¿½s computer work. It compares `VERSION` against the Cargo workspace
 version, configures, builds, and tests the native tree, then runs `cargo fmt --check` and
 `cargo clippy -D warnings`. Run `cargo test --workspace --locked` separately when Rust behaviour is affected; the script does not execute those tests.
 
@@ -274,10 +274,18 @@ lower latency. Do not soften README or status wording ahead of the code.
 
 ## Out-of-tree material
 
-Game binaries, Epic engine source, vendor SDKs, reference checkouts, captures, and Ghidra projects
-stay untracked. `.local/`, `references/`, `vendor/`, `captures/`, and `dumps/` are gitignored. Only
-the executable name and hash appear in published research. See `docs/dependencies.md` before adding
-any third-party code or binary.
+Game binaries, Epic engine source, vendor runtime binaries, reference checkouts, captures, and Ghidra
+projects stay untracked. `.local/`, `references/`, `captures/`, `dumps/` and everything under `vendor/`
+except the SDK submodules are gitignored. Only the executable name and hash appear in published research.
+See `docs/dependencies.md` before adding any third-party code or binary.
+
+The vendor SDK sources the build compiles against are shallow submodules pinned in `eng/dependencies.json`:
+`vendor/streamline`, `vendor/fidelityfx` (SDK 2.4.0), `vendor/fidelityfx-vulkan` (SDK 1.1.4, the Vulkan FSR
+source build) and `vendor/xess`. After cloning, run `git submodule update --init --depth 1` and
+`./eng/fetch-vendor.ps1`; the second fetches the signed Streamline runtime from the pinned release zip into
+`vendor/streamline-sdk` and the package layout into `vendor/runtimes`, verifying every hash. Change a vendor
+pin in `eng/dependencies.json` and the submodule commit together; `eng/fetch-vendor.ps1` refuses a mismatch.
+Never edit inside a submodule: patches to vendor source are applied to copies by the scripts that need them.
 
 The procedure this project uses to analyse a game is written down in
 [docs/research/methodology.md](docs/research/methodology.md), with the operational version as a

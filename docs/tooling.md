@@ -11,7 +11,7 @@ The repository pins Rust in `rust-toolchain.toml` and selects Visual Studio 2022
 | [Git](https://git-scm.com/downloads) | Repository and reference revisions |
 | [Visual Studio / C++ Build Tools](https://visualstudio.microsoft.com/downloads/) | VS 2022 or 2026 C++ tools and Windows SDK for the reference x64 build |
 | [CMake](https://cmake.org/download/) | A version supporting the selected VS generator (preset schema requires 3.25+; VS 2026 needs a newer generator-capable CMake). Configuring fetches [MinHook](https://github.com/TsudaKageyu/minhook) v1.3.4 (BSD-2-Clause) from GitHub for the Present and cursor detours, so the first configure needs the network |
-| [Streamline SDK](https://github.com/NVIDIA-RTX/Streamline/releases) | `sl.h` and its headers under `vendor/streamline/include` (untracked), which the C++ Streamline layout tests read; the game folder's `ReScaleFrame\streamline` holds the release's `bin/x64` |
+| Vendor SDKs | `git submodule update --init --depth 1` checks out Streamline, FidelityFX (2.4.0 and 1.1.4) and XeSS under `vendor/` at their pinned revisions (about 950 MB); their headers switch the DLSS, FSR and XeSS backends on. `./eng/fetch-vendor.ps1` then fetches the signed Streamline runtime from the pinned 2.14.1 release zip into `vendor/streamline-sdk` and links the package layout into `vendor/runtimes`. See [Vendor SDKs](dependencies.md#vendor-sdks) |
 | [Rust via rustup](https://rustup.rs/) | CMake invokes Cargo to build the orchestrator static library. The MSVC build uses the `x86_64-pc-windows-msvc` Rust target and the MinGW cross-build needs `x86_64-pc-windows-gnu`. Cargo also builds the overlay and upscaler. |
 | [LLVM](https://github.com/llvm/llvm-project/releases/tag/llvmorg-22.1.8) 22.1.8 | `libclang.dll` for bindgen. The crates that own C headers generate their bindings in `build.rs` through `tools/bindgen`, so every Cargo build needs it. Install with `winget install --id LLVM.LLVM --exact --version 22.1.8` (puts it in `C:\Program Files\LLVM\bin`, which the build finds) or set `LIBCLANG_PATH` to the directory holding `libclang.dll`. CI installs the same release |
 | [bindgen-cli](https://crates.io/crates/bindgen-cli) 0.72.1 | Only for the few bindings that stay committed (vendor SDK headers, bare-rustc builds): `cargo install bindgen-cli --version 0.72.1`, then run the generator named in each output's comment; `--check` compares without writing |
@@ -23,8 +23,9 @@ Run `./eng/verify.ps1` and `cargo test --workspace --locked`. The script current
 Unity managed builds also need a .NET SDK capable of building the netstandard2.1 helper, locked
 Harmony 2.4.2, the researched game's Managed directory and Unity native rendering headers.
 See [dependencies](dependencies.md) and [the build script](../eng/build-unity-sr.ps1).
-SDK/GPU/managed fixtures are separate from a clean native CI run; availability depends on local
-untracked dependencies. Recorded runs in research are not automatic results for this workspace.
+CI checks out the vendor submodules, so it compiles and links the DLSS, FSR and XeSS paths, but it
+does not fetch the Streamline runtime and has no vendor GPU. SDK/GPU/managed fixtures are separate
+from that run; their availability depends on local hardware and untracked dependencies. Recorded runs in research are not automatic results for this workspace.
 
 ## Binary and frame analysis
 
@@ -33,8 +34,9 @@ Use [Ghidra](https://github.com/NationalSecurityAgency/ghidra) with PyGhidra and
 Use [RenderDoc](https://github.com/baldurk/renderdoc) for capture and replay. The recorded AC7 workflow used 1.45: the Windows DLL captured through DXVK under Proton, Windows `renderdoccmd` converted XML under Wine, and Windows replay supplied pixels. Keep this evidence separate from assumptions about other versions/platforms.
 
 The accepted AC7 build uses [Streamline 2.14.1](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1)
-and the runtimes recorded in [dependencies](dependencies.md). Check existing local SDK/reference
-folders before recommending downloads. SDK headers, deployed DLLs and Ghidra tooling are distinct.
+and the runtimes recorded in [dependencies](dependencies.md). The vendor SDKs are submodules and a
+verified fetch (see Build above); check existing local reference folders before recommending other
+downloads. SDK headers, deployed DLLs and Ghidra tooling are distinct.
 
 The Windows DLSS integration and the observed RenderDoc route did not coexist. AC7's bounded
 F9 instrumentation supplies raw colour/depth/motion, constants, shader/binding facts and native

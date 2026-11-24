@@ -31,10 +31,10 @@ retain their commercial licenses and are not copied into Git or runtime packages
 
 ## Godot developer integration
 
-The [Godot dependency lock](../integrations/godot/dependencies.json) pins Godot
-4.7.2, godot-cpp, official standard/.NET archives, vendor SDKs and the Godot Mesa
-NIR binary used by the Windows D3D12 engine build. Engine/reference checkouts,
-SDKs and build tools remain ignored. The GDExtension is written against Godot's C
+The [dependency lock](../eng/dependencies.json) pins Godot
+4.7.2, godot-cpp, official standard/.NET archives, the vendor SDKs (see
+[Vendor SDKs](#vendor-sdks)) and the Godot Mesa NIR binary used by the Windows D3D12
+engine build. Engine/reference checkouts and build tools remain ignored. The GDExtension is written against Godot's C
 interface and does not link godot-cpp. The godot-cpp pin is kept as the source of the
 4.7 API description (`extension_api-4-7.json`, `gdextension_interface.json`) that the
 method hashes and record layouts follow. The custom engine builds the first-party
@@ -48,7 +48,7 @@ Read the [build and validation record](research/godot-engine-integration.md) for
 exact revisions, binary hashes, exported-player coverage and image failures.
 
 Native Vulkan FSR2/FSR3 uses the separately pinned FidelityFX SDK 1.1.4 at
-`c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`. `eng/build-godot-vulkan.ps1` builds
+`c6efa6bf7f2027b3ec94f28578bb5965eabb9e55` (the `vendor/fidelityfx-vulkan` submodule). `eng/build-godot-vulkan.ps1` builds
 it in an ignored staging directory, with guarded storage-format and swapchain
 lifetime corrections. Reference sources remain unchanged. The payload includes
 the SDK license texts and a source/patch/compiler/binary hash receipt. Development
@@ -59,8 +59,8 @@ was used only for development; its exact archive/DLL fingerprints are in the
 research record and it is not part of the runtime payload.
 The Vulkan FG SDK build additionally includes the reviewed descriptor-pool count
 and presenter CPU completion corrections, each recorded in its hash receipt.
-The pinned Streamline source (`2122257e0fce486f91b385aa63b9a09b0a34b363`)
-is prepared separately from its retail SDK archive. Its corrected Production
+The pinned Streamline source (`2122257e0fce486f91b385aa63b9a09b0a34b363`, the `vendor/streamline` submodule)
+is built separately from its retail SDK archive. Its corrected Production
 common/interposer build stays ignored and is staged in a separate
 `streamline-vulkan` directory for Godot PCL/Reflex. The build receipt also covers
 the low-latency extension dependency and private-data feature corrections. CMake
@@ -111,7 +111,7 @@ The Windows Rust runtime uses [ash](https://crates.io/crates/ash) 0.38.0+1.3.281
 loader and link features are disabled. The graphics host continues to lend
 the Vulkan procedure resolvers.
 
-Vendor SDKs, reference checkouts, Epic source, and game binaries are kept outside version control. [The source map](research/source-map.md) records inspected revisions; Epic links require authorized access.
+Reference checkouts, Epic source, game binaries and vendor runtime binaries are kept outside version control; the vendor SDK sources are pinned submodules. [The source map](research/source-map.md) records inspected revisions; Epic links require authorized access.
 
 ## Optional local SDKs
 
@@ -123,17 +123,53 @@ program from the installed NVIDIA runtime in memory. No external GPU cache, Inte
 shader data or MFGUnlocker DLL is included. Distributions using this path must retain the
 MIT notice alongside the existing vendor runtime terms. [Integration](research/rtx40-mfg-unlock.md).
 
+## Vendor SDKs
+
+[eng/dependencies.json](../eng/dependencies.json) is the one source of the vendor pins: each SDK's
+repository and revision, the Streamline release zip and its SHA-512, and the SHA-256 of every signed
+DLL a package carries. The CMake receipt check, the eng scripts, `eng/fetch-vendor.ps1` and the
+`tools/package-*.py` packagers (through `tools/package_common.py`) all read it.
+
+The SDK sources are shallow git submodules under `vendor/`, pinned to exactly those revisions. A
+submodule records only a URL and a commit; nothing of the vendor's is copied into this repository,
+so their licences do not restrict referencing them. A fresh clone gets everything with:
+
+```powershell
+git submodule update --init --depth 1
+./eng/fetch-vendor.ps1
+```
+
+| Submodule | Revision | Checkout | Licence | Used for |
+| --- | --- | --- | --- | --- |
+| `vendor/streamline` ([NVIDIA-RTX/Streamline](https://github.com/NVIDIA-RTX/Streamline)) | `2122257e0fce486f91b385aa63b9a09b0a34b363` (2.14.1) | 100 MB | MIT for the source and headers; the closed NVIDIA runtimes are not in it | `include/` compiles the DLSS/DLSS-G/Reflex/PCL adapters; `source/` feeds the corrected Vulkan Streamline build and the selected-device patch tests |
+| `vendor/fidelityfx` ([FidelityFX-SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK)) | `7539ae8b6568ad29ed78a753404351daf3b5cca7` (SDK 2.4.0; FSR 2.3.4, 3.1.6, hardware-dependent 4.1.2 and FG 4.0.2) | 322 MB | MIT for the source; `Kits/FidelityFX/docs/license.md` (binary-only redistribution, no reverse engineering) for the signed DLLs | `Kits/FidelityFX/api/include`, `upscalers/include` and `framegeneration/include` compile the DX12 FSR SR/FG adapters; `signedbin/` holds the shipped `amd_fidelityfx_{loader,upscaler,framegeneration}_dx12.dll` |
+| `vendor/fidelityfx-vulkan` (same repository) | `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55` (SDK 1.1.4) | 427 MB | MIT | The native Vulkan FSR2/FSR3 runtime is built from this source with the corrections in `runtime/vulkan/fsr3/sdk-fixes` (their `sdkCommit` is this revision); `ffx-api/include` is `RSF_FFX_VK_INCLUDE` |
+| `vendor/xess` ([intel/xess](https://github.com/intel/xess)) | `8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0` (3.0.2) | 104 MB | Intel Simplified Software License: redistribution of the binaries unmodified, with the notice | `inc/` (`xess/`, `xess_fg/`, `xell/`) compiles the XeSS SR/FG/XeLL adapters; `bin/` holds `libxess.dll`, `libxess_dx11.dll`, `libxess_fg.dll`, `libxell.dll` |
+
+FidelityFX needs two revisions because the two paths use different products of it: the DX12 path ships
+AMD's signed 2.4.0 DLLs, which the FSR4 compatibility hook recognises by their bytes, while the Vulkan
+path builds the 1.1.4 source with tracked corrections that apply to that source only. SDK 2.3.0
+`60f4ea81` is still accepted by the FSR4 compatibility hook at runtime but is no longer a build input;
+the earlier lock entry naming it was stale against the 2.4.0 DLLs the packagers pin.
+
+The signed Streamline runtime (`sl.*.dll`, `nvngx_dlss*.dll`) and its licences are only in the
+[2.14.1 release zip](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1), not in the
+repository. `eng/fetch-vendor.ps1` checks each submodule's revision and the pinned FidelityFX and
+XeSS DLL hashes, downloads the zip, requires its SHA-512, unpacks only the eight pinned retail DLLs of
+`bin/x64` and the licence files into `vendor/streamline-sdk` (67 MB; the 263 MB zip is deleted afterwards),
+and checks each DLL against its pinned SHA-256. A run that finds them in place downloads nothing. That directory is the default `--streamline-root` of the
+packagers and the default Streamline root of the deploy and staging scripts. The script then links the
+package layout (`streamline/`, `fidelityfx/`, `xess/`) into `vendor/runtimes`, the default
+`RSF_ANOMALY_SR_VENDOR_ROOT` for the Anomaly SR and backend-switch device fixtures.
+Both directories are ignored.
+
 | Dependency | Inspected version | Local path | Purpose |
 | --- | --- | --- | --- |
-| RenderDoc header and x64 DLL | 1.45 | `vendor/renderdoc/` | In-application capture |
-| Streamline headers | 2.14.1 | `vendor/streamline/include/sl.h` | Compile the DLSS adapter |
-| Streamline/NGX x64 runtime | 2.14.1 release package | `vendor/streamline/bin/x64/` | Load and evaluate DLSS; `sl.dlss_g.dll`, `nvngx_dlssg.dll`, `sl.pcl.dll` and `sl.reflex.dll` are in the same package and are loaded by current-source FG/Reflex |
-| FidelityFX SDK headers | `7539ae8b6568ad29ed78a753404351daf3b5cca7` (SDK 2.4.0; FSR 2.3.4, 3.1.6, hardware-dependent 4.1.2 and FG 4.0.2). SDK 2.3.0 `60f4ea81` remains accepted by the FSR4 compatibility hook | `vendor/fidelityfx/Kits/FidelityFX/api/include/` and `upscalers/include/` | Compile the FSR adapter |
-| FidelityFX x64 runtime | same | `vendor/fidelityfx/Kits/FidelityFX/signedbin/` | `amd_fidelityfx_loader_dx12.dll`, `amd_fidelityfx_upscaler_dx12.dll`, `amd_fidelityfx_framegeneration_dx12.dll` |
-| XeSS SDK headers | 3.0.2, `8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0` | `vendor/xess/inc/` (`xess/`, `xess_fg/`, `xell/`) | Compile the XeSS adapter |
-| XeSS x64 runtime | same | `vendor/xess/bin/` | `libxess.dll`, `libxess_dx11.dll`, `libxess_fg.dll`, `libxell.dll` |
+| RenderDoc header and x64 DLL | 1.45 | `vendor/renderdoc/` (hand-placed) | In-application capture |
+| Unity native-plugin headers | NativeRenderingPlugin `522254181faf...` | `vendor/unity-native/include/` (hand-placed) | Unity adapter |
+| Streamline/NGX x64 runtime | 2.14.1 release package | `vendor/streamline-sdk/bin/x64/` (fetched) | Load and evaluate DLSS; `sl.dlss_g.dll`, `nvngx_dlssg.dll`, `sl.pcl.dll` and `sl.reflex.dll` are in the same package and are loaded by current-source FG/Reflex |
 
-Without the headers, the checkout still builds; the relevant API reports that the feature is unavailable. `RSF_RENDERDOC_DLL`, `RSF_STREAMLINE_BIN`, `RSF_FFX_BIN`, per-family `RSF_FSR2_BIN` / `RSF_FSR3_BIN` / `RSF_FSR4_BIN`, and `RSF_XESS_BIN` select runtime locations. See [loader setup](../loader/README.md). The new SR adapters use the SDK checkout layouts above. A single current AMD package can provide all three FSR algorithms; separate runtime directories and explicit version overrides also permit side-by-side SDK releases. See [the switching evidence](research/orchestrator-sr-switching.md). Vendor checkouts remain untracked.
+Without the headers, the checkout still builds; the relevant API reports that the feature is unavailable. `RSF_RENDERDOC_DLL`, `RSF_STREAMLINE_BIN`, `RSF_FFX_BIN`, per-family `RSF_FSR2_BIN` / `RSF_FSR3_BIN` / `RSF_FSR4_BIN`, and `RSF_XESS_BIN` select runtime locations. See [loader setup](../loader/README.md). The new SR adapters use the SDK checkout layouts above. A single current AMD package can provide all three FSR algorithms; separate runtime directories and explicit version overrides also permit side-by-side SDK releases. See [the switching evidence](research/orchestrator-sr-switching.md).
 
 RenderDoc and Streamline source/header licenses are separate from the licenses covering NVIDIA runtime binaries such as `nvngx_dlss.dll` and `nvngx_dlssg.dll`. The FidelityFX signed DX12 DLLs carry the SDK release's bundled binary redistribution terms; ship `Kits/FidelityFX/docs/license.md` and `3rdpartynotice.md` beside them. The earlier statement grouping these signed binaries under MIT was incorrect for the inspected SDK 2.3 package. The XeSS headers and samples carry Intel's SDK licence and the `libxess*.dll` / `libxell.dll` binaries have separate Intel redistribution terms; confirm both against the shipped text before any redistribution. Check the exact release's included terms and notices in every case. The AC7 release includes the retail Streamline interposer/common/DLSS/PCL DLLs and NVIDIA DLSS 310.9.1.0, unmodified, with the SDK licenses and notices. The corrected AC7 package also includes FidelityFX SDK 2.3.0 upscaling (FSR 2/3/4) and XeSS SR 2.0.2 with their terms and notices. Frame generation and Reflex are not included in that published SR package. Current-source
 deployments use separate FG DLLs and shared latency services. Vendor binaries stay untracked in Git.
@@ -152,13 +188,16 @@ hashes. Missing FidelityFX/XeSS runtime directories cause LOAD_FAILED refusals e
 proxy was built with their headers. [Diagnosis and deployment evidence](research/sr-runtime-deployment.md).
 
 Build and verify the Release configuration, build the Rust overlay with `cargo build --release
---locked -p rescaleframe-overlay`, and commit the release source. Use the official
-[Streamline 2.14.1 SDK](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1), with the
-unmodified retail DLLs from `bin/x64` and its accompanying license files.
+--locked -p rescaleframe-overlay`, and commit the release source. Run `eng/fetch-vendor.ps1` for the
+official [Streamline 2.14.1 SDK](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1)
+runtime: the unmodified retail DLLs from `bin/x64` and its accompanying license files.
 
 ```
-python tools/package-ac7.py --streamline-root .local/streamline/sdk --fidelityfx-root vendor/fidelityfx --xess-root vendor/xess
+py -3 tools/package-ac7.py
 ```
+
+The Streamline, FidelityFX and XeSS roots default to `vendor/streamline-sdk`, `vendor/fidelityfx` and
+`vendor/xess`; `--streamline-root`, `--fidelityfx-root` and `--xess-root` override them.
 
 The packager writes the Windows archive, corresponding-source archive and SHA256SUMS.txt under
 `build/releases`. It refuses a dirty source tree, includes a source-commit/file-hash manifest,
