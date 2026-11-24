@@ -451,7 +451,7 @@ impl Stage {
             let mut registry = lock(&self.registry);
             let vertex = registry.get(stock.vs);
             let name = registry.name(stock.vs as usize);
-            let element = unsafe { rsf_anomaly_motion_model_element(name.as_ptr(), name.len()) };
+            let element = rsf_anomaly_motion_model_element(name.as_bytes());
             let selection = registry.select(stock, render.device_view().device, link_variants);
             (vertex, element, selection)
         };

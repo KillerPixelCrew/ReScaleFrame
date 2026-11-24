@@ -15,7 +15,6 @@ use crate::native_geometry::rsf_anomaly_geometry_active;
 use crate::native_geometry::rsf_anomaly_geometry_set_near;
 use crate::native_geometry::{CONSTANT_BUFFER_DATA, CONSTANT_BUFFER_SIZE, CONSTANT_BUFFER_SLOTS};
 use crate::native_hooks::Site as HookSite;
-use crate::native_observer::rsf_anomaly_observation;
 use crate::native_profile::{PROFILES as NATIVE, Profile as NativeProfile};
 use crate::runtime_module::rsf_anomaly_runtime_set_colour_transport;
 use crate::sr_d3d11::native::rsf_anomaly_sr_set_full_viewport;
@@ -40,7 +39,6 @@ use crate::sr_profile::{
 use crate::sr_reconstruction::rsf_anomaly_sr_correct_position_constant;
 use crate::sr_swap::{self as swap_owner, Handle};
 
-use crate::sys::{RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation};
 use crate::sys::{
     RSF_ANOMALY_SWAP_MAKE_CREATED, RSF_ANOMALY_SWAP_MAKE_FAILED, RSF_ANOMALY_SWAP_SLOT_COUNT,
     rsf_anomaly_swap_counters, rsf_anomaly_swap_request, rsf_anomaly_swap_twins,
@@ -51,7 +49,6 @@ use crate::sys::{
     rsf_anomaly_sr_frame_reads, rsf_anomaly_sr_log, rsf_anomaly_sr_motion_target,
     rsf_anomaly_sr_swap_counters,
 };
-use rsf_game_sys::rsf_result;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::{MaybeUninit, size_of};
 use std::ptr::{from_ref, null_mut};
@@ -369,15 +366,7 @@ pub(crate) fn frame_facts(world_window: bool, temporal: bool) -> rsf_anomaly_sr_
     let out = &mut reads.facts;
     out.backend = address(sr.backend_rva);
     read_into(sr.hw_device_rva, &mut out.device);
-    let mut observation = rsf_anomaly_native_observation {
-        struct_size: size_of::<rsf_anomaly_native_observation>() as u32,
-        abi_version: RSF_ANOMALY_OBSERVATION_ABI,
-        ..Default::default()
-    };
-    const OK: rsf_result = 0; // RSF_OK
-    if unsafe { rsf_anomaly_observation(&mut observation) } == OK {
-        out.generation = observation.resets;
-    }
+    out.generation = crate::native_observer::resets();
     read_into(native_profile.device_width_rva, &mut out.device_width);
     read_into(native_profile.device_height_rva, &mut out.device_height);
     const UNSET: u8 = 0xff;

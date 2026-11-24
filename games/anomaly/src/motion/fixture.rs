@@ -604,7 +604,7 @@ fn far_diagnostics() {
         (b"model_env_lq_0.vs", Unknown),
     ] {
         assert_eq!(
-            unsafe { rsf_anomaly_motion_model_element(root.as_ptr(), root.len()) } as u8,
+            rsf_anomaly_motion_model_element(root) as u8,
             expected as u8
         );
     }

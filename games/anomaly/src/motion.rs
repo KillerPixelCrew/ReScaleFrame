@@ -990,11 +990,7 @@ enum ModelElement {
     Tessellated,
 }
 
-unsafe fn rsf_anomaly_motion_model_element(
-    root: *const u8,
-    count: usize,
-) -> ModelElement {
-    let root = unsafe { borrow_span(root, count) };
+fn rsf_anomaly_motion_model_element(root: &[u8]) -> ModelElement {
     if !root.starts_with(b"deffer_model") {
         ModelElement::Unknown
     } else if root.windows(5).any(|part| part == b"(tess") {
