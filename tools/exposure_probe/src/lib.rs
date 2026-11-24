@@ -195,25 +195,12 @@ fn native_device() -> ProbeResult<(ID3D11Device, ID3D11DeviceContext)> {
         }
         index += 1;
     };
-    let mut device = None;
-    let mut context = None;
-    unsafe {
-        D3D11CreateDevice(
-            &adapter,
-            D3D_DRIVER_TYPE_UNKNOWN,
-            Default::default(),
-            D3D11_CREATE_DEVICE_FLAG(0),
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-    }?;
-    Ok((
-        device.ok_or("null D3D11 device")?,
-        context.ok_or("null immediate context")?,
-    ))
+    Ok(rsf_test_support::d3d11_device_on(
+        Some(&adapter),
+        D3D_DRIVER_TYPE_UNKNOWN,
+        D3D11_CREATE_DEVICE_FLAG(0),
+        None,
+    )?)
 }
 
 fn texture(

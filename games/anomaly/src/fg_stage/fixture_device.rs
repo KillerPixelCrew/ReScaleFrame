@@ -4,7 +4,7 @@ use crate::fg_inputs::d3d::create_texture;
 use crate::sr_temporal::fg_fixture::Temporal;
 use crate::sys::{rsf_anomaly_sr_camera as ViewCamera, rsf_anomaly_sr_pass_inputs as PassInputs};
 use std::cell::Cell;
-use windows::Win32::Foundation::{HMODULE as Module, HWND as Window, RECT as Rect};
+use windows::Win32::Foundation::{HWND as Window, RECT as Rect};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -152,24 +152,15 @@ fn create_chain(
         SwapEffect: DXGI_SWAP_EFFECT_SEQUENTIAL,
         Flags: 0,
     };
-    let (mut chain, mut device, mut context) = (None, None, None);
-    unsafe {
-        D3D11CreateDeviceAndSwapChain(
-            &**adapter,
-            D3D_DRIVER_TYPE_UNKNOWN,
-            Module(ptr::null_mut()),
-            D3D11_CREATE_DEVICE_FLAG(0),
-            Some(&[D3D_FEATURE_LEVEL_11_0]),
-            D3D11_SDK_VERSION,
-            Some(&desc),
-            Some(&mut chain),
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )
-    }
+    let (device, context, chain) = rsf_test_support::d3d11_swapchain_on(
+        Some(&**adapter),
+        D3D_DRIVER_TYPE_UNKNOWN,
+        D3D11_CREATE_DEVICE_FLAG(0),
+        Some(&[D3D_FEATURE_LEVEL_11_0]),
+        &desc,
+    )
     .ok()?;
-    Some((chain?, device?, context?.cast().ok()?))
+    Some((chain, device, context.cast().ok()?))
 }
 
 fn target(device: &ID3D11Device, texture: &ID3D11Texture2D) -> Option<ID3D11RenderTargetView> {

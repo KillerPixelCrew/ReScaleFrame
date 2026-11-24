@@ -237,14 +237,25 @@ pub fn d3d11_swapchain(
     flags: D3D11_CREATE_DEVICE_FLAG,
     desc: &DXGI_SWAP_CHAIN_DESC,
 ) -> Result<(ID3D11Device, ID3D11DeviceContext, IDXGISwapChain)> {
+    d3d11_swapchain_on(None, driver, flags, None, desc)
+}
+
+/// [`d3d11_swapchain`] on a chosen adapter, which needs `D3D_DRIVER_TYPE_UNKNOWN`.
+pub fn d3d11_swapchain_on(
+    adapter: Option<&IDXGIAdapter>,
+    driver: D3D_DRIVER_TYPE,
+    flags: D3D11_CREATE_DEVICE_FLAG,
+    levels: Option<&[D3D_FEATURE_LEVEL]>,
+    desc: &DXGI_SWAP_CHAIN_DESC,
+) -> Result<(ID3D11Device, ID3D11DeviceContext, IDXGISwapChain)> {
     let (mut chain, mut device, mut context) = (None, None, None);
     unsafe {
         D3D11CreateDeviceAndSwapChain(
-            None::<&IDXGIAdapter>,
+            adapter,
             driver,
             HMODULE::default(),
             flags,
-            None,
+            levels,
             D3D11_SDK_VERSION,
             Some(desc),
             Some(&mut chain),
