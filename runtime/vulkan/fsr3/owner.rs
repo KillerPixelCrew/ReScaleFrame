@@ -11,14 +11,13 @@
 //! signed SDK using bindings generated from the pinned Vulkan ABI.
 
 use std::ffi::{CStr, c_char, c_void};
+use std::io::Write as _;
 use std::mem::offset_of;
 use std::ptr::{self, NonNull};
 use std::sync::OnceLock;
 
 use rsf_game_sys::ffi_util::try_box;
 
-#[cfg(not(test))]
-mod exports;
 #[cfg(not(test))]
 #[path = "platform.rs"]
 mod platform_win32;
@@ -289,7 +288,8 @@ fn rsf_core_fsr3_sdk() -> *const Sdk {
 ///
 /// # Safety
 /// `runtime` is null or a loaded module.
-unsafe fn rsf_core_fsr3_open(runtime: Handle) -> i32 {
+#[unsafe(no_mangle)]
+extern "C" fn rsf_vk_fsr3_open(runtime: Handle) -> i32 {
     if runtime.is_null() {
         return -1;
     }
@@ -326,7 +326,8 @@ unsafe fn rsf_core_fsr3_open(runtime: Handle) -> i32 {
 ///
 /// # Safety
 /// Non-null outputs must be writable.
-unsafe fn rsf_core_fsr3_plan(
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_plan(
     display_width: u32,
     display_height: u32,
     quality: u32,
@@ -358,12 +359,9 @@ unsafe fn rsf_core_fsr3_plan(
 /// loader or the buffer-requirements entry is absent, or the SDK result.
 ///
 /// # Safety
-/// `request` and `result` are null or valid.
-unsafe fn rsf_core_fsr3_create(request: *const Request, result: *mut *mut Context) -> i32 {
+/// `result` is null or writable.
+unsafe fn create_sr(request: &Request, result: *mut *mut Context) -> i32 {
     let Some(sdk) = SDK.get() else {
-        return -1;
-    };
-    let Some(request) = (unsafe { request.as_ref() }) else {
         return -1;
     };
     if result.is_null()
@@ -399,6 +397,27 @@ unsafe fn rsf_core_fsr3_create(request: *const Request, result: *mut *mut Contex
     0
 }
 
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_create(
+    device: Handle,
+    physical: Handle,
+    render_width: u32,
+    render_height: u32,
+    width: u32,
+    height: u32,
+    result: *mut *mut Context,
+) -> i32 {
+    let request = Request {
+        device,
+        physical,
+        render_width,
+        render_height,
+        width,
+        height,
+    };
+    unsafe { create_sr(&request, result) }
+}
+
 /// Records SR with independent R8 reactive and composition masks.
 ///
 /// Returns the SDK result, -1 for a missing context or frame, and
@@ -406,7 +425,11 @@ unsafe fn rsf_core_fsr3_create(request: *const Request, result: *mut *mut Contex
 ///
 /// # Safety
 /// Non-null pointers must be a live context and a readable 184-byte frame.
-unsafe fn rsf_core_fsr3_evaluate(context: *mut Context, frame: *const Frame) -> i32 {
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_evaluate_with_composition(
+    context: *mut Context,
+    frame: *const Frame,
+) -> i32 {
     let (Some(context), Some(frame)) = (unsafe { context.as_ref() }, unsafe { frame.as_ref() })
     else {
         return -1;
@@ -432,8 +455,9 @@ unsafe fn rsf_core_fsr3_evaluate(context: *mut Context, frame: *const Frame) -> 
 /// the context attached.
 ///
 /// # Safety
-/// `context` is null or a live context from `rsf_core_fsr3_create`.
-unsafe fn rsf_core_fsr3_destroy(context: *mut Context) -> i32 {
+/// `context` is null or a live context from `create_sr`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_destroy(context: *mut Context) -> i32 {
     let Some(owner) = (unsafe { context.as_ref() }) else {
         return 0;
     };
@@ -500,16 +524,9 @@ unsafe fn has_context(swapchain: *mut Swapchain) -> bool {
 /// releasing the underlying device.
 ///
 /// # Safety
-/// `request` is valid with a null or
-/// readable `info`; `result` is null or writable.
-unsafe fn rsf_core_fsr3_swapchain_create(
-    request: *const WsiRequest,
-    result: *mut *mut Swapchain,
-) -> i32 {
+/// `request.info` is null or readable; `result` is null or writable.
+unsafe fn create_swapchain(request: &WsiRequest, result: *mut *mut Swapchain) -> i32 {
     let Some(sdk) = SDK.get() else {
-        return -1;
-    };
-    let Some(request) = (unsafe { request.as_ref() }) else {
         return -1;
     };
     if result.is_null() || !unsafe { request.admitted() } {
@@ -567,11 +584,38 @@ unsafe fn rsf_core_fsr3_swapchain_create(
     0
 }
 
+/// A failed rollback can return a cleanup-only owner for SwapchainDestroy.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_swapchain_create(
+    physical: Handle,
+    device: Handle,
+    game: Handle,
+    async_compute: Handle,
+    present: Handle,
+    acquire: Handle,
+    queue_family: u32,
+    info: *const u8,
+    result: *mut *mut Swapchain,
+) -> i32 {
+    let request = WsiRequest {
+        physical,
+        device,
+        game,
+        async_compute,
+        present,
+        acquire,
+        info,
+        queue_family,
+    };
+    unsafe { create_swapchain(&request, result) }
+}
+
 /// Returns the owner's current chain, or `VK_NULL_HANDLE` for null.
 ///
 /// # Safety
 /// `value` is null or a live swapchain owner.
-unsafe fn rsf_core_fsr3_swapchain_handle(value: *mut Swapchain) -> Vk {
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_swapchain_handle(value: *mut Swapchain) -> Vk {
     if value.is_null() {
         0
     } else {
@@ -584,7 +628,8 @@ unsafe fn rsf_core_fsr3_swapchain_handle(value: *mut Swapchain) -> Vk {
 ///
 /// # Safety
 /// `value` is null or a live owner; non-null `info` and `chain` are valid.
-unsafe fn rsf_core_fsr3_swapchain_recreate(
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_swapchain_recreate(
     value: *mut Swapchain,
     info: *const u8,
     chain: *mut Vk,
@@ -612,7 +657,8 @@ unsafe fn rsf_core_fsr3_swapchain_recreate(
 ///
 /// # Safety
 /// `value` is null or a live owner; the pointers follow the Vulkan contract.
-unsafe fn rsf_core_fsr3_swapchain_get_images(
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_swapchain_get_images(
     value: *mut Swapchain,
     chain: Vk,
     count: *mut u32,
@@ -639,7 +685,8 @@ unsafe fn rsf_core_fsr3_swapchain_get_images(
 ///
 /// # Safety
 /// `value` is null or a live owner; the handles follow the Vulkan contract.
-unsafe fn rsf_core_fsr3_swapchain_acquire(
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_swapchain_acquire(
     value: *mut Swapchain,
     chain: Vk,
     timeout: u64,
@@ -670,7 +717,8 @@ unsafe fn rsf_core_fsr3_swapchain_acquire(
 ///
 /// # Safety
 /// `value` is null or a live owner; `info` is null or a valid present info.
-unsafe fn rsf_core_fsr3_swapchain_present(
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_swapchain_present(
     value: *mut Swapchain,
     queue: Handle,
     info: *const c_void,
@@ -693,7 +741,11 @@ unsafe fn rsf_core_fsr3_swapchain_present(
 ///
 /// # Safety
 /// `value` is null or a live owner whose `active_fg` is null or live.
-unsafe fn rsf_core_fsr3_swapchain_prepare_destroy(value: *mut Swapchain, chain: Vk) -> i32 {
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_swapchain_prepare_destroy(
+    value: *mut Swapchain,
+    chain: Vk,
+) -> i32 {
     if chain == 0 {
         return 0;
     }
@@ -717,9 +769,13 @@ unsafe fn rsf_core_fsr3_swapchain_prepare_destroy(value: *mut Swapchain, chain: 
 /// the replacement destroy entry is absent.
 ///
 /// # Safety
-/// As `rsf_core_fsr3_swapchain_prepare_destroy`.
-unsafe fn rsf_core_fsr3_swapchain_destroy_chain(value: *mut Swapchain, chain: Vk) -> i32 {
-    let prepared = unsafe { rsf_core_fsr3_swapchain_prepare_destroy(value, chain) };
+/// As `rsf_vk_fsr3_swapchain_prepare_destroy`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_swapchain_destroy_chain_checked(
+    value: *mut Swapchain,
+    chain: Vk,
+) -> i32 {
+    let prepared = unsafe { rsf_vk_fsr3_swapchain_prepare_destroy(value, chain) };
     if prepared != 0 {
         return prepared;
     }
@@ -739,11 +795,26 @@ unsafe fn rsf_core_fsr3_swapchain_destroy_chain(value: *mut Swapchain, chain: Vk
     0
 }
 
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_swapchain_destroy_chain(value: *mut Swapchain, chain: Vk) {
+    let code = unsafe { rsf_vk_fsr3_swapchain_destroy_chain_checked(value, chain) };
+    if code != 0 {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "[FidelityFX] swapchain destruction retained ownership after error {code}"
+        );
+    }
+}
+
 /// Returns the SDK's present count, or zero without an owner, chain or entry.
 ///
 /// # Safety
 /// `value` is null or a live owner.
-unsafe fn rsf_core_fsr3_swapchain_last_present_count(value: *mut Swapchain, chain: Vk) -> u64 {
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_swapchain_last_present_count(
+    value: *mut Swapchain,
+    chain: Vk,
+) -> u64 {
     if value.is_null() || chain == 0 || unsafe { (*value).cleanup_only } {
         return 0;
     }
@@ -758,12 +829,13 @@ unsafe fn rsf_core_fsr3_swapchain_last_present_count(value: *mut Swapchain, chai
 ///
 /// # Safety
 /// `value` is null or a live owner whose `active_fg` is null or live.
-unsafe fn rsf_core_fsr3_swapchain_destroy(value: *mut Swapchain) -> i32 {
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_swapchain_destroy(value: *mut Swapchain) -> i32 {
     if value.is_null() {
         return 0;
     }
     unsafe {
-        let prepared = rsf_core_fsr3_swapchain_prepare_destroy(value, (*value).chain);
+        let prepared = rsf_vk_fsr3_swapchain_prepare_destroy(value, (*value).chain);
         if prepared != 0 {
             return prepared;
         }
@@ -791,15 +863,12 @@ unsafe fn rsf_core_fsr3_swapchain_destroy(value: *mut Swapchain) -> i32 {
 /// without the Vulkan loader, or the SDK result.
 ///
 /// # Safety
-/// `request` and `result` are null or valid.
-unsafe fn rsf_core_fsr3_fg_create(request: *const FgRequest, result: *mut *mut FgContext) -> i32 {
+/// `result` is null or writable.
+unsafe fn create_fg(request: &FgRequest, result: *mut *mut FgContext) -> i32 {
     let Some(sdk) = SDK.get() else {
         return -1;
     };
     let create = sdk.create;
-    let Some(request) = (unsafe { request.as_ref() }) else {
-        return -1;
-    };
     if result.is_null()
         || request.device.is_null()
         || request.physical.is_null()
@@ -834,6 +903,25 @@ unsafe fn rsf_core_fsr3_fg_create(request: *const FgRequest, result: *mut *mut F
     }
     unsafe { result.write(Box::into_raw(owner)) };
     0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_fg_create(
+    device: Handle,
+    physical: Handle,
+    width: u32,
+    height: u32,
+    back_buffer_format: i32,
+    result: *mut *mut FgContext,
+) -> i32 {
+    let request = FgRequest {
+        device,
+        physical,
+        width,
+        height,
+        back_buffer_format,
+    };
+    unsafe { create_fg(&request, result) }
 }
 
 /// Disables proxy interpolation, drains the linked chain's presents and
@@ -890,7 +978,11 @@ unsafe fn fg_disable(context: *mut FgContext) -> i32 {
 ///
 /// # Safety
 /// As `fg_disable`.
-unsafe fn rsf_core_fsr3_fg_disable(context: *mut FgContext, _swapchain: *mut Swapchain) -> i32 {
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_fg_disable(
+    context: *mut FgContext,
+    _swapchain: *mut Swapchain,
+) -> i32 {
     unsafe { fg_disable(context) }
 }
 
@@ -905,7 +997,11 @@ unsafe fn rsf_core_fsr3_fg_disable(context: *mut FgContext, _swapchain: *mut Swa
 /// # Safety
 /// `context` is null or a live owner; `frame` is null or a readable 248-byte
 /// record whose `swapchain_context` is null or a live swapchain owner.
-unsafe fn rsf_core_fsr3_fg_evaluate(context: *mut FgContext, frame: *const FgFrame) -> i32 {
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_fg_evaluate(
+    context: *mut FgContext,
+    frame: *const FgFrame,
+) -> i32 {
     let Some(record) = (unsafe { frame.as_ref() }) else {
         return -1;
     };
@@ -967,11 +1063,15 @@ unsafe fn rsf_core_fsr3_fg_evaluate(context: *mut FgContext, frame: *const FgFra
 /// Returns -1 for a null frame or a non-null `swapchain_context`.
 ///
 /// # Safety
-/// As `rsf_core_fsr3_fg_evaluate`.
-unsafe fn rsf_core_fsr3_fg_evaluate_direct(context: *mut FgContext, frame: *const FgFrame) -> i32 {
+/// As `rsf_vk_fsr3_fg_evaluate`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_fg_evaluate_direct(
+    context: *mut FgContext,
+    frame: *const FgFrame,
+) -> i32 {
     match unsafe { frame.as_ref() } {
         Some(record) if record.swapchain_context.is_null() => unsafe {
-            rsf_core_fsr3_fg_evaluate(context, frame)
+            rsf_vk_fsr3_fg_evaluate(context, frame)
         },
         _ => -1,
     }
@@ -984,7 +1084,8 @@ unsafe fn rsf_core_fsr3_fg_evaluate_direct(context: *mut FgContext, frame: *cons
 ///
 /// # Safety
 /// `context` is null or a live owner; the host has retired direct-mode work.
-unsafe fn rsf_core_fsr3_fg_destroy(context: *mut FgContext) -> i32 {
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vk_fsr3_fg_destroy(context: *mut FgContext) -> i32 {
     if context.is_null() {
         return 0;
     }
@@ -1468,40 +1569,43 @@ mod tests {
         let none = ptr::null_mut::<Swapchain>();
         unsafe {
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
+                create_swapchain(&wsi_request(&info, 0x30), &mut swapchain),
                 -1
             );
-            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(8), &mut context), -1);
+            assert_eq!(create_fg(&fg_request(8), &mut context), -1);
             assert_eq!(
-                rsf_core_fsr3_fg_evaluate(context, &fg_frame(none, 1.0, R8G8B8A8_UNORM)),
+                rsf_vk_fsr3_fg_evaluate(context, &fg_frame(none, 1.0, R8G8B8A8_UNORM)),
                 -1
             );
-            assert_eq!(rsf_core_fsr3_fg_evaluate_direct(context, ptr::null()), -1);
-            assert_eq!(rsf_core_fsr3_swapchain_handle(none), 0);
+            assert_eq!(rsf_vk_fsr3_fg_evaluate_direct(context, ptr::null()), -1);
+            assert_eq!(rsf_vk_fsr3_swapchain_handle(none), 0);
             assert_eq!(
-                rsf_core_fsr3_swapchain_recreate(none, info.as_ptr().cast(), &mut chain),
+                rsf_vk_fsr3_swapchain_recreate(none, info.as_ptr().cast(), &mut chain),
                 VK_ERROR_INITIALIZATION_FAILED
             );
             assert_eq!(
-                rsf_core_fsr3_swapchain_get_images(none, CHAIN_A, &mut count, ptr::null_mut()),
+                rsf_vk_fsr3_swapchain_get_images(none, CHAIN_A, &mut count, ptr::null_mut()),
                 VK_ERROR_INITIALIZATION_FAILED
             );
             assert_eq!(
-                rsf_core_fsr3_swapchain_acquire(none, CHAIN_A, u64::MAX, 0, 0, &mut count),
+                rsf_vk_fsr3_swapchain_acquire(none, CHAIN_A, u64::MAX, 0, 0, &mut count),
                 VK_ERROR_INITIALIZATION_FAILED
             );
             assert_eq!(
-                rsf_core_fsr3_swapchain_present(none, mark(0), info.as_ptr().cast()),
+                rsf_vk_fsr3_swapchain_present(none, mark(0), info.as_ptr().cast()),
                 VK_ERROR_INITIALIZATION_FAILED
             );
-            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(none, 0), 0);
-            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(none, CHAIN_A), -1);
-            assert_eq!(rsf_core_fsr3_swapchain_destroy_chain(none, 0), 0);
-            assert_eq!(rsf_core_fsr3_swapchain_destroy_chain(none, CHAIN_A), -1);
-            assert_eq!(rsf_core_fsr3_swapchain_last_present_count(none, CHAIN_A), 0);
-            assert_eq!(rsf_core_fsr3_swapchain_destroy(none), 0);
-            assert_eq!(rsf_core_fsr3_fg_disable(ptr::null_mut(), none), 0);
-            assert_eq!(rsf_core_fsr3_fg_destroy(ptr::null_mut()), 0);
+            assert_eq!(rsf_vk_fsr3_swapchain_prepare_destroy(none, 0), 0);
+            assert_eq!(rsf_vk_fsr3_swapchain_prepare_destroy(none, CHAIN_A), -1);
+            assert_eq!(rsf_vk_fsr3_swapchain_destroy_chain_checked(none, 0), 0);
+            assert_eq!(
+                rsf_vk_fsr3_swapchain_destroy_chain_checked(none, CHAIN_A),
+                -1
+            );
+            assert_eq!(rsf_vk_fsr3_swapchain_last_present_count(none, CHAIN_A), 0);
+            assert_eq!(rsf_vk_fsr3_swapchain_destroy(none), 0);
+            assert_eq!(rsf_vk_fsr3_fg_disable(ptr::null_mut(), none), 0);
+            assert_eq!(rsf_vk_fsr3_fg_destroy(ptr::null_mut()), 0);
         }
         assert!(swapchain.is_null() && context.is_null());
         assert!(take_log().is_empty());
@@ -1520,34 +1624,31 @@ mod tests {
             // Refusals before `result` is cleared.
             info[12] = 0x99;
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
+                create_swapchain(&wsi_request(&info, 0x30), &mut swapchain),
                 -1
             );
             info[12] = 0;
-            assert_eq!(
-                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0), &mut swapchain),
-                -1
-            );
+            assert_eq!(create_swapchain(&wsi_request(&info, 0), &mut swapchain), -1);
             assert_eq!(swapchain, sentinel);
 
             // SDK failures clear `result`, release partial owners, and release
             // the context after a failed or incomplete query.
             fail_next("wsi_create", 9);
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
+                create_swapchain(&wsi_request(&info, 0x30), &mut swapchain),
                 9
             );
             assert!(swapchain.is_null());
             assert_eq!(take_log(), ["wsi_create"]);
             fail_next("wsi_query", 4);
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
+                create_swapchain(&wsi_request(&info, 0x30), &mut swapchain),
                 4
             );
             assert_eq!(take_log(), ["wsi_create", "wsi_query", "wsi_destroy"]);
             INCOMPLETE.store(true, Ordering::SeqCst);
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
+                create_swapchain(&wsi_request(&info, 0x30), &mut swapchain),
                 -3
             );
             INCOMPLETE.store(false, Ordering::SeqCst);
@@ -1557,17 +1658,17 @@ mod tests {
             fail_next("wsi_query", 4);
             fail_next("wsi_destroy", 11);
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
+                create_swapchain(&wsi_request(&info, 0x30), &mut swapchain),
                 4
             );
             assert!(!swapchain.is_null());
             assert_eq!(LIVE_WSI.load(Ordering::SeqCst), 1);
-            assert_eq!(rsf_core_fsr3_swapchain_handle(swapchain), 0);
+            assert_eq!(rsf_vk_fsr3_swapchain_handle(swapchain), 0);
             assert_eq!(
-                rsf_core_fsr3_swapchain_recreate(swapchain, info.as_ptr().cast(), &mut chain),
+                rsf_vk_fsr3_swapchain_recreate(swapchain, info.as_ptr().cast(), &mut chain),
                 VK_ERROR_INITIALIZATION_FAILED
             );
-            assert_eq!(rsf_core_fsr3_swapchain_destroy(swapchain), 0);
+            assert_eq!(rsf_vk_fsr3_swapchain_destroy(swapchain), 0);
             assert_eq!(
                 take_log(),
                 ["wsi_create", "wsi_query", "wsi_destroy", "wsi_destroy"]
@@ -1575,47 +1676,47 @@ mod tests {
             assert_eq!(LIVE_WSI.load(Ordering::SeqCst), 0);
 
             assert_eq!(
-                rsf_core_fsr3_swapchain_create(&wsi_request(&info, 0x30), &mut swapchain),
+                create_swapchain(&wsi_request(&info, 0x30), &mut swapchain),
                 0
             );
             assert_eq!(take_log(), ["wsi_create", "wsi_query"]);
             let sw = swapchain;
-            assert_eq!(rsf_core_fsr3_swapchain_handle(sw), CHAIN_A);
+            assert_eq!(rsf_vk_fsr3_swapchain_handle(sw), CHAIN_A);
 
             // Pass-throughs; a failed recreate keeps the current chain.
             fail_next("wsi_recreate", VK_ERROR_OUT_OF_DATE);
             assert_eq!(
-                rsf_core_fsr3_swapchain_recreate(sw, info.as_ptr().cast(), &mut chain),
+                rsf_vk_fsr3_swapchain_recreate(sw, info.as_ptr().cast(), &mut chain),
                 VK_ERROR_OUT_OF_DATE
             );
-            assert_eq!(rsf_core_fsr3_swapchain_handle(sw), CHAIN_A);
+            assert_eq!(rsf_vk_fsr3_swapchain_handle(sw), CHAIN_A);
             assert_eq!(
-                rsf_core_fsr3_swapchain_get_images(sw, CHAIN_A, &mut count, ptr::null_mut()),
+                rsf_vk_fsr3_swapchain_get_images(sw, CHAIN_A, &mut count, ptr::null_mut()),
                 0
             );
             assert_eq!(count, 3);
             assert_eq!(
-                rsf_core_fsr3_swapchain_get_images(sw, CHAIN_A, ptr::null_mut(), ptr::null_mut()),
+                rsf_vk_fsr3_swapchain_get_images(sw, CHAIN_A, ptr::null_mut(), ptr::null_mut()),
                 VK_ERROR_INITIALIZATION_FAILED
             );
             assert_eq!(
-                rsf_core_fsr3_swapchain_acquire(sw, CHAIN_A, u64::MAX, 0, 0, &mut index),
+                rsf_vk_fsr3_swapchain_acquire(sw, CHAIN_A, u64::MAX, 0, 0, &mut index),
                 0
             );
             assert_eq!(index, 1);
             assert_eq!(
-                rsf_core_fsr3_swapchain_present(sw, mark(0), ptr::null()),
+                rsf_vk_fsr3_swapchain_present(sw, mark(0), ptr::null()),
                 VK_ERROR_INITIALIZATION_FAILED
             );
             assert_eq!(
-                rsf_core_fsr3_swapchain_present(sw, mark(0), info.as_ptr().cast()),
+                rsf_vk_fsr3_swapchain_present(sw, mark(0), info.as_ptr().cast()),
                 0
             );
             assert_eq!(
-                rsf_core_fsr3_swapchain_last_present_count(sw, CHAIN_A),
+                rsf_vk_fsr3_swapchain_last_present_count(sw, CHAIN_A),
                 CHAIN_A + 1
             );
-            assert_eq!(rsf_core_fsr3_swapchain_last_present_count(sw, 0), 0);
+            assert_eq!(rsf_vk_fsr3_swapchain_last_present_count(sw, 0), 0);
             assert_eq!(
                 take_log(),
                 [
@@ -1627,14 +1728,14 @@ mod tests {
             );
 
             // Interpolation creation refusals leave `result` unwritten.
-            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(0), &mut context), -1);
+            assert_eq!(create_fg(&fg_request(0), &mut context), -1);
             fail_next("fg_bind_vulkan", 1);
-            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(8), &mut context), -3);
+            assert_eq!(create_fg(&fg_request(8), &mut context), -3);
             fail_next("fg_create", 7);
-            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(8), &mut context), 7);
+            assert_eq!(create_fg(&fg_request(8), &mut context), 7);
             assert!(context.is_null());
             assert_eq!(LIVE_FG.load(Ordering::SeqCst), 0);
-            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(8), &mut context), 0);
+            assert_eq!(create_fg(&fg_request(8), &mut context), 0);
             let fg = context;
             assert_eq!(
                 take_log(),
@@ -1649,17 +1750,17 @@ mod tests {
 
             // Direct admission and evaluation.
             let none = ptr::null_mut();
-            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &fg_frame(none, 1.0, 97)), -2);
+            assert_eq!(rsf_vk_fsr3_fg_evaluate(fg, &fg_frame(none, 1.0, 97)), -2);
             let mut narrow = fg_frame(none, 1.0, R8G8B8A8_UNORM);
             narrow.output.width = 4;
-            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &narrow), -2);
+            assert_eq!(rsf_vk_fsr3_fg_evaluate(fg, &narrow), -2);
             assert_eq!(
-                rsf_core_fsr3_fg_evaluate_direct(fg, &fg_frame(sw, 1.0, R8G8B8A8_UNORM)),
+                rsf_vk_fsr3_fg_evaluate_direct(fg, &fg_frame(sw, 1.0, R8G8B8A8_UNORM)),
                 -1
             );
             assert!(take_log().is_empty());
             assert_eq!(
-                rsf_core_fsr3_fg_evaluate_direct(fg, &fg_frame(none, 0.0, R8G8B8A8_UNORM)),
+                rsf_vk_fsr3_fg_evaluate_direct(fg, &fg_frame(none, 0.0, R8G8B8A8_UNORM)),
                 0
             );
             assert_eq!(
@@ -1673,30 +1774,30 @@ mod tests {
 
             // Proxy evaluation links the pair and registers UI.
             let proxy = fg_frame(sw, 2.5, R8G8B8A8_UNORM);
-            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &proxy), 0);
+            assert_eq!(rsf_vk_fsr3_fg_evaluate(fg, &proxy), 0);
             assert_eq!(
                 take_log(),
                 ["fg_configure_proxy", "fg_prepare", "wsi_register_ui"]
             );
             let mut contender = ptr::null_mut();
-            assert_eq!(rsf_core_fsr3_fg_create(&fg_request(8), &mut contender), 0);
+            assert_eq!(create_fg(&fg_request(8), &mut contender), 0);
             assert_eq!(take_log(), ["fg_bind_vulkan", "fg_create"]);
-            assert_eq!(rsf_core_fsr3_fg_evaluate(contender, &proxy), -2);
-            assert_eq!(rsf_core_fsr3_fg_destroy(contender), 0);
+            assert_eq!(rsf_vk_fsr3_fg_evaluate(contender, &proxy), -2);
+            assert_eq!(rsf_vk_fsr3_fg_destroy(contender), 0);
             assert_eq!(take_log(), ["fg_destroy"]);
             // Another chain drains without disabling.
-            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(sw, 0x77), 0);
+            assert_eq!(rsf_vk_fsr3_swapchain_prepare_destroy(sw, 0x77), 0);
             assert_eq!(take_log(), ["wsi_wait"]);
             // Failed drain or UI release keeps the link.
             fail_next("wsi_wait", 6);
-            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(sw, CHAIN_A), 6);
+            assert_eq!(rsf_vk_fsr3_swapchain_prepare_destroy(sw, CHAIN_A), 6);
             assert_eq!(take_log(), ["fg_disable", "wsi_wait"]);
             fail_next("wsi_clear_ui", 8);
-            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(sw, CHAIN_A), 8);
+            assert_eq!(rsf_vk_fsr3_swapchain_prepare_destroy(sw, CHAIN_A), 8);
             assert_eq!(take_log(), ["fg_disable", "wsi_wait", "wsi_clear_ui"]);
             // A direct frame first disables the linked proxy.
             assert_eq!(
-                rsf_core_fsr3_fg_evaluate(fg, &fg_frame(none, 1.0, R8G8B8A8_UNORM)),
+                rsf_vk_fsr3_fg_evaluate(fg, &fg_frame(none, 1.0, R8G8B8A8_UNORM)),
                 0
             );
             assert_eq!(
@@ -1710,21 +1811,21 @@ mod tests {
                     "fg_generate"
                 ]
             );
-            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(sw, CHAIN_A), 0);
+            assert_eq!(rsf_vk_fsr3_swapchain_prepare_destroy(sw, CHAIN_A), 0);
             assert_eq!(take_log(), ["wsi_wait"]);
 
             // Recreate must retire the old pairing before changing chains.
-            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &proxy), 0);
+            assert_eq!(rsf_vk_fsr3_fg_evaluate(fg, &proxy), 0);
             take_log();
             fail_next("wsi_wait", 6);
             assert_eq!(
-                rsf_core_fsr3_swapchain_recreate(sw, info.as_ptr().cast(), &mut chain),
+                rsf_vk_fsr3_swapchain_recreate(sw, info.as_ptr().cast(), &mut chain),
                 VK_ERROR_INITIALIZATION_FAILED
             );
-            assert_eq!(rsf_core_fsr3_swapchain_handle(sw), CHAIN_A);
+            assert_eq!(rsf_vk_fsr3_swapchain_handle(sw), CHAIN_A);
             assert_eq!(take_log(), ["fg_disable", "wsi_wait"]);
             assert_eq!(
-                rsf_core_fsr3_swapchain_recreate(sw, info.as_ptr().cast(), &mut chain),
+                rsf_vk_fsr3_swapchain_recreate(sw, info.as_ptr().cast(), &mut chain),
                 0
             );
             assert_eq!(
@@ -1732,41 +1833,41 @@ mod tests {
                 ["fg_disable", "wsi_wait", "wsi_clear_ui", "wsi_recreate"]
             );
             assert_eq!(
-                (chain, rsf_core_fsr3_swapchain_handle(sw)),
+                (chain, rsf_vk_fsr3_swapchain_handle(sw)),
                 (CHAIN_B, CHAIN_B)
             );
-            assert_eq!(rsf_core_fsr3_fg_disable(fg, none), 0);
+            assert_eq!(rsf_vk_fsr3_fg_disable(fg, none), 0);
             assert!(take_log().is_empty());
-            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &proxy), 0);
+            assert_eq!(rsf_vk_fsr3_fg_evaluate(fg, &proxy), 0);
             take_log();
 
             // Destroying the old chain neither disables nor clears the current one.
-            assert_eq!(rsf_core_fsr3_swapchain_destroy_chain(sw, CHAIN_A), 0);
+            assert_eq!(rsf_vk_fsr3_swapchain_destroy_chain_checked(sw, CHAIN_A), 0);
             assert_eq!(take_log(), ["wsi_wait", "wsi_destroy_chain"]);
-            assert_eq!(rsf_core_fsr3_swapchain_handle(sw), CHAIN_B);
+            assert_eq!(rsf_vk_fsr3_swapchain_handle(sw), CHAIN_B);
 
             // A failed context release keeps the swapchain owner after the
             // linked interpolation was disabled and the chain drained.
             fail_next("wsi_destroy", 11);
-            assert_eq!(rsf_core_fsr3_swapchain_destroy(sw), 11);
+            assert_eq!(rsf_vk_fsr3_swapchain_destroy(sw), 11);
             assert_eq!(
                 take_log(),
                 ["fg_disable", "wsi_wait", "wsi_clear_ui", "wsi_destroy"]
             );
             assert_eq!(LIVE_WSI.load(Ordering::SeqCst), 1);
-            assert_eq!(rsf_core_fsr3_swapchain_destroy_chain(sw, CHAIN_B), 0);
-            assert_eq!(rsf_core_fsr3_swapchain_handle(sw), 0);
-            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &proxy), -2);
+            assert_eq!(rsf_vk_fsr3_swapchain_destroy_chain_checked(sw, CHAIN_B), 0);
+            assert_eq!(rsf_vk_fsr3_swapchain_handle(sw), 0);
+            assert_eq!(rsf_vk_fsr3_fg_evaluate(fg, &proxy), -2);
             take_log();
             // With no chain left, retirement skips the drain.
-            assert_eq!(rsf_core_fsr3_swapchain_destroy(sw), 0);
+            assert_eq!(rsf_vk_fsr3_swapchain_destroy(sw), 0);
             assert_eq!(take_log(), ["wsi_destroy"]);
             assert_eq!(LIVE_WSI.load(Ordering::SeqCst), 0);
 
             fail_next("fg_destroy", 12);
-            assert_eq!(rsf_core_fsr3_fg_destroy(fg), 12);
+            assert_eq!(rsf_vk_fsr3_fg_destroy(fg), 12);
             assert_eq!(LIVE_FG.load(Ordering::SeqCst), 1);
-            assert_eq!(rsf_core_fsr3_fg_destroy(fg), 0);
+            assert_eq!(rsf_vk_fsr3_fg_destroy(fg), 0);
             assert_eq!(take_log(), ["fg_destroy", "fg_destroy"]);
             assert_eq!(LIVE_FG.load(Ordering::SeqCst), 0);
         }
@@ -1780,51 +1881,50 @@ mod tests {
         unsafe {
             // Unbound: every SDK-dependent entry refuses with -1.
             assert!(rsf_core_fsr3_sdk().read().module.is_null());
-            assert_eq!(rsf_core_fsr3_plan(8, 8, 2, &mut width, &mut height), -1);
-            assert_eq!(rsf_core_fsr3_create(&request(1, 8), &mut context), -1);
+            assert_eq!(rsf_vk_fsr3_plan(8, 8, 2, &mut width, &mut height), -1);
+            assert_eq!(create_sr(&request(1, 8), &mut context), -1);
             assert_eq!(
-                rsf_core_fsr3_evaluate(ptr::null_mut(), &frame(1.0, R8_UNORM)),
+                rsf_vk_fsr3_evaluate_with_composition(ptr::null_mut(), &frame(1.0, R8_UNORM)),
                 -1
             );
-            assert_eq!(rsf_core_fsr3_destroy(ptr::null_mut()), 0);
+            assert_eq!(rsf_vk_fsr3_destroy(ptr::null_mut()), 0);
             fg_wsi_unbound();
 
-            assert_eq!(rsf_core_fsr3_open(ptr::null_mut()), -1);
-            assert_eq!(rsf_core_fsr3_open(MISSING_CONFIGURE as Handle), -2);
+            assert_eq!(rsf_vk_fsr3_open(ptr::null_mut()), -1);
+            assert_eq!(rsf_vk_fsr3_open(MISSING_CONFIGURE as Handle), -2);
             assert!(rsf_core_fsr3_sdk().read().module.is_null());
-            assert_eq!(rsf_core_fsr3_open(0x1000 as Handle), 0);
-            assert_eq!(rsf_core_fsr3_open(0x3000 as Handle), -2);
+            assert_eq!(rsf_vk_fsr3_open(0x1000 as Handle), 0);
+            assert_eq!(rsf_vk_fsr3_open(0x3000 as Handle), -2);
             let bound = rsf_core_fsr3_sdk().read();
             assert_eq!(bound.module as usize, 0x1000);
             assert_eq!(bound.configure, mark(5));
 
-            assert_eq!(rsf_core_fsr3_plan(8, 8, 2, &mut width, ptr::null_mut()), -1);
-            assert_eq!(rsf_core_fsr3_plan(8, 6, 2, &mut width, &mut height), 0);
+            assert_eq!(rsf_vk_fsr3_plan(8, 8, 2, &mut width, ptr::null_mut()), -1);
+            assert_eq!(rsf_vk_fsr3_plan(8, 6, 2, &mut width, &mut height), 0);
             assert_eq!((width, height), (4, 3));
 
             // Refusals leave the output slot unwritten and free partial owners.
-            assert_eq!(rsf_core_fsr3_create(&request(1, 0), &mut context), -1);
-            assert_eq!(rsf_core_fsr3_create(ptr::null(), &mut context), -1);
-            assert_eq!(rsf_core_fsr3_create(&request(1, 8), ptr::null_mut()), -1);
+            assert_eq!(create_sr(&request(1, 0), &mut context), -1);
+            assert_eq!(create_sr(&request(1, 8), ptr::null_mut()), -1);
+            assert_eq!(create_sr(&request(NO_LOADER, 8), &mut context), -3);
             assert_eq!(
-                rsf_core_fsr3_create(&request(NO_LOADER, 8), &mut context),
+                create_sr(&request(NO_BUFFER_REQUIREMENTS, 8), &mut context),
                 -3
             );
-            assert_eq!(
-                rsf_core_fsr3_create(&request(NO_BUFFER_REQUIREMENTS, 8), &mut context),
-                -3
-            );
-            assert_eq!(
-                rsf_core_fsr3_create(&request(1, SDK_REFUSES), &mut context),
-                7
-            );
+            assert_eq!(create_sr(&request(1, SDK_REFUSES), &mut context), 7);
             assert!(context.is_null());
             assert_eq!(LIVE.load(Ordering::SeqCst), 0);
 
-            assert_eq!(rsf_core_fsr3_create(&request(1, 8), &mut context), 0);
+            assert_eq!(create_sr(&request(1, 8), &mut context), 0);
             assert!(!context.is_null());
-            assert_eq!(rsf_core_fsr3_evaluate(context, ptr::null()), -1);
-            assert_eq!(rsf_core_fsr3_evaluate(context, &frame(1.0, 37)), -2);
+            assert_eq!(
+                rsf_vk_fsr3_evaluate_with_composition(context, ptr::null()),
+                -1
+            );
+            assert_eq!(
+                rsf_vk_fsr3_evaluate_with_composition(context, &frame(1.0, 37)),
+                -2
+            );
             assert_eq!(EVALUATIONS.load(Ordering::SeqCst), 0);
             for (delta, expected) in [
                 (2.5, 2.5),
@@ -1832,7 +1932,10 @@ mod tests {
                 (-1.0, DEFAULT_FRAME_TIME_MS),
                 (f32::NAN, DEFAULT_FRAME_TIME_MS),
             ] {
-                assert_eq!(rsf_core_fsr3_evaluate(context, &frame(delta, R8_UNORM)), 0);
+                assert_eq!(
+                    rsf_vk_fsr3_evaluate_with_composition(context, &frame(delta, R8_UNORM)),
+                    0
+                );
                 assert_eq!(
                     f32::from_bits(FRAME_TIME_BITS.load(Ordering::SeqCst)),
                     expected
@@ -1841,10 +1944,10 @@ mod tests {
 
             // A failed SDK release keeps the owner attached for a retry.
             FAIL_DESTROY.store(true, Ordering::SeqCst);
-            assert_eq!(rsf_core_fsr3_destroy(context), 5);
+            assert_eq!(rsf_vk_fsr3_destroy(context), 5);
             assert_eq!(LIVE.load(Ordering::SeqCst), 1);
             FAIL_DESTROY.store(false, Ordering::SeqCst);
-            assert_eq!(rsf_core_fsr3_destroy(context), 0);
+            assert_eq!(rsf_vk_fsr3_destroy(context), 0);
             assert_eq!(LIVE.load(Ordering::SeqCst), 0);
         }
         fg_wsi_bound();
