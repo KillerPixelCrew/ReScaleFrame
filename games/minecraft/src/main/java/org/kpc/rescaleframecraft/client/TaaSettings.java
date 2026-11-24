@@ -59,11 +59,6 @@ public final class TaaSettings {
         sharpening_depth_bias=Math.clamp(sharpening_depth_bias,0,1000000);
     }
     public float[] sharpening() { return new float[]{sharpeningMode.ordinal(),sharpening_sharpness/1000.0f,sharpening_mas?1f:0f,sharpening_motion_sharpness/1000.0f,sharpening_motion_threshold/1000.0f,sharpening_motion_scale_limit/1000.0f,sharpening_contrast_enabled?1f:0f,sharpening_contrast/1000.0f,sharpening_depth_scale/1000.0f,sharpening_depth_bias/1000000.0f,sharpening_clamp_output?1f:0f,sharpening_debug?1f:0f}; }
-    public record SharpeningState(Sharpener mode,int sharpness,boolean mas,int motion_sharpness,int motion_threshold,int motion_scale_limit,boolean contrast_enabled,int contrast,int depth_scale,int depth_bias,boolean clamp_output,boolean debug) {
-        public boolean matches(TaaSettings settings) { return mode==settings.sharpeningMode&&
-            sharpness==settings.sharpening_sharpness&&mas==settings.sharpening_mas&&motion_sharpness==settings.sharpening_motion_sharpness&&motion_threshold==settings.sharpening_motion_threshold&&motion_scale_limit==settings.sharpening_motion_scale_limit&&contrast_enabled==settings.sharpening_contrast_enabled&&contrast==settings.sharpening_contrast&&depth_scale==settings.sharpening_depth_scale&&depth_bias==settings.sharpening_depth_bias&&clamp_output==settings.sharpening_clamp_output&&debug==settings.sharpening_debug; }
-    }
-    public SharpeningState sharpeningState() { return new SharpeningState(sharpeningMode,sharpening_sharpness,sharpening_mas,sharpening_motion_sharpness,sharpening_motion_threshold,sharpening_motion_scale_limit,sharpening_contrast_enabled,sharpening_contrast,sharpening_depth_scale,sharpening_depth_bias,sharpening_clamp_output,sharpening_debug); }
     public static void load() {
         Path FILE=file();
         if(Files.exists(FILE)) {
