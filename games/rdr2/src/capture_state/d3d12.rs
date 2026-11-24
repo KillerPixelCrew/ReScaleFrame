@@ -2,7 +2,7 @@
 //! Win32 graphics leaves for leased capture copies and completion.
 use super::artifacts::write_image;
 use super::gpu_leases::{
-    Ops, ReadbackLeases, gpu_adopt, gpu_arm_backbuffers, gpu_bind_fence, gpu_selected,
+    ReadbackLeases, gpu_adopt, gpu_arm_backbuffers, gpu_bind_fence, gpu_selected,
 };
 use super::metadata::PresentationDesc;
 use super::shots::Image;
@@ -17,24 +17,13 @@ use windows::Win32::Graphics::{
 use windows::core::{IUnknown, Interface};
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
-static GPU_OPS: Ops = Ops {
-    retain,
-    release,
-    create_fence,
-    signal,
-    get_buffer,
-};
-
-pub(super) fn d3d12_ops() -> &'static Ops {
-    &GPU_OPS
-}
-
-unsafe extern "C" fn retain(object: *mut c_void) {
+// The COM leaves gpu_leases calls (its tests swap in no-op fakes).
+pub(super) unsafe fn retain(object: *mut c_void) {
     let object = unsafe { IUnknown::from_raw_borrowed(&object) }.expect("live capture object");
     std::mem::forget(IUnknown::clone(object));
 }
 
-unsafe extern "C" fn release(object: *mut c_void) {
+pub(super) unsafe fn release(object: *mut c_void) {
     drop(unsafe { IUnknown::from_raw(object) });
 }
 
@@ -44,7 +33,7 @@ unsafe fn device(child: &ID3D12DeviceChild) -> Option<ID3D12Device> {
     device
 }
 
-unsafe extern "C" fn create_fence(queue: *mut c_void) -> *mut c_void {
+pub(super) unsafe fn create_fence(queue: *mut c_void) -> *mut c_void {
     let queue = unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) };
     queue
         .and_then(|queue| unsafe { device(queue) })
@@ -54,7 +43,7 @@ unsafe extern "C" fn create_fence(queue: *mut c_void) -> *mut c_void {
         .map_or_else(null_mut, Interface::into_raw)
 }
 
-unsafe extern "C" fn signal(queue: *mut c_void, fence: *mut c_void, value: u64) -> bool {
+pub(super) unsafe fn signal_fence(queue: *mut c_void, fence: *mut c_void, value: u64) -> bool {
     let queue = unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) };
     let fence = unsafe { ID3D12Fence::from_raw_borrowed(&fence) };
     queue
@@ -62,7 +51,7 @@ unsafe extern "C" fn signal(queue: *mut c_void, fence: *mut c_void, value: u64) 
         .is_some_and(|(queue, fence)| unsafe { queue.Signal(fence, value) }.is_ok())
 }
 
-unsafe extern "C" fn get_buffer(chain: *mut c_void, index: u32) -> *mut c_void {
+pub(super) unsafe fn get_buffer(chain: *mut c_void, index: u32) -> *mut c_void {
     unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }
         .and_then(|chain| unsafe { chain.GetBuffer::<ID3D12Resource>(index) }.ok())
         .map_or_else(null_mut, Interface::into_raw)
@@ -207,7 +196,7 @@ pub(super) unsafe fn d3d12_copy(
         let Some(buffer) = buffer else {
             return false;
         };
-        if !gpu_adopt(leases, buffer.into_raw(), &GPU_OPS) {
+        if !gpu_adopt(leases, buffer.into_raw()) {
             return false;
         }
     }
@@ -317,7 +306,7 @@ pub(super) unsafe fn d3d12_present(
     };
     let identity = swapchain.cast::<IUnknown>().ok();
     let identity = identity.as_ref().map_or(chain, Interface::as_raw);
-    if !unsafe { gpu_arm_backbuffers(owner, chain, desc.BufferCount, &GPU_OPS) } {
+    if !unsafe { gpu_arm_backbuffers(owner, chain, desc.BufferCount) } {
         return false;
     }
     let descriptor = PresentationDesc {

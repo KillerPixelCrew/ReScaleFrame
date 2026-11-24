@@ -3,7 +3,7 @@
 #[cfg(any(windows, test))]
 use super::gpu_leases::{Gpu, take_idle};
 use super::gpu_leases::{
-    NO_SIGNAL_NEEDED, Ops, ReadbackLeases, SIGNAL_ACCEPTED, Signal, bind_queue, gpu_bind_fence,
+    NO_SIGNAL_NEEDED, ReadbackLeases, SIGNAL_ACCEPTED, Signal, bind_queue, gpu_bind_fence,
     select_target, signal,
 };
 use super::metadata::{InputId, RESOURCE_COUNT, RESOURCE_ROLES};
@@ -312,7 +312,7 @@ unsafe fn claim_submission(
 
 /// The native submission stack pairs the same queue and receipt after the original call.
 /// A successful signal also covers older unfenced receipts already submitted to that queue.
-pub(super) unsafe fn after_submit(owner: &Capture, queue: *mut c_void, ops: &Ops) -> u32 {
+pub(super) unsafe fn after_submit(owner: &Capture, queue: *mut c_void) -> u32 {
     // Release the TLS borrow before signalling: the native leaf can reenter the observer.
     let call = QUEUE_CALLS.with_borrow_mut(|calls| {
         if calls.refused != 0 {
@@ -329,14 +329,13 @@ pub(super) unsafe fn after_submit(owner: &Capture, queue: *mut c_void, ops: &Ops
         Err(result) => return result,
     };
     let snapshot = call.as_ref().map_or(ptr::null_mut(), |call| call.snapshot);
-    unsafe { finish_submission(owner, queue, snapshot, ops) }
+    unsafe { finish_submission(owner, queue, snapshot) }
 }
 
 unsafe fn finish_submission(
     owner: &Capture,
     queue: *mut c_void,
     submission: *mut Submission,
-    ops: &Ops,
 ) -> u32 {
     let serial = unsafe { apply_submission(owner, submission) };
     let pending = &mut unsafe { &mut *owner.shots.get() }.pending;
@@ -357,7 +356,7 @@ unsafe fn finish_submission(
         fence: ptr::null_mut(),
         value: 0,
     };
-    let result = unsafe { signal(owner, queue, ops, &mut proof) };
+    let result = unsafe { signal(owner, queue, &mut proof) };
     if result == SIGNAL_ACCEPTED {
         for shot in pending {
             if fence_readback(&mut shot.receipt, queue, proof.value) {
@@ -466,16 +465,6 @@ mod tests {
     use super::*;
     use std::ptr::without_provenance_mut;
 
-    unsafe extern "C" fn retain_or_release(_: *mut c_void) {}
-    unsafe extern "C" fn no_fence(_: *mut c_void) -> *mut c_void {
-        ptr::null_mut()
-    }
-    unsafe extern "C" fn no_signal(_: *mut c_void, _: *mut c_void, _: u64) -> bool {
-        false
-    }
-    unsafe extern "C" fn no_buffer(_: *mut c_void, _: u32) -> *mut c_void {
-        ptr::null_mut()
-    }
     unsafe fn completed(_: *mut c_void) -> u64 {
         u64::MAX
     }
@@ -514,16 +503,9 @@ mod tests {
 
     #[test]
     fn a_removal_sentinel_requires_device_confirmation_and_never_admits_a_mapping() {
-        static OPS: Ops = Ops {
-            retain: retain_or_release,
-            release: retain_or_release,
-            create_fence: no_fence,
-            signal: no_signal,
-            get_buffer: no_buffer,
-        };
         let owner = Capture::new();
         let mut shot = Shot::default();
-        assert!(gpu_adopt(&mut shot.leases, without_provenance_mut(1), &OPS));
+        assert!(gpu_adopt(&mut shot.leases, without_provenance_mut(1)));
         gpu_bind_fence(&mut shot.leases, without_provenance_mut(2));
         shot.receipt.fence_value = 1;
         unsafe {

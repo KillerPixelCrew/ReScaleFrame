@@ -2,38 +2,28 @@
 //! COM ownership of capture backbuffers, readbacks and per-queue completion fences.
 
 use super::Capture;
+#[cfg(not(test))]
+use super::d3d12::{create_fence, get_buffer, release, retain, signal_fence};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
+#[cfg(test)]
+use tests::{create_fence, get_buffer, release, retain, signal_fence};
 
-type RefCall = unsafe extern "C" fn(*mut c_void);
-
-#[repr(C)]
-pub(super) struct Ops {
-    pub(super) retain: RefCall,
-    pub(super) release: RefCall,
-    pub(super) create_fence: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
-    pub(super) signal: unsafe extern "C" fn(*mut c_void, *mut c_void, u64) -> bool,
-    pub(super) get_buffer: unsafe extern "C" fn(*mut c_void, u32) -> *mut c_void,
-}
-
-#[repr(C)]
 #[derive(Default)]
 pub(super) struct ReadbackLeases {
     pub(super) buffer: Option<NonNull<c_void>>,
     pub(super) fence: Option<NonNull<c_void>>,
     queue: Option<NonNull<c_void>>,
-    ops: Option<&'static Ops>,
 }
 
 struct Com {
     raw: NonNull<c_void>,
-    release: RefCall,
 }
 
 impl Drop for Com {
     fn drop(&mut self) {
-        unsafe { (self.release)(self.raw.as_ptr()) };
+        unsafe { release(self.raw.as_ptr()) };
     }
 }
 
@@ -80,51 +70,44 @@ pub(super) const SIGNAL_REFUSED: u32 = 2;
 const NO_SLOT: u32 = 3;
 pub(super) const NO_SIGNAL_NEEDED: u32 = 4;
 
-const _: () = {
-    assert!(size_of::<ReadbackLeases>() == 32);
-    assert!(size_of::<Ops>() == 40);
-};
-
-/// The native caller transfers the retained readback buffer and a process-lived leaf table.
-pub(super) fn gpu_adopt(
-    leases: &mut ReadbackLeases,
-    buffer: *mut c_void,
-    ops: &'static Ops,
-) -> bool {
+/// The native caller transfers the retained readback buffer.
+pub(super) fn gpu_adopt(leases: &mut ReadbackLeases, buffer: *mut c_void) -> bool {
     let Some(buffer) = NonNull::new(buffer) else {
         return false;
     };
     if leases.buffer.is_some() {
-        unsafe { (ops.release)(buffer.as_ptr()) };
+        unsafe { release(buffer.as_ptr()) };
         return false;
     }
-    leases.ops = Some(ops);
     leases.buffer = Some(buffer);
     true
 }
 
 /// Retain the submitted queue until an accepted fence takes over its completion proof.
 pub(super) fn bind_queue(leases: &mut ReadbackLeases, queue: *mut c_void) {
-    let Some(ops) = leases.ops else { return };
-    replace(&mut leases.queue, ops, NonNull::new(queue));
+    if leases.buffer.is_some() {
+        replace(&mut leases.queue, NonNull::new(queue));
+    }
 }
 
-fn replace(slot: &mut Option<NonNull<c_void>>, ops: &Ops, object: Option<NonNull<c_void>>) {
+fn replace(slot: &mut Option<NonNull<c_void>>, object: Option<NonNull<c_void>>) {
     if let Some(object) = object {
-        unsafe { (ops.retain)(object.as_ptr()) };
+        unsafe { retain(object.as_ptr()) };
     }
     if let Some(previous) = std::mem::replace(slot, object) {
-        unsafe { (ops.release)(previous.as_ptr()) };
+        unsafe { release(previous.as_ptr()) };
     }
 }
 
 pub(super) fn gpu_bind_fence(leases: &mut ReadbackLeases, fence: *mut c_void) {
-    let Some(ops) = leases.ops else { return };
+    if leases.buffer.is_none() {
+        return;
+    }
     let fence = NonNull::new(fence);
-    replace(&mut leases.fence, ops, fence);
+    replace(&mut leases.fence, fence);
     if fence.is_some() {
         // The queue owner now has a reference and the shot has the exact fence.
-        replace(&mut leases.queue, ops, None);
+        replace(&mut leases.queue, None);
     }
 }
 
@@ -132,8 +115,8 @@ impl Drop for ReadbackLeases {
     fn drop(&mut self) {
         gpu_bind_fence(self, ptr::null_mut());
         bind_queue(self, ptr::null_mut());
-        if let (Some(ops), Some(buffer)) = (self.ops.take(), self.buffer.take()) {
-            unsafe { (ops.release)(buffer.as_ptr()) };
+        if let Some(buffer) = self.buffer.take() {
+            unsafe { release(buffer.as_ptr()) };
         }
     }
 }
@@ -143,7 +126,6 @@ impl Drop for ReadbackLeases {
 pub(super) unsafe fn signal(
     owner: &Capture,
     queue: *mut c_void,
-    ops: &Ops,
     proof: &mut Signal,
 ) -> u32 {
     let Some(queue) = NonNull::new(queue) else {
@@ -155,21 +137,15 @@ pub(super) unsafe fn signal(
         if map.try_reserve(1).is_err() {
             return NO_SLOT;
         }
-        let Some(fence) = NonNull::new(unsafe { (ops.create_fence)(queue.as_ptr()) }) else {
+        let Some(fence) = NonNull::new(unsafe { create_fence(queue.as_ptr()) }) else {
             return CREATE_REFUSED;
         };
-        unsafe { (ops.retain)(queue.as_ptr()) };
+        unsafe { retain(queue.as_ptr()) };
         map.insert(
             key,
             Queue {
-                fence: Com {
-                    raw: fence,
-                    release: ops.release,
-                },
-                _queue: Com {
-                    raw: queue,
-                    release: ops.release,
-                },
+                fence: Com { raw: fence },
+                _queue: Com { raw: queue },
                 next: 1,
             },
         );
@@ -184,7 +160,7 @@ pub(super) unsafe fn signal(
     };
     state.next = next;
     let fence = state.fence.raw.as_ptr();
-    if !unsafe { (ops.signal)(queue.as_ptr(), fence, value) } {
+    if !unsafe { signal_fence(queue.as_ptr(), fence, value) } {
         return SIGNAL_REFUSED;
     }
     *proof = Signal { fence, value };
@@ -197,7 +173,6 @@ pub(super) unsafe fn gpu_arm_backbuffers(
     owner: &Capture,
     swapchain: *mut c_void,
     count: u32,
-    ops: &Ops,
 ) -> bool {
     let Some(chain) = NonNull::new(swapchain) else {
         return false;
@@ -209,21 +184,15 @@ pub(super) unsafe fn gpu_arm_backbuffers(
     }
     let mut buffers = [const { None }; MAX_BUFFERS];
     for (index, slot) in buffers[..count].iter_mut().enumerate() {
-        let Some(raw) = NonNull::new(unsafe { (ops.get_buffer)(swapchain, index as u32) }) else {
+        let Some(raw) = NonNull::new(unsafe { get_buffer(swapchain, index as u32) }) else {
             return false;
         };
-        *slot = Some(Com {
-            raw,
-            release: ops.release,
-        });
+        *slot = Some(Com { raw });
     }
-    unsafe { (ops.retain)(chain.as_ptr()) };
+    unsafe { retain(chain.as_ptr()) };
     gpu.backbuffers = Some(Backbuffers {
         buffers,
-        chain: Com {
-            raw: chain,
-            release: ops.release,
-        },
+        chain: Com { raw: chain },
         selected: None,
     });
     true
@@ -266,4 +235,22 @@ pub(super) unsafe fn take_idle(owner: &Capture) -> Option<Gpu> {
         return None;
     }
     Some(std::mem::take(gpu))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::c_void;
+    use std::ptr;
+
+    pub(super) unsafe fn retain(_: *mut c_void) {}
+    pub(super) unsafe fn release(_: *mut c_void) {}
+    pub(super) unsafe fn create_fence(_: *mut c_void) -> *mut c_void {
+        ptr::null_mut()
+    }
+    pub(super) unsafe fn signal_fence(_: *mut c_void, _: *mut c_void, _: u64) -> bool {
+        false
+    }
+    pub(super) unsafe fn get_buffer(_: *mut c_void, _: u32) -> *mut c_void {
+        ptr::null_mut()
+    }
 }

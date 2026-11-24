@@ -83,16 +83,16 @@ type Raw = *mut c_void;
 type Out = *mut Raw;
 type Iid = *const GUID;
 
-unsafe extern "C" fn target(object: Raw, slot: u32) -> Raw {
+pub(super) unsafe fn vtable_target(object: Raw, slot: u32) -> Raw {
     unsafe { object.cast::<*const Raw>().read().add(slot as usize).read() }
 }
-unsafe extern "C" fn create(target: Raw, replacement: *const c_void, original: Out) -> i32 {
+pub(super) unsafe fn create_hook(target: Raw, replacement: *const c_void, original: Out) -> i32 {
     unsafe { rsf_minhook_sys::MH_CreateHook(target, replacement.cast_mut(), original) }
 }
-unsafe extern "C" fn enable(target: Raw) -> i32 {
+pub(super) unsafe fn enable_hook(target: Raw) -> i32 {
     unsafe { rsf_minhook_sys::MH_EnableHook(target) }
 }
-unsafe extern "C" fn hook_report(slot: u32, target: Raw, result: i32) {
+pub(super) unsafe fn hook_report(slot: u32, target: Raw, result: i32) {
     let status = if result == hooks::DIFFERENT_TARGET {
         c"unobserved vtable target"
     } else {
@@ -108,15 +108,8 @@ unsafe extern "C" fn hook_report(slot: u32, target: Raw, result: i32) {
         status.to_string_lossy()
     ));
 }
-static HOOK_OPS: hooks::Ops = hooks::Ops {
-    target,
-    create,
-    enable,
-    report: hook_report,
-};
-
 fn bind(role: Role, object: Raw, detour: *const c_void) {
-    hooks::bind(&HOOK_OPS, role as u32, object, detour);
+    hooks::bind(role as u32, object, detour);
 }
 fn original<F: Copy>(role: Role) -> F {
     const { assert!(size_of::<F>() == size_of::<usize>()) };
@@ -616,7 +609,7 @@ pub(super) unsafe extern "C" fn after_submit(queue: Raw, _: u32, _: *const Raw) 
     let state = owner();
     let result = {
         let _guard = lock(&state.observations);
-        unsafe { shots::after_submit(&state.capture, queue, d3d12_ops()) }
+        unsafe { shots::after_submit(&state.capture, queue) }
     };
     let message = match result {
         gpu_leases::NO_SIGNAL_NEEDED | gpu_leases::SIGNAL_ACCEPTED => return,
