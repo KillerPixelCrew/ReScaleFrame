@@ -350,17 +350,17 @@ impl Renderer {
             height: desc.Height,
         };
         let decision = view_begin(&draw);
-        if decision.action == VIEW_UNAVAILABLE || decision.slot == NO_SLOT {
+        if decision.action == ViewAction::Unavailable || decision.slot == NO_SLOT {
             return None;
         }
         let entry = slot(&mut self.views, decision.slot)?;
-        if decision.action == VIEW_SAME_FRAME {
+        if decision.action == ViewAction::SameFrame {
             return entry
                 .as_ref()
                 .filter(|v| v.native_depth.as_raw() == depth.as_raw())
                 .map(|_| decision.slot);
         }
-        if decision.action == VIEW_ALLOCATE {
+        if decision.action == ViewAction::Allocate {
             *entry = None;
             *entry = Some(View::new(&self.device, depth.clone(), dsv, desc)?);
         }
@@ -374,19 +374,18 @@ impl Renderer {
         Some(decision.slot)
     }
 
-    pub(super) fn retire(&mut self, kind: u32, slot: u32) {
-        match kind {
-            RETIRE_MODEL => {
+    pub(super) fn retire(&mut self, retired: Retired) {
+        match retired {
+            Retired::Model(slot) => {
                 if let Some(entry) = self.models.get_mut(slot as usize) {
                     *entry = Model::default();
                 }
             }
-            RETIRE_VIEW => {
+            Retired::View(slot) => {
                 if let Some(entry) = self.views.get_mut(slot as usize) {
                     *entry = None;
                 }
             }
-            _ => {}
         }
     }
 
@@ -562,7 +561,7 @@ impl Renderer {
             scope,
             viewports,
             rect,
-            decision.usable != 0,
+            decision.usable,
             previous.map_or(0, |b| b.count),
         )?;
         let previous = [previous.map(|b| b.view.clone())];
@@ -751,7 +750,7 @@ fn model<'a>(
         return None;
     }
     let model = slot(models, decision.slot)?;
-    if decision.rotate != 0 {
+    if decision.rotate {
         std::mem::swap(&mut model.previous, &mut model.now);
         if let Some(now) = &model.now {
             unsafe { hash.c.ClearUnorderedAccessViewUint(&now.write, &[0; 4]) };

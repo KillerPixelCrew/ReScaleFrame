@@ -32,7 +32,7 @@ fn view(frame: u32, width: u32, height: u32) -> ViewDraw {
     }
 }
 
-fn end_frame(history: &mut History) -> Vec<(u32, u32)> {
+fn end_frame(history: &mut History) -> Vec<Retired> {
     let mut retired = Vec::new();
     history.end_frame(&mut retired);
     retired.sort_unstable();
@@ -44,40 +44,40 @@ fn history_is_usable_only_for_the_next_frame_without_reset() {
     let mut history = History::default();
     let (admitted, first) = history.begin_model(&model(10, 4));
     assert!(admitted);
-    assert_eq!((first.slot, first.rotate, first.usable), (0, 1, 0));
+    assert_eq!((first.slot, first.rotate, first.usable), (0, true, false));
 
     let (_, same) = history.begin_model(&model(10, 4));
-    assert_eq!((same.slot, same.rotate, same.usable), (0, 0, 0));
+    assert_eq!((same.slot, same.rotate, same.usable), (0, false, false));
 
     let (_, next) = history.begin_model(&model(11, 4));
-    assert_eq!((next.rotate, next.usable), (1, 1));
+    assert_eq!((next.rotate, next.usable), (true, true));
     // Validity persists through later draws of the same frame.
     let (_, again) = history.begin_model(&model(11, 4));
-    assert_eq!((again.rotate, again.usable), (0, 1));
+    assert_eq!((again.rotate, again.usable), (false, true));
 
     let (_, skipped) = history.begin_model(&model(13, 4));
-    assert_eq!((skipped.rotate, skipped.usable), (1, 0));
+    assert_eq!((skipped.rotate, skipped.usable), (true, false));
 
     let mut reset = model(14, 4);
     reset.reset = 1;
-    assert_eq!(history.begin_model(&reset).1.usable, 0);
+    assert!(!history.begin_model(&reset).1.usable);
 
     let (_, after_reset) = history.begin_model(&model(15, 4));
-    assert_eq!(after_reset.usable, 1);
+    assert!(after_reset.usable);
 }
 
 #[test]
 fn frame_succession_wraps_but_never_follows_the_empty_frame() {
     let mut history = History::default();
     // A new model's frame is the sentinel, whose wrapped successor is frame 0.
-    assert_eq!(history.begin_model(&model(0, 1)).1.usable, 0);
+    assert!(!history.begin_model(&model(0, 1)).1.usable);
     let mut other = model(NO_FRAME - 1, 1);
     other.primitive_key = 9;
     history.begin_model(&other);
     other.frame = NO_FRAME;
-    assert_eq!(history.begin_model(&other).1.usable, 1);
+    assert!(history.begin_model(&other).1.usable);
     other.frame = 0;
-    assert_eq!(history.begin_model(&other).1.usable, 0);
+    assert!(!history.begin_model(&other).1.usable);
 }
 
 #[test]
@@ -100,7 +100,10 @@ fn record_overflow_refuses_after_rotation_and_epoch() {
     history.begin_model(&model(1, RECORD_LIMIT));
     let (admitted, decision) = history.begin_model(&model(2, RECORD_LIMIT + 1));
     assert!(!admitted);
-    assert_eq!((decision.slot, decision.rotate, decision.usable), (0, 1, 1));
+    assert_eq!(
+        (decision.slot, decision.rotate, decision.usable),
+        (0, true, true)
+    );
     let entry = history.models.get_mut(0).unwrap();
     assert_eq!(
         (entry.frame, entry.records, entry.epoch),
@@ -169,21 +172,30 @@ fn view_allocates_until_ready_and_on_extent_change() {
         first,
         ViewDecision {
             slot: 0,
-            action: VIEW_ALLOCATE,
+            action: ViewAction::Allocate,
             width: 64,
             height: 32
         }
     );
     // A failed allocation leaves the slot unready and retries.
-    assert_eq!(history.begin_view(&view(2, 64, 32)).action, VIEW_ALLOCATE);
+    assert_eq!(
+        history.begin_view(&view(2, 64, 32)).action,
+        ViewAction::Allocate
+    );
     history.ready_view(0, &view(2, 64, 32));
-    assert_eq!(history.begin_view(&view(2, 64, 32)).action, VIEW_SAME_FRAME);
-    assert_eq!(history.begin_view(&view(3, 64, 32)).action, VIEW_REUSE);
+    assert_eq!(
+        history.begin_view(&view(2, 64, 32)).action,
+        ViewAction::SameFrame
+    );
+    assert_eq!(
+        history.begin_view(&view(3, 64, 32)).action,
+        ViewAction::Reuse
+    );
     history.ready_view(0, &view(3, 64, 32));
     history.mark_written(0, true);
 
     let resized = history.begin_view(&view(4, 128, 32));
-    assert_eq!((resized.action, resized.width), (VIEW_ALLOCATE, 128));
+    assert_eq!((resized.action, resized.width), (ViewAction::Allocate, 128));
     let entry = history.views.get_mut(0).unwrap();
     assert_eq!(
         (entry.frame, entry.epoch, entry.written),
@@ -197,7 +209,10 @@ fn same_frame_keeps_the_view_epoch() {
     history.begin_view(&view(1, 8, 8));
     history.ready_view(0, &view(1, 8, 8));
     end_frame(&mut history);
-    assert_eq!(history.begin_view(&view(1, 8, 8)).action, VIEW_SAME_FRAME);
+    assert_eq!(
+        history.begin_view(&view(1, 8, 8)).action,
+        ViewAction::SameFrame
+    );
     assert_eq!(history.views.get_mut(0).unwrap().epoch, FIRST_EPOCH);
 }
 
@@ -212,7 +227,7 @@ fn commit_needs_written_motion_for_the_same_frame_view_and_family() {
         history.commit_view(&view(5, 0, 0)),
         ViewDecision {
             slot: 0,
-            action: VIEW_COMMIT,
+            action: ViewAction::Commit,
             width: 16,
             height: 8
         }
@@ -249,7 +264,7 @@ fn entries_retire_at_the_third_frame_end_after_use() {
     assert!(end_frame(&mut history).is_empty());
     assert_eq!(
         end_frame(&mut history),
-        [(RETIRE_MODEL, 0), (RETIRE_VIEW, 0)]
+        [Retired::Model(0), Retired::View(0)]
     );
     assert_eq!((history.models.len(), history.views.len()), (0, 0));
     assert_eq!(history.epoch, FIRST_EPOCH + 3);
@@ -264,7 +279,7 @@ fn use_refreshes_the_epoch() {
     history.begin_model(&model(3, 1));
     assert!(end_frame(&mut history).is_empty());
     assert!(end_frame(&mut history).is_empty());
-    assert_eq!(end_frame(&mut history), [(RETIRE_MODEL, 0)]);
+    assert_eq!(end_frame(&mut history), [Retired::Model(0)]);
 }
 
 #[test]
@@ -272,7 +287,7 @@ fn a_view_left_unready_keeps_epoch_zero() {
     let mut history = History::default();
     history.begin_view(&view(1, 8, 8));
     assert!(end_frame(&mut history).is_empty());
-    assert_eq!(end_frame(&mut history), [(RETIRE_VIEW, 0)]);
+    assert_eq!(end_frame(&mut history), [Retired::View(0)]);
 }
 
 #[test]
@@ -285,12 +300,15 @@ fn retired_slots_are_reused_as_fresh_entries() {
     end_frame(&mut history);
     end_frame(&mut history);
     history.begin_model(&other);
-    assert_eq!(end_frame(&mut history), [(RETIRE_MODEL, 0)]);
+    assert_eq!(end_frame(&mut history), [Retired::Model(0)]);
 
     let mut third = model(3, 1);
     third.material_key = 7;
     let (_, decision) = history.begin_model(&third);
-    assert_eq!((decision.slot, decision.rotate, decision.usable), (0, 1, 0));
+    assert_eq!(
+        (decision.slot, decision.rotate, decision.usable),
+        (0, true, false)
+    );
     assert_eq!(history.models.len(), 2);
 }
 
@@ -302,6 +320,9 @@ fn reset_restarts_slots_and_the_epoch() {
     end_frame(&mut history);
     history = History::default();
     assert_eq!(history.epoch, FIRST_EPOCH);
-    assert_eq!(history.begin_model(&model(2, 1)).1.usable, 0);
-    assert_eq!(history.begin_view(&view(2, 8, 8)).action, VIEW_ALLOCATE);
+    assert!(!history.begin_model(&model(2, 1)).1.usable);
+    assert_eq!(
+        history.begin_view(&view(2, 8, 8)).action,
+        ViewAction::Allocate
+    );
 }

@@ -18,16 +18,22 @@ pub(crate) const MIN_CAPACITY: u32 = 1024;
 // stream-output records in velocity_stream.rs.
 pub(crate) const RECORD_LIMIT: u32 = u32::MAX / 128;
 
-// View actions.
-pub(crate) const VIEW_UNAVAILABLE: u32 = 0;
-pub(crate) const VIEW_SAME_FRAME: u32 = 1;
-const VIEW_REUSE: u32 = 2;
-pub(crate) const VIEW_ALLOCATE: u32 = 3;
-pub(crate) const VIEW_COMMIT: u32 = 4;
+/// What the replay does with a view slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ViewAction {
+    Unavailable,
+    SameFrame,
+    Reuse,
+    Allocate,
+    Commit,
+}
 
-// Retirement kinds.
-pub(crate) const RETIRE_MODEL: u32 = 0;
-pub(crate) const RETIRE_VIEW: u32 = 1;
+/// A slot whose native resources frame end releases.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Retired {
+    Model(u32),
+    View(u32),
+}
 
 /// A draw's model identity and its record count for this callback. `particle` drops the vertex
 /// factory and draw offsets from the identity; `reset` is the scope's history reset.
@@ -55,8 +61,8 @@ pub(crate) struct ModelDraw {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ModelDecision {
     pub(crate) slot: u32,
-    pub(crate) rotate: u32,
-    pub(crate) usable: u32,
+    pub(crate) rotate: bool,
+    pub(crate) usable: bool,
     pub(crate) capacity: u32,
 }
 
@@ -76,21 +82,21 @@ pub(crate) struct ViewDraw {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ViewDecision {
     pub(crate) slot: u32,
-    pub(crate) action: u32,
+    pub(crate) action: ViewAction,
     pub(crate) width: u32,
     pub(crate) height: u32,
 }
 
 pub(crate) const UNAVAILABLE_MODEL: ModelDecision = ModelDecision {
     slot: NO_SLOT,
-    rotate: 0,
-    usable: 0,
+    rotate: false,
+    usable: false,
     capacity: 0,
 };
 
 pub(crate) const UNAVAILABLE_VIEW: ViewDecision = ViewDecision {
     slot: NO_SLOT,
-    action: VIEW_UNAVAILABLE,
+    action: ViewAction::Unavailable,
     width: 0,
     height: 0,
 };
@@ -239,7 +245,7 @@ impl<K: Copy + Eq + Hash, V: Default + Aged> Table<K, V> {
         self.entries.get_mut(slot as usize)?.as_mut()
     }
 
-    fn retire(&mut self, epoch: u64, kind: u32, retired: &mut Vec<(u32, u32)>) {
+    fn retire(&mut self, epoch: u64, kind: fn(u32) -> Retired, retired: &mut Vec<Retired>) {
         let (entries, free) = (&mut self.entries, &mut self.free);
         self.slots.retain(|_, &mut slot| {
             let entry = &mut entries[slot as usize];
@@ -251,7 +257,7 @@ impl<K: Copy + Eq + Hash, V: Default + Aged> Table<K, V> {
             }
             *entry = None;
             free.push(slot);
-            retired.push((kind, slot));
+            retired.push(kind(slot));
             false
         });
     }
@@ -307,10 +313,10 @@ impl History {
                 && draw.reset == 0;
             model.frame = draw.frame;
             model.records = 0;
-            decision.rotate = 1;
+            decision.rotate = true;
         }
         model.epoch = epoch;
-        decision.usable = u32::from(model.usable);
+        decision.usable = model.usable;
         let count = draw.records;
         if count > u32::MAX - model.records || model.records + count > RECORD_LIMIT {
             return (false, decision);
@@ -345,7 +351,7 @@ impl History {
             if !view.matches(draw) || view.width != draw.width || view.height != draw.height {
                 return UNAVAILABLE_VIEW;
             }
-            VIEW_SAME_FRAME
+            ViewAction::SameFrame
         } else if !view.allocated || view.width != draw.width || view.height != draw.height {
             // The native slot is discarded; it stays unready until every target exists.
             *view = View {
@@ -353,9 +359,9 @@ impl History {
                 height: draw.height,
                 ..View::default()
             };
-            VIEW_ALLOCATE
+            ViewAction::Allocate
         } else {
-            VIEW_REUSE
+            ViewAction::Reuse
         };
         ViewDecision {
             slot,
@@ -390,7 +396,7 @@ impl History {
         match self.views.find(&key) {
             Some((slot, view)) if view.written && view.matches(pass) => ViewDecision {
                 slot,
-                action: VIEW_COMMIT,
+                action: ViewAction::Commit,
                 width: view.width,
                 height: view.height,
             },
@@ -398,11 +404,11 @@ impl History {
         }
     }
 
-    fn end_frame(&mut self, retired: &mut Vec<(u32, u32)>) {
+    fn end_frame(&mut self, retired: &mut Vec<Retired>) {
         self.epoch += 1;
         let epoch = self.epoch;
-        self.models.retire(epoch, RETIRE_MODEL, retired);
-        self.views.retire(epoch, RETIRE_VIEW, retired);
+        self.models.retire(epoch, Retired::Model, retired);
+        self.views.retire(epoch, Retired::View, retired);
     }
 }
 
@@ -454,7 +460,7 @@ pub(crate) fn model_count() -> usize {
 }
 
 /// Advances the epoch and reports retired slots after releasing the history lock.
-pub(crate) fn frame_end(mut retire: impl FnMut(u32, u32)) {
+pub(crate) fn frame_end(retire: impl FnMut(Retired)) {
     let mut retired = Vec::new();
     {
         let mut history = lock();
@@ -466,9 +472,7 @@ pub(crate) fn frame_end(mut retire: impl FnMut(u32, u32)) {
         }
         history.end_frame(&mut retired);
     }
-    for (kind, slot) in retired {
-        retire(kind, slot);
-    }
+    retired.into_iter().for_each(retire);
 }
 
 /// The native slots were discarded with their renderer (`velocity_renderer.rs`).

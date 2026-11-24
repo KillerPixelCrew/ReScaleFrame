@@ -20,7 +20,7 @@ fn pass() -> rsf_game_render_pass {
 fn committed(width: u32, height: u32) -> ViewDecision {
     ViewDecision {
         slot: 0,
-        action: VIEW_COMMIT,
+        action: ViewAction::Commit,
         width,
         height,
     }

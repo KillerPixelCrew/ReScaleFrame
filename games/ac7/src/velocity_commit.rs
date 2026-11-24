@@ -6,7 +6,7 @@
 //! target's description and device check, the state scope, the merge draw, the copies, the clock,
 //! and the device shader object count.
 
-use crate::velocity_history::{self, VIEW_COMMIT, ViewDecision, ViewDraw};
+use crate::velocity_history::{self, ViewAction, ViewDecision, ViewDraw};
 use rsf_game_sys::rsf_game_render_pass;
 #[cfg(windows)]
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -80,7 +80,7 @@ fn commit_identity(pass: &rsf_game_render_pass) -> Option<ViewDraw> {
 
 /// A single-sample, unarrayed R16G16 UNORM or typeless target at the committed view's extent.
 pub(crate) fn target_matches(view: &ViewDecision, target: &CommitTarget) -> bool {
-    view.action == VIEW_COMMIT
+    view.action == ViewAction::Commit
         && target.width == view.width
         && target.height == view.height
         && target.samples == 1
@@ -171,7 +171,7 @@ fn lock() -> MutexGuard<'static, Pass> {
 /// frame, view and family.
 pub(crate) fn commit_view(pass: &rsf_game_render_pass) -> Option<ViewDecision> {
     let decision = velocity_history::commit(&commit_identity(pass)?);
-    (decision.action == VIEW_COMMIT).then_some(decision)
+    (decision.action == ViewAction::Commit).then_some(decision)
 }
 
 #[cfg(windows)]

@@ -138,7 +138,7 @@ pub(crate) extern "C" fn rsf_ac7_velocity_frame_end() {
         return;
     };
     log_frame_end(owner.count());
-    velocity_history::frame_end(|kind, slot| owner.retire(kind, slot));
+    velocity_history::frame_end(|retired| owner.retire(retired));
 }
 
 #[cfg(feature = "warp-fixture")]
