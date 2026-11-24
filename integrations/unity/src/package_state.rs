@@ -1342,19 +1342,23 @@ mod tests {
     pub(super) unsafe fn preview_present(
         resource: *mut c_void,
         pass: *const rsf_game_render_pass,
-        common: u32,
-    ) -> u32 {
+        common: bool,
+    ) -> bool {
         assert_eq!(resource, unsafe { (*pass).color_input });
-        call(format!("present {:#x} {common}", resource as usize));
-        fake().shown.into()
+        call(format!(
+            "present {:#x} {}",
+            resource as usize,
+            u32::from(common)
+        ));
+        fake().shown
     }
     pub(super) unsafe fn texture_desc(resource: *mut c_void) -> (u64, u32, u32) {
         call(format!("desc {:#x}", resource as usize));
         (640, 360, 10)
     }
-    pub(super) fn preview_prepare(width: u32, height: u32) -> u32 {
+    pub(super) fn preview_prepare(width: u32, height: u32) -> bool {
         call(format!("preview prepare {width}x{height}"));
-        fake().preview_ready.into()
+        fake().preview_ready
     }
     pub(super) fn preview_owns(window: *mut c_void) -> bool {
         call(format!("preview owns {:#x}", window as usize));

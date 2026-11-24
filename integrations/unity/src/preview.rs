@@ -339,48 +339,53 @@ pub(crate) unsafe fn rsf_unity_preview_prepare(
     width: u32,
     height: u32,
     observer: rsf_d3d12_window_observer,
-) -> u32 {
+) -> bool {
     let Some(mut output) = try_output() else {
-        return 0;
+        return false;
     };
     let Some(target) = target() else {
-        return 0;
+        return false;
     };
     if output.is_none() {
         *output = NonNull::new(unsafe { rsf_d3d12_window_create(observer) }).map(Output);
     }
     let Some(output) = output.as_ref() else {
-        return 0;
+        return false;
     };
     // The bridge lends the device and queue for this call. STATE is unlocked, so the
     // Runtime can ask the adapter whether it owns the HWND during DXGI creation.
-    u32::from(
-        unsafe {
-            rsf_d3d12_window_prepare(output.0.as_ptr(), &target, device, queue, width, height)
-        } != 0,
-    )
+    let prepared = unsafe {
+        rsf_d3d12_window_prepare(output.0.as_ptr(), &target, device, queue, width, height)
+    };
+    prepared != 0
 }
 
 pub(crate) unsafe fn rsf_unity_preview_present(
     texture: *mut c_void,
     pass: *const rsf_game_render_pass,
-    common_state: u32,
-) -> u32 {
+    common_state: bool,
+) -> bool {
     let Some(output) = try_output() else {
-        return 0;
+        return false;
     };
     let (Some(output), Some(target)) = (output.as_ref(), target()) else {
-        return 0;
+        return false;
     };
     // Keep the output gate across the observer and DXGI Present. Nested preview
     // calls refuse at try_output, while the window guard can still read STATE.
-    if unsafe { rsf_d3d12_window_present(output.0.as_ptr(), &target, texture, pass, common_state) }
-        == 0
-    {
-        return 0;
+    let shown = unsafe {
+        rsf_d3d12_window_present(
+            output.0.as_ptr(),
+            &target,
+            texture,
+            pass,
+            u32::from(common_state),
+        )
+    } != 0;
+    if shown {
+        show(target.generation);
     }
-    show(target.generation);
-    1
+    shown
 }
 
 pub(crate) fn rsf_unity_preview_drained() -> bool {

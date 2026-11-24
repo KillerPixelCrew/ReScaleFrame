@@ -173,9 +173,9 @@ pub(super) unsafe fn rsf_unity_package_texture_desc(resource: *mut c_void) -> (u
     (desc.Width, desc.Height, desc.Format.0 as u32)
 }
 
-pub(super) fn rsf_unity_package_prepare_preview(width: u32, height: u32) -> u32 {
+pub(super) fn rsf_unity_package_prepare_preview(width: u32, height: u32) -> bool {
     let Some((device, queue)) = graphics() else {
-        return 0;
+        return false;
     };
     unsafe {
         rsf_unity_preview_prepare(

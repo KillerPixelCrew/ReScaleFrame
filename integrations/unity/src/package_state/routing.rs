@@ -40,14 +40,14 @@ impl Leaves {
         unsafe { raw::fg_hudless(commands, pass) }
     }
     fn preview_present(&self, pass: &rsf_game_render_pass, common: bool) -> bool {
-        unsafe { raw::preview_present(pass.color_input, pass, u32::from(common)) != 0 }
+        unsafe { raw::preview_present(pass.color_input, pass, common) }
     }
     /// ID3D12Resource::GetDesc's width, height and format.
     fn texture_desc(&self, resource: *mut c_void) -> (u64, u32, u32) {
         unsafe { raw::texture_desc(resource) }
     }
     fn preview_prepare(&self, width: u32, height: u32) -> bool {
-        raw::preview_prepare(width, height) != 0
+        raw::preview_prepare(width, height)
     }
     fn preview_owns(&self, window: *mut c_void) -> bool {
         raw::preview_owns(window)
