@@ -100,8 +100,8 @@ struct Image {
 }
 
 /// Matches `rsf_vk_fsr3_frame` and the managed `Fsr3Frame`.
-// Layout mirror: the native dispatch leaf reads the commands and constants.
-#[allow(dead_code)]
+// platform.rs reads the commands and constants; the unit tests replace it.
+#[cfg_attr(test, allow(dead_code))]
 #[repr(C)]
 struct Frame {
     commands: Handle,
@@ -145,9 +145,9 @@ fn frame_time_ms(delta_ms: f32) -> f32 {
 }
 
 /// Matches `rsf_vk_fsr3_fg_frame` and the managed `Fsr3FgFrame`.
-// Layout mirror: the native configure, prepare, generate and UI leaves read
-// the resources, constants and camera vectors.
-#[allow(dead_code)]
+// platform.rs's configure, prepare, generate and UI leaves read the resources, constants and
+// camera vectors; the unit tests replace it.
+#[cfg_attr(test, allow(dead_code))]
 #[repr(C)]
 struct FgFrame {
     commands: Handle,
@@ -179,8 +179,8 @@ impl FgFrame {
 }
 
 /// Matches `rsf_fsr3wsi_create`.
-// The native create leaf reads the queue family.
-#[allow(dead_code)]
+// platform.rs's create leaf reads the queue family; the unit tests replace it.
+#[cfg_attr(test, allow(dead_code))]
 #[repr(C)]
 struct WsiRequest {
     physical: Handle,
@@ -209,8 +209,8 @@ impl WsiRequest {
 }
 
 /// Matches `rsf_fsr3fg_create`.
-// The native create leaf maps the back-buffer format.
-#[allow(dead_code)]
+// platform.rs's create leaf maps the back-buffer format; the unit tests replace it.
+#[cfg_attr(test, allow(dead_code))]
 #[repr(C)]
 struct FgRequest {
     device: Handle,
