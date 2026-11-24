@@ -136,3 +136,77 @@ static inline int rsf_fixture_create_views(rsf_fixture_targets* t, ID3D11Device*
         FAILED(ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource*)t->output, NULL, &t->output_view)) ||
         FAILED(ID3D11Device_CreateDepthStencilView(device, (ID3D11Resource*)t->depth, &ds, &t->depth_view)));
 }
+
+static inline void rsf_fixture_host_log(void* user, const char* message)
+{
+    (void)user;
+    printf("%s\n", message);
+}
+
+/* The host setup and services both launchers share. Each sets its own bridge mode, window filter
+   and capabilities afterwards. */
+static inline void rsf_fixture_host_setup(rsf_d3d11_host_setup* setup, rsf_game_host_services* host,
+    const wchar_t* ini, const wchar_t* root)
+{
+    memset(setup, 0, sizeof(*setup));
+    setup->struct_size = sizeof(*setup);
+    setup->abi_version = RSF_D3D11_HOST_ABI_VERSION;
+    setup->configuration_path = ini;
+    setup->configuration_section = L"Device";
+    setup->runtime_directory = root;
+    setup->identity_utf8 = "shared-sr-device";
+    setup->executable_sha256 = "synthetic";
+    setup->engine_version_utf8 = "1";
+    setup->project_id_utf8 = "668392a0-ecfe-4d0c-9f58-c2838c5ca308";
+    setup->units_to_meters = 1;
+    setup->quality_choices = 0x1f;
+    setup->depth_inverted = 1;
+    setup->depth_far_plane = RSF_D3D11_HOST_DEPTH_INFINITE;
+    setup->motion.struct_size = sizeof(setup->motion);
+    setup->motion.scale_x = setup->motion.scale_y = 1;
+    setup->motion.output_scale_x = setup->motion.output_scale_y = 1;
+    setup->motion.invalid_value = -1000;
+    memset(host, 0, sizeof(*host));
+    host->struct_size = sizeof(*host);
+    host->abi_version = RSF_GAME_ABI_VERSION;
+    host->session_id = 91;
+    host->log = rsf_fixture_host_log;
+}
+
+/* The two-buffer windowed chain of the fixture size on `window`. */
+static inline void rsf_fixture_chain_desc(DXGI_SWAP_CHAIN_DESC* desc, HWND window)
+{
+    memset(desc, 0, sizeof(*desc));
+    desc->BufferDesc.Width = RSF_FIXTURE_WIDTH;
+    desc->BufferDesc.Height = RSF_FIXTURE_HEIGHT;
+    desc->BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc->SampleDesc.Count = 1;
+    desc->BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    desc->BufferCount = 2;
+    desc->OutputWindow = window;
+    desc->Windowed = TRUE;
+}
+
+/* The leases the Rust fixture borrows from a launcher. */
+static inline void rsf_fixture_resources(rsf_d3d11_fixture_resources* resources,
+    const rsf_game_host_services* host, ID3D11Device* device, ID3D11DeviceContext* context,
+    IDXGISwapChain* chain, const rsf_fixture_targets* targets, void* diagnostics, void (*close_window)(void))
+{
+    memset(resources, 0, sizeof(*resources));
+    resources->host = host;
+    resources->device = device;
+    resources->context = context;
+    resources->chain = chain;
+    resources->colour = targets->color;
+    resources->motion = targets->motion;
+    resources->depth = targets->depth;
+    resources->output = targets->output;
+    resources->colour_view = targets->color_view;
+    resources->motion_view = targets->motion_view;
+    resources->depth_view = targets->depth_view;
+    resources->output_view = targets->output_view;
+    resources->width = RSF_FIXTURE_WIDTH;
+    resources->height = RSF_FIXTURE_HEIGHT;
+    resources->diagnostics = diagnostics;
+    resources->close_window = close_window;
+}

@@ -95,25 +95,25 @@ class AnomalyPackageTest(unittest.TestCase):
                 bundle.writestr('unreviewed.pdb', b'not allowlisted')
         return manifest
 
+    def bundle(self, **options):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name) / 'bundle.zip'
+        return path, self.make_bundle(path, **options)
+
     def test_archive_matches_manifest(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / 'bundle.zip'
-            expected = self.make_bundle(path)
-            self.assertEqual(package.verify_archive(path), expected)
+        path, expected = self.bundle()
+        self.assertEqual(package.verify_archive(path), expected)
 
     def test_archive_extra_entry_refused(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / 'extra.zip'
-            self.make_bundle(path, extra=True)
-            with self.assertRaisesRegex(RuntimeError, 'allowlist'):
-                package.verify_archive(path)
+        path, _ = self.bundle(extra=True)
+        with self.assertRaisesRegex(RuntimeError, 'allowlist'):
+            package.verify_archive(path)
 
     def test_archive_changed_entry_refused(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / 'changed.zip'
-            self.make_bundle(path, corrupt=True)
-            with self.assertRaisesRegex(RuntimeError, 'hash mismatch'):
-                package.verify_archive(path)
+        path, _ = self.bundle(corrupt=True)
+        with self.assertRaisesRegex(RuntimeError, 'hash mismatch'):
+            package.verify_archive(path)
 
 
 if __name__ == '__main__':

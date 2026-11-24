@@ -126,11 +126,6 @@ static const IDXGISwapChainVtbl outer_vtable = {
 static HWND window;
 static const GUID diagnostic_all = {0xe48ae283, 0xda80, 0x490b, {0x87, 0xe6, 0x43, 0xe9, 0xa9, 0xcf, 0xda, 0x08}};
 
-static void host_log(void* user, const char* message)
-{
-    (void)user;
-    printf("%s\n", message);
-}
 static int accept_window(void* user, void* candidate)
 {
     (void)user;
@@ -387,46 +382,16 @@ static int body(int argc, char** argv, Fixture* f, wchar_t* ini)
     if (!WritePrivateProfileSectionW(L"Device", L"SR=0\0SRBackend=1\0SRQuality=0\0FG=0\0FGBackend=3\0FGGeneratedFrames=1\0Latency=0\0FrameLimitUs=0\0StatusOverlay=0\0", ini))
         return fail("write scratch settings");
 
-    memset(&setup, 0, sizeof(setup));
-    setup.struct_size = sizeof(setup);
-    setup.abi_version = RSF_D3D11_HOST_ABI_VERSION;
-    setup.configuration_path = ini;
-    setup.configuration_section = L"Device";
-    setup.runtime_directory = root;
-    setup.identity_utf8 = "shared-sr-device";
-    setup.executable_sha256 = "synthetic";
-    setup.engine_version_utf8 = "1";
-    setup.project_id_utf8 = "668392a0-ecfe-4d0c-9f58-c2838c5ca308";
-    setup.units_to_meters = 1;
-    setup.quality_choices = 0x1f;
-    setup.depth_inverted = 1;
-    setup.depth_far_plane = RSF_D3D11_HOST_DEPTH_INFINITE;
-    setup.motion.struct_size = sizeof(setup.motion);
-    setup.motion.scale_x = setup.motion.scale_y = 1;
-    setup.motion.output_scale_x = setup.motion.output_scale_y = 1;
-    setup.motion.invalid_value = -1000;
+    rsf_fixture_host_setup(&setup, &host, ini, root);
     setup.presentation_bridge = scoped ? 3u : 1u;
     setup.accept_window = accept_window;
     setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_RENDERED_SOURCE;
-    memset(&host, 0, sizeof(host));
-    host.struct_size = sizeof(host);
-    host.abi_version = RSF_GAME_ABI_VERSION;
-    host.session_id = 91;
-    host.log = host_log;
     if (rsf_d3d11_host_create(&setup, &host) != RSF_OK || rsf_d3d11_host_set_active(host.user, 1) != RSF_OK)
         return fail("create/activate production D3D11 host");
     if (rsf_get_d3d11_present_api(&presentation) != RSF_OK) return fail("query production presentation API");
 
-    memset(&chain_desc, 0, sizeof(chain_desc));
-    chain_desc.BufferDesc.Width = RSF_FIXTURE_WIDTH;
-    chain_desc.BufferDesc.Height = RSF_FIXTURE_HEIGHT;
-    chain_desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    chain_desc.SampleDesc.Count = 1;
-    chain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    chain_desc.BufferCount = 2;
+    rsf_fixture_chain_desc(&chain_desc, window);
     if (scoped) chain_desc.BufferUsage |= DXGI_USAGE_SHADER_INPUT | DXGI_USAGE_UNORDERED_ACCESS;
-    chain_desc.OutputWindow = window;
-    chain_desc.Windowed = TRUE;
     scope.window = window;
     if (scoped) {
         rsf_d3d11_creation_scope nested = {sizeof(nested), RSF_D3D11_HOST_ABI_VERSION, window, 0};
@@ -547,23 +512,8 @@ static int body(int argc, char** argv, Fixture* f, wchar_t* ini)
     if (f->diagnostics) ID3D11InfoQueue_ClearStoredMessages(f->diagnostics);
     if (rsf_get_overlay_api(&overlay) != RSF_OK) return fail("query production overlay API");
 
-    memset(&resources, 0, sizeof(resources));
-    resources.host = &host;
-    resources.device = f->device;
-    resources.context = f->context;
-    resources.chain = f->chain;
-    resources.colour = f->targets.color;
-    resources.motion = f->targets.motion;
-    resources.depth = f->targets.depth;
-    resources.output = f->targets.output;
-    resources.colour_view = f->targets.color_view;
-    resources.motion_view = f->targets.motion_view;
-    resources.depth_view = f->targets.depth_view;
-    resources.output_view = f->targets.output_view;
-    resources.width = RSF_FIXTURE_WIDTH;
-    resources.height = RSF_FIXTURE_HEIGHT;
-    resources.diagnostics = f->diagnostics;
-    resources.close_window = close_window;
+    rsf_fixture_resources(&resources, &host, f->device, f->context, f->chain, &f->targets, f->diagnostics,
+        close_window);
     native_calls.presentation = &presentation;
     native_calls.outer = outer;
     native_calls.overlay = &overlay;

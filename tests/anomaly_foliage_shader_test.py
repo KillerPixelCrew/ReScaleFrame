@@ -1,4 +1,5 @@
 """First-party tests. Licensed shaders are read only from the local corpus."""
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -14,6 +15,15 @@ from unittest.mock import patch
 REPO = Path(__file__).resolve().parents[1]
 SOURCE = REPO / ".local/anomaly/vanilla/shaders/r3"
 TOOL = REPO / "tools/anomaly_foliage_shader.py"
+
+
+@contextlib.contextmanager
+def staged(prefix):
+    """A scratch folder under the permitted local staging root."""
+    staging = REPO / ".local/anomaly/staging"
+    staging.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=staging, prefix=prefix) as folder:
+        yield Path(folder)
 
 
 def load_tool():
@@ -66,10 +76,7 @@ class StageTests(unittest.TestCase):
         self.assertTrue(hasattr(tool, "stage"), "bounded foliage staging missing")
         if not SOURCE.exists():
             self.skipTest("licensed local fixture unavailable")
-        staging = REPO / ".local/anomaly/staging"
-        staging.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=staging, prefix="foliage-test-") as folder:
-            root = Path(folder)
+        with staged("foliage-test-") as root:
             output = root / "generated"
             manifest = tool.stage(SOURCE, output)
             self.assertFalse(manifest["runtime_ready"])
@@ -102,10 +109,7 @@ class StageTests(unittest.TestCase):
         assert tool is not None
         if not SOURCE.exists():
             self.skipTest("licensed local fixture unavailable")
-        staging = REPO / ".local/anomaly/staging"
-        staging.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=staging, prefix="foliage-race-") as folder:
-            root = Path(folder)
+        with staged("foliage-race-") as root:
             source = root / "source"
             shutil.copytree(SOURCE, source)
             original_copy = shutil.copytree
@@ -137,10 +141,8 @@ class StageTests(unittest.TestCase):
     def test_cli_emits_content_addressed_family_abi_and_refuses_existing_output(self):
         if not SOURCE.exists():
             self.skipTest("licensed local fixture unavailable")
-        staging = REPO / ".local/anomaly/staging"
-        staging.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=staging, prefix="foliage-cli-") as folder:
-            output = Path(folder) / "generated"
+        with staged("foliage-cli-") as folder:
+            output = folder / "generated"
             command = [sys.executable, str(TOOL), "--source", str(SOURCE), "--output", str(output)]
             run = subprocess.run(command, capture_output=True, text=True, timeout=30)
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
@@ -201,10 +203,7 @@ class CompilerTests(unittest.TestCase):
         fxc = find_fxc()
         if not fxc or not SOURCE.exists():
             self.skipTest("FXC or licensed local corpus unavailable")
-        staging = REPO / ".local/anomaly/staging"
-        staging.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=staging, prefix="foliage-fxc-") as folder:
-            folder = Path(folder)
+        with staged("foliage-fxc-") as folder:
             output = folder / "merged"
             prepare_compiler_fixture(output)
             names = sorted(path.name for path in SOURCE.glob("deffer_tree*.vs")
@@ -254,10 +253,7 @@ class DeviceTests(unittest.TestCase):
         cargo = shutil.which("cargo")
         if os.name != "nt" or not fxc or not cargo or not SOURCE.exists():
             self.skipTest("Windows D3D11 fixture requires FXC, Cargo and licensed corpus")
-        staging = REPO / ".local/anomaly/staging"
-        staging.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=staging, prefix="foliage-device-") as folder:
-            folder = Path(folder)
+        with staged("foliage-device-") as folder:
             output = folder / "merged"
             prepare_compiler_fixture(output)
             cases = [("tree", "deffer_tree_flat.vs", ()),
