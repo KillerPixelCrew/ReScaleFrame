@@ -54,10 +54,10 @@ void first_use_barriers() {
     requested.subresourceRange = {both, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
     const auto initialized = initializedBarriers(1, &requested);
     require(initialized.size() == 4, "one first-use barrier per mip and layer");
-    for (const auto& barrier : initialized) {
+    for (const auto& first : initialized) {
         // Combined aspects stay combined without separateDepthStencilLayouts.
-        require(barrier.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && barrier.subresourceRange.aspectMask == both &&
-            barrier.subresourceRange.levelCount == 1 && barrier.subresourceRange.layerCount == 1,
+        require(first.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && first.subresourceRange.aspectMask == both &&
+            first.subresourceRange.levelCount == 1 && first.subresourceRange.layerCount == 1,
             "first-use barriers start undefined with combined aspects");
     }
     require(fresh.empty(), "a fully initialized image is no longer tracked");
