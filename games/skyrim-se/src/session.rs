@@ -75,7 +75,7 @@ mod subsystems {
         bind as cpu_bind, busy as cpu_busy, disable as cpu_disable, prepare as cpu_prepare,
         quiesce as cpu_quiesce, stop as cpu_stop,
     };
-    pub(super) use crate::observers::{NATIVE_LEAVES as OBSERVERS, busy as observers_busy};
+    pub(super) use crate::observers::busy as observers_busy;
     pub(super) use crate::plugin::admit_observers;
     pub(super) use crate::postprocess::cleanup_pending as auxiliaries_pending;
     pub(super) use crate::presentation::{
@@ -354,7 +354,7 @@ impl Session {
             self.dpi_requested = true;
             request_dpi(host)?;
         }
-        if !self.observers.prepare(&subsystems::OBSERVERS) {
+        if !self.observers.prepare() {
             return Ok(NATIVE_REFUSED);
         }
         if !subsystems::cpu_prepare() {
@@ -478,7 +478,7 @@ impl Session {
             }
         }
         if self.rollback_observers {
-            self.rollback_observers = !self.observers.disable(&subsystems::OBSERVERS, true);
+            self.rollback_observers = !self.observers.disable(true);
         }
         self.rollback_stages == 0 && !self.rollback_observers
     }
@@ -507,7 +507,7 @@ impl Session {
             return Ok(NATIVE_REFUSED);
         }
         let services = self.services;
-        if !self.observers.start(&subsystems::OBSERVERS, &services) {
+        if !self.observers.start(&services) {
             self.rollback_observers = true;
             let retired = self.rollback();
             self.retirement_pending = !retired;
@@ -591,7 +591,7 @@ impl Session {
             return Ok(BUSY);
         }
         let cpu_stopped = subsystems::cpu_disable();
-        if !self.observers.disable(&subsystems::OBSERVERS, false) {
+        if !self.observers.disable(false) {
             return Ok(BUSY);
         }
         self.enabled = false;

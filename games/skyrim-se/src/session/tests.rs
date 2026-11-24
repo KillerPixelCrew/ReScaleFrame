@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::observers::fake::DISABLED;
 use std::cell::{Cell, RefCell};
 
 thread_local! {
@@ -7,7 +8,6 @@ thread_local! {
     static OBSERVER_BUSY: Cell<bool> = const { Cell::new(false) };
     static ROLLBACK: Cell<bool> = const { Cell::new(true) };
     static ACTIVE_RESULT: Cell<i32> = const { Cell::new(OK) };
-    static DISABLED: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Recording fakes of the subsystems: admission and every other stage succeed; the CPU start
@@ -106,36 +106,11 @@ pub(super) mod subsystems {
     pub(in crate::session) extern "C" fn accept_window(_: *mut c_void, _: *mut c_void) -> i32 {
         0
     }
-
-    extern "C" fn yes() -> bool {
-        true
-    }
-    extern "C" fn hook_yes(_: u32) -> bool {
-        true
-    }
-    extern "C" fn enable(_: u32) -> i32 {
-        0
-    }
-    extern "C" fn disable(_: u32) -> bool {
-        DISABLED.set(DISABLED.get() + 1);
-        true
-    }
-    extern "C" fn observer_log(_: *const rsf_game_host_services, _: *const c_char) {}
-
-    pub(in crate::session) static OBSERVERS: crate::observers::Leaves = crate::observers::Leaves {
-        initialize: yes,
-        create: hook_yes,
-        remove: hook_yes,
-        enable,
-        disable,
-        pin: yes,
-        log: observer_log,
-    };
 }
 
 fn prepared() -> Session {
     let mut session = Session::new();
-    assert!(session.observers.prepare(&subsystems::OBSERVERS));
+    assert!(session.observers.prepare());
     session.prepared = true;
     OPERATIONS.take();
     DISABLED.set(0);
