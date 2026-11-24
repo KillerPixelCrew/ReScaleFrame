@@ -2,6 +2,13 @@
 //! Allocation and string helpers for native ABI callers.
 use std::alloc::{Layout, alloc};
 use std::ptr::NonNull;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+/// Locks `mutex`, taking the guard of a poisoned one: a panic on a foreign thread must not
+/// wedge an ABI entry that has to keep answering.
+pub fn lock_or_recover<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// Allocates a nonzero-sized value without aborting on allocation failure.
 /// Convert the result with `Box::into_raw` when transferring ownership across the ABI.

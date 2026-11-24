@@ -7,13 +7,13 @@ use super::{
 use super::{presentation, services};
 use crate::sys::RSF_UNITY_PREVIEW_SOURCE_COMMON;
 use crate::sys::{RSF_UNITY_DEVICE_EVENT_INITIALIZE, RSF_UNITY_DEVICE_EVENT_SHUTDOWN};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
 use std::ffi::{c_int, c_void};
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 use std::ptr::null_mut;
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 use std::sync::Mutex;
-use std::sync::PoisonError;
 use std::sync::atomic::Ordering::SeqCst;
 
 /// Editor preview refusals with a texture logged per process.
@@ -205,7 +205,7 @@ pub(super) unsafe extern "C" fn render_callback(
     }
     let pass = unsafe { &*pass };
     if PACKAGE.route(leaves, commands, pass, begin != 0) {
-        let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
+        let _operation = lock_or_recover(&OPERATIONS);
         PACKAGE.render(leaves, commands, pass);
     } else {
         RECORDING.set(None);
@@ -237,7 +237,7 @@ extern "C" fn rsf_unity_package_device_event(sdk_event: u32) {
         RSF_UNITY_DEVICE_EVENT_SHUTDOWN => false,
         _ => return,
     };
-    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    let _operation = lock_or_recover(&OPERATIONS);
     if let Some(leaves) = loaded() {
         PACKAGE.device_event(leaves, initialize);
     }
@@ -245,7 +245,7 @@ extern "C" fn rsf_unity_package_device_event(sdk_event: u32) {
 
 #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
 pub(super) fn shutdown() -> bool {
-    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    let _operation = lock_or_recover(&OPERATIONS);
     match loaded() {
         Some(leaves) => PACKAGE.shutdown(leaves),
         None => PACKAGE.device.load(SeqCst) == DEVICE_WAITING,
@@ -268,7 +268,7 @@ unsafe extern "C" {
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_package_plugin_load(interfaces: *mut c_void) {
-    let mut registered = REGISTERED.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut registered = lock_or_recover(&REGISTERED);
     if PACKAGE.device.load(SeqCst) == DEVICE_RETAINED || !UNITY_INTERFACES.load(SeqCst).is_null() {
         return;
     }
@@ -289,7 +289,7 @@ unsafe extern "C" fn rsf_unity_package_plugin_load(interfaces: *mut c_void) {
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_package_plugin_unload() {
-    let mut registered = REGISTERED.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut registered = lock_or_recover(&REGISTERED);
     if std::mem::take(&mut *registered) {
         unsafe { rsf_unity_package_device_callback(UNITY_GRAPHICS.load(SeqCst), 0) };
     }

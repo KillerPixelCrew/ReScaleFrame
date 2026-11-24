@@ -13,13 +13,14 @@ use crate::sys::{
     RSF_UNITY_FRAMES_SLOTS, RSF_UNITY_PACKET_HUDLESS, RSF_UNITY_PACKET_WINDOW, rsf_unity_packet,
     rsf_unity_source_submission,
 };
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_WINDOW, rsf_game_host_services,
     rsf_game_render_pass,
 };
 use rsf_runtime_submission::{FenceStatus, fence_status};
 use std::ptr::null_mut;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::IDXGISwapChain};
 use windows::core::Interface;
@@ -42,7 +43,7 @@ struct Slot {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        SLOTS.lock().unwrap_or_else(PoisonError::into_inner)[self.index] = self.commands.take();
+        lock_or_recover(&SLOTS)[self.index] = self.commands.take();
     }
 }
 
@@ -63,33 +64,29 @@ fn source(pass: &rsf_game_render_pass) -> rsf_unity_source_submission {
 }
 
 pub(crate) fn completed() -> u64 {
-    let fence = FENCE.lock().unwrap_or_else(PoisonError::into_inner);
+    let fence = lock_or_recover(&FENCE);
     fence
         .as_ref()
         .map_or(0, |fence| unsafe { fence.GetCompletedValue() })
 }
 
 pub(crate) fn release_graphics() {
-    let slots = std::mem::take(&mut *SLOTS.lock().unwrap_or_else(PoisonError::into_inner));
+    let slots = std::mem::take(&mut *lock_or_recover(&SLOTS));
     drop(slots);
-    let fence = FENCE.lock().unwrap_or_else(PoisonError::into_inner).take();
+    let fence = lock_or_recover(&FENCE).take();
     drop(fence);
 }
 
 unsafe fn frame_fence(engine: &rsf_unity_d3d12_engine) -> bool {
     // Only this event can populate it. Keep the Unity call outside the mutex.
-    if FENCE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .is_some()
-    {
+    if lock_or_recover(&FENCE).is_some() {
         return true;
     }
     let raw = unsafe { engine.frame_fence.unwrap()() };
     let Some(fence) = (unsafe { ID3D12Fence::from_raw_borrowed(&raw) }) else {
         return false;
     };
-    *FENCE.lock().unwrap_or_else(PoisonError::into_inner) = Some(fence.clone());
+    *lock_or_recover(&FENCE) = Some(fence.clone());
     true
 }
 
@@ -161,7 +158,7 @@ unsafe fn reconstruct(
     let index = admission.slot as usize;
     let mut slot = Slot {
         index,
-        commands: SLOTS.lock().unwrap_or_else(PoisonError::into_inner)[index].take(),
+        commands: lock_or_recover(&SLOTS)[index].take(),
     };
     if let Some(commands) = slot.commands.as_mut() {
         commands.leases = Default::default();

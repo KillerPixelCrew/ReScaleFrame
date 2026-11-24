@@ -9,8 +9,9 @@ use crate::platform::{
     VkSrFrame, VkSrPass, VkView,
 };
 use rsf_game_sys::backend_result;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use std::ffi::{c_int, c_void};
-use std::sync::{MutexGuard, PoisonError};
+use std::sync::MutexGuard;
 
 const SR_NONE: u32 = 0;
 const SR_SPATIAL: u32 = 6;
@@ -83,7 +84,7 @@ fn retire(contexts: &mut Contexts) -> bool {
 
 impl Vulkan {
     pub(super) fn contexts(&self) -> MutexGuard<'_, Contexts> {
-        self.contexts.lock().unwrap_or_else(PoisonError::into_inner)
+        lock_or_recover(&self.contexts)
     }
 
     pub(crate) fn sr_context(&self) -> *mut c_void {

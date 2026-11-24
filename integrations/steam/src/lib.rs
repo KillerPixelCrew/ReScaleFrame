@@ -8,6 +8,7 @@
 #![cfg(windows)]
 
 use rsf_game_sys::call_header::validate;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
     RSF_D3D11_DISPATCH_PRESENT, RSF_D3D11_DISPATCH_PRESENT1, RSF_D3D11_DISPATCH_RELEASE,
     RSF_D3D11_DISPATCH_RESIZE_BUFFERS, RSF_D3D11_DISPATCH_RESIZE_BUFFERS1,
@@ -27,7 +28,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, OnceLock};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
 use windows_sys::Win32::System::LibraryLoader::{
@@ -466,7 +467,7 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
     if INSTALLED.load(Ordering::Acquire) {
         return true;
     }
-    let mut attempted = ATTEMPTED.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut attempted = lock_or_recover(&ATTEMPTED);
     if INSTALLED.load(Ordering::Relaxed) {
         return true;
     }

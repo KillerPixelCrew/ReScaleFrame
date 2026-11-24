@@ -22,6 +22,7 @@ use crate::sys::{
     RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_WINDOW, rsf_unity_config, rsf_unity_frame_admission,
     rsf_unity_packet, rsf_unity_source_submission,
 };
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_KEYED,
     RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_SUBMISSION, rsf_camera_frame, rsf_game_cpu_event,
@@ -31,7 +32,7 @@ use std::cell::Cell;
 use std::ffi::{c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 const PACKETS: usize = RSF_UNITY_FRAMES_PACKETS as usize;
 const SLOTS: usize = RSF_UNITY_FRAMES_SLOTS as usize;
@@ -122,7 +123,7 @@ thread_local! {
 }
 
 fn lock() -> MutexGuard<'static, State> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&STATE)
 }
 
 fn source_of(packet: &rsf_unity_packet) -> rsf_unity_source_submission {

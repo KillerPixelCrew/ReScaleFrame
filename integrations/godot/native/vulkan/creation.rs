@@ -14,12 +14,13 @@ use crate::platform::{
     VkCreationLeaves, VkDeviceCall, VkFunction, VkInstanceCall, VkProc,
 };
 use ash::vk;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_log_fn;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
 
 const VK_ERROR_INCOMPATIBLE_DRIVER: i32 = vk::Result::ERROR_INCOMPATIBLE_DRIVER.as_raw();
 
@@ -63,7 +64,7 @@ impl Creation {
 
     /// A copy of the binding; the lock is never held across a leaf or a resolver call.
     fn binding(&self) -> Binding {
-        *self.binding.lock().unwrap_or_else(PoisonError::into_inner)
+        *lock_or_recover(&self.binding)
     }
 
     fn owner(&self) -> *mut c_void {
@@ -78,7 +79,7 @@ impl Creation {
         log: rsf_game_log_fn,
         log_user: *mut c_void,
     ) -> bool {
-        *self.binding.lock().unwrap_or_else(PoisonError::into_inner) = Binding {
+        *lock_or_recover(&self.binding) = Binding {
             underlying,
             log,
             log_user: log_user as usize,
@@ -95,7 +96,7 @@ impl Creation {
     }
 
     fn receipts(&self) -> std::sync::MutexGuard<'_, HashMap<usize, DeviceReceipt>> {
-        self.receipts.lock().unwrap_or_else(PoisonError::into_inner)
+        lock_or_recover(&self.receipts)
     }
 
     fn reset_readiness(&self) {

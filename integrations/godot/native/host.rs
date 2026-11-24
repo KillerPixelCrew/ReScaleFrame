@@ -3,13 +3,14 @@
 
 use crate::platform::*;
 use crate::sys::*;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_RESET, rsf_frame_record,
     rsf_game_render_pass,
 };
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{null, null_mut};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::{
     Direct3D12::{
@@ -73,10 +74,7 @@ static BINDING: Mutex<Option<Arc<Binding>>> = Mutex::new(None);
 static CAPTURE: Mutex<Option<Arc<Capture>>> = Mutex::new(None);
 
 fn binding() -> Option<Arc<Binding>> {
-    BINDING
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+    lock_or_recover(&BINDING).clone()
 }
 
 struct Capture(Handle);
@@ -93,10 +91,7 @@ impl Drop for Capture {
 }
 
 fn capture() -> Option<Arc<Capture>> {
-    CAPTURE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+    lock_or_recover(&CAPTURE).clone()
 }
 
 // The DLL's C++ static lifetime invokes this after the host is quiesced. Avoid
@@ -240,10 +235,7 @@ impl Platform {
 
     pub(crate) fn prepare_capture(&self) -> bool {
         let capture = unsafe { rsf_core_capture12_create(1) };
-        let retired = CAPTURE
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .replace(Arc::new(Capture(capture)));
+        let retired = lock_or_recover(&CAPTURE).replace(Arc::new(Capture(capture)));
         drop(retired);
         // A disabled/null Runtime capture owner does not stop rendering.
         true
@@ -433,14 +425,11 @@ impl Platform {
         else {
             return false;
         };
-        let retired = BINDING
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .replace(Arc::new(Binding {
-                fence,
-                queue: queue.clone(),
-                device: device.clone(),
-            }));
+        let retired = lock_or_recover(&BINDING).replace(Arc::new(Binding {
+            fence,
+            queue: queue.clone(),
+            device: device.clone(),
+        }));
         drop(retired);
         true
     }

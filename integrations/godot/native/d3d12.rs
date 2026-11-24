@@ -17,12 +17,13 @@
 //! leaf except the fence signal, which calls no owner and keeps fence values in submission order.
 use crate::control::Control;
 use crate::platform::{Platform, Settings, Sharpening, SrCreate, SrEvaluate, SrFrame};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW, backend_result,
     rsf_game_render_pass,
 };
 use std::ffi::{c_int, c_void};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 const SR_NONE: u32 = 0;
 const SR_SPATIAL: u32 = 6;
@@ -169,7 +170,7 @@ impl D3d12 {
     }
 
     fn ledger(&self) -> MutexGuard<'_, Ledger> {
-        self.ledger.lock().unwrap_or_else(PoisonError::into_inner)
+        lock_or_recover(&self.ledger)
     }
 
     /// One `rsfg_render` pass. The caller checked the session, the arguments, the pass size and

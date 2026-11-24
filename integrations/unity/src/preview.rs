@@ -5,11 +5,12 @@ use crate::sys::{
     rsf_d3d12_window_drained, rsf_d3d12_window_observer, rsf_d3d12_window_prepare,
     rsf_d3d12_window_present, rsf_d3d12_window_presenter, rsf_d3d12_window_target,
 };
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_render_pass;
 use std::{
     ffi::c_void,
     ptr::{self, NonNull},
-    sync::{Mutex, MutexGuard, PoisonError, TryLockError},
+    sync::{Mutex, MutexGuard, TryLockError},
 };
 use windows_sys::Win32::{
     Foundation::{
@@ -89,7 +90,7 @@ static STATE: Mutex<State> = Mutex::new(State {
 static CONFIGURE: Mutex<()> = Mutex::new(());
 
 fn state() -> MutexGuard<'static, State> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&STATE)
 }
 
 unsafe extern "system" fn procedure(
@@ -392,7 +393,7 @@ pub(crate) fn rsf_unity_preview_drained() -> bool {
 
 pub(crate) fn rsf_unity_preview_release() {
     // The package closes bridge admission and proves the drain before committing.
-    let mut output = OUTPUT.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut output = lock_or_recover(&OUTPUT);
     if output
         .as_ref()
         .is_some_and(|output| unsafe { rsf_d3d12_window_destroy(output.0.as_ptr()) != 0 })

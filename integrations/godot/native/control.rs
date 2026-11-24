@@ -16,13 +16,14 @@ use crate::platform::{
 };
 use crate::vulkan::Vulkan;
 use crate::window::Window;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
     backend_result, presentation_result::PresentationResult, rsf_game_log_fn,
     vendor_paths::VendorPaths,
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 const SR_DLSS: u32 = 1;
 const SR_SPATIAL: u32 = 6;
@@ -192,7 +193,7 @@ impl Control {
     // No leaf or engine callback runs while this lock is held: the log, the FG install and the
     // engine services can re-enter this owner.
     fn session(&self) -> MutexGuard<'_, Session> {
-        self.session.lock().unwrap_or_else(PoisonError::into_inner)
+        lock_or_recover(&self.session)
     }
 
     pub(crate) fn booted(&self) -> bool {

@@ -9,11 +9,12 @@ use crate::sys::{
     rsf_unity_d3d12_engine,
 };
 use crate::sys::{RSF_UNITY_NATIVE_ABI_VERSION, rsf_unity_native_api};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::*;
 use std::ffi::{c_char, c_int, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU64, Ordering::SeqCst};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::{
     Foundation::{LPARAM, LRESULT, WPARAM},
     System::{
@@ -70,7 +71,7 @@ static INPUT_SOURCE: AtomicU64 = AtomicU64::new(0);
 static MESSAGE_HOOK: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
 fn host_lock() -> MutexGuard<'static, Option<Services>> {
-    HOST.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&HOST)
 }
 
 fn host() -> Option<rsf_game_host_services> {
@@ -221,14 +222,13 @@ unsafe extern "C" fn cpu_fact(fact: *const rsf_game_cpu_event) {
     let Some(_callback) = Callback::enter() else {
         return;
     };
-    if !rsf_unity_frames_active()
-        || fact.is_null()
-        || unsafe { fact.cast::<u32>().read() } < size_of::<rsf_game_cpu_event>() as u32
-    {
+    if !rsf_unity_frames_active() {
         return;
     }
     let Some(host) = host() else { return };
-    let fact = unsafe { &*fact };
+    let Some(fact) = (unsafe { ffi_util::checked(fact) }) else {
+        return;
+    };
     if fact.session_id != host.session_id {
         return;
     }
@@ -390,7 +390,7 @@ fn lookup_player_registry() -> bool {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
     use std::path::Path;
-    use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 
     const RVA: usize = 0x74fc80;
     const EXPECTED: [u8; 24] = [
@@ -406,12 +406,11 @@ fn lookup_player_registry() -> bool {
     if player.is_null() {
         return false;
     }
-    let mut path = [0u16; 1024];
-    let len = unsafe { GetModuleFileNameW(player, path.as_mut_ptr(), path.len() as u32) } as usize;
-    if len == 0 || len >= path.len() {
+    let mut buffer = [0u16; 1024];
+    let Some(path) = (unsafe { win32::module_path_in(player, &mut buffer) }) else {
         return false;
-    }
-    let path = OsString::from_wide(&path[..len]);
+    };
+    let path = OsString::from_wide(path);
     if rsf_windows::sha256_file(Path::new(&path)) != Some(SHA256) {
         return false;
     }

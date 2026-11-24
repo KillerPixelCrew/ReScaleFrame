@@ -34,6 +34,7 @@ pub(super) use crate::sys::{
     rsf_unity_vulkan_image_handles as ImageHandles,
 };
 use crate::vulkan_resolver::{DEVICE_LOST, SUCCESS};
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
@@ -269,7 +270,7 @@ unsafe impl Send for State {}
 static STATE: Mutex<State> = Mutex::new(State::new());
 
 fn lock() -> MutexGuard<'static, State> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&STATE)
 }
 
 impl State {
@@ -555,7 +556,7 @@ fn commands_retired() -> bool {
 
 /// The caller holds the presentation lease throughout native replacement.
 fn prepare_image(state: &Mutex<State>, index: usize, key: ImageKey) -> Option<ImageHandles> {
-    let lock = || state.lock().unwrap_or_else(PoisonError::into_inner);
+    let lock = || lock_or_recover(&state);
     let (device, replacing) = {
         let state = lock();
         if !state.open() || state.partial_submission {
@@ -786,7 +787,7 @@ static PRESENTATION: Mutex<Presentation> = Mutex::new(Presentation::new());
 static LEASE_ENDED: Condvar = Condvar::new();
 
 fn presentation() -> MutexGuard<'static, Presentation> {
-    PRESENTATION.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&PRESENTATION)
 }
 
 /// The presentation once no lease is held.

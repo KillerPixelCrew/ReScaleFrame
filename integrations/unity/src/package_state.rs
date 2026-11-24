@@ -33,6 +33,7 @@ use crate::sys::{
     rsf_sr12, rsf_unity_frame_counters, rsf_unity_package_settings, rsf_unity_package_status,
     rsf_unity_package_view_setup,
 };
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
     RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_render_config, rsf_game_render_pass,
 };
@@ -43,7 +44,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::{
     AtomicBool, AtomicI32, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering::SeqCst,
 };
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 /// RSF_SCREEN_MENU and RSF_SCREEN_FLIGHT, cast macros; package.c asserts them. The stored
 /// gameplay flag picks the screen class of every SR pass.
@@ -311,7 +312,7 @@ fn d3d_ring(bridge: u32) -> Option<MutexGuard<'static, ProducerRing>> {
         12 => &D3D12_RECORDINGS,
         _ => return None,
     };
-    Some(owner.lock().unwrap_or_else(PoisonError::into_inner))
+    Some(lock_or_recover(&owner))
 }
 
 pub(crate) fn rsf_unity_package_sr_slot_reset(bridge: u32, commands: *mut c_void, slot: u32) {
@@ -417,11 +418,11 @@ impl Package {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock_or_recover(&self.state)
     }
 
     fn lock_views(&self) -> MutexGuard<'_, Views> {
-        self.views.lock().unwrap_or_else(PoisonError::into_inner)
+        lock_or_recover(&self.views)
     }
 
     /// Stores valid settings. A reconstruction change (backend, quality or DLSS model) sets the
@@ -760,7 +761,7 @@ unsafe fn struct_size<T>(value: *const T) -> u32 {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfu_configure(input: *const rsf_unity_package_settings) -> c_int {
-    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    let _operation = lock_or_recover(&OPERATIONS);
     let Some(leaves) = loaded() else {
         return 0;
     };
@@ -775,7 +776,7 @@ unsafe extern "C" fn rsfu_configure(input: *const rsf_unity_package_settings) ->
 /// Accepts a longer structure and writes only this version's fields.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfu_settings(output: *mut rsf_unity_package_settings) -> c_int {
-    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    let _operation = lock_or_recover(&OPERATIONS);
     if output.is_null()
         || unsafe { struct_size(output) } < size_of::<rsf_unity_package_settings>() as u32
         || unsafe { (*output).abi_version } != RSF_UNITY_SETTINGS_ABI_VERSION
@@ -788,7 +789,7 @@ unsafe extern "C" fn rsfu_settings(output: *mut rsf_unity_package_settings) -> c
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfu_status(output: *mut rsf_unity_package_status) -> c_int {
-    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    let _operation = lock_or_recover(&OPERATIONS);
     let Some(leaves) = loaded() else {
         return 0;
     };
@@ -827,7 +828,7 @@ unsafe extern "C" fn rsfu_initialize(
     project: *const c_char,
     output: *mut rsf_unity_native_api,
 ) -> c_int {
-    let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    let _operation = lock_or_recover(&OPERATIONS);
     let Some(leaves) = loaded() else {
         return code::FAILED;
     };

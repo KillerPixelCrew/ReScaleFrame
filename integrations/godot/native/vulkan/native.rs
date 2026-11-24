@@ -9,6 +9,7 @@ use crate::vulkan::handle;
 use crate::{CONTROL, vk_creation_resolver};
 use ash::vk;
 use rsf_game_sys::backend_result;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::ffi_util::{ascii_wide, wide};
 use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
@@ -68,11 +69,11 @@ struct State {
 unsafe impl Send for State {}
 
 fn guard() -> MutexGuard<'static, ()> {
-    GUARD.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&GUARD)
 }
 
 fn state() -> MutexGuard<'static, State> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&STATE)
 }
 
 fn log(message: &CStr) {

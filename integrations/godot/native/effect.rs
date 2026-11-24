@@ -17,9 +17,10 @@ use crate::platform::{
     EFFECT_MOTION_FORMAT, EffectFrame, EffectReadback, EffectResources, EffectStatus,
 };
 use crate::properties::Properties;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use std::ffi::{CStr, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 #[cfg(test)]
 use tests::{leaf_frame, leaf_read_motion, leaf_resources};
 
@@ -81,9 +82,7 @@ pub(crate) struct Effect {
 
 impl Effect {
     fn published(&self) -> MutexGuard<'_, Published> {
-        self.published
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        lock_or_recover(&self.published)
     }
 
     pub(crate) fn request_capture(&self) {

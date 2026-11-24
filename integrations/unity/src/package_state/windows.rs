@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Win32 platform operations and input-window ownership for the Unity package.
 use super::services::{Handle, report_window_message};
-use crate::runtime_config::{PATH_CAPACITY, file_name, terminated};
+use crate::runtime_config::{file_name, terminated};
+use rsf_game_sys::ffi_util::lock_or_recover;
+use rsf_game_sys::win32;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{null, null_mut, without_provenance};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering::SeqCst};
-use std::sync::{Mutex, PoisonError};
 use windows_sys::Win32::Foundation::{
     CloseHandle, FreeLibrary, HANDLE, HMODULE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, WPARAM,
 };
@@ -17,7 +19,7 @@ use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA;
 use windows_sys::Win32::System::Environment::GetEnvironmentVariableW;
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-    GetModuleFileNameW, GetModuleHandleExW,
+    GetModuleHandleExW,
 };
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
@@ -28,15 +30,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 use windows_sys::core::w;
 
+/// The module's path without a terminator; empty when it cannot be read.
 fn module_path(module: HMODULE) -> Vec<u16> {
-    let mut path = vec![0u16; PATH_CAPACITY];
-    let length = unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), PATH_CAPACITY as u32) };
-    path.truncate(if (length as usize) < PATH_CAPACITY {
-        length as usize
-    } else {
-        0
-    });
-    path
+    unsafe { win32::module_path(module) }.map_or_else(Vec::new, |path| path.units().to_vec())
 }
 
 pub(super) fn startup_paths() -> (bool, Vec<u16>) {
@@ -175,7 +171,7 @@ pub(super) fn rsf_unity_package_subclass(hwnd: HWND) -> u32 {
     if unsafe { GetWindowThreadProcessId(hwnd, null_mut()) } != owner {
         return 0;
     }
-    let mut receipt = RECEIPT.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut receipt = lock_or_recover(&RECEIPT);
     if let Some(active) = receipt.as_ref() {
         if !DESTROYED.load(SeqCst) {
             if active.window.0 != hwnd || active.owner != owner {
@@ -223,7 +219,7 @@ pub(super) fn rsf_unity_package_subclass(hwnd: HWND) -> u32 {
 
 pub(super) fn rsf_unity_package_restore(hwnd: HWND) {
     REPORTING.store(false, SeqCst);
-    let mut receipt = RECEIPT.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut receipt = lock_or_recover(&RECEIPT);
     let Some(active) = receipt.as_ref() else {
         return;
     };

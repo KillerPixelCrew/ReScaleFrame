@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Observes successful public XInput reads from modules the process already loaded.
 use crate::minhook;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering::SeqCst};
-use std::sync::{Mutex, PoisonError};
 use windows_sys::Win32::Foundation::{ERROR_DEVICE_NOT_CONNECTED, ERROR_SUCCESS};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::UI::Input::XboxController::{XINPUT_STATE, XUSER_MAX_COUNT};
@@ -62,7 +63,7 @@ unsafe extern "system" fn read<const SLOT: usize>(index: u32, state: *mut XINPUT
 // The callback belongs to the adapter and must remain callable until its readers drain.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_xinput_facts_install_loaded(callback: Option<Receipt>) {
-    let mut targets = TARGETS.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut targets = lock_or_recover(&TARGETS);
     RECEIVED.store(
         callback.map_or(ptr::null_mut(), |f| f as *mut c_void),
         SeqCst,
@@ -113,13 +114,13 @@ fn disable(targets: &[usize; SLOT_COUNT]) -> bool {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_xinput_facts_disable() {
-    let targets = TARGETS.lock().unwrap_or_else(PoisonError::into_inner);
+    let targets = lock_or_recover(&TARGETS);
     disable(&targets);
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_xinput_facts_remove() -> bool {
-    let mut targets = TARGETS.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut targets = lock_or_recover(&TARGETS);
     if !disable(&targets) || READERS.load(SeqCst) != 0 {
         return false;
     }

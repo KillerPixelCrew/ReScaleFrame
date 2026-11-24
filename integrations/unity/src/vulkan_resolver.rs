@@ -4,10 +4,11 @@
 //! Win32 interop device-extension selection and the interop readiness of the created device.
 //! Native code supplies stateless Vulkan loader entry points and the DXGI presentation callback.
 use ash::vk;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::slice;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 #[path = "vulkan_wsi.rs"]
 mod wsi;
@@ -90,7 +91,7 @@ struct Resolver {
 static RESOLVER: Mutex<Resolver> = Mutex::new(Resolver::NEW);
 
 fn resolver() -> MutexGuard<'static, Resolver> {
-    RESOLVER.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&RESOLVER)
 }
 
 fn route(name: &CStr, from_instance: bool) -> u32 {

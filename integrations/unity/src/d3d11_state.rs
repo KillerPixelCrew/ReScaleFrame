@@ -24,11 +24,12 @@ use crate::bridge_interop::D3D11;
 use crate::d3d11_pass::shared_format;
 use crate::device_creation::{Claim, Creation};
 use crate::sys::RSF_UNITY_FRAMES_SLOTS;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_host_services;
 use rsf_runtime_submission::SubmissionHandle;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 // D3D11 recording over the Unity SDK leaves in integrations/unity/native, which need the untracked
 // Unity native headers; unit tests cover the slot state above it.
@@ -201,11 +202,7 @@ unsafe impl Send for State {}
 static STATE: Mutex<State> = Mutex::new(State::new());
 
 fn lock() -> MutexGuard<'static, State> {
-    lock_state(&STATE)
-}
-
-fn lock_state(state: &Mutex<State>) -> MutexGuard<'_, State> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
+    lock_or_recover(&STATE)
 }
 
 impl State {
@@ -411,7 +408,7 @@ fn prepare_surface(
     ring: &SubmissionHandle,
 ) -> Option<*mut c_void> {
     let (retire, handles) = {
-        let mut state = lock_state(state);
+        let mut state = lock_or_recover(state);
         let retire = match state.surface_claim(index, key) {
             SurfaceClaim::Borrowed(surface) => return Some(surface),
             SurfaceClaim::Refused => return None,
@@ -449,7 +446,7 @@ fn prepare_surface(
         unsafe { ops::destroy_surface(created) };
         return None;
     }
-    let published = lock_state(state).publish_surface(
+    let published = lock_or_recover(state).publish_surface(
         index,
         Surface {
             key,
@@ -770,21 +767,21 @@ mod tests {
         let state = published();
         // Without the lease nothing is lent or created.
         assert_eq!(surface(&state, 0, 16), None);
-        assert!(lock_state(&state).begin_surfaces());
+        assert!(lock_or_recover(&state).begin_surfaces());
         // The first creation has nothing to retire.
         assert_eq!(surface(&state, 0, 16), Some(handle(16)));
         assert_eq!(calls(), ["create_surface"]);
         // A matching key borrows without a leaf.
         assert_eq!(surface(&state, 0, 16), Some(handle(16)));
         assert!(calls().is_empty());
-        lock_state(&state).end_surfaces();
-        assert!(lock_state(&state).begin_surfaces());
+        lock_or_recover(&state).end_surfaces();
+        assert!(lock_or_recover(&state).begin_surfaces());
         // A new key waits for the ring, creates, publishes, then destroys the old surface.
         assert_eq!(surface(&state, 0, 32), Some(handle(32)));
         assert_eq!(calls(), ["wait", "create_surface", "destroy_surface"]);
-        lock_state(&state).end_surfaces();
+        lock_or_recover(&state).end_surfaces();
         assert_eq!(
-            lock_state(&state)
+            lock_or_recover(&state)
                 .creation
                 .device
                 .as_ref()
@@ -800,11 +797,11 @@ mod tests {
     #[test]
     fn a_refused_replacement_keeps_the_published_surface() {
         let state = published();
-        assert!(lock_state(&state).begin_surfaces());
+        assert!(lock_or_recover(&state).begin_surfaces());
         assert_eq!(surface(&state, 3, 16), Some(handle(16)));
-        lock_state(&state).end_surfaces();
+        lock_or_recover(&state).end_surfaces();
         calls();
-        assert!(lock_state(&state).begin_surfaces());
+        assert!(lock_or_recover(&state).begin_surfaces());
         refuse("wait");
         assert_eq!(surface(&state, 3, 32), None);
         assert_eq!(calls(), ["wait"]);
@@ -821,17 +818,17 @@ mod tests {
     fn replacement_keeps_the_old_surface_until_the_copy_timeline_retires() {
         let state = published();
         let ring = SubmissionHandle::new(SLOTS);
-        assert!(lock_state(&state).begin_surfaces());
+        assert!(lock_or_recover(&state).begin_surfaces());
         assert_eq!(
             prepare_surface(&state, 0, ptr::null(), key(16), 2, &ring),
             Some(handle(16))
         );
-        lock_state(&state).end_surfaces();
+        lock_or_recover(&state).end_surfaces();
         calls();
 
         let fence = ring.lock().shared_tail().unwrap();
         ring.lock().record_copy();
-        assert!(lock_state(&state).begin_surfaces());
+        assert!(lock_or_recover(&state).begin_surfaces());
         assert_eq!(
             prepare_surface(&state, 0, ptr::null(), key(32), 2, &ring),
             None
@@ -854,7 +851,7 @@ mod tests {
     #[test]
     fn a_lease_never_replaces_a_view_it_lent() {
         let state = published();
-        assert!(lock_state(&state).begin_surfaces());
+        assert!(lock_or_recover(&state).begin_surfaces());
         assert_eq!(surface(&state, 4, 16), Some(handle(16)));
         calls();
         assert_eq!(surface(&state, 4, 32), None);
@@ -862,7 +859,7 @@ mod tests {
         // Another slot is independent.
         assert_eq!(surface(&state, 5, 32), Some(handle(32)));
         assert_eq!(surface(&state, SURFACES, 32), None);
-        lock_state(&state).end_surfaces();
+        lock_or_recover(&state).end_surfaces();
         calls();
     }
 
@@ -901,13 +898,13 @@ mod tests {
     #[test]
     fn release_destroys_surfaces_before_slots_and_device() {
         let state = published();
-        assert!(lock_state(&state).begin_surfaces());
+        assert!(lock_or_recover(&state).begin_surfaces());
         assert!(surface(&state, 1, 16).is_some());
         assert!(surface(&state, 5, 32).is_some());
-        lock_state(&state).end_surfaces();
+        lock_or_recover(&state).end_surfaces();
         calls();
         let taken = {
-            let mut state = lock_state(&state);
+            let mut state = lock_or_recover(&state);
             assert!(state.close().is_some());
             state.take_for_release().unwrap()
         };
@@ -923,6 +920,6 @@ mod tests {
                 "destroy"
             ]
         );
-        lock_state(&state).released();
+        lock_or_recover(&state).released();
     }
 }

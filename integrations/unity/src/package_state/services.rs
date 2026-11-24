@@ -20,6 +20,7 @@ use crate::bridge_state::{
 };
 use crate::runtime_config::{PATH_CAPACITY, terminated};
 use crate::sys::rsf_unity_native_api;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN,
     RSF_GAME_CPU_FRAME_END, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
@@ -29,8 +30,8 @@ use rsf_game_sys::{
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::null_mut;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
-use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// The kinds rsfu_input accepts.
 const INPUT_KINDS: u32 = RSF_GAME_INPUT_KEYBOARD | RSF_GAME_INPUT_MOUSE | RSF_GAME_INPUT_CONTROLLER;
@@ -79,10 +80,6 @@ const fn empty_api() -> rsf_unity_native_api {
     unsafe { std::mem::zeroed() }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 pub(super) struct Services {
     /// Unity.exe hosts the package: generation installs per session and input comes from the
     /// preview's parent window.
@@ -116,11 +113,11 @@ impl Services {
     }
 
     pub(super) fn api(&self) -> rsf_unity_native_api {
-        lock(&self.api).0
+        lock_or_recover(&self.api).0
     }
 
     pub(super) fn retired(&self) {
-        *lock(&self.api) = Api(empty_api());
+        *lock_or_recover(&self.api) = Api(empty_api());
         self.session.store(0, SeqCst);
         self.input_frame.store(0, SeqCst);
     }
@@ -218,7 +215,7 @@ impl Package {
     pub(super) fn loaded(&self, leaves: &Leaves, editor: bool, log: &[u16]) {
         self.services.editor.store(editor, SeqCst);
         if !log.is_empty() {
-            let mut file = lock(&self.services.log);
+            let mut file = lock_or_recover(&self.services.log);
             if file.is_none() {
                 *file = leaves.log_open(log);
             }
@@ -231,7 +228,7 @@ impl Package {
     /// `%LOCALAPPDATA%\ReScaleFrame\Unity\<process id>.log` unless a log is open, its directories
     /// created first. A refusal is retried by the next session.
     fn open_process_log(&self, leaves: &Leaves) {
-        let mut file = lock(&self.services.log);
+        let mut file = lock_or_recover(&self.services.log);
         if !file.is_none() {
             return;
         }
@@ -254,7 +251,7 @@ impl Package {
     }
 
     fn log_text(&self, leaves: &Leaves, text: &CStr) {
-        let file = lock(&self.services.log);
+        let file = lock_or_recover(&self.services.log);
         leaves.log_write(*file, text);
     }
 
@@ -292,7 +289,7 @@ impl Package {
         // The bridge writes into the stored API.
         let mut api = self.services.api();
         let prepared = leaves.bridge_prepare(&services, &mut api);
-        lock(&self.services.api).0 = api;
+        lock_or_recover(&self.services.api).0 = api;
         self.services.session.store(api.session_id, SeqCst);
         prepared
     }
@@ -300,7 +297,7 @@ impl Package {
     /// Hooks the window `find` names while none is hooked. A window that is not found yet is
     /// looked for again by the next call.
     fn hook(&self, leaves: &Leaves, find: fn(&Leaves) -> Handle) {
-        let mut window = lock(&self.services.window);
+        let mut window = lock_or_recover(&self.services.window);
         if !window.is_none() {
             return;
         }
@@ -321,7 +318,7 @@ impl Package {
     }
 
     pub(super) fn stop_window_input(&self, leaves: &Leaves) {
-        let mut window = lock(&self.services.window);
+        let mut window = lock_or_recover(&self.services.window);
         if !window.is_none() {
             leaves.restore(*window);
         }
@@ -331,7 +328,7 @@ impl Package {
     /// A WNDPROC that the platform could not detach keeps its own forwarding receipt.
     pub(super) fn unload(&self, leaves: &Leaves) {
         self.stop_window_input(leaves);
-        let mut file = lock(&self.services.log);
+        let mut file = lock_or_recover(&self.services.log);
         if !file.is_none() {
             leaves.log_close(*file);
             *file = Handle::NONE;

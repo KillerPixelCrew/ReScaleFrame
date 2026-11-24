@@ -10,10 +10,11 @@ use crate::generation::{self, Sources};
 use crate::sys::{RSF_FG_BACKEND_AUTO, RSF_REFLEX_OFF, rsf_fg12_setup, rsf_native_fg_options};
 use crate::sys::{RSF_FG_OFF, rsf_unity_package_view_setup};
 use rsf_game_sys::backend_result;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::vendor_paths::VendorPaths;
 use std::ffi::CString;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
-use std::sync::{Mutex, PoisonError};
 
 /// The package's SDK directories and Streamline identity, as UTF-8 C strings.
 #[derive(Clone, Default)]
@@ -91,15 +92,11 @@ impl Presentation {
     }
 
     pub(super) fn identity(&self) -> Identity {
-        self.identity
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-            .unwrap_or_default()
+        lock_or_recover(&self.identity).clone().unwrap_or_default()
     }
 
     pub(super) fn set_identity(&self, identity: Identity) {
-        *self.identity.lock().unwrap_or_else(PoisonError::into_inner) = Some(identity);
+        *lock_or_recover(&self.identity) = Some(identity);
     }
 }
 
@@ -129,11 +126,7 @@ impl Package {
     pub(super) fn install(&self, leaves: &Leaves) {
         let identity = self.presentation.identity();
         let result = {
-            let mut installed = self
-                .presentation
-                .installed
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut installed = lock_or_recover(&self.presentation.installed);
             if *installed || !identity.installable() {
                 return;
             }

@@ -10,10 +10,11 @@ use crate::platform::{
     VkSrFrame, VkView,
 };
 use rsf_game_sys::backend_result;
+use rsf_game_sys::ffi_util::lock_or_recover;
 use std::ffi::{c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 const SR_DLSS: u32 = 1;
 const SR_FSR3: u32 = 3;
@@ -123,7 +124,7 @@ impl Vulkan {
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock_or_recover(&self.state)
     }
 
     /// `settings`' providers with Auto resolved by the Runtime's adapter policy
