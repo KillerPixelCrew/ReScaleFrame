@@ -17,9 +17,13 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # rust-toolchain.toml names the toolchain; rustup no longer installs it implicitly.
       - name: Install pinned Rust toolchain
         shell: pwsh
-        run: rustup show
+        run: |
+          rustup toolchain install --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup show
       # build.rs generates the C bindings with bindgen, which loads libclang (docs/tooling.md).
       - name: Install pinned LLVM for bindgen
         shell: pwsh
