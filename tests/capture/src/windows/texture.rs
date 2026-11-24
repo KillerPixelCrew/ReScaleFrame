@@ -2,7 +2,7 @@
 // Dump known motion and mask textures through the native ABI and inspect the files.
 use super::{directory_argument, entry, utf8};
 use crate::sys::*;
-use rsf_test_support::d3d11_device;
+use rsf_test_support::device::Device;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::{fs, path::Path, ptr};
 use windows::Win32::Graphics::Direct3D::*;
@@ -33,25 +33,6 @@ unsafe extern "C" fn collect(user: *mut c_void, message: *const c_char) {
     );
 }
 
-fn device(driver: D3D_DRIVER_TYPE) -> Option<(ID3D11Device, ID3D11DeviceContext)> {
-    d3d11_device(
-        driver,
-        D3D11_CREATE_DEVICE_FLAG(0),
-        Some(&[D3D_FEATURE_LEVEL_11_0]),
-    )
-    .ok()
-}
-
-fn texture(
-    device: &ID3D11Device,
-    desc: &D3D11_TEXTURE2D_DESC,
-    source: Option<&D3D11_SUBRESOURCE_DATA>,
-) -> Option<ID3D11Texture2D> {
-    let mut texture = None;
-    unsafe { device.CreateTexture2D(desc, source.map(ptr::from_ref), Some(&mut texture)) }.ok()?;
-    texture
-}
-
 fn near(actual: f32, expected: f32, tolerance: f32) {
     assert!(
         (actual - expected).abs() <= tolerance,
@@ -60,12 +41,11 @@ fn near(actual: f32, expected: f32, tolerance: f32) {
 }
 
 fn run(path: &Path) -> i32 {
-    let Some((device, context)) =
-        device(D3D_DRIVER_TYPE_HARDWARE).or_else(|| device(D3D_DRIVER_TYPE_WARP))
-    else {
+    let Some(gpu) = Device::feature_11() else {
         println!("no D3D11 device available, skipping");
         return 0;
     };
+    let Device { device, context } = &gpu;
     let encode = |v: f32| (((v * SCALE + BIAS) * 65535.0) + 0.5) as u16;
     let pixels = [
         0,
@@ -96,7 +76,7 @@ fn run(path: &Path) -> i32 {
         SysMemPitch: 16,
         SysMemSlicePitch: 0,
     };
-    let source = texture(&device, &desc, Some(&initial)).expect("create velocity texture");
+    let source = gpu.texture(&desc, Some(&initial)).expect("create velocity texture");
     let prefix = utf8(&path.join("velocity"));
     let mut log = Log::default();
     let user = ptr::from_mut(&mut log).cast();
@@ -177,15 +157,15 @@ fn run(path: &Path) -> i32 {
         SysMemPitch: 8,
         SysMemSlicePitch: 0,
     };
-    let mask = texture(
-        &device,
-        &D3D11_TEXTURE2D_DESC {
-            Format: DXGI_FORMAT_R8G8_UNORM,
-            ..desc
-        },
-        Some(&mask_data),
-    )
-    .expect("create two-channel mask");
+    let mask = gpu
+        .texture(
+            &D3D11_TEXTURE2D_DESC {
+                Format: DXGI_FORMAT_R8G8_UNORM,
+                ..desc
+            },
+            Some(&mask_data),
+        )
+        .expect("create two-channel mask");
     let mask_prefix = utf8(&path.join("numeric_mask"));
     options.base.output_prefix_utf8 = mask_prefix.as_ptr();
     options.base.view = RSF_FIXTURE_DUMP_VIEW_RAW as u32;
@@ -221,8 +201,7 @@ fn run(path: &Path) -> i32 {
         pSysMem: bytes.as_ptr().cast(),
         ..initial
     };
-    if let Some(unsupported) = texture(
-        &device,
+    if let Ok(unsupported) = gpu.texture(
         &D3D11_TEXTURE2D_DESC {
             Format: DXGI_FORMAT_R32_UINT,
             ..desc
@@ -241,15 +220,15 @@ fn run(path: &Path) -> i32 {
         BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
         ..desc
     };
-    if let Some(mipped) = texture(&device, &mipped, None) {
+    if let Ok(mipped) = gpu.texture(&mipped, None) {
         let mip_prefix = utf8(&path.join("mipped"));
         options.base.output_prefix_utf8 = mip_prefix.as_ptr();
         assert_eq!(dump(&mipped, &options, &mut report), 0);
         assert_eq!((report.width, report.height), (8, 8));
     }
     options.base.output_prefix_utf8 = prefix.as_ptr();
-    if let Some((other_device, _)) = self::device(D3D_DRIVER_TYPE_WARP)
-        && let Some(foreign) = texture(&other_device, &desc, Some(&initial))
+    if let Some(other) = Device::create(D3D_DRIVER_TYPE_WARP, Some(&[D3D_FEATURE_LEVEL_11_0]))
+        && let Ok(foreign) = other.texture(&desc, Some(&initial))
     {
         assert_eq!(
             dump(&foreign, &options, &mut report),

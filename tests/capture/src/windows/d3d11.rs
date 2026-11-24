@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{bundles, contents, directory_argument, entry, root, utf8};
 use crate::sys::*;
-use rsf_test_support::{Window, frame_record, warp_swapchain, wide_os};
+use rsf_test_support::{Window, frame_record, qpc, qpc_frequency, warp_swapchain, wide_os};
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::{fs, path::Path, ptr};
 use windows::Win32::Foundation::GENERIC_READ;
@@ -14,7 +14,6 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPED;
 use windows::core::{BOOL, IUnknown, Interface, PCWSTR, w};
-use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 const RAW: u32 = RSF_FIXTURE_DUMP_VIEW_RAW as u32;
 const HDR: u32 = RSF_FIXTURE_DUMP_VIEW_HDR as u32;
@@ -157,10 +156,8 @@ fn clocks(bundle: &Path, pass: &rsf_game_render_pass) {
         motion_scale_y: 1.0,
         ..Default::default()
     };
-    let (mut input, mut source, mut freq) = (0, 0, 0);
     unsafe {
-        assert_ne!(QueryPerformanceCounter(&mut input), 0);
-        record.input_qpc = input as u64;
+        record.input_qpc = qpc();
         record.source_provenance = SOURCE_INPUT;
         fg.record = &record;
         rsf_input_dump_fg_prepare(pass, &fg, 0);
@@ -169,12 +166,10 @@ fn clocks(bundle: &Path, pass: &rsf_game_render_pass) {
         for key in ["source_provenance", "source_qpc", "source_qpc_frequency"] {
             assert!(recorded.contains(&format!("\"{key}\":0,")));
         }
-        assert_ne!(QueryPerformanceCounter(&mut source), 0);
-        assert_ne!(QueryPerformanceFrequency(&mut freq), 0);
         record.input_qpc = 0;
         record.source_provenance = SOURCE_RENDERED;
-        record.source_qpc = source as u64;
-        record.source_qpc_frequency = freq as u64;
+        record.source_qpc = qpc();
+        record.source_qpc_frequency = qpc_frequency();
         fg.record = &record;
         rsf_input_dump_fg_prepare(pass, &fg, 0);
         let rendered = contents(bundle, "fg_constants.json");

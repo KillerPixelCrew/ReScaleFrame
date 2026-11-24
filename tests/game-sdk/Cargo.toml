@@ -8,14 +8,14 @@ license.workspace = true
 
 [features]
 unity-sr-d3d12-fixture = [
-  "dep:rsf-unity", "dep:windows", "windows-sys/Win32_System_Performance",
-  "windows-sys/Win32_System_Threading", "windows-sys/Win32_System_WindowsProgramming",
+  "dep:rsf-unity", "dep:windows", "windows-sys/Win32_System_Threading",
+  "windows-sys/Win32_System_WindowsProgramming",
 ]
-vk-latency-fixtures = ["dep:ash", "windows-sys/Win32_System_Performance", "windows-sys/Win32_System_Threading", "windows-sys/Win32_UI_WindowsAndMessaging"]
+vk-latency-fixtures = ["dep:ash", "windows-sys/Win32_System_Threading", "windows-sys/Win32_UI_WindowsAndMessaging"]
 cpu-fixtures = ["windows-sys/Win32_System_Memory", "windows-sys/Win32_System_SystemInformation"]
 d3d11-host-fixture = []
 plugin-session-fixture = []
-render-host-fixtures = ["windows-sys/Win32_System_Performance", "windows-sys/Win32_System_WindowsProgramming"]
+render-host-fixtures = ["windows-sys/Win32_System_WindowsProgramming"]
 
 [lib]
 crate-type = ["staticlib"]

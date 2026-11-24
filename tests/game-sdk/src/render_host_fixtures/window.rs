@@ -4,10 +4,10 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_PRIMARY,
     RSF_GAME_RENDER_TEXTURE_BINDING, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass as Pass,
 };
+use rsf_test_support::{qpc, qpc_frequency};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{E_NOINTERFACE, S_FALSE, S_OK};
-use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::core::GUID;
 
 #[repr(C)]
@@ -204,12 +204,6 @@ fn scope_contract() {
     assert_eq!(end(&extended.pass), 1);
 }
 
-fn counter() -> u64 {
-    let mut tick = 0;
-    assert_ne!(unsafe { QueryPerformanceCounter(&mut tick) }, 0);
-    tick as u64
-}
-
 fn present_contract() {
     let (mut chain, mut alias, mut surface) = (Unknown::new(), Unknown::new(), Unknown::new());
     let chain_ptr = &raw mut chain;
@@ -267,9 +261,7 @@ fn present_contract() {
             0
         );
         assert_eq!(chain.queries + alias.queries, queries);
-        let before_begin = counter();
-        let mut frequency = 0;
-        assert_ne!(QueryPerformanceFrequency(&mut frequency), 0);
+        let before_begin = qpc();
         assert_eq!(rsf_native_window_present(&begin), 1);
         assert_eq!(rsf_native_window_last_present(&mut record), 0);
 
@@ -310,10 +302,10 @@ fn present_contract() {
             }),
             0
         );
-        let before_end = counter();
+        let before_end = qpc();
         assert_eq!(rsf_native_window_present(&end), 1);
         assert_eq!(rsf_native_window_last_present(&mut record), 1);
-        let after_end = counter();
+        let after_end = qpc();
         assert_eq!(
             (
                 record.matched,
@@ -343,7 +335,7 @@ fn present_contract() {
         );
         assert!((before_begin..=before_end).contains(&record.begin_qpc));
         assert!((before_end..=after_end).contains(&record.end_qpc));
-        assert_eq!(record.qpc_frequency, frequency as u64);
+        assert_eq!(record.qpc_frequency, qpc_frequency());
         assert_eq!(
             (
                 record.scene_matched,

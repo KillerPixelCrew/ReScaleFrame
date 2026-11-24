@@ -8,8 +8,8 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_WINDOW, RSF_SCREEN_FLIGHT, rsf_game_cpu_event,
     rsf_game_host_services, rsf_game_latency_event, rsf_game_render_pass,
 };
-use rsf_test_support::Window;
 use rsf_test_support::d3d12::transition;
+use rsf_test_support::{Window, cpu_event, qpc, qpc_frequency};
 use std::{ptr, thread, time::Duration};
 use windows::{
     Win32::{
@@ -19,10 +19,7 @@ use windows::{
     },
     core::{Interface, PCWSTR, w},
 };
-use windows_sys::Win32::System::{
-    Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
-    WindowsProgramming::WritePrivateProfileStringW,
-};
+use windows_sys::Win32::System::WindowsProgramming::WritePrivateProfileStringW;
 
 fn fixture_window(class: PCWSTR, title: PCWSTR) -> Result<Window> {
     Ok(Window::new(
@@ -201,17 +198,6 @@ pub(super) fn live_switches(
     Ok(())
 }
 
-fn timestamps() -> Result<(u64, u64)> {
-    let (mut now, mut frequency) = (0, 0);
-    check(
-        unsafe {
-            QueryPerformanceCounter(&mut now) != 0 && QueryPerformanceFrequency(&mut frequency) != 0
-        },
-        "read latency fixture timestamps",
-    )?;
-    Ok((now as u64, frequency as u64))
-}
-
 fn latency(
     host: &rsf_game_host_services,
     session: u64,
@@ -222,14 +208,13 @@ fn latency(
         .process_latency
         .ok_or("missing host latency callback")?;
     for &marker in markers {
-        let (timestamp_qpc, qpc_frequency) = timestamps()?;
         let event = rsf_game_latency_event {
             struct_size: size_of::<rsf_game_latency_event>() as u32,
             marker,
             session_id: session,
             source_frame_id: source,
-            timestamp_qpc,
-            qpc_frequency,
+            timestamp_qpc: qpc(),
+            qpc_frequency: qpc_frequency(),
         };
         check(
             unsafe { call(host.user, &event) } == 0,
@@ -241,17 +226,16 @@ fn latency(
 
 fn inputs(host: &rsf_game_host_services, session: u64, source: u64, window: &Window) -> Result<()> {
     let call = host.cpu_event.ok_or("missing host CPU callback")?;
-    let (timestamp_qpc, qpc_frequency) = timestamps()?;
     let received = rsf_game_cpu_event {
         input_kind: 7,
         event_version: RSF_GAME_CPU_EVENT_VERSION,
         flags: RSF_GAME_CPU_INPUT_KEYED,
-        ..rsf_test_support::cpu_event(
+        ..cpu_event(
             session,
             source,
             RSF_GAME_CPU_INPUT_EVENT,
-            timestamp_qpc,
-            qpc_frequency,
+            qpc(),
+            qpc_frequency(),
         )
     };
     unsafe {

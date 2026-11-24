@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use rsf_game_sys::backend_result::{FEATURE_FAILED, INVALID_ARGUMENT, OK};
+use rsf_test_support::{qpc, qpc_frequency};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicI32, AtomicUsize};
-use windows_sys::Win32::{
-    System::{
-        Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
-        Threading::GetCurrentThreadId,
-    },
-    UI::WindowsAndMessaging::*,
-};
+use windows_sys::Win32::{System::Threading::GetCurrentThreadId, UI::WindowsAndMessaging::*};
 
 #[path = "vk_streamline_cases.rs"]
 mod cases;
@@ -74,12 +69,7 @@ fn cpu_expected(frame: u64, stage: u32, render_expected: u32) {
     unsafe { rsf_latencyvk_cpu(&event) };
 }
 fn clock_event(frame: u64, stage: u32) -> Event {
-    let (mut now, mut hz) = (0, 0);
-    unsafe {
-        QueryPerformanceCounter(&mut now);
-        QueryPerformanceFrequency(&mut hz);
-    }
-    event(909, frame, stage, now as u64, hz as u64, V1, KEYED)
+    event(909, frame, stage, qpc(), qpc_frequency(), V1, KEYED)
 }
 fn report_with_registration(event: &Event) {
     CHECK_REGISTRATION.set(true);
