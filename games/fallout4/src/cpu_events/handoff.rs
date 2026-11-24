@@ -162,6 +162,14 @@ impl WorkerTicket {
         }
     }
 
+    /// Refuses as a changed state. True when no refusal had been recorded, so the caller reports it
+    /// once.
+    pub fn refuse_changed(&mut self) -> bool {
+        let first = self.refusal == 0;
+        self.refuse(rsf_game_sys::RSF_GAME_CPU_ABORT_STATE_CHANGED);
+        first
+    }
+
     pub fn reserve(&mut self, owner: &WorkerCycle, future: &CpuIdentity, generation: u64) -> bool {
         if self.active()
             || owner.source == 0

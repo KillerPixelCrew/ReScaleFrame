@@ -184,14 +184,6 @@ fn thread_id() -> u32 {
     unsafe { GetCurrentThreadId() }
 }
 
-fn last_error() -> u32 {
-    unsafe { GetLastError() }
-}
-
-fn set_last_error(error: u32) {
-    unsafe { SetLastError(error) };
-}
-
 fn predicate_bits(terms: &[bool]) -> u32 {
     terms
         .iter()
@@ -204,7 +196,7 @@ fn log(host: &rsf_game_host_services, text: String) {
     host_log(host, &text);
 }
 
-/// A pointer as MSVC %p renders it.
+/// A pointer as sixteen uppercase hexadecimal digits.
 struct P(usize);
 impl std::fmt::Display for P {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -558,7 +550,7 @@ fn native_cycle(
         && CYCLE_STAGES[index].fetch_or(bit, Relaxed) & bit == 0
         && CYCLE_BUDGET.fetch_add(1, Relaxed) < 32
     {
-        let error = last_error();
+        let error = unsafe { GetLastError() };
         let state_known = [
             StateRead::MainRead,
             StateRead::ManagerRead,
@@ -636,7 +628,7 @@ fn native_cycle(
                 P(proof.window),
             ),
         );
-        set_last_error(error);
+        unsafe { SetLastError(error) };
     }
     false
 }
@@ -1005,7 +997,7 @@ fn close_frame() {
             // No verified Present phase was published for this source. The worker cannot await
             // its receipt once Main closes and joins it.
             if !w.current.sealed && w.future.facts.predecessor == w.current.key {
-                w.future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+                w.future.facts.refuse_changed();
             }
         }
     }
@@ -1201,14 +1193,10 @@ fn downstream_receipt(
 // ---------------------------------------------------------------------------------------------
 // The worker poll and its future source.
 
-/// Reserves the future source for the selected worker poll. True when this poll owns a mapped
-/// ticket, even when a later proof refused it.
-fn reserve_worker_poll(
-    manager: usize,
-    caller: usize,
-    generation: &mut u64,
-    previous_polls: &mut u32,
-) -> bool {
+/// Reserves the future source for the selected worker poll. Returns whether this poll owns a mapped
+/// ticket, even when a later proof refused it, the poll generation it took and the number of polls
+/// already in flight.
+fn reserve_worker_poll(manager: usize, caller: usize) -> (bool, u64, u32) {
     let c = render_copy();
     let mut proof = c.key;
     let mut native = InputState::ZERO;
@@ -1233,13 +1221,14 @@ fn reserve_worker_poll(
     let mut copy = Future::ZERO;
     let bits;
     let mut registered = false;
+    let (previous_polls, generation);
     {
         let mut guard = worker();
         let w = &mut *guard;
         // Publish the one qualified no-native-poll-yet intention with its attempt counters. Main
         // cannot observe an advanced counter without this ticket.
-        *previous_polls = POLLS.fetch_add(1, SeqCst);
-        *generation = POLL_GENERATION.fetch_add(1, SeqCst) + 1;
+        previous_polls = POLLS.fetch_add(1, SeqCst);
+        generation = POLL_GENERATION.fetch_add(1, SeqCst) + 1;
         let current = &w.current;
         let source_exists = current.cpu.source != 0
             && current.cpu.submission != 0
@@ -1247,7 +1236,7 @@ fn reserve_worker_poll(
             && current.key.source == current.cpu.source;
         let binding_ready = binding_unchanged
             && (c.binding.source == 0
-                || (*generation > c.binding.generation && *generation - c.binding.generation == 1));
+                || (generation > c.binding.generation && generation - c.binding.generation == 1));
         bits = predicate_bits(&[
             enabled(),
             JOB_SELECTED.get(),
@@ -1255,7 +1244,7 @@ fn reserve_worker_poll(
             JOB_DEPTH.get() == 1,
             WRAPPER_DEPTH.get() == 1,
             JOBS.load(SeqCst) == 1,
-            *previous_polls == 0,
+            previous_polls == 0,
             RAW_WRITERS.load(SeqCst) == 0,
             current.constructed,
             source_exists,
@@ -1282,7 +1271,7 @@ fn reserve_worker_poll(
                 0
             };
             let f = &mut w.future;
-            if f.facts.reserve(&c.key, &next, *generation)
+            if f.facts.reserve(&c.key, &next, generation)
                 && f.facts
                     .begin_callback(bound_generation, c.binding.queue_generation)
             {
@@ -1303,7 +1292,7 @@ fn reserve_worker_poll(
         if worker_call {
             gate_receipt(1, bits, 0x3ffff, &c, &proof, &CpuIdentity::ZERO);
         }
-        return false;
+        return (false, generation, previous_polls);
     }
     let mut announce = false;
     {
@@ -1318,7 +1307,7 @@ fn reserve_worker_poll(
             f.reserve_announced = true;
             announce = true;
         } else {
-            f.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+            f.facts.refuse_changed();
         }
     }
     let sent = announce && source_fact(&ticket_pending(&copy), RSF_GAME_CPU_SOURCE_RESERVE, 0);
@@ -1346,7 +1335,7 @@ fn reserve_worker_poll(
         && RAW_WRITERS.load(SeqCst) == 0
         && RAW_REVISION.load(SeqCst) == revision
         && POLLS.load(SeqCst) == 1
-        && POLL_GENERATION.load(SeqCst) == *generation;
+        && POLL_GENERATION.load(SeqCst) == generation;
     let (mut armed, mut unsafe_bound) = (false, false);
     {
         let mut w = worker();
@@ -1360,11 +1349,11 @@ fn reserve_worker_poll(
                 && !current.invalid
                 && w.future
                     .facts
-                    .arm(&proof, *generation, revision, predecessor_safe)
+                    .arm(&proof, generation, revision, predecessor_safe)
             {
                 armed = true;
             } else {
-                w.future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+                w.future.facts.refuse_changed();
             }
         }
     }
@@ -1375,7 +1364,7 @@ fn reserve_worker_poll(
         let mask = predicate_bits(&[sent, native_valid, !unsafe_bound, armed]);
         gate_receipt(3, mask, 0xf, &after, &proof, &copy.facts.cpu);
     }
-    true
+    (true, generation, previous_polls)
 }
 
 fn sample_worker_poll(generation: u64, began: u64) {
@@ -1412,7 +1401,7 @@ fn sample_worker_poll(generation: u64, began: u64) {
         {
             sampled = Some(w.future);
         } else {
-            w.future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+            w.future.facts.refuse_changed();
         }
     }
     if let Some(sampled) = sampled
@@ -1501,7 +1490,7 @@ fn begin_worker_consumer(receiver: usize, caller: usize) -> bool {
         let generation = POLL_GENERATION.load(SeqCst);
         let revision = RAW_REVISION.load(SeqCst);
         if !valid || !current_matches || !w.future.facts.begin(now, generation, revision, cursor) {
-            w.future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+            w.future.facts.refuse_changed();
         } else {
             begun = w.future;
         }
@@ -1550,8 +1539,7 @@ fn begin_worker_consumer(receiver: usize, caller: usize) -> bool {
                     trace.test(14, bound)
                 };
             if !accepted {
-                refused = w.future.facts.refusal == 0;
-                w.future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+                refused = w.future.facts.refuse_changed();
             }
         }
     }
@@ -1588,8 +1576,7 @@ fn end_worker_consumer() {
                 trace.test(11, consumed)
             };
             if !accepted {
-                refused = w.future.facts.refusal == 0;
-                w.future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+                refused = w.future.facts.refuse_changed();
             }
         }
     }
@@ -1878,13 +1865,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_poll_enter(
 ) {
     enter();
     let manager_address = manager as usize;
-    let (mut previous_polls, mut generation) = (0u32, 0u64);
-    let mapped = reserve_worker_poll(
-        manager_address,
-        caller,
-        &mut generation,
-        &mut previous_polls,
-    );
+    let (mapped, generation, previous_polls) = reserve_worker_poll(manager_address, caller);
     let refusal = if previous_polls != 0 {
         RSF_GAME_CPU_ABORT_OVERLAP
     } else {
@@ -1952,7 +1933,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_poll_enter(
                     || RAW_REVISION.load(SeqCst) != w.future.facts.raw
                     || !WorkerTicket::poll_safe(c.binding.source, c.closed, c.sealed);
                 if unsafe_poll {
-                    w.future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+                    w.future.facts.refuse_changed();
                 }
             }
         }
@@ -2048,6 +2029,29 @@ fn sampled_sequence(p: &Pending) -> bool {
     ) && queue_generation == p.queue_generation
 }
 
+/// The abort reason when the pending source's input state or queue changed, else 0.
+fn pending_changed() -> u32 {
+    let changed = invalid_pending();
+    if changed == 0 && !sampled_sequence(&pending()) {
+        RSF_GAME_CPU_ABORT_STATE_CHANGED
+    } else {
+        changed
+    }
+}
+
+/// Opens this thread's frame identity for `source` and reports FRAME_BEGIN.
+fn begin_frame(source: u64, frequency: u64) {
+    IDENTITY.set(CpuIdentity {
+        session: host_services().session_id,
+        source,
+        submission: 0,
+        began_qpc: qpc(),
+        frequency,
+    });
+    RENDERED.set(0);
+    emit(RSF_GAME_CPU_FRAME_BEGIN);
+}
+
 #[derive(Clone, Copy)]
 struct PlayerControlsScope {
     worker_consuming: bool,
@@ -2098,30 +2102,16 @@ unsafe extern "C" fn rsf_fallout4_cpu_player_controls_enter(
                 RSF_GAME_CPU_ABORT_STATE_CHANGED
             });
         } else {
-            IDENTITY.set(CpuIdentity {
-                session: host_services().session_id,
-                source: p.source,
-                submission: 0,
-                began_qpc: qpc(),
-                frequency: p.frequency,
-            });
-            RENDERED.set(0);
-            emit(RSF_GAME_CPU_FRAME_BEGIN);
+            begin_frame(p.source, p.frequency);
             // Recheck after the host callback before asserting native consumption.
-            let mut changed = invalid_pending();
-            if changed == 0 && !sampled_sequence(&pending()) {
-                changed = RSF_GAME_CPU_ABORT_STATE_CHANGED;
-            }
+            let changed = pending_changed();
             if changed != 0 {
                 abort_pending(changed);
                 close_frame();
             } else {
                 source_event(RSF_GAME_CPU_SOURCE_BIND, 0);
                 update_pending(|p| p.bound = true);
-                let mut changed_after_bind = invalid_pending();
-                if changed_after_bind == 0 && !sampled_sequence(&pending()) {
-                    changed_after_bind = RSF_GAME_CPU_ABORT_STATE_CHANGED;
-                }
+                let changed_after_bind = pending_changed();
                 if changed_after_bind != 0 {
                     abort_pending(changed_after_bind);
                     close_frame();
@@ -2304,16 +2294,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_swap_enter(
     }
     if IDENTITY.get().source == 0 && !future_copy().facts.active() {
         let frequency = qpc_frequency();
-        let source = NEXT_SOURCE.fetch_add(1, SeqCst);
-        IDENTITY.set(CpuIdentity {
-            session: host_services().session_id,
-            source,
-            submission: 0,
-            began_qpc: qpc(),
-            frequency,
-        });
-        RENDERED.set(0);
-        emit(RSF_GAME_CPU_FRAME_BEGIN);
+        begin_frame(NEXT_SOURCE.fetch_add(1, SeqCst), frequency);
     }
     // This exact C346AC call leaves native update work and enters Swap's rendering path. Close
     // only the sample actually consumed for this source.
@@ -2364,8 +2345,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_swap_exit(scope: *mut rsf_fallout4_cpu_sco
     PENDING.set(Pending::ZERO);
 }
 
-/// The Swap scope close, run by the shell's destructor on return and on a native unwind, as the
-/// Exit guard does.
+/// The Swap scope close, run by the shell's destructor on return and on a native unwind.
 ///
 /// # Safety
 /// `scope` is the receipt its entry wrote.
@@ -2430,8 +2410,7 @@ fn claim_future(main: usize) {
             FUTURE_CLAIMED.set(true);
             claimed = true;
         } else {
-            refused = future.facts.refusal == 0;
-            future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+            refused = future.facts.refuse_changed();
         }
     }
     if refused {
@@ -2446,7 +2425,7 @@ fn claim_future(main: usize) {
 struct JobScope {
     parent: bool,
     parent_source: u64,
-    // The entry snapshot, reread in place at completion as the native proof always was.
+    // The entry snapshot, reread in place at completion.
     native: InputState,
 }
 
@@ -2535,8 +2514,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_job_end_exit(scope: *mut rsf_fallout4_cpu_
                     trace.test(7, complete)
                 };
                 if !completed {
-                    refused = w.future.facts.refusal == 0;
-                    w.future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+                    refused = w.future.facts.refuse_changed();
                 }
                 w.future.busy = false;
             }
@@ -2602,7 +2580,7 @@ struct JoinScope {
     key: WorkerCycle,
     entry_proof: WorkerCycle,
     entry_trace: PhaseChecks,
-    // The entry snapshot, reread in place after the wait as the native proof always was.
+    // The entry snapshot, reread in place after the wait.
     native: InputState,
     selected: bool,
 }
@@ -2721,8 +2699,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_worker_join_exit(
                     trace.test(14, join)
                 };
                 if !joined {
-                    refused = w.future.facts.refusal == 0;
-                    w.future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+                    refused = w.future.facts.refuse_changed();
                 }
             }
             w.current.joining = false;
@@ -2966,8 +2943,7 @@ pub(crate) fn begin_render() -> bool {
                 *future = Future::ZERO;
                 FUTURE_CLAIMED.set(false);
             } else {
-                refused = future.facts.refusal == 0;
-                future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+                refused = future.facts.refuse_changed();
                 failed = true;
             }
         } else {
@@ -3139,15 +3115,11 @@ fn finish_peek_protection(cell: &mut PeekCell) -> bool {
     true
 }
 
-fn exchange_peek(
-    cell: &mut PeekCell,
-    expected: usize,
-    desired: usize,
-    exchanged: &mut bool,
-) -> bool {
-    *exchanged = false;
+/// Swaps the import cell from `expected` to `desired`. Returns whether the swap happened and
+/// whether the cell's protection was restored.
+fn exchange_peek(cell: &mut PeekCell, expected: usize, desired: usize) -> (bool, bool) {
     if !finish_peek_protection(cell) {
-        return false;
+        return (false, false);
     }
     let mut protection = 0;
     if unsafe {
@@ -3159,13 +3131,13 @@ fn exchange_peek(
         )
     } == 0
     {
-        return false;
+        return (false, false);
     }
     cell.protection = protection;
     cell.protection_pending = true;
     // SAFETY: the import cell is an aligned, now writable pointer slot of the executable.
     let slot = unsafe { AtomicPtr::from_ptr(peek_slot()) };
-    *exchanged = slot
+    let exchanged = slot
         .compare_exchange(
             expected as *mut c_void,
             desired as *mut c_void,
@@ -3173,7 +3145,7 @@ fn exchange_peek(
             SeqCst,
         )
         .is_ok();
-    finish_peek_protection(cell)
+    (exchanged, finish_peek_protection(cell))
 }
 
 fn prepare_peek(event: CpuEvent) -> bool {
@@ -3228,13 +3200,8 @@ fn install_peek() -> bool {
     if !cell.prepared {
         return false;
     }
-    let mut exchanged = false;
-    let protection_ok = exchange_peek(
-        &mut cell,
-        ORIGINAL_PEEK.load(Acquire),
-        peek_thunk(),
-        &mut exchanged,
-    );
+    let (exchanged, protection_ok) =
+        exchange_peek(&mut cell, ORIGINAL_PEEK.load(Acquire), peek_thunk());
     cell.owned = exchanged;
     protection_ok && exchanged
 }
@@ -3245,15 +3212,10 @@ fn retire_peek() -> bool {
         return false;
     }
     if cell.owned {
-        let mut exchanged = false;
-        let protection_ok = exchange_peek(
-            &mut cell,
-            peek_thunk(),
-            ORIGINAL_PEEK.load(Acquire),
-            &mut exchanged,
-        );
         // A successful exchange restores the original; a failed one preserves the later writer.
         // In either case the immutable continuation and pinned thunk remain resident.
+        let (_, protection_ok) =
+            exchange_peek(&mut cell, peek_thunk(), ORIGINAL_PEEK.load(Acquire));
         if !protection_ok {
             return false;
         }
