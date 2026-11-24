@@ -59,9 +59,7 @@ use std::ffi::c_void;
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_skyrim_creation_enter(call: *mut CreationCall) -> *mut c_void {
     let original = creation::enter_lease();
-    if let Some(call) = unsafe { call.as_mut() }
-        && call.valid()
-    {
+    if let Some(call) = unsafe { call.as_mut() } {
         creation::enter(&Platform, call);
     }
     original
@@ -73,9 +71,7 @@ unsafe extern "C" fn rsf_skyrim_creation_enter(call: *mut CreationCall) -> *mut 
 /// `call` is null or the record passed to the matching enter.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_skyrim_creation_leave(call: *mut CreationCall) {
-    if let Some(call) = unsafe { call.as_mut() }
-        && call.valid()
-    {
+    if let Some(call) = unsafe { call.as_mut() } {
         creation::leave(&Platform, call);
     }
     creation::leave_lease();

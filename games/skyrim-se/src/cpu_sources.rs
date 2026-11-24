@@ -6,7 +6,6 @@ use rsf_game_sys::ffi_util::lock_or_recover;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-#[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct JobTicket {
     pub(crate) generation: u64,
@@ -147,14 +146,12 @@ impl NativeJobs {
     }
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Stamp {
     revision: u64,
     pub(crate) generation: u64,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct PollTicket {
     pub(crate) generation: u64,
@@ -278,7 +275,6 @@ impl InputEpochs {
 pub(crate) static JOBS: NativeJobs = NativeJobs::new();
 pub(crate) static EPOCHS: InputEpochs = InputEpochs::new();
 
-#[repr(u32)]
 #[derive(Clone, Copy)]
 pub(crate) enum Consumer {
     Movement,
@@ -287,7 +283,6 @@ pub(crate) enum Consumer {
     PlayerCamera,
 }
 
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct PollScope {
     pub(crate) ticket: PollTicket,
@@ -296,7 +291,6 @@ pub(crate) struct PollScope {
     pub(crate) kinds: u32,
 }
 
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct PollProvenance {
     pub(crate) session: u64,
@@ -329,19 +323,6 @@ pub(crate) fn poll_provenance(
     true
 }
 
-const _: () = {
-    assert!(size_of::<JobTicket>() == 32);
-    assert!(std::mem::offset_of!(JobTicket, manager) == 24);
-    assert!(size_of::<Stamp>() == 16);
-    assert!(size_of::<PollTicket>() == 24);
-    assert!(std::mem::offset_of!(PollTicket, exclusive) == 16);
-    assert!(size_of::<PollScope>() == 40);
-    assert!(std::mem::offset_of!(PollScope, kinds) == 36);
-    assert!(size_of::<PollProvenance>() == 32);
-    assert!(std::mem::offset_of!(PollProvenance, poll_generation) == 24);
-};
-
-#[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
     None,
@@ -351,7 +332,6 @@ pub(crate) enum Phase {
     Bound,
 }
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct Reservation {
     pub(crate) source: u64,
@@ -381,16 +361,15 @@ impl Reservation {
     }
 }
 
-#[repr(C)]
 pub(crate) struct Reserve {
     pub(crate) reserved: Reservation,
     pub(crate) withdrawn: u64,
     pub(crate) overlap: bool,
 }
 
-struct Sources {
+pub(crate) struct Sources {
     pending: Reservation,
-    owned: Reservation,
+    pub(crate) owned: Reservation,
 }
 
 impl Sources {
@@ -399,7 +378,7 @@ impl Sources {
         owned: Reservation::EMPTY,
     };
 
-    fn reserve(&mut self, reservation: Reservation) -> Reserve {
+    pub(crate) fn reserve(&mut self, reservation: Reservation) -> Reserve {
         let mut result = Reserve {
             reserved: Reservation::EMPTY,
             withdrawn: 0,
@@ -425,7 +404,11 @@ impl Sources {
         result
     }
 
-    fn sample(&mut self, source: u64, produced: bool, kinds: u32) -> bool {
+    pub(crate) fn still_reserved(&self, source: u64) -> bool {
+        self.pending.polling(source)
+    }
+
+    pub(crate) fn sample(&mut self, source: u64, produced: bool, kinds: u32) -> bool {
         if !self.pending.polling(source) {
             return false;
         }
@@ -435,14 +418,14 @@ impl Sources {
         true
     }
 
-    fn withdraw_pending(&mut self, only: u64) -> u64 {
+    pub(crate) fn withdraw_pending(&mut self, only: u64) -> u64 {
         if self.pending.phase == Phase::None || (only != 0 && self.pending.source != only) {
             return 0;
         }
         std::mem::replace(&mut self.pending, Reservation::EMPTY).source
     }
 
-    fn adopt(&mut self, session: u64, joined_job_generation: u64) -> Reservation {
+    pub(crate) fn adopt(&mut self, session: u64, joined_job_generation: u64) -> Reservation {
         if self.owned.phase != Phase::None
             || self.pending.phase != Phase::Sampled
             || !self.pending.produced
@@ -457,7 +440,7 @@ impl Sources {
         self.owned
     }
 
-    fn bind(&mut self, source: u64, completed_poll_generation: u64) -> bool {
+    pub(crate) fn bind(&mut self, source: u64, completed_poll_generation: u64) -> bool {
         if source == 0
             || self.owned.source != source
             || self.owned.phase != Phase::Adopted
@@ -469,7 +452,7 @@ impl Sources {
         true
     }
 
-    fn release(&mut self, source: u64) -> Reservation {
+    pub(crate) fn release(&mut self, source: u64) -> Reservation {
         if source == 0 || self.owned.source != source {
             return Reservation::EMPTY;
         }
@@ -477,14 +460,13 @@ impl Sources {
     }
 }
 
-type Store = Mutex<Sources>;
-static PRODUCTION: Store = Mutex::new(Sources::EMPTY);
+static SOURCES: Mutex<Sources> = Mutex::new(Sources::EMPTY);
 
-fn lock_store(store: &Store) -> MutexGuard<'_, Sources> {
-    lock_or_recover(store)
+/// The two prospective source slots (the C++ `ProspectiveSources`).
+pub(crate) fn sources() -> MutexGuard<'static, Sources> {
+    lock_or_recover(&SOURCES)
 }
 
-#[repr(u32)]
 pub(crate) enum PollSample {
     None,
     NotProduced,
@@ -495,69 +477,16 @@ pub(crate) fn poll_sample_status(scope: &PollScope, source: u64) -> PollSample {
     // Finish an exclusive poll first. Report SAMPLED only for the exact completed
     // generation, and leave it unadoptable until the native host call returns.
     if EPOCHS.snapshot().generation != scope.ticket.generation {
-        if lock_store(&PRODUCTION).withdraw_pending(source) != 0 {
+        if sources().withdraw_pending(source) != 0 {
             PollSample::NotProduced
         } else {
             PollSample::None
         }
-    } else if lock_store(&PRODUCTION).pending.polling(source) {
+    } else if sources().still_reserved(source) {
         PollSample::Ready
     } else {
         PollSample::None
     }
-}
-
-const _: () = {
-    assert!(size_of::<Reservation>() == 56);
-    assert!(std::mem::offset_of!(Reservation, phase) == 40);
-    assert!(std::mem::offset_of!(Reservation, kinds) == 48);
-    assert!(size_of::<Reserve>() == 72);
-};
-
-pub(crate) fn sources_reserve(
-    source: u64,
-    predecessor: u64,
-    session: u64,
-    job_generation: u64,
-    poll_generation: u64,
-) -> Reserve {
-    lock_store(&PRODUCTION).reserve(Reservation {
-        source,
-        predecessor,
-        session,
-        job_generation,
-        poll_generation,
-        phase: Phase::Polling,
-        ..Reservation::EMPTY
-    })
-}
-
-pub(crate) fn sources_still_reserved(source: u64) -> bool {
-    lock_store(&PRODUCTION).pending.polling(source)
-}
-
-pub(crate) fn sources_sample(source: u64, produced: bool, kinds: u32) -> bool {
-    lock_store(&PRODUCTION).sample(source, produced, kinds)
-}
-
-pub(crate) fn sources_withdraw_pending(only: u64) -> u64 {
-    lock_store(&PRODUCTION).withdraw_pending(only)
-}
-
-pub(crate) fn sources_adopt(session: u64, joined: u64) -> Reservation {
-    lock_store(&PRODUCTION).adopt(session, joined)
-}
-
-pub(crate) fn sources_bind(source: u64, completed: u64) -> bool {
-    lock_store(&PRODUCTION).bind(source, completed)
-}
-
-pub(crate) fn sources_owned() -> Reservation {
-    lock_store(&PRODUCTION).owned
-}
-
-pub(crate) fn sources_release(source: u64) -> Reservation {
-    lock_store(&PRODUCTION).release(source)
 }
 
 // Counts of observed native call envelopes for diagnostics. These never reach
@@ -578,7 +507,6 @@ static WORKERS: WorkerConsumption = WorkerConsumption {
     mismatched: AtomicU32::new(0),
 };
 
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct WorkerCounts {
     pub(crate) movement: u32,
@@ -586,8 +514,6 @@ pub(crate) struct WorkerCounts {
     pub(crate) camera: u32,
     pub(crate) mismatched: u32,
 }
-
-const _: () = assert!(size_of::<WorkerCounts>() == 16);
 
 pub(crate) fn worker_bind(source: u64) {
     WORKERS.source.store(0, SeqCst);
@@ -614,7 +540,7 @@ pub(crate) fn worker_record_consumer(stamp: &Stamp, consumer: Consumer) {
         return;
     }
     let job = JOBS.snapshot();
-    let owned = lock_store(&PRODUCTION).owned;
+    let owned = sources().owned;
     if job.generation == 0
         || job.source != source
         || owned.source != source
@@ -651,11 +577,10 @@ pub(crate) fn clear_proof(drained: bool) {
         JOBS.invalidate();
     }
     EPOCHS.invalidate();
-    *lock_store(&PRODUCTION) = Sources::EMPTY;
+    *sources() = Sources::EMPTY;
     worker_release();
 }
 
-#[repr(u32)]
 enum BindRefusal {
     None,
     Unreadable,

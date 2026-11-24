@@ -196,17 +196,14 @@ fn begin_frame(main: usize) -> Receipt {
         return Receipt::None;
     };
     // Only a sampled late poll whose native job joined normally can be adopted.
-    let reservation = sources_adopt(services.host.session_id, JOBS.retired());
+    let reservation = sources().adopt(services.host.session_id, JOBS.retired());
     let mut queued = None;
     let (source, entry_readable) = if reservation.source != 0 {
         queued = queued_move();
         (reservation.source, queued.is_some())
     } else {
-        abort(
-            services,
-            sources_withdraw_pending(0),
-            RSF_GAME_CPU_ABORT_STATE_CHANGED,
-        );
+        let withdrawn = sources().withdraw_pending(0);
+        abort(services, withdrawn, RSF_GAME_CPU_ABORT_STATE_CHANGED);
         (cpu_next_source(), false)
     };
     Receipt::Frame(Frame {
@@ -229,7 +226,7 @@ fn finish_frame(frame: NonNull<Frame>, returned: bool) {
         (frame.source, frame.services, frame.reservation)
     };
     if facts.source != 0 {
-        let owned = sources_release(source);
+        let owned = sources().release(source);
         if owned.phase == Phase::Bound {
             worker_release();
         }
@@ -303,20 +300,14 @@ fn begin_submit(caller: usize) -> Receipt {
                     frame.refusal
                 };
                 if refusal != 0 {
-                    abort(
-                        services,
-                        sources_release(source).source,
-                        RSF_GAME_CPU_ABORT_NOT_CONSUMED,
-                    );
-                } else if sources_bind(source, stamp().generation) {
+                    let withdrawn = sources().release(source).source;
+                    abort(services, withdrawn, RSF_GAME_CPU_ABORT_NOT_CONSUMED);
+                } else if sources().bind(source, stamp().generation) {
                     worker_bind(source);
                     source_event(services, RSF_GAME_CPU_SOURCE_BIND, source, 0, 0, 0, 0, 0, 0);
                 } else {
-                    abort(
-                        services,
-                        sources_release(source).source,
-                        RSF_GAME_CPU_ABORT_STATE_CHANGED,
-                    );
+                    let withdrawn = sources().release(source).source;
+                    abort(services, withdrawn, RSF_GAME_CPU_ABORT_STATE_CHANGED);
                 }
             }
             frame_event(frame, RSF_GAME_CPU_SIMULATION_BEGIN);
@@ -437,13 +428,15 @@ fn prepare_poll(mut poll: NonNull<Poll>) {
         }
         if scheduled {
             let source = cpu_next_source();
-            let receipt = sources_reserve(
+            let receipt = sources().reserve(Reservation {
                 source,
-                provenance.submitting_source,
-                provenance.session,
-                provenance.job_generation,
-                provenance.poll_generation,
-            );
+                predecessor: provenance.submitting_source,
+                session: provenance.session,
+                job_generation: provenance.job_generation,
+                poll_generation: provenance.poll_generation,
+                phase: Phase::Polling,
+                ..Reservation::EMPTY
+            });
             abort(
                 services,
                 receipt.withdrawn,
@@ -467,18 +460,15 @@ fn prepare_poll(mut poll: NonNull<Poll>) {
                 );
                 // The synchronous callback may overlap withdrawal. Reissue the
                 // terminal fact if withdrawal won before reservation publication.
-                if sources_still_reserved(source) {
+                if sources().still_reserved(source) {
                     reserved = source;
                 } else {
                     abort(services, source, RSF_GAME_CPU_ABORT_STATE_CHANGED);
                 }
             }
         } else {
-            abort(
-                services,
-                sources_withdraw_pending(0),
-                RSF_GAME_CPU_ABORT_INTERVENING_POLL,
-            );
+            let withdrawn = sources().withdraw_pending(0);
+            abort(services, withdrawn, RSF_GAME_CPU_ABORT_INTERVENING_POLL);
             worker_intervening_poll();
         }
     }
@@ -521,12 +511,9 @@ fn finish_poll(poll: &mut Poll, returned: bool) {
                 0,
                 poll.begin,
             );
-            if !sources_sample(source, true, poll.scope.kinds) {
-                abort(
-                    services,
-                    sources_withdraw_pending(source),
-                    RSF_GAME_CPU_ABORT_STATE_CHANGED,
-                );
+            if !sources().sample(source, true, poll.scope.kinds) {
+                let withdrawn = sources().withdraw_pending(source);
+                abort(services, withdrawn, RSF_GAME_CPU_ABORT_STATE_CHANGED);
             }
         }
         PollSample::None | PollSample::Ready => {}
@@ -626,7 +613,7 @@ pub(crate) fn render_diagnostic(stage: &CStr, pass: &rsf_game_render_pass) {
     {
         return;
     }
-    let owned = sources_owned();
+    let owned = sources().owned;
     let message = {
         let frame = unsafe { frame.as_ref() };
         let render = &frame.render;
@@ -872,14 +859,11 @@ pub(crate) fn start() -> bool {
         Ok(()) => true,
         Err(refusal) => {
             if let Some(services) = cpu_hooks::services() {
-                let stage = unsafe { CStr::from_ptr(refusal.stage) };
                 host_log(
                     &services.host,
                     &format!(
                         "Skyrim CPU start refused: {} RVA={:X} status={}",
-                        stage.to_string_lossy(),
-                        refusal.rva,
-                        refusal.status
+                        refusal.stage, refusal.rva, refusal.status
                     ),
                 );
             }

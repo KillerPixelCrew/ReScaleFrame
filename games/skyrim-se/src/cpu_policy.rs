@@ -67,7 +67,6 @@ struct ScreenFacts {
 }
 
 /// Render facts collected during a Main tick.
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct RenderState {
     pub(crate) scope: u64,
@@ -80,7 +79,6 @@ pub(crate) struct RenderState {
 }
 
 /// Observations from consumers during the current tick.
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct FrameInput {
     pub(crate) consumed: Stamp,
@@ -90,13 +88,6 @@ pub(crate) struct FrameInput {
     pub(crate) player_camera_updates: u32,
     pub(crate) ambiguous: bool,
 }
-
-const _: () = {
-    assert!(size_of::<RenderState>() == 24);
-    assert!(std::mem::offset_of!(RenderState, render_entered) == 20);
-    assert!(size_of::<FrameInput>() == 40);
-    assert!(std::mem::offset_of!(FrameInput, ambiguous) == 32);
-};
 
 #[cfg(test)]
 mod tests {
@@ -312,7 +303,6 @@ pub(crate) fn cpu_screen(main: usize, primary: bool, menus: MenuQueries) -> rsf_
     })
 }
 
-#[repr(C)]
 #[derive(Default)]
 pub(crate) struct RenderReceipt {
     pub(crate) scope: u64,

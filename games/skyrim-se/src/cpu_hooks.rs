@@ -8,7 +8,7 @@ use crate::hook_set::HookSet;
 use crate::platform::Platform;
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_host_services;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
@@ -175,7 +175,6 @@ fn qpc_frequency() -> u64 {
 }
 
 #[derive(Clone, Copy)]
-#[repr(C)]
 pub(crate) struct Services {
     pub(crate) host: rsf_game_host_services,
     pub(crate) frequency: u64,
@@ -185,18 +184,11 @@ pub(crate) struct Services {
 // copy it under the lock within their entry lease. Start may copy it to log a refusal.
 unsafe impl Send for Services {}
 
-#[repr(C)]
 pub(crate) struct StartRefusal {
-    pub(crate) stage: *const c_char,
+    pub(crate) stage: &'static str,
     pub(crate) rva: u32,
     pub(crate) status: i32,
 }
-
-const _: () = {
-    assert!(size_of::<Services>() == size_of::<rsf_game_host_services>() + 8);
-    assert!(std::mem::offset_of!(Services, frequency) == size_of::<rsf_game_host_services>());
-    assert!(size_of::<StartRefusal>() == 16);
-};
 
 struct Control {
     hooks: HookSet<{ HOOKS.len() }>,
@@ -231,28 +223,24 @@ fn admission(platform: &Platform, base: usize) -> Result<(), StartRefusal> {
         || named_poll.is_none()
         || named_slot.and_then(|address| platform.read_usize(address)) != named_poll
     {
-        return Err(StartRefusal::new(c"named callback", NAMED_CALLBACK_SLOT, 0));
+        return Err(StartRefusal::new("named callback", NAMED_CALLBACK_SLOT, 0));
     }
     let screen_rva = bad_screen_query(platform, base);
     if screen_rva != 0 {
-        return Err(StartRefusal::new(c"screen query bytes", screen_rva, 0));
+        return Err(StartRefusal::new("screen query bytes", screen_rva, 0));
     }
     for (rva, bytes) in &HOOKS {
         // Every hook RVA is below the checked named slot.
         if !platform.matches(base + *rva as usize, bytes) {
-            return Err(StartRefusal::new(c"hook bytes", *rva, 0));
+            return Err(StartRefusal::new("hook bytes", *rva, 0));
         }
     }
     Ok(())
 }
 
 impl StartRefusal {
-    fn new(stage: &'static CStr, rva: u32, status: i32) -> Self {
-        Self {
-            stage: stage.as_ptr(),
-            rva,
-            status,
-        }
+    fn new(stage: &'static str, rva: u32, status: i32) -> Self {
+        Self { stage, rva, status }
     }
 }
 
@@ -315,15 +303,15 @@ impl Control {
 
     fn start(&mut self, platform: &Platform) -> Result<(), StartRefusal> {
         if active() || busy() {
-            return Err(StartRefusal::new(c"active or entered", 0, 0));
+            return Err(StartRefusal::new("active or entered", 0, 0));
         }
         // Disabled targets are the only ones whose live prologues can be checked.
         if let Some(index) = self.hooks.first_unavailable() {
-            return Err(StartRefusal::new(c"hook state", HOOKS[index].0, 0));
+            return Err(StartRefusal::new("hook state", HOOKS[index].0, 0));
         }
         let base = platform.main_module();
         if !self.pinned || base != self.base || lock_or_recover(&SERVICES).is_none() {
-            return Err(StartRefusal::new(c"hook state", 0, 0));
+            return Err(StartRefusal::new("hook state", 0, 0));
         }
         admission(platform, base)?;
 
@@ -333,7 +321,7 @@ impl Control {
         }) {
             // Keep preparation and any hook whose disable refused so stop can retry.
             self.disable_hooks();
-            return Err(StartRefusal::new(c"hook enable", HOOKS[index].0, status));
+            return Err(StartRefusal::new("hook enable", HOOKS[index].0, status));
         }
         PRODUCERS.fetch_or(ACTIVE, Ordering::Release);
         Ok(())

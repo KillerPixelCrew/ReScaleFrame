@@ -19,9 +19,9 @@ _Static_assert(sizeof(DXGI_SWAP_CHAIN_DESC) == 72 && offsetof(DXGI_SWAP_CHAIN_DE
     "DXGI swap chain description layout");
 _Static_assert(sizeof(rsf_d3d11_creation_scope) == 24 && sizeof(rsf_d3d11_native_chain) == 32,
     "D3D11 creation record layout");
-_Static_assert(sizeof(rsf_skyrim_creation_call) == 136 && offsetof(rsf_skyrim_creation_call, native_result) == 48 &&
-    offsetof(rsf_skyrim_creation_call, owner) == 56 && offsetof(rsf_skyrim_creation_call, scope) == 80 &&
-    offsetof(rsf_skyrim_creation_call, outputs) == 104, "Skyrim creation call layout");
+_Static_assert(sizeof(rsf_skyrim_creation_call) == 128 && offsetof(rsf_skyrim_creation_call, native_result) == 40 &&
+    offsetof(rsf_skyrim_creation_call, owner) == 48 && offsetof(rsf_skyrim_creation_call, scope) == 72 &&
+    offsetof(rsf_skyrim_creation_call, outputs) == 96, "Skyrim creation call layout");
 
 /* Leave closes an admitted Runtime scope after the original returns or unwinds, then restores the
    native last error. The original keeps the current IAT and every original argument. */
@@ -32,8 +32,6 @@ HRESULT WINAPI rsf_skyrim_create_detour(IDXGIAdapter* adapter, D3D_DRIVER_TYPE d
     rsf_skyrim_creation_call call;
     HRESULT result = E_FAIL;
     memset(&call, 0, sizeof(call));
-    call.struct_size = sizeof(call);
-    call.version = RSF_SKYRIM_CREATION_PLATFORM_VERSION;
 #if defined(_MSC_VER)
     call.caller = (uintptr_t)_ReturnAddress();
 #else

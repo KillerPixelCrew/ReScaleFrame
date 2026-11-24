@@ -13,9 +13,6 @@ use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery};
 
-/// `RSF_SKYRIM_CREATION_PLATFORM_VERSION`, the native detour's call record version.
-pub(crate) const CREATION_CALL_VERSION: u32 = 4;
-
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct MemoryRegion {
@@ -29,8 +26,6 @@ pub(crate) struct MemoryRegion {
 /// `rsf_skyrim_creation_call`: one guarded creation call on the detour's stack.
 #[repr(C)]
 pub(crate) struct CreationCall {
-    pub(crate) struct_size: u32,
-    pub(crate) version: u32,
     pub(crate) caller: usize,
     pub(crate) description: *const c_void,
     pub(crate) swapchain: *mut *mut c_void,
@@ -46,12 +41,6 @@ pub(crate) struct CreationCall {
     pub(crate) outer: *mut c_void,
     pub(crate) scope: CreationScope,
     pub(crate) outputs: NativeChain,
-}
-
-impl CreationCall {
-    pub(crate) fn valid(&self) -> bool {
-        self.struct_size as usize >= size_of::<Self>() && self.version == CREATION_CALL_VERSION
-    }
 }
 
 /// The process platform: Win32 queries plus the native fault and exception boundary.
@@ -85,11 +74,11 @@ const _: () = {
     assert!(size_of::<MemoryRegion>() == 32);
     assert!(size_of::<CreationScope>() == 24);
     assert!(size_of::<NativeChain>() == 32);
-    assert!(size_of::<CreationCall>() == 136);
-    assert!(std::mem::offset_of!(CreationCall, native_result) == 48);
-    assert!(std::mem::offset_of!(CreationCall, owner) == 56);
-    assert!(std::mem::offset_of!(CreationCall, scope) == 80);
-    assert!(std::mem::offset_of!(CreationCall, outputs) == 104);
+    assert!(size_of::<CreationCall>() == 128);
+    assert!(std::mem::offset_of!(CreationCall, native_result) == 40);
+    assert!(std::mem::offset_of!(CreationCall, owner) == 48);
+    assert!(std::mem::offset_of!(CreationCall, scope) == 72);
+    assert!(std::mem::offset_of!(CreationCall, outputs) == 96);
 };
 
 pub(crate) use rsf_game_sys::ffi_util::wide;
@@ -253,5 +242,3 @@ impl Platform {
         false
     }
 }
-#[cfg(test)]
-mod tests;

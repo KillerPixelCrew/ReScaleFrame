@@ -15,23 +15,10 @@ typedef struct rsf_skyrim_taa_receipt {
     uint8_t enabled;
 } rsf_skyrim_taa_receipt;
 
-#ifdef __cplusplus
-#define RSF_SKYRIM_NOEXCEPT noexcept
-#define RSF_SKYRIM_ASSERT static_assert
-extern "C" {
-#else
-#define RSF_SKYRIM_NOEXCEPT
-#define RSF_SKYRIM_ASSERT _Static_assert
-#endif
-RSF_SKYRIM_ASSERT(sizeof(rsf_skyrim_cs_hdr_call) == 40 && offsetof(rsf_skyrim_cs_hdr_call, argument5) == 32,
+_Static_assert(sizeof(rsf_skyrim_cs_hdr_call) == 40 && offsetof(rsf_skyrim_cs_hdr_call, argument5) == 32,
     "Skyrim HDR call layout");
-RSF_SKYRIM_ASSERT(sizeof(rsf_skyrim_taa_receipt) == 24 && offsetof(rsf_skyrim_taa_receipt, enabled) == 16,
+_Static_assert(sizeof(rsf_skyrim_taa_receipt) == 24 && offsetof(rsf_skyrim_taa_receipt, enabled) == 16,
     "Skyrim TAA receipt layout");
 
-void rsf_skyrim_postprocess_prepare(const rsf_skyrim_cs_hdr_call*, rsf_skyrim_taa_receipt*) RSF_SKYRIM_NOEXCEPT;
-void rsf_skyrim_postprocess_restore(const rsf_skyrim_taa_receipt*) RSF_SKYRIM_NOEXCEPT;
-#ifdef __cplusplus
-}
-#endif
-#undef RSF_SKYRIM_ASSERT
-#undef RSF_SKYRIM_NOEXCEPT
+void rsf_skyrim_postprocess_prepare(const rsf_skyrim_cs_hdr_call*, rsf_skyrim_taa_receipt*);
+void rsf_skyrim_postprocess_restore(const rsf_skyrim_taa_receipt*);
