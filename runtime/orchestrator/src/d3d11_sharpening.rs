@@ -84,15 +84,11 @@ impl Device {
                     D3DCOMPILE_ENABLE_STRICTNESS,
                 )
                 .ok()?;
-                *shader = unsafe { com_ref::owned(compute_shader(device, &code)?.into_raw()) };
+                *shader = Some(compute_shader(device, &code)?.into());
             }
         }
         if self.constants.is_none() {
-            self.constants = unsafe {
-                com_ref::owned(
-                    constant_buffer(device, CONSTANT_WORDS as u32 * 4, false)?.into_raw(),
-                )
-            };
+            self.constants = Some(constant_buffer(device, CONSTANT_WORDS as u32 * 4, false)?.into());
         }
         let key = ScratchKey {
             width: output.width,
@@ -121,11 +117,9 @@ impl Device {
             let mut texture = None;
             unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture)) }.ok()?;
             let texture = texture?;
-            self.scratch = Some(complete_scratch(
-                key,
-                unsafe { com_ref::owned(texture.clone().into_raw()) }?,
-                || unsafe { com_ref::owned(target_view(device, &texture, 0)?.into_raw()) },
-            )?);
+            self.scratch = Some(complete_scratch(key, texture.clone().into(), || {
+                Some(target_view(device, &texture, 0)?.into())
+            })?);
         }
         Some(())
     }
