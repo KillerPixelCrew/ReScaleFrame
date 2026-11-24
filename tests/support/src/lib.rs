@@ -127,6 +127,14 @@ pub fn cpu_event(
     }
 }
 
+/// A Vulkan entry point (a `PFN_vk*` or `*const ()`) as the opaque function address the C resolver
+/// ABI hands out. The Runtime casts it back to the matching signature before calling it. Windows x64
+/// uses one calling convention for system and C procedure pointers.
+pub fn vk_entry<F: Copy>(entry: F) -> Option<unsafe extern "C" fn()> {
+    const { assert!(size_of::<F>() == size_of::<unsafe extern "C" fn()>()) };
+    Some(unsafe { std::mem::transmute_copy(&entry) })
+}
+
 /// A `vkCmdPipelineBarrier` that records nothing, for fake Vulkan entry tables.
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "system" fn ignore_pipeline_barrier(

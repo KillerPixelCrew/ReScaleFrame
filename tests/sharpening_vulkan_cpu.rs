@@ -546,9 +546,7 @@ unsafe extern "system" fn properties(
 
 macro_rules! fptr {
     ($function:ident) => {
-        Some(unsafe {
-            std::mem::transmute::<*const (), unsafe extern "C" fn()>($function as *const ())
-        })
+        rsf_test_support::vk_entry($function as *const ())
     };
 }
 

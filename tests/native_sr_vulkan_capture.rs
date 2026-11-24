@@ -27,8 +27,7 @@ unsafe extern "C" fn capture_proc(_: Handle, name: *const c_char) -> rsf_vk_func
     macro_rules! leaf {
         ($ty:ident, ($($name:ident: $param:ty),*) $(-> $ret:ty)? $body:block) => {{
             unsafe extern "system" fn call($($name: $param),*) $(-> $ret)? $body
-            let typed: vk::$ty = call;
-            Some(unsafe { std::mem::transmute::<vk::$ty, unsafe extern "C" fn()>(typed) })
+            rsf_test_support::vk_entry::<vk::$ty>(call)
         }};
     }
     match unsafe { CStr::from_ptr(name) }.to_bytes() {

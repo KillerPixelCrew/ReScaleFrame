@@ -133,9 +133,7 @@ unsafe extern "C" fn instance_proc(_: *mut c_void, name: *const c_char) -> rsf_v
     // casts them back to the matching Vulkan system ABI before calling them.
     macro_rules! address {
         ($function:ident) => {
-            Some(unsafe {
-                std::mem::transmute::<*const (), unsafe extern "C" fn()>($function as *const ())
-            })
+            rsf_test_support::vk_entry($function as *const ())
         };
     }
     match unsafe { CStr::from_ptr(name) }.to_bytes() {

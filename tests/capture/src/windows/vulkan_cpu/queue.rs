@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::rsf_vk_function;
 use ash::vk::{self, Handle as _};
-use rsf_test_support::ignore_pipeline_barrier;
+use rsf_test_support::{ignore_pipeline_barrier, vk_entry};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char, c_void};
-use std::mem;
 
 #[derive(Clone, Copy)]
 pub(super) struct Readback {
@@ -445,8 +444,7 @@ macro_rules! define_proc {
                 return None;
             }
             $(if name == $name {
-                let callback: vk::$ty = $callback;
-                return Some(unsafe { mem::transmute::<vk::$ty, unsafe extern "C" fn()>(callback) });
+                return vk_entry::<vk::$ty>($callback);
             })+
             None
         }
@@ -483,10 +481,5 @@ pub(super) unsafe extern "C" fn instance_proc(
     if unsafe { CStr::from_ptr(name) } != c"vkGetPhysicalDeviceMemoryProperties" {
         return None;
     }
-    let callback: vk::PFN_vkGetPhysicalDeviceMemoryProperties = properties;
-    Some(unsafe {
-        mem::transmute::<vk::PFN_vkGetPhysicalDeviceMemoryProperties, unsafe extern "C" fn()>(
-            callback,
-        )
-    })
+    vk_entry::<vk::PFN_vkGetPhysicalDeviceMemoryProperties>(properties)
 }

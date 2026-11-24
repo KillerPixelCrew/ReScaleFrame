@@ -5,7 +5,13 @@ use super::rsf_fixture_ffx_refused_second_owner;
 use crate::sys::rsf_vk_function;
 use crate::vulkan_ffx_fg::{Owner, rsf_ffxgvk_destroy};
 use ash::vk::{self, Handle};
-use rsf_test_support::ignore_pipeline_barrier;
+use rsf_test_support::{ignore_pipeline_barrier, vk_entry};
+
+macro_rules! entry {
+    ($function:ident, $signature:ident) => {
+        vk_entry::<vk::$signature>($function)
+    };
+}
 use std::{
     cell::UnsafeCell,
     ffi::{CStr, c_char, c_void},
@@ -216,13 +222,6 @@ unsafe extern "system" fn wsi_images(
 // Initial route population queries this table directly. For subsequent
 // backend queries the loader below verifies promoted-name fallback.
 pub(super) unsafe extern "C" fn rsf_fixture_wsi_entry(name: *const c_char) -> rsf_vk_function {
-    macro_rules! entry {
-        ($function:ident, $signature:ident) => {
-            Some(unsafe {
-                std::mem::transmute::<vk::$signature, unsafe extern "C" fn()>($function)
-            })
-        };
-    }
     match unsafe { CStr::from_ptr(name) }.to_bytes() {
         b"vkCreateSwapchainKHR" => entry!(wsi_create, PFN_vkCreateSwapchainKHR),
         b"vkDestroySwapchainKHR" => entry!(wsi_destroy, PFN_vkDestroySwapchainKHR),
@@ -411,29 +410,22 @@ pub(super) unsafe extern "C" fn rsf_fixture_ffx_lookup(
     _: *mut c_void,
     name: *const c_char,
 ) -> rsf_vk_function {
-    macro_rules! function {
-        ($function:ident, $signature:ident) => {
-            Some(unsafe {
-                std::mem::transmute::<vk::$signature, unsafe extern "C" fn()>($function)
-            })
-        };
-    }
     match unsafe { CStr::from_ptr(name) }.to_bytes() {
-        b"vkCreateImage" => function!(create_image, PFN_vkCreateImage),
-        b"vkDestroyImage" => function!(destroy_image, PFN_vkDestroyImage),
+        b"vkCreateImage" => entry!(create_image, PFN_vkCreateImage),
+        b"vkDestroyImage" => entry!(destroy_image, PFN_vkDestroyImage),
         b"vkGetImageMemoryRequirements" => {
-            function!(requirements, PFN_vkGetImageMemoryRequirements)
+            entry!(requirements, PFN_vkGetImageMemoryRequirements)
         }
-        b"vkAllocateMemory" => function!(allocate, PFN_vkAllocateMemory),
-        b"vkFreeMemory" => function!(free_memory, PFN_vkFreeMemory),
-        b"vkBindImageMemory" => function!(bind, PFN_vkBindImageMemory),
-        b"vkCreateFence" => function!(create_fence, PFN_vkCreateFence),
-        b"vkDestroyFence" => function!(destroy_fence, PFN_vkDestroyFence),
-        b"vkResetFences" => function!(reset_fences, PFN_vkResetFences),
-        b"vkWaitForFences" => function!(wait_fences, PFN_vkWaitForFences),
-        b"vkCmdPipelineBarrier" => function!(ignore_pipeline_barrier, PFN_vkCmdPipelineBarrier),
-        b"vkCmdCopyImage" => function!(copy, PFN_vkCmdCopyImage),
-        b"vkDeviceWaitIdle" => function!(idle, PFN_vkDeviceWaitIdle),
+        b"vkAllocateMemory" => entry!(allocate, PFN_vkAllocateMemory),
+        b"vkFreeMemory" => entry!(free_memory, PFN_vkFreeMemory),
+        b"vkBindImageMemory" => entry!(bind, PFN_vkBindImageMemory),
+        b"vkCreateFence" => entry!(create_fence, PFN_vkCreateFence),
+        b"vkDestroyFence" => entry!(destroy_fence, PFN_vkDestroyFence),
+        b"vkResetFences" => entry!(reset_fences, PFN_vkResetFences),
+        b"vkWaitForFences" => entry!(wait_fences, PFN_vkWaitForFences),
+        b"vkCmdPipelineBarrier" => entry!(ignore_pipeline_barrier, PFN_vkCmdPipelineBarrier),
+        b"vkCmdCopyImage" => entry!(copy, PFN_vkCmdCopyImage),
+        b"vkDeviceWaitIdle" => entry!(idle, PFN_vkDeviceWaitIdle),
         _ => None,
     }
 }

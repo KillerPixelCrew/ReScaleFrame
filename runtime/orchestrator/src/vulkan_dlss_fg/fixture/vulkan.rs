@@ -8,11 +8,11 @@ use crate::sys::{
 };
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::rsf_frame_record;
-use rsf_test_support::ignore_pipeline_barrier;
+use rsf_test_support::{ignore_pipeline_barrier, vk_entry};
 use std::{
     cell::{Cell, UnsafeCell},
     ffi::{CStr, c_char},
-    mem, ptr, slice,
+    ptr, slice,
 };
 
 /// What the provider scenarios read and steer between calls into the provider.
@@ -736,7 +736,7 @@ pub(super) unsafe extern "C" fn proc_address(_: Handle, name: *const c_char) -> 
     macro_rules! entries {
         ($($name:literal, $ty:ident, $call:ident);+ $(;)?) => {
             $(if name == $name {
-                return Some(unsafe { mem::transmute::<vk::$ty, unsafe extern "C" fn()>($call) });
+                return vk_entry::<vk::$ty>($call);
             })+
         };
     }

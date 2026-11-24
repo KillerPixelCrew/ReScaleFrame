@@ -12,7 +12,7 @@ use crate::xess_sdk_abi::{
 };
 use ash::vk::{self, Handle as _};
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_frame_record};
-use rsf_test_support::{frame_record, ignore_pipeline_barrier};
+use rsf_test_support::{frame_record, ignore_pipeline_barrier, vk_entry};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
@@ -391,11 +391,6 @@ unsafe extern "system" fn memory_properties(
     unsafe { *out = properties };
 }
 
-fn entry(function: *const ()) -> rsf_vk_function {
-    // Windows x64 uses one calling convention for system and C procedure pointers.
-    unsafe { std::mem::transmute::<*const (), rsf_vk_function>(function) }
-}
-
 unsafe extern "C" fn device_proc(_: Handle, name: *const c_char) -> rsf_vk_function {
     let table: [(&CStr, *const ()); 10] = [
         (c"vkCreateImage", create_image as *const ()),
@@ -417,12 +412,12 @@ unsafe extern "C" fn device_proc(_: Handle, name: *const c_char) -> rsf_vk_funct
     table
         .iter()
         .find(|(entry_name, _)| *entry_name == name)
-        .and_then(|(_, function)| entry(*function))
+        .and_then(|(_, function)| vk_entry(*function))
 }
 
 unsafe extern "C" fn instance_proc(_: Handle, name: *const c_char) -> rsf_vk_function {
     if unsafe { CStr::from_ptr(name) } == c"vkGetPhysicalDeviceMemoryProperties" {
-        entry(memory_properties as *const ())
+        vk_entry(memory_properties as *const ())
     } else {
         None
     }
