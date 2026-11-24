@@ -14,7 +14,6 @@ mod probe {
     use windows::Win32::Graphics::Dxgi::{
         CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1,
     };
-    use windows::core::Interface;
 
     const SOURCE: &[u8] = include_bytes!("motion_tess_probe.hlsl");
 
@@ -81,40 +80,6 @@ mod probe {
     }
 
     impl Probe {
-        fn inspect(&mut self, info: &ID3D11InfoQueue) {
-            for index in 0..unsafe { info.GetNumStoredMessages() } {
-                let mut size = 0;
-                if unsafe { info.GetMessage(index, None, &mut size) }.is_err()
-                    || size < size_of::<D3D11_MESSAGE>()
-                {
-                    continue;
-                }
-                // The SDK writes the message header and its variable strings in one allocation.
-                let mut storage = vec![0usize; size.div_ceil(size_of::<usize>())];
-                let message = storage.as_mut_ptr().cast::<D3D11_MESSAGE>();
-                if unsafe { info.GetMessage(index, Some(message), &mut size) }.is_err() {
-                    continue;
-                }
-                let message = unsafe { &*message };
-                if matches!(
-                    message.Severity,
-                    D3D11_MESSAGE_SEVERITY_ERROR | D3D11_MESSAGE_SEVERITY_CORRUPTION
-                ) {
-                    if self.errors == 0 && !message.pDescription.is_null() {
-                        let text = unsafe {
-                            std::slice::from_raw_parts(
-                                message.pDescription.cast::<u8>(),
-                                message.DescriptionByteLength,
-                            )
-                        };
-                        self.first_error =
-                            String::from_utf8_lossy(text).trim_end_matches('\0').into();
-                    }
-                    self.errors += 1;
-                }
-            }
-        }
-
         fn defined(&self) -> bool {
             self.errors == 0 && self.value[..3] == [0.125, -0.25, 1.0]
         }
@@ -146,19 +111,21 @@ mod probe {
             return Err("shader creation returned an empty interface".into());
         };
 
-        let desc = Device::desc([8, 8], DXGI_FORMAT_R32G32B32A32_FLOAT, D3D11_BIND_RENDER_TARGET);
+        let desc = Device::desc(
+            [8, 8],
+            DXGI_FORMAT_R32G32B32A32_FLOAT,
+            D3D11_BIND_RENDER_TARGET,
+        );
         let target = gpu.texture(&desc, None)?;
         let mut view = None;
         unsafe { device.CreateRenderTargetView(&target, None, Some(&mut view)) }?;
         let view = view.ok_or("target view unavailable")?;
 
-        let info = device.cast::<ID3D11InfoQueue>().ok();
+        // Only the errors this draw raises count.
+        let _ = rsf_test_support::device::d3d11_errors(device);
         let views = [Some(view)];
         let mut probe = Probe::default();
         unsafe {
-            if let Some(info) = &info {
-                info.ClearStoredMessages();
-            }
             context.ClearState();
             context.ClearRenderTargetView(
                 views[0].as_ref().ok_or("target view unavailable")?,
@@ -187,9 +154,9 @@ mod probe {
             }
             context.ClearState();
         }
-        if let Some(info) = &info {
-            probe.inspect(info);
-        }
+        let errors = rsf_test_support::device::d3d11_errors(device);
+        probe.errors = errors.len() as u64;
+        probe.first_error = errors.into_iter().next().unwrap_or_default();
         Ok(probe)
     }
 

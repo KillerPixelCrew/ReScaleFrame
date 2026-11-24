@@ -228,44 +228,16 @@ impl Device {
         view
     }
 
+    /// The debug-layer errors since the last call, each printed; 0 without the debug layer.
     pub(crate) fn debug_errors(&self) -> u64 {
-        let Some(info) = &self.info else { return 0 };
-        let mut errors = 0;
-        for index in 0..unsafe { info.GetNumStoredMessages() } {
-            let mut size = 0;
-            if unsafe { info.GetMessage(index, None, &mut size) }.is_err()
-                || size < size_of::<D3D11_MESSAGE>()
-            {
-                errors += 1;
-                continue;
-            }
-            let mut storage = vec![0usize; size.div_ceil(size_of::<usize>())];
-            let raw = storage.as_mut_ptr().cast::<D3D11_MESSAGE>();
-            if unsafe { info.GetMessage(index, Some(raw), &mut size) }.is_err() {
-                errors += 1;
-                continue;
-            }
-            let message = unsafe { &*raw };
-            if message.Severity.0 <= D3D11_MESSAGE_SEVERITY_ERROR.0 {
-                let text = if message.pDescription.is_null() {
-                    &[]
-                } else {
-                    unsafe {
-                        std::slice::from_raw_parts(
-                            message.pDescription,
-                            message.DescriptionByteLength,
-                        )
-                    }
-                };
-                println!(
-                    "  debug layer: {}",
-                    String::from_utf8_lossy(text).trim_end_matches('\0')
-                );
-                errors += 1;
-            }
+        if self.info.is_none() {
+            return 0;
         }
-        unsafe { info.ClearStoredMessages() };
-        errors
+        let errors = rsf_test_support::device::d3d11_errors(&self.device);
+        for error in &errors {
+            println!("  debug layer: {error}");
+        }
+        errors.len() as u64
     }
 }
 

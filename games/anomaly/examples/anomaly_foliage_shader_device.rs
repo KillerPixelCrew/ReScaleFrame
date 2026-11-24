@@ -6,8 +6,8 @@ mod fixture {
     use rsf_test_support::device::{Device, half_to_f32 as half};
     use std::ffi::{CStr, CString};
     use std::fmt::Write;
-    use std::path::Path;
     use std::ops::Deref;
+    use std::path::Path;
     use std::ptr::{from_ref, null_mut, read_unaligned};
     use windows::Win32::Graphics::Direct3D::Fxc::D3DReflect;
     use windows::Win32::Graphics::Direct3D::*;
@@ -612,7 +612,11 @@ mod fixture {
                 ..Default::default()
             };
             let white = self.texture(
-                &Device::desc([1, 1], DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE),
+                &Device::desc(
+                    [1, 1],
+                    DXGI_FORMAT_R8G8B8A8_UNORM,
+                    D3D11_BIND_SHADER_RESOURCE,
+                ),
                 Some(&initial),
             )?;
             let mut srv = None;

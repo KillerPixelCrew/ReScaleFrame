@@ -9,6 +9,7 @@ use windows::Win32::Graphics::Direct3D::{
 };
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::core::Interface;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -126,6 +127,45 @@ impl Device {
         }
         Ok(pixels)
     }
+}
+
+/// The descriptions of the error and corruption messages in `device`'s info queue, oldest first,
+/// and clears the queue. A message the queue cannot return counts as an error. Empty when the
+/// device has no info queue because the debug layer is off.
+pub fn d3d11_errors(device: &ID3D11Device) -> Vec<String> {
+    let Ok(queue) = device.cast::<ID3D11InfoQueue>() else {
+        return Vec::new();
+    };
+    let mut errors = Vec::new();
+    for index in 0..unsafe { queue.GetNumStoredMessages() } {
+        let mut bytes = 0;
+        if unsafe { queue.GetMessage(index, None, &mut bytes) }.is_err()
+            || bytes < size_of::<D3D11_MESSAGE>()
+        {
+            errors.push("unreadable debug-layer message".into());
+            continue;
+        }
+        // Word-aligned storage holds the record and the description appended to it.
+        let mut storage = vec![0usize; bytes.div_ceil(size_of::<usize>())];
+        let message = storage.as_mut_ptr().cast::<D3D11_MESSAGE>();
+        if unsafe { queue.GetMessage(index, Some(message), &mut bytes) }.is_err() {
+            errors.push("unreadable debug-layer message".into());
+            continue;
+        }
+        let message = unsafe { &*message };
+        if message.Severity.0 <= D3D11_MESSAGE_SEVERITY_ERROR.0 {
+            let text = if message.pDescription.is_null() {
+                &[][..]
+            } else {
+                unsafe {
+                    slice::from_raw_parts(message.pDescription, message.DescriptionByteLength)
+                }
+            };
+            errors.push(String::from_utf8_lossy(text).trim_end_matches('\0').into());
+        }
+    }
+    unsafe { queue.ClearStoredMessages() };
+    errors
 }
 
 pub fn half_to_f32(bits: u16) -> f32 {

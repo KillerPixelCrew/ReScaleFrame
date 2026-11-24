@@ -211,28 +211,13 @@ impl Gpu {
     }
 
     fn errors(&self) -> Fixture<()> {
-        let Ok(queue) = self.device.cast::<ID3D11InfoQueue>() else {
-            return Ok(());
-        };
-        unsafe {
-            for index in 0..queue.GetNumStoredMessagesAllowedByRetrievalFilter() {
-                let mut size = 0;
-                win(queue.GetMessage(index, None, &mut size), "info queue size")?;
-                // Use pointer-aligned backing storage for the SDK header and trailing message.
-                let mut storage = vec![0usize; size.div_ceil(size_of::<usize>())];
-                let message = storage.as_mut_ptr().cast::<D3D11_MESSAGE>();
-                win(
-                    queue.GetMessage(index, Some(message), &mut size),
-                    "info queue message",
-                )?;
-                let message = &*message;
-                if message.Severity.0 <= D3D11_MESSAGE_SEVERITY_ERROR.0 {
-                    return Err(name(PCSTR(message.pDescription))?);
-                }
-            }
-            queue.ClearStoredMessages();
+        match rsf_test_support::device::d3d11_errors(&self.device)
+            .into_iter()
+            .next()
+        {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     fn buffer(

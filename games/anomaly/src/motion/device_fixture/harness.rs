@@ -139,44 +139,11 @@ impl Gpu {
 
     /// Error and corruption messages since the last call, with the first description.
     pub(super) fn debug_errors(&self) -> (u64, String) {
-        let Ok(queue) = self.device.cast::<ID3D11InfoQueue>() else {
-            return (0, String::new());
-        };
-        let mut errors = 0;
-        let mut first = String::new();
-        for index in 0..unsafe { queue.GetNumStoredMessages() } {
-            let mut size = 0;
-            if unsafe { queue.GetMessage(index, None, &mut size) }.is_err()
-                || size < size_of::<D3D11_MESSAGE>()
-            {
-                continue;
-            }
-            // The SDK writes the header and its description in one allocation.
-            let mut storage = vec![0usize; size.div_ceil(size_of::<usize>())];
-            let message = storage.as_mut_ptr().cast::<D3D11_MESSAGE>();
-            if unsafe { queue.GetMessage(index, Some(message), &mut size) }.is_err() {
-                continue;
-            }
-            let message = unsafe { &*message };
-            if !matches!(
-                message.Severity,
-                D3D11_MESSAGE_SEVERITY_ERROR | D3D11_MESSAGE_SEVERITY_CORRUPTION
-            ) {
-                continue;
-            }
-            if errors == 0 && !message.pDescription.is_null() {
-                let text = unsafe {
-                    std::slice::from_raw_parts(
-                        message.pDescription.cast::<u8>(),
-                        message.DescriptionByteLength,
-                    )
-                };
-                first = String::from_utf8_lossy(text).trim_end_matches('\0').into();
-            }
-            errors += 1;
-        }
-        unsafe { queue.ClearStoredMessages() };
-        (errors, first)
+        let errors = rsf_test_support::device::d3d11_errors(&self.device);
+        (
+            errors.len() as u64,
+            errors.into_iter().next().unwrap_or_default(),
+        )
     }
 
     pub(super) fn require_clean_debug_layer(&self, what: &str) -> Outcome {
