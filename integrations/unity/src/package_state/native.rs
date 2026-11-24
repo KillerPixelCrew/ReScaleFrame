@@ -1,27 +1,17 @@
 // SPDX-License-Identifier: MIT
 //! Package entry points backed by the linked Unity SDK and Runtime shims.
 use super::services::backend_log;
-use super::windows::*;
-use super::{BACKEND_OK, Leaves, PACKAGE, routing, services};
+use super::{BACKEND_OK, PACKAGE, routing, services};
 use crate::bridge_native::package::*;
-use crate::bridge_native::rsf_unity_set_engine_spatial;
-use crate::bridge_state::rsf_unity_frames_activate;
 use crate::generation::RSF_DLSS_ENGINE_UNITY;
 use crate::preview::*;
 use crate::sys::{
-    RSF_DLSS_ABI_VERSION, RSF_SR12_PLAN_ABI_VERSION, rsf_d3d11_present_backend,
-    rsf_d3d11_present_generation, rsf_d3d11_present_has_owner, rsf_d3d11_present_host,
-    rsf_d3d11_present_request, rsf_d3d11_present_switch_result, rsf_dlss_setup,
-    rsf_fg_default_backend, rsf_fg12_cpu, rsf_fg12_end_session, rsf_fg12_hudless, rsf_fg12_install,
-    rsf_fg12_options, rsf_fg12_status, rsf_fg12_submitted, rsf_fg12_window,
-    rsf_native_latency_status_get, rsf_sharpening_core_defaults, rsf_sharpening_core_valid,
-    rsf_sharpening_options, rsf_sr12, rsf_sr12_create_planned, rsf_sr12_destroy, rsf_sr12_evaluate,
-    rsf_sr12_plan_result, rsf_sr12_quality_supported, rsf_sr12_set_sharpening, rsf_sr12_setup,
-    rsf_unity_package_view_setup,
+    RSF_DLSS_ABI_VERSION, RSF_SR12_PLAN_ABI_VERSION, rsf_d3d11_present_host, rsf_dlss_setup,
+    rsf_fg_default_backend, rsf_sharpening_core_defaults, rsf_sharpening_core_valid,
+    rsf_sharpening_options, rsf_sr12, rsf_sr12_create_planned, rsf_sr12_plan_result,
+    rsf_sr12_setup, rsf_unity_package_view_setup,
 };
-use crate::vulkan_state::bridge::{rsf_uvk_bridge_owns_window, rsf_uvk_bridge_update_window};
-use rsf_windows::rsf_win32_input_kind;
-use std::ffi::{c_int, c_void};
+use crate::vulkan_state::bridge::rsf_uvk_bridge_update_window;use std::ffi::{c_int, c_void};
 use std::sync::atomic::Ordering::SeqCst;
 use windows::Win32::Graphics::{
     Direct3D12::{ID3D12Device, ID3D12GraphicsCommandList, ID3D12Resource},
@@ -31,66 +21,61 @@ use windows::core::Interface;
 
 unsafe extern "C" {
     // package.c: the pinned dlss_preset.h model mask, and the Unity SDK calls.
-    fn rsf_unity_package_dlss_preset_valid(preset: u32) -> u32;
-    fn rsf_unity_package_renderer_vulkan(graphics: *mut c_void) -> u32;
+    pub(super) fn rsf_unity_package_dlss_preset_valid(preset: u32) -> u32;
+    pub(super) fn rsf_unity_package_renderer_vulkan(graphics: *mut c_void) -> u32;
 }
 
-/// The leaves' production binding: the Runtime's exports, this crate's bridges and Win32 calls,
-/// and package.c's two C leaves. The tests bind fakes instead.
-pub(super) static PRODUCTION: Leaves = Leaves {
-    sharpening_valid,
-    dlss_preset_valid: rsf_unity_package_dlss_preset_valid,
-    set_engine_spatial: rsf_unity_set_engine_spatial,
-    fg_options: rsf_fg12_options,
-    fg_status: rsf_fg12_status,
-    latency_status: rsf_native_latency_status_get,
-    present_backend: rsf_d3d11_present_backend,
-    present_switch_result: rsf_d3d11_present_switch_result,
-    present_generation: rsf_d3d11_present_generation,
-    bridge_activate: rsf_unity_frames_activate,
-    bridge_try_close: rsf_unity_package_bridge_try_close,
-    end_session: rsf_fg12_end_session,
-    sr_quality_supported: rsf_sr12_quality_supported,
-    sr_create: rsf_unity_package_create_view,
-    sharpening_defaults,
-    sr_set_sharpening: rsf_sr12_set_sharpening,
-    sr_evaluate: rsf_sr12_evaluate,
-    sr_destroy: rsf_sr12_destroy,
-    bridge_finish_retirement: rsf_unity_package_bridge_finish_retirement,
-    fg_install: rsf_fg12_install,
-    present_has_owner: rsf_d3d11_present_has_owner,
-    present_request: rsf_d3d11_present_request,
-    fg_default_backend: rsf_unity_package_default_fg,
-    bridge_open: rsf_unity_package_bridge_open,
-    session_seed: rsf_unity_package_session_seed,
-    bridge_prepare: rsf_unity_package_bridge_prepare,
-    local_app_data: rsf_unity_package_local_app_data,
-    create_directory: rsf_unity_package_create_directory,
-    log_open: rsf_unity_package_log_open,
-    log_write: rsf_unity_package_log_write,
-    log_close: rsf_unity_package_log_close,
-    player_window: rsf_unity_package_player_window,
-    preview_parent: rsf_unity_preview_parent,
-    subclass: rsf_unity_package_subclass,
-    restore: rsf_unity_package_restore,
-    input_kind: rsf_win32_input_kind,
-    timestamp: rsf_unity_package_timestamp,
-    cpu: rsf_fg12_cpu,
-    fg_submitted: rsf_fg12_submitted,
-    fg_window: rsf_fg12_window,
-    fg_hudless: rsf_fg12_hudless,
-    preview_present: rsf_unity_preview_present,
-    texture_desc: rsf_unity_package_texture_desc,
-    preview_prepare: rsf_unity_package_prepare_preview,
-    preview_owns: rsf_unity_preview_owns,
-    renderer_vulkan: rsf_unity_package_renderer_vulkan,
-    vulkan_owns: rsf_uvk_bridge_owns_window,
-    window_class: rsf_unity_package_window_class,
-    bridge_load: rsf_unity_package_bridge_load,
-    bridge_unload: rsf_unity_package_bridge_unload,
-};
-
-unsafe extern "C" fn sharpening_valid(options: *const rsf_sharpening_options) -> u32 {
+/// The leaves' production binding (package_state's `raw`): the Runtime's exports, this crate's
+/// bridges and Win32 calls, and package.c's two C leaves. The tests bind fakes instead.
+pub(super) mod raw {
+    pub(in crate::package_state) use super::super::windows::{
+        rsf_unity_package_create_directory as create_directory,
+        rsf_unity_package_local_app_data as local_app_data,
+        rsf_unity_package_log_close as log_close, rsf_unity_package_log_open as log_open,
+        rsf_unity_package_log_write as log_write,
+        rsf_unity_package_player_window as player_window, rsf_unity_package_restore as restore,
+        rsf_unity_package_session_seed as session_seed, rsf_unity_package_subclass as subclass,
+        rsf_unity_package_timestamp as timestamp,
+        rsf_unity_package_window_class as window_class,
+    };
+    pub(in crate::package_state) use super::{
+        rsf_unity_package_create_view as sr_create, rsf_unity_package_default_fg as fg_default_backend,
+        rsf_unity_package_dlss_preset_valid as dlss_preset_valid,
+        rsf_unity_package_prepare_preview as preview_prepare,
+        rsf_unity_package_renderer_vulkan as renderer_vulkan,
+        rsf_unity_package_texture_desc as texture_desc, sharpening_defaults, sharpening_valid,
+    };
+    pub(in crate::package_state) use crate::bridge_native::package::{
+        rsf_unity_package_bridge_finish_retirement as bridge_finish_retirement,
+        rsf_unity_package_bridge_load as bridge_load, rsf_unity_package_bridge_open as bridge_open,
+        rsf_unity_package_bridge_prepare as bridge_prepare,
+        rsf_unity_package_bridge_try_close as bridge_try_close,
+        rsf_unity_package_bridge_unload as bridge_unload,
+    };
+    pub(in crate::package_state) use crate::bridge_native::rsf_unity_set_engine_spatial as set_engine_spatial;
+    pub(in crate::package_state) use crate::bridge_state::rsf_unity_frames_activate as bridge_activate;
+    pub(in crate::package_state) use crate::preview::{
+        rsf_unity_preview_owns as preview_owns, rsf_unity_preview_parent as preview_parent,
+        rsf_unity_preview_present as preview_present,
+    };
+    pub(in crate::package_state) use crate::sys::{
+        rsf_d3d11_present_backend as present_backend,
+        rsf_d3d11_present_generation as present_generation,
+        rsf_d3d11_present_has_owner as present_has_owner,
+        rsf_d3d11_present_request as present_request,
+        rsf_d3d11_present_switch_result as present_switch_result, rsf_fg12_cpu as cpu,
+        rsf_fg12_end_session as end_session, rsf_fg12_hudless as fg_hudless,
+        rsf_fg12_install as fg_install, rsf_fg12_options as fg_options,
+        rsf_fg12_status as fg_status, rsf_fg12_submitted as fg_submitted,
+        rsf_fg12_window as fg_window, rsf_native_latency_status_get as latency_status,
+        rsf_sr12_destroy as sr_destroy, rsf_sr12_evaluate as sr_evaluate,
+        rsf_sr12_quality_supported as sr_quality_supported,
+        rsf_sr12_set_sharpening as sr_set_sharpening,
+    };
+    pub(in crate::package_state) use crate::vulkan_state::bridge::rsf_uvk_bridge_owns_window as vulkan_owns;
+    pub(in crate::package_state) use rsf_windows::rsf_win32_input_kind as input_kind;
+}
+pub(super) unsafe fn sharpening_valid(options: *const rsf_sharpening_options) -> u32 {
     let options = unsafe { *options };
     u32::from(
         options.struct_size as usize >= size_of::<rsf_sharpening_options>()
@@ -98,7 +83,7 @@ unsafe extern "C" fn sharpening_valid(options: *const rsf_sharpening_options) ->
     )
 }
 
-unsafe extern "C" fn sharpening_defaults(output: *mut rsf_sharpening_options) {
+pub(super) unsafe fn sharpening_defaults(output: *mut rsf_sharpening_options) {
     unsafe { output.write(rsf_sharpening_core_defaults()) };
 }
 

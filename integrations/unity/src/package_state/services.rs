@@ -14,7 +14,7 @@
 //! The log lock is held across the log leaves and the input-window lock across the window leaves;
 //! neither leaf calls back. The message and CPU paths take neither lock, so a message the window
 //! dispatches while it is being hooked cannot wait on the hook.
-use super::{BACKEND_OK, LEAVES, Leaves, PACKAGE, Package};
+use super::{BACKEND_OK, Leaves, PACKAGE, Package, loaded, raw};
 use crate::bridge_state::{
     rsf_unity_frames_active, rsf_unity_frames_callback_enter, rsf_unity_frames_callback_leave,
 };
@@ -157,22 +157,22 @@ impl Services {
 // for the call only. Paths are terminated here.
 impl Leaves {
     fn bridge_open(&self, editor: bool) -> bool {
-        unsafe { (self.bridge_open)(u32::from(editor)) != 0 }
+        raw::bridge_open(u32::from(editor)) != 0
     }
     fn session_seed(&self) -> u64 {
-        unsafe { (self.session_seed)() }
+        raw::session_seed()
     }
     fn bridge_prepare(
         &self,
         services: &rsf_game_host_services,
         api: &mut rsf_unity_native_api,
     ) -> bool {
-        unsafe { (self.bridge_prepare)(services, api) != 0 }
+        unsafe { raw::bridge_prepare(services, api) != 0 }
     }
     /// %LOCALAPPDATA%; None when it is unset, empty or longer than a path buffer.
     fn local_app_data(&self) -> Option<Vec<u16>> {
         let mut value = vec![0u16; PATH_CAPACITY];
-        let length = unsafe { (self.local_app_data)(value.as_mut_ptr(), PATH_CAPACITY as u32) };
+        let length = unsafe { raw::local_app_data(value.as_mut_ptr(), PATH_CAPACITY as u32) };
         let length = length as usize;
         (length != 0 && length < PATH_CAPACITY).then(|| {
             value.truncate(length);
@@ -181,37 +181,37 @@ impl Leaves {
     }
     fn create_directory(&self, path: &[u16]) {
         let path = terminated(path.to_vec());
-        unsafe { (self.create_directory)(path.as_ptr()) }
+        unsafe { raw::create_directory(path.as_ptr()) }
     }
     fn log_open(&self, path: &[u16]) -> Handle {
         let path = terminated(path.to_vec());
-        Handle(unsafe { (self.log_open)(path.as_ptr()) })
+        Handle(unsafe { raw::log_open(path.as_ptr()) })
     }
     fn log_write(&self, file: Handle, text: &CStr) {
-        unsafe { (self.log_write)(file.0, text.as_ptr()) }
+        unsafe { raw::log_write(file.0, text.as_ptr()) }
     }
     fn log_close(&self, file: Handle) {
-        unsafe { (self.log_close)(file.0) }
+        unsafe { raw::log_close(file.0) }
     }
     fn player_window(&self) -> Handle {
-        Handle(unsafe { (self.player_window)() })
+        Handle(raw::player_window())
     }
     fn preview_parent(&self) -> Handle {
-        Handle(unsafe { (self.preview_parent)() })
+        Handle(raw::preview_parent())
     }
     fn subclass(&self, window: Handle) -> bool {
-        unsafe { (self.subclass)(window.0) != 0 }
+        raw::subclass(window.0) != 0
     }
     fn restore(&self, window: Handle) {
-        unsafe { (self.restore)(window.0) }
+        raw::restore(window.0)
     }
     fn timestamp(&self) -> (u64, u64) {
         let (mut now, mut frequency) = (0u64, 0u64);
-        unsafe { (self.timestamp)(&mut now, &mut frequency) };
+        unsafe { raw::timestamp(&mut now, &mut frequency) };
         (now, frequency)
     }
     fn cpu(&self, event: &rsf_game_cpu_event) {
-        unsafe { (self.cpu)(event) }
+        unsafe { raw::cpu(event) }
     }
 }
 
@@ -358,7 +358,7 @@ impl Package {
     /// Every message the input window dequeues, classified by its range and WM_INPUT by its raw
     /// device. A keyed one outside a CPU frame is unframed.
     pub(super) fn window_message(&self, leaves: &Leaves, message: u32, lparam: isize) {
-        let kind = unsafe { (leaves.input_kind)(message, lparam) };
+        let kind = raw::input_kind(message, lparam);
         let now = leaves.timestamp();
         let source = self.services.input_frame.load(SeqCst);
         let mut flags = RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_WINDOW_MESSAGE;
@@ -396,7 +396,7 @@ unsafe extern "C" fn host_cpu_event(_: *mut c_void, event: *const rsf_game_cpu_e
     if event.is_null() {
         return;
     }
-    if let Some(leaves) = LEAVES.get() {
+    if let Some(leaves) = loaded() {
         PACKAGE.cpu_event(leaves, unsafe { &*event });
     }
 }
@@ -409,14 +409,14 @@ pub(crate) unsafe extern "C" fn rsf_unity_package_log(text: *const c_char) {
     if text.is_null() {
         return;
     }
-    if let Some(leaves) = LEAVES.get() {
+    if let Some(leaves) = loaded() {
         PACKAGE.log_text(leaves, unsafe { CStr::from_ptr(text) });
     }
 }
 
 #[cfg(windows)]
 pub(super) fn report_window_message(message: u32, lparam: isize) {
-    if let Some(leaves) = LEAVES.get()
+    if let Some(leaves) = loaded()
         && let Some(_callback) = InputCallback::enter()
     {
         PACKAGE.window_message(leaves, message, lparam);
@@ -432,7 +432,7 @@ extern "C" fn rsfu_input(frame: u64, kinds: u32) -> c_int {
     if kinds == 0 {
         return BACKEND_OK;
     }
-    match LEAVES.get() {
+    match loaded() {
         Some(leaves) => {
             let Some(_callback) = InputCallback::enter() else {
                 return BACKEND_OK;
@@ -444,7 +444,7 @@ extern "C" fn rsfu_input(frame: u64, kinds: u32) -> c_int {
 }
 
 pub(super) extern "C" fn rsf_unity_package_preview_input() {
-    if let Some(leaves) = LEAVES.get() {
+    if let Some(leaves) = loaded() {
         PACKAGE.preview_input(leaves);
     }
 }
@@ -455,7 +455,7 @@ pub(crate) fn editor() -> bool {
 
 #[cfg(windows)]
 pub(super) fn unload() {
-    if let Some(leaves) = LEAVES.get() {
+    if let Some(leaves) = loaded() {
         PACKAGE.unload(leaves);
     }
 }

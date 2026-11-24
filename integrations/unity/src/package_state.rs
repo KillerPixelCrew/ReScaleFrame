@@ -25,7 +25,7 @@ use crate::package_views::{Recording, SLOTS, View, Views};
 use crate::sys::rsf_unity_native_api;
 use crate::sys::{
     RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
-    RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_SPATIAL, rsf_fg12_setup,
+    RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_SPATIAL,
 };
 use crate::sys::{
     RSF_FG_STAT_TOTAL_PRESENTED, RSF_SR_NONE, RSF_UNITY_SETTINGS_ABI_VERSION,
@@ -34,8 +34,7 @@ use crate::sys::{
     rsf_unity_package_view_setup,
 };
 use rsf_game_sys::{
-    RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_cpu_event, rsf_game_host_services,
-    rsf_game_render_config, rsf_game_render_pass,
+    RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_render_config, rsf_game_render_pass,
 };
 use rsf_game_sys::{RSF_SCREEN_FLIGHT, RSF_SCREEN_MENU};
 use std::cell::Cell;
@@ -44,7 +43,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::{
     AtomicBool, AtomicI32, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering::SeqCst,
 };
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// RSF_BACKEND_OK, a cast macro bindgen does not evaluate; package.c asserts it.
 const BACKEND_OK: i32 = 0;
@@ -124,84 +123,36 @@ const fn fresh_status() -> rsf_unity_package_status {
 static OPERATIONS: Mutex<()> = Mutex::new(());
 static UNITY_INTERFACES: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static UNITY_GRAPHICS: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
-static LEAVES: OnceLock<&'static Leaves> = OnceLock::new();
+/// Plugin load bound the leaves; every entry before it refuses.
+static LOADED: AtomicBool = AtomicBool::new(false);
 
-/// Package callbacks and native leaves. Production binds them in native.rs; the tests bind fakes.
-struct Leaves {
-    sharpening_valid: unsafe extern "C" fn(*const rsf_sharpening_options) -> u32,
-    dlss_preset_valid: unsafe extern "C" fn(u32) -> u32,
-    set_engine_spatial: unsafe extern "C" fn(u32, u32) -> c_int,
-    fg_options: unsafe extern "C" fn(*const rsf_native_fg_options),
-    fg_status: unsafe extern "C" fn(*mut rsf_native_fg_status) -> c_int,
-    latency_status: unsafe extern "C" fn(*mut rsf_native_latency_status) -> c_int,
-    present_backend: unsafe extern "C" fn() -> u32,
-    present_switch_result: unsafe extern "C" fn() -> i32,
-    present_generation: unsafe extern "C" fn() -> u64,
-    bridge_activate: unsafe extern "C" fn(u32),
-    bridge_try_close: unsafe extern "C" fn() -> u32,
-    end_session: unsafe extern "C" fn(u64) -> c_int,
-    sr_quality_supported: unsafe extern "C" fn(u32, u32) -> u32,
-    sr_create: unsafe extern "C" fn(
-        *mut c_void,
-        *mut rsf_unity_package_view_setup,
-        *mut i32,
-        *mut *mut rsf_sr12,
-    ) -> u32,
-    sharpening_defaults: unsafe extern "C" fn(*mut rsf_sharpening_options),
-    sr_set_sharpening: unsafe extern "C" fn(*mut rsf_sr12, *const rsf_sharpening_options) -> i32,
-    sr_evaluate:
-        unsafe extern "C" fn(*mut rsf_sr12, *mut c_void, *const rsf_game_render_pass, u32) -> i32,
-    sr_destroy: unsafe extern "C" fn(*mut rsf_sr12),
-    bridge_finish_retirement: unsafe extern "C" fn(u32),
-    fg_install: unsafe extern "C" fn(*const rsf_fg12_setup) -> i32,
-    present_has_owner: unsafe extern "C" fn() -> c_int,
-    present_request: unsafe extern "C" fn(u32) -> i32,
-    fg_default_backend: unsafe extern "C" fn(*mut u32) -> u32,
-    bridge_open: unsafe extern "C" fn(u32) -> u32,
-    session_seed: unsafe extern "C" fn() -> u64,
-    bridge_prepare:
-        unsafe extern "C" fn(*const rsf_game_host_services, *mut rsf_unity_native_api) -> u32,
-    local_app_data: unsafe extern "C" fn(*mut u16, u32) -> u32,
-    create_directory: unsafe extern "C" fn(*const u16),
-    log_open: unsafe extern "C" fn(*const u16) -> *mut c_void,
-    log_write: unsafe extern "C" fn(*mut c_void, *const c_char),
-    log_close: unsafe extern "C" fn(*mut c_void),
-    player_window: unsafe extern "C" fn() -> *mut c_void,
-    preview_parent: unsafe extern "C" fn() -> *mut c_void,
-    subclass: unsafe extern "C" fn(*mut c_void) -> u32,
-    restore: unsafe extern "C" fn(*mut c_void),
-    input_kind: unsafe extern "C" fn(u32, isize) -> u32,
-    timestamp: unsafe extern "C" fn(*mut u64, *mut u64),
-    cpu: unsafe extern "C" fn(*const rsf_game_cpu_event),
-    fg_submitted: unsafe extern "C" fn(u64, u64),
-    fg_window: unsafe extern "C" fn(*const rsf_game_render_pass),
-    fg_hudless: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass),
-    preview_present: unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass, u32) -> u32,
-    texture_desc: unsafe extern "C" fn(*mut c_void, *mut u64, *mut u32, *mut u32),
-    preview_prepare: unsafe extern "C" fn(u32, u32) -> u32,
-    preview_owns: extern "C" fn(*mut c_void) -> bool,
-    renderer_vulkan: unsafe extern "C" fn(*mut c_void) -> u32,
-    vulkan_owns: extern "C" fn(*mut c_void) -> bool,
-    window_class: unsafe extern "C" fn(*mut c_void) -> u32,
-    bridge_load: unsafe extern "C" fn(*mut c_void) -> u32,
-    bridge_unload: unsafe extern "C" fn(),
+fn loaded() -> Option<&'static Leaves> {
+    LOADED.load(SeqCst).then_some(&Leaves)
 }
 
-// SAFETY for every call below: the leaves are package.c's functions and borrow their
-// pointer arguments for the call only.
+/// Package callbacks and native leaves, called through `raw`: native.rs's bindings in production,
+/// the test module's fakes under test. Plugin load makes them available (`loaded`).
+struct Leaves;
+
+#[cfg(not(test))]
+use native::raw;
+#[cfg(test)]
+use tests as raw;
+
+// SAFETY for every call below: the leaves borrow their pointer arguments for the call only.
 impl Leaves {
     fn sharpening_valid(&self, options: &rsf_sharpening_options) -> bool {
-        unsafe { (self.sharpening_valid)(options) != 0 }
+        unsafe { raw::sharpening_valid(options) != 0 }
     }
     fn dlss_preset_valid(&self, preset: u32) -> bool {
-        unsafe { (self.dlss_preset_valid)(preset) != 0 }
+        unsafe { raw::dlss_preset_valid(preset) != 0 }
     }
     /// The bridge always accepts the policy; its result was never read.
     fn set_engine_spatial(&self, spatial: bool, quality: u32) {
-        unsafe { (self.set_engine_spatial)(u32::from(spatial), quality) };
+        raw::set_engine_spatial(u32::from(spatial), quality);
     }
     fn fg_options(&self, options: &rsf_native_fg_options) {
-        unsafe { (self.fg_options)(options) }
+        unsafe { raw::fg_options(options) }
     }
     /// The Runtime's generation status; zero-filled apart from struct_size when it has none.
     fn fg_status(&self) -> rsf_native_fg_status {
@@ -209,7 +160,7 @@ impl Leaves {
             struct_size: size_of::<rsf_native_fg_status>() as u32,
             ..Default::default()
         };
-        unsafe { (self.fg_status)(&mut status) };
+        unsafe { raw::fg_status(&mut status) };
         status
     }
     fn latency_status(&self) -> Option<rsf_native_latency_status> {
@@ -218,28 +169,28 @@ impl Leaves {
             version: LATENCY_STATUS_VERSION,
             ..Default::default()
         };
-        (unsafe { (self.latency_status)(&mut status) } != 0).then_some(status)
+        (unsafe { raw::latency_status(&mut status) } != 0).then_some(status)
     }
     fn present_backend(&self) -> u32 {
-        unsafe { (self.present_backend)() }
+        unsafe { raw::present_backend() }
     }
     fn present_switch_result(&self) -> i32 {
-        unsafe { (self.present_switch_result)() }
+        unsafe { raw::present_switch_result() }
     }
     fn present_generation(&self) -> u64 {
-        unsafe { (self.present_generation)() }
+        unsafe { raw::present_generation() }
     }
     fn bridge_activate(&self, enabled: bool) {
-        unsafe { (self.bridge_activate)(u32::from(enabled)) }
+        raw::bridge_activate(u32::from(enabled))
     }
     fn bridge_try_close(&self) -> bool {
-        unsafe { (self.bridge_try_close)() != 0 }
+        raw::bridge_try_close() != 0
     }
     fn end_session(&self, session: u64) -> bool {
-        unsafe { (self.end_session)(session) != 0 }
+        unsafe { raw::end_session(session) != 0 }
     }
     fn sr_quality_supported(&self, backend: u32, quality: u32) -> bool {
-        unsafe { (self.sr_quality_supported)(backend, quality) != 0 }
+        unsafe { raw::sr_quality_supported(backend, quality) != 0 }
     }
 
     fn sr_create(
@@ -248,7 +199,7 @@ impl Leaves {
         setup: &mut rsf_unity_package_view_setup,
     ) -> Option<(i32, *mut rsf_sr12)> {
         let (mut result, mut sr): (i32, *mut rsf_sr12) = (0, null_mut());
-        (unsafe { (self.sr_create)(commands, setup, &mut result, &mut sr) } != 0)
+        (unsafe { raw::sr_create(commands, setup, &mut result, &mut sr) } != 0)
             .then_some((result, sr))
     }
 
@@ -258,12 +209,12 @@ impl Leaves {
             return *stored;
         }
         let mut defaults = rsf_sharpening_options::default();
-        unsafe { (self.sharpening_defaults)(&mut defaults) };
+        unsafe { raw::sharpening_defaults(&mut defaults) };
         defaults
     }
     /// The result is not read.
     fn sr_set_sharpening(&self, sr: *mut rsf_sr12, options: &rsf_sharpening_options) {
-        unsafe { (self.sr_set_sharpening)(sr, options) };
+        unsafe { raw::sr_set_sharpening(sr, options) };
     }
     fn sr_evaluate(
         &self,
@@ -272,13 +223,13 @@ impl Leaves {
         pass: &rsf_game_render_pass,
         slot: u32,
     ) -> i32 {
-        unsafe { (self.sr_evaluate)(sr, commands, pass, slot) }
+        unsafe { raw::sr_evaluate(sr, commands, pass, slot) }
     }
     fn sr_destroy(&self, sr: *mut rsf_sr12) {
-        unsafe { (self.sr_destroy)(sr) }
+        unsafe { raw::sr_destroy(sr) }
     }
     fn bridge_finish_retirement(&self, commit: bool) {
-        unsafe { (self.bridge_finish_retirement)(u32::from(commit)) }
+        raw::bridge_finish_retirement(u32::from(commit))
     }
 }
 
@@ -816,7 +767,7 @@ unsafe fn struct_size<T>(value: *const T) -> u32 {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfu_configure(input: *const rsf_unity_package_settings) -> c_int {
     let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
-    let Some(leaves) = LEAVES.get() else {
+    let Some(leaves) = loaded() else {
         return 0;
     };
     if input.is_null()
@@ -844,7 +795,7 @@ unsafe extern "C" fn rsfu_settings(output: *mut rsf_unity_package_settings) -> c
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfu_status(output: *mut rsf_unity_package_status) -> c_int {
     let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
-    let Some(leaves) = LEAVES.get() else {
+    let Some(leaves) = loaded() else {
         return 0;
     };
     if output.is_null()
@@ -858,7 +809,7 @@ unsafe extern "C" fn rsfu_status(output: *mut rsf_unity_package_status) -> c_int
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfu_frame_counters(output: *mut rsf_unity_frame_counters) -> c_int {
-    let Some(leaves) = LEAVES.get() else {
+    let Some(leaves) = loaded() else {
         return 0;
     };
     if output.is_null()
@@ -883,7 +834,7 @@ unsafe extern "C" fn rsfu_initialize(
     output: *mut rsf_unity_native_api,
 ) -> c_int {
     let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
-    let Some(leaves) = LEAVES.get() else {
+    let Some(leaves) = loaded() else {
         return code::FAILED;
     };
     if runtime.is_null() || engine.is_null() || project.is_null() || output.is_null() {
@@ -923,6 +874,8 @@ pub(crate) extern "C" fn rsf_unity_package_bridge_failed(result: i32) {
 mod tests {
     use super::*;
     use crate::sys::RSF_SR_DLSS;
+    use crate::sys::rsf_fg12_setup;
+    use rsf_game_sys::{rsf_game_cpu_event, rsf_game_host_services};
     use crate::sys::rsf_fg_status;
     use std::cell::{Cell, RefCell};
     use std::ffi::CStr;
@@ -1041,26 +994,26 @@ mod tests {
         CALLS.with(|calls| calls.borrow_mut().drain(..).collect())
     }
 
-    unsafe extern "C" fn sharpening_valid(_: *const rsf_sharpening_options) -> u32 {
+    pub(super) unsafe fn sharpening_valid(_: *const rsf_sharpening_options) -> u32 {
         call("sharpening".into());
         fake().sharpening_valid.into()
     }
-    unsafe extern "C" fn dlss_preset_valid(_: u32) -> u32 {
+    pub(super) unsafe fn dlss_preset_valid(_: u32) -> u32 {
         call("preset".into());
         fake().preset_valid.into()
     }
-    unsafe extern "C" fn set_engine_spatial(spatial: u32, quality: u32) -> c_int {
+    pub(super) fn set_engine_spatial(spatial: u32, quality: u32) -> c_int {
         call(format!("spatial {spatial} {quality}"));
         1
     }
-    unsafe extern "C" fn fg_options(options: *const rsf_native_fg_options) {
+    pub(super) unsafe fn fg_options(options: *const rsf_native_fg_options) {
         let o = unsafe { *options };
         call(format!(
             "options {} {} {} {} {} {}",
             o.struct_size, o.mode, o.generated_frames, o.reflex_mode, o.frame_limit_us, o.debug
         ));
     }
-    unsafe extern "C" fn fg_status(status: *mut rsf_native_fg_status) -> c_int {
+    pub(super) unsafe fn fg_status(status: *mut rsf_native_fg_status) -> c_int {
         call("fg status".into());
         let status = unsafe { &mut *status };
         assert_eq!(status.struct_size, 352);
@@ -1081,7 +1034,7 @@ mod tests {
         };
         1
     }
-    unsafe extern "C" fn latency_status(status: *mut rsf_native_latency_status) -> c_int {
+    pub(super) unsafe fn latency_status(status: *mut rsf_native_latency_status) -> c_int {
         call("latency".into());
         let status = unsafe { &mut *status };
         assert_eq!((status.struct_size, status.version), (152, 1));
@@ -1096,36 +1049,36 @@ mod tests {
         status.derived_boundaries = 8;
         1
     }
-    unsafe extern "C" fn present_backend() -> u32 {
+    pub(super) unsafe fn present_backend() -> u32 {
         call("backend".into());
         5
     }
-    unsafe extern "C" fn present_switch_result() -> i32 {
+    pub(super) unsafe fn present_switch_result() -> i32 {
         call("switch".into());
         fake().switch_result
     }
-    unsafe extern "C" fn present_generation() -> u64 {
+    pub(super) unsafe fn present_generation() -> u64 {
         call("generation".into());
         77
     }
-    unsafe extern "C" fn bridge_activate(enabled: u32) {
+    pub(super) fn bridge_activate(enabled: u32) {
         call(format!("activate {enabled}"));
     }
-    unsafe extern "C" fn bridge_try_close() -> u32 {
+    pub(super) fn bridge_try_close() -> u32 {
         assert!(!fake().close_held);
         call("close".into());
         set(|f| f.close_held = f.drained);
         fake().close_held.into()
     }
-    unsafe extern "C" fn end_session(session: u64) -> c_int {
+    pub(super) unsafe fn end_session(session: u64) -> c_int {
         assert!(fake().close_held);
         call(format!("end {session}"));
         fake().ended.into()
     }
-    unsafe extern "C" fn sr_quality_supported(backend: u32, quality: u32) -> u32 {
+    pub(super) unsafe fn sr_quality_supported(backend: u32, quality: u32) -> u32 {
         u32::from(backend != RSF_SR_DLSS || quality != ULTRA_QUALITY)
     }
-    unsafe extern "C" fn sr_create(
+    pub(super) unsafe fn sr_create(
         _: *mut c_void,
         setup: *mut rsf_unity_package_view_setup,
         result: *mut i32,
@@ -1195,18 +1148,18 @@ mod tests {
         }
         1
     }
-    unsafe extern "C" fn sharpening_defaults(output: *mut rsf_sharpening_options) {
+    pub(super) unsafe fn sharpening_defaults(output: *mut rsf_sharpening_options) {
         call("defaults".into());
         unsafe { (*output).struct_size = 56 };
     }
-    unsafe extern "C" fn sr_set_sharpening(
+    pub(super) unsafe fn sr_set_sharpening(
         _: *mut rsf_sr12,
         options: *const rsf_sharpening_options,
     ) -> i32 {
         call(format!("sharpen {}", unsafe { (*options).struct_size }));
         -1
     }
-    unsafe extern "C" fn sr_evaluate(
+    pub(super) unsafe fn sr_evaluate(
         sr: *mut rsf_sr12,
         _: *mut c_void,
         pass: *const rsf_game_render_pass,
@@ -1216,15 +1169,15 @@ mod tests {
         call(format!("evaluate {:#x} {slot} {screen}", sr as usize));
         fake().evaluate_result
     }
-    unsafe extern "C" fn sr_destroy(sr: *mut rsf_sr12) {
+    pub(super) unsafe fn sr_destroy(sr: *mut rsf_sr12) {
         call(format!("destroy {:#x}", sr as usize));
     }
-    unsafe extern "C" fn bridge_finish_retirement(commit: u32) {
+    pub(super) fn bridge_finish_retirement(commit: u32) {
         assert!(fake().close_held);
         set(|f| f.close_held = false);
         call(if commit == 0 { "retain" } else { "release" }.into());
     }
-    unsafe extern "C" fn fg_install(setup: *const rsf_fg12_setup) -> i32 {
+    pub(super) unsafe fn fg_install(setup: *const rsf_fg12_setup) -> i32 {
         let s = unsafe { *setup };
         let o = s.options;
         let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_str().unwrap();
@@ -1261,15 +1214,15 @@ mod tests {
         ));
         fake().install_result
     }
-    unsafe extern "C" fn present_has_owner() -> c_int {
+    pub(super) unsafe fn present_has_owner() -> c_int {
         call("owner".into());
         fake().owner.into()
     }
-    unsafe extern "C" fn present_request(backend: u32) -> i32 {
+    pub(super) unsafe fn present_request(backend: u32) -> i32 {
         call(format!("request {backend}"));
         fake().request_result
     }
-    unsafe extern "C" fn fg_default_backend(backend: *mut u32) -> u32 {
+    pub(super) unsafe fn fg_default_backend(backend: *mut u32) -> u32 {
         call("fg default".into());
         let Some(adapter) = fake().fg_adapter else {
             return 0;
@@ -1277,7 +1230,7 @@ mod tests {
         unsafe { backend.write(adapter) };
         1
     }
-    unsafe extern "C" fn bridge_open(editor: u32) -> u32 {
+    pub(super) fn bridge_open(editor: u32) -> u32 {
         assert!(!fake().close_held);
         if editor != 0 {
             return 1;
@@ -1285,12 +1238,12 @@ mod tests {
         call("surface".into());
         fake().surface.into()
     }
-    unsafe extern "C" fn session_seed() -> u64 {
+    pub(super) fn session_seed() -> u64 {
         call("seed".into());
         41
     }
     /// Checks the host services and writes the API a bridge writes on success.
-    unsafe extern "C" fn bridge_prepare(
+    pub(super) unsafe fn bridge_prepare(
         services: *const rsf_game_host_services,
         api: *mut rsf_unity_native_api,
     ) -> u32 {
@@ -1322,7 +1275,7 @@ mod tests {
     fn handle(value: usize) -> *mut c_void {
         without_provenance_mut(value)
     }
-    unsafe extern "C" fn local_app_data(output: *mut u16, capacity: u32) -> u32 {
+    pub(super) unsafe fn local_app_data(output: *mut u16, capacity: u32) -> u32 {
         call("local".into());
         assert_eq!(capacity, 32768);
         let Some(local) = fake().local else {
@@ -1332,14 +1285,14 @@ mod tests {
         unsafe { output.copy_from_nonoverlapping(local.as_ptr(), local.len()) };
         local.len() as u32
     }
-    unsafe extern "C" fn create_directory(path: *const u16) {
+    pub(super) unsafe fn create_directory(path: *const u16) {
         call(format!("mkdir {}", wide(path)));
     }
-    unsafe extern "C" fn log_open(path: *const u16) -> *mut c_void {
+    pub(super) unsafe fn log_open(path: *const u16) -> *mut c_void {
         call(format!("open {}", wide(path)));
         handle(fake().file)
     }
-    unsafe extern "C" fn log_write(file: *mut c_void, text: *const c_char) {
+    pub(super) unsafe fn log_write(file: *mut c_void, text: *const c_char) {
         let text = unsafe { CStr::from_ptr(text) }.to_str().unwrap();
         call(if file.is_null() {
             format!("log {text}")
@@ -1347,37 +1300,37 @@ mod tests {
             format!("log {:#x} {text}", file as usize)
         });
     }
-    unsafe extern "C" fn log_close(file: *mut c_void) {
+    pub(super) unsafe fn log_close(file: *mut c_void) {
         call(format!("close {:#x}", file as usize));
     }
-    unsafe extern "C" fn player_window() -> *mut c_void {
+    pub(super) fn player_window() -> *mut c_void {
         call("player".into());
         handle(fake().player)
     }
-    unsafe extern "C" fn preview_parent() -> *mut c_void {
+    pub(super) fn preview_parent() -> *mut c_void {
         call("parent".into());
         handle(fake().parent)
     }
-    unsafe extern "C" fn subclass(window: *mut c_void) -> u32 {
+    pub(super) fn subclass(window: *mut c_void) -> u32 {
         call(format!("subclass {:#x}", window as usize));
         fake().subclass_accepted.into()
     }
-    unsafe extern "C" fn restore(window: *mut c_void) {
+    pub(super) fn restore(window: *mut c_void) {
         call(format!("restore {:#x}", window as usize));
     }
-    unsafe extern "C" fn input_kind(message: u32, lparam: isize) -> u32 {
+    pub(super) fn input_kind(message: u32, lparam: isize) -> u32 {
         rsf_windows::classify_window_message(message, || {
             call(format!("raw {lparam}"));
             fake().raw
         })
     }
-    unsafe extern "C" fn timestamp(counter: *mut u64, frequency: *mut u64) {
+    pub(super) unsafe fn timestamp(counter: *mut u64, frequency: *mut u64) {
         unsafe {
             counter.write(1000);
             frequency.write(10);
         }
     }
-    unsafe extern "C" fn cpu(event: *const rsf_game_cpu_event) {
+    pub(super) unsafe fn cpu(event: *const rsf_game_cpu_event) {
         let e = unsafe { *event };
         call(format!(
             "cpu {} {} {} {}/{} {} {:#x} {} {}",
@@ -1392,18 +1345,18 @@ mod tests {
             e.event_version
         ));
     }
-    unsafe extern "C" fn fg_submitted(session: u64, source_frame: u64) {
+    pub(super) unsafe fn fg_submitted(session: u64, source_frame: u64) {
         call(format!("submitted {session} {source_frame}"));
     }
-    unsafe extern "C" fn fg_window(pass: *const rsf_game_render_pass) {
+    pub(super) unsafe fn fg_window(pass: *const rsf_game_render_pass) {
         call(format!("window {}", unsafe { (*pass).view_key }));
     }
-    unsafe extern "C" fn fg_hudless(commands: *mut c_void, pass: *const rsf_game_render_pass) {
+    pub(super) unsafe fn fg_hudless(commands: *mut c_void, pass: *const rsf_game_render_pass) {
         call(format!("hudless {:#x} {}", commands as usize, unsafe {
             (*pass).view_key
         }));
     }
-    unsafe extern "C" fn preview_present(
+    pub(super) unsafe fn preview_present(
         resource: *mut c_void,
         pass: *const rsf_game_render_pass,
         common: u32,
@@ -1412,7 +1365,7 @@ mod tests {
         call(format!("present {:#x} {common}", resource as usize));
         fake().shown.into()
     }
-    unsafe extern "C" fn texture_desc(
+    pub(super) unsafe fn texture_desc(
         resource: *mut c_void,
         width: *mut u64,
         height: *mut u32,
@@ -1425,31 +1378,31 @@ mod tests {
             format.write(10);
         }
     }
-    unsafe extern "C" fn preview_prepare(width: u32, height: u32) -> u32 {
+    pub(super) fn preview_prepare(width: u32, height: u32) -> u32 {
         call(format!("preview prepare {width}x{height}"));
         fake().preview_ready.into()
     }
-    extern "C" fn preview_owns(window: *mut c_void) -> bool {
+    pub(super) fn preview_owns(window: *mut c_void) -> bool {
         call(format!("preview owns {:#x}", window as usize));
         fake().preview_owns
     }
-    unsafe extern "C" fn renderer_vulkan(_: *mut c_void) -> u32 {
+    pub(super) unsafe fn renderer_vulkan(_: *mut c_void) -> u32 {
         call("vulkan renderer".into());
         fake().vulkan.into()
     }
-    extern "C" fn vulkan_owns(window: *mut c_void) -> bool {
+    pub(super) fn vulkan_owns(window: *mut c_void) -> bool {
         call(format!("surface owns {:#x}", window as usize));
         fake().surface_owns
     }
-    unsafe extern "C" fn window_class(window: *mut c_void) -> u32 {
+    pub(super) fn window_class(window: *mut c_void) -> u32 {
         call(format!("class {:#x}", window as usize));
         fake().class
     }
-    unsafe extern "C" fn bridge_load(_: *mut c_void) -> u32 {
+    pub(super) unsafe fn bridge_load(_: *mut c_void) -> u32 {
         call("bridge load".into());
         fake().registry.into()
     }
-    unsafe extern "C" fn bridge_unload() {
+    pub(super) fn bridge_unload() {
         call("bridge unload".into());
     }
 
@@ -1457,58 +1410,7 @@ mod tests {
     fn leaves() -> Leaves {
         FAKE.with(|cell| cell.set(READY));
         calls();
-        Leaves {
-            sharpening_valid,
-            dlss_preset_valid,
-            set_engine_spatial,
-            fg_options,
-            fg_status,
-            latency_status,
-            present_backend,
-            present_switch_result,
-            present_generation,
-            bridge_activate,
-            bridge_try_close,
-            end_session,
-            sr_quality_supported,
-            sr_create,
-            sharpening_defaults,
-            sr_set_sharpening,
-            sr_evaluate,
-            sr_destroy,
-            bridge_finish_retirement,
-            fg_install,
-            present_has_owner,
-            present_request,
-            fg_default_backend,
-            bridge_open,
-            session_seed,
-            bridge_prepare,
-            local_app_data,
-            create_directory,
-            log_open,
-            log_write,
-            log_close,
-            player_window,
-            preview_parent,
-            subclass,
-            restore,
-            input_kind,
-            timestamp,
-            cpu,
-            fg_submitted,
-            fg_window,
-            fg_hudless,
-            preview_present,
-            texture_desc,
-            preview_prepare,
-            preview_owns,
-            renderer_vulkan,
-            vulkan_owns,
-            window_class,
-            bridge_load,
-            bridge_unload,
-        }
+        Leaves
     }
 
     #[test]

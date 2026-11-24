@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Unity render-pass routing, window admission and device events.
 use super::{
-    LEAVES, Leaves, OPERATIONS, PACKAGE, Package, RECORDING, UNITY_GRAPHICS, UNITY_INTERFACES,
+    Leaves, OPERATIONS, PACKAGE, Package, RECORDING, UNITY_GRAPHICS, UNITY_INTERFACES, loaded, raw,
 };
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 use super::{presentation, services};
@@ -34,40 +34,40 @@ const RETAINED: &str = "Unity device shutdown retained unproved bridge work; ini
 // for the call only.
 impl Leaves {
     fn fg_submitted(&self, session: u64, source_frame: u64) {
-        unsafe { (self.fg_submitted)(session, source_frame) }
+        unsafe { raw::fg_submitted(session, source_frame) }
     }
     fn fg_hudless(&self, commands: *mut c_void, pass: &rsf_game_render_pass) {
-        unsafe { (self.fg_hudless)(commands, pass) }
+        unsafe { raw::fg_hudless(commands, pass) }
     }
     fn preview_present(&self, pass: &rsf_game_render_pass, common: bool) -> bool {
-        unsafe { (self.preview_present)(pass.color_input, pass, u32::from(common)) != 0 }
+        unsafe { raw::preview_present(pass.color_input, pass, u32::from(common)) != 0 }
     }
     /// ID3D12Resource::GetDesc's width, height and format.
     fn texture_desc(&self, resource: *mut c_void) -> (u64, u32, u32) {
         let (mut width, mut height, mut format) = (0u64, 0u32, 0u32);
-        unsafe { (self.texture_desc)(resource, &mut width, &mut height, &mut format) };
+        unsafe { raw::texture_desc(resource, &mut width, &mut height, &mut format) };
         (width, height, format)
     }
     fn preview_prepare(&self, width: u32, height: u32) -> bool {
-        unsafe { (self.preview_prepare)(width, height) != 0 }
+        raw::preview_prepare(width, height) != 0
     }
     fn preview_owns(&self, window: *mut c_void) -> bool {
-        (self.preview_owns)(window)
+        raw::preview_owns(window)
     }
     fn renderer_vulkan(&self) -> bool {
-        unsafe { (self.renderer_vulkan)(UNITY_GRAPHICS.load(SeqCst)) != 0 }
+        unsafe { raw::renderer_vulkan(UNITY_GRAPHICS.load(SeqCst)) != 0 }
     }
     fn vulkan_owns(&self, window: *mut c_void) -> bool {
-        (self.vulkan_owns)(window)
+        raw::vulkan_owns(window)
     }
     fn window_class(&self, window: *mut c_void) -> u32 {
-        unsafe { (self.window_class)(window) }
+        raw::window_class(window)
     }
     fn bridge_load(&self) -> bool {
-        unsafe { (self.bridge_load)(UNITY_INTERFACES.load(SeqCst)) != 0 }
+        unsafe { raw::bridge_load(UNITY_INTERFACES.load(SeqCst)) != 0 }
     }
     fn bridge_unload(&self) {
-        unsafe { (self.bridge_unload)() }
+        raw::bridge_unload()
     }
 }
 
@@ -102,7 +102,7 @@ impl Package {
                     .preview_present(&pass, pass.flags & RSF_UNITY_PREVIEW_SOURCE_COMMON != 0);
                 self.preview_refused(leaves, shown, &pass);
             } else {
-                unsafe { (leaves.fg_window)(&pass) };
+                unsafe { raw::fg_window(&pass) };
             }
             return false;
         }
@@ -197,7 +197,7 @@ pub(super) unsafe extern "C" fn render_callback(
     pass: *const rsf_game_render_pass,
     begin: u32,
 ) {
-    let Some(leaves) = LEAVES.get() else {
+    let Some(leaves) = loaded() else {
         return;
     };
     if commands.is_null() || pass.is_null() {
@@ -213,7 +213,7 @@ pub(super) unsafe extern "C" fn render_callback(
 }
 
 pub(super) extern "C" fn accept_window(_: *mut c_void, window: *mut c_void) -> c_int {
-    LEAVES.get().map_or(0, |leaves| {
+    loaded().map_or(0, |leaves| {
         c_int::from(PACKAGE.accept_window(leaves, window))
     })
 }
@@ -221,12 +221,12 @@ pub(super) extern "C" fn accept_window(_: *mut c_void, window: *mut c_void) -> c
 // The preview presenter consumes the Runtime observation receipt before presenting.
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(super) unsafe extern "C" fn observe_preview(pass: *const rsf_game_render_pass) -> c_int {
-    let Some(leaves) = LEAVES.get() else {
+    if loaded().is_none() {
         return 0;
-    };
+    }
     // The presenter lends the pass with the preview swap chain already attached. The Runtime
     // entry cannot unwind, so its return is the observation.
-    unsafe { (leaves.fg_window)(pass) };
+    unsafe { raw::fg_window(pass) };
     1
 }
 
@@ -238,7 +238,7 @@ extern "C" fn rsf_unity_package_device_event(sdk_event: u32) {
         _ => return,
     };
     let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(leaves) = LEAVES.get() {
+    if let Some(leaves) = loaded() {
         PACKAGE.device_event(leaves, initialize);
     }
 }
@@ -246,7 +246,7 @@ extern "C" fn rsf_unity_package_device_event(sdk_event: u32) {
 #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
 pub(super) fn shutdown() -> bool {
     let _operation = OPERATIONS.lock().unwrap_or_else(PoisonError::into_inner);
-    match LEAVES.get() {
+    match loaded() {
         Some(leaves) => PACKAGE.shutdown(leaves),
         None => PACKAGE.device.load(SeqCst) == DEVICE_WAITING,
     }

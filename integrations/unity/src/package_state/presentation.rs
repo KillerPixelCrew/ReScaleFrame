@@ -5,7 +5,7 @@
 //! pass. The identity comes from [UnitySR] when the plugin loads and from rsfu_initialize for each
 //! session. SR views read it for their contexts. Auto uses the Runtime's
 //! rsf_fg_default_backend with the current D3D12 adapter.
-use super::{BACKEND_OK, Leaves, Package};
+use super::{BACKEND_OK, Leaves, Package, raw};
 use crate::generation::{self, Sources};
 use crate::sys::{RSF_FG_BACKEND_AUTO, RSF_REFLEX_OFF, rsf_fg12_setup, rsf_native_fg_options};
 use crate::sys::{RSF_FG_OFF, rsf_unity_package_view_setup};
@@ -106,18 +106,18 @@ impl Presentation {
 // borrow their pointer arguments for the call only.
 impl Leaves {
     fn fg_install(&self, setup: &rsf_fg12_setup) -> i32 {
-        unsafe { (self.fg_install)(setup) }
+        unsafe { raw::fg_install(setup) }
     }
     fn present_has_owner(&self) -> bool {
-        unsafe { (self.present_has_owner)() != 0 }
+        unsafe { raw::present_has_owner() != 0 }
     }
     fn present_request(&self, backend: u32) -> i32 {
-        unsafe { (self.present_request)(backend) }
+        unsafe { raw::present_request(backend) }
     }
     /// Auto's provider for Unity's adapter; None when the device or adapter cannot be read.
     fn fg_default_backend(&self) -> Option<u32> {
         let mut backend = 0u32;
-        (unsafe { (self.fg_default_backend)(&mut backend) } != 0).then_some(backend)
+        (unsafe { raw::fg_default_backend(&mut backend) } != 0).then_some(backend)
     }
 }
 
@@ -206,7 +206,8 @@ pub(super) fn load() {
 
     let (editor, ini) = super::windows::startup_paths();
     PACKAGE.services.editor.store(editor, SeqCst);
-    let leaves = super::LEAVES.get_or_init(|| &super::native::PRODUCTION);
+    super::LOADED.store(true, SeqCst);
+    let leaves = &super::Leaves;
     let mut log = Vec::new();
     if let Some(ini) = unsafe { Ini::new(ini.as_ptr()) } {
         let root = utf8(&path_setting(&ini, w!("Runtime")));
