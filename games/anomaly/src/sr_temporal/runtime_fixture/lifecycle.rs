@@ -669,14 +669,10 @@ pub(super) fn announce() {
     let asked = selects();
     boundary(&other, a, OUTPUT);
     boundary(&other, a, OUTPUT);
-    assert_eq!(
-        (
-            selects(),
-            other.published().counters.select_failures,
-            pending(&other)
-        ),
-        (asked, 1, 0)
-    );
+    // Read under its own guard: a guard temporary inside the assert would still hold the lock when
+    // pending() takes it again.
+    let select_failures = other.published().counters.select_failures;
+    assert_eq!((selects(), select_failures, pending(&other)), (asked, 1, 0));
     assert!(logged(
         "preparing FSR4. The first use makes the vendor build its pipelines"
     ));
