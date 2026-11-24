@@ -2,8 +2,8 @@
 //! CPU-only XeSS Vulkan SR contract. The production Rust table and owner run
 //! with inert SDK and Vulkan entry points substituted through the table copy.
 use crate::sys::{
-    RSF_SR_XESS, RSF_SRVK_ABI_VERSION, rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup,
-    rsf_vk_function,
+    RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT, RSF_SR_XESS, RSF_SRVK_ABI_VERSION, rsf_srvk_frame,
+    rsf_srvk_image, rsf_srvk_setup, rsf_vk_function,
 };
 use crate::sys::{RSF_XESSVK_REQUIREMENTS_ABI_VERSION, rsf_xessvk_setup};
 use crate::xess_sdk_abi::{
@@ -554,6 +554,9 @@ fn run() -> Result<(), &'static str> {
     input.sharpening.struct_size = size_of_val(&input.sharpening) as u32;
     input.sharpening.abi_version = SHARPENING_ABI_VERSION;
     input.sharpening.mode = SHARPENING_OFF;
+    // The owner admits only a valid record (sharpening_policy::valid); the motion scale limit is the
+    // one field whose floor is above zero.
+    input.sharpening.motion_scale_limit = RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT as f32;
 
     let read = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
     let dimensions = |record: &mut rsf_frame_record, input: &mut rsf_srvk_frame, w: u32, h: u32| {
