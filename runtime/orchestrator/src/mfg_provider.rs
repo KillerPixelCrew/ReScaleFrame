@@ -7,7 +7,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use windows_sys::Win32::{
     Storage::FileSystem::{VS_FFI_SIGNATURE, VS_FIXEDFILEINFO},
-    System::LibraryLoader::{GetModuleFileNameW, GetProcAddress},
+    System::LibraryLoader::GetProcAddress,
 };
 
 // Plain (not dllimport) references, as the C++ provider policy made them: version.lib resolves
@@ -162,9 +162,7 @@ fn retain_supported_provider(module: Handle) -> bool {
 
 // The caller holds a loader reference while reading and lending this path.
 pub(super) fn module_path(module: Handle, path: &mut [u16; 32768]) -> Option<usize> {
-    let length =
-        unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), path.len() as u32) } as usize;
-    (length != 0 && length < path.len()).then_some(length)
+    unsafe { rsf_game_sys::win32::module_path_in(module, path) }.map(<[u16]>::len)
 }
 
 // The NGX gate requires a process-lifetime reference before it scans or

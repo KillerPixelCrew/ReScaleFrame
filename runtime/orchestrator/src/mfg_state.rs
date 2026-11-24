@@ -2,18 +2,17 @@
 use crate::sdk_module::SdkModule;
 use crate::sync::lock;
 use crate::sys::rsf_backend_log_fn as Log;
+use rsf_game_sys::pe32_plus::Mapped;
 use rsf_game_sys::win32::read_process;
-use std::ffi::{CStr, CString, c_void};
+use rsf_graphics::dump_options::Log as Sink;
+use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
     System::{
         Diagnostics::{
-            Debug::{
-                FlushInstructionCache, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC,
-                IMAGE_SCN_MEM_EXECUTE, IMAGE_SECTION_HEADER,
-            },
+            Debug::{FlushInstructionCache, IMAGE_SCN_MEM_EXECUTE},
             ToolHelp::{
                 CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW,
                 TH32CS_SNAPMODULE,
@@ -25,7 +24,6 @@ use windows_sys::Win32::{
         },
         Memory::{PAGE_EXECUTE_READ, PAGE_EXECUTE_WRITECOPY, VirtualProtect},
         ProcessStatus::{K32GetModuleInformation, MODULEINFO},
-        SystemServices::{IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_NT_SIGNATURE},
         Threading::{GetCurrentProcess, GetCurrentProcessId},
     },
 };
@@ -52,12 +50,6 @@ struct ProviderReceipt {
     temporal: bool,
     gate: bool,
     failure: u32,
-}
-
-fn emit(log: Log, user: Handle, text: &CStr) {
-    if let Some(log) = log {
-        unsafe { log(user, text.as_ptr()) };
-    }
 }
 
 // The verified temporal program precedes the count/index gate, so the gate
@@ -126,36 +118,21 @@ impl ModuleImage {
         unsafe { read_process(address as usize, out, size) }.then_some(())
     }
 
-    fn record<T: Default>(&self, offset: usize) -> Option<T> {
-        let mut record = T::default();
-        self.read(offset, (&raw mut record).cast(), size_of::<T>())?;
-        Some(record)
-    }
-
     fn wrapper_patch(&self) -> Option<(*mut u8, u32)> {
-        let dos: IMAGE_DOS_HEADER = self.record(0)?;
-        if dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 {
-            return None;
-        }
-        let nt = dos.e_lfanew as usize;
-        let headers: IMAGE_NT_HEADERS64 = self.record(nt)?;
-        if headers.Signature != IMAGE_NT_SIGNATURE
-            || headers.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
-            || usize::from(headers.FileHeader.SizeOfOptionalHeader)
-                < size_of_val(&headers.OptionalHeader)
-            || headers.OptionalHeader.SizeOfImage as usize > self.size
+        let mut read = |offset, out: *mut u8, size| self.read(offset, out.cast(), size).is_some();
+        let image = Mapped::read(&mut read)?;
+        let image_size = image.image_size();
+        if usize::from(image.headers.FileHeader.SizeOfOptionalHeader)
+            < size_of_val(&image.headers.OptionalHeader)
+            || image_size > self.size
         {
             return None;
         }
-        let header_size = std::mem::offset_of!(IMAGE_NT_HEADERS64, OptionalHeader);
-        let table = nt + header_size + usize::from(headers.FileHeader.SizeOfOptionalHeader);
         let mut found = None;
         let mut section_bytes = Vec::new();
-        for index in 0..usize::from(headers.FileHeader.NumberOfSections) {
-            let section: IMAGE_SECTION_HEADER =
-                self.record(table + index * size_of::<IMAGE_SECTION_HEADER>())?;
+        for index in 0..image.section_count() {
+            let section = image.section(&mut read, index)?;
             let rva = section.VirtualAddress as usize;
-            let image_size = headers.OptionalHeader.SizeOfImage as usize;
             if section.Characteristics & IMAGE_SCN_MEM_EXECUTE == 0 || rva >= image_size {
                 continue;
             }
@@ -366,12 +343,9 @@ pub(crate) unsafe fn rsf_core_mfg_prime(
     let maximum = unsafe { prime(owner, device, directory, verify_signature) };
     if maximum != 0 && log.is_some() {
         let prepared = u32::from(maximum > 1);
-        let text = CString::new(format!(
+        Sink::new(log, user).say(&format!(
             "RTX 40 MFG wrapper prepared={prepared} capacity={maximum} before plugin initialization"
         ));
-        if let Ok(text) = text {
-            emit(log, user, &text);
-        }
     }
 }
 
@@ -435,15 +409,10 @@ pub(crate) unsafe fn rsf_core_mfg_prepare(
             "RTX 40 MFG unlock {status}: wrapper_capacity={maximum} temporal={temporal} gate={gate} failure={failure} provider={path}"
         );
         text.truncate(text.floor_char_boundary(REPORT_BYTES - 1));
-        if let Ok(text) = CString::new(text) {
-            emit(log, user, &text);
-        }
+        Sink::new(log, user).say(&text);
     } else {
-        emit(
-            log,
-            user,
-            c"RTX 40 MFG unlock refused: wrapper or provider ownership mismatch",
-        );
+        Sink::new(log, user)
+            .say("RTX 40 MFG unlock refused: wrapper or provider ownership mismatch");
     }
 }
 
