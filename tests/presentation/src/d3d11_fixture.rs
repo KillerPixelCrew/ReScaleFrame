@@ -431,23 +431,21 @@ impl MarkerFixture {
         );
         self.close(FALLBACK, 0);
 
-        // Legacy threaded order permits Present before a late SimulationEnd/RenderSubmitEnd.
+        // Legacy threaded order permits PresentStart before a late RenderSubmitEnd. Submission
+        // itself needs the observed simulation interval, as in every order.
         unsafe { rsf_native_fg_reflex_ordering_set(1) };
         self.check(
             Self::send(LEGACY, RSF_GAME_CPU_FRAME_BEGIN, 0, 0)
-                && Self::send(LEGACY, RSF_GAME_CPU_INPUT_SAMPLE, 0, 0),
-            "legacy input",
+                && Self::send(LEGACY, RSF_GAME_CPU_INPUT_SAMPLE, 0, 0)
+                && Self::send(LEGACY, RSF_GAME_CPU_SIMULATION_BEGIN, 0, 0)
+                && Self::send(LEGACY, RSF_GAME_CPU_SIMULATION_END, 0, 0),
+            "legacy input and simulation",
         );
         Self::render(LEGACY, 1);
         self.present(LEGACY, 1);
+        Self::render(LEGACY, 0);
+        Self::render(LEGACY, 0);
         self.present(LEGACY, 0);
-        self.check(
-            Self::send(LEGACY, RSF_GAME_CPU_SIMULATION_BEGIN, 0, 0)
-                && Self::send(LEGACY, RSF_GAME_CPU_SIMULATION_END, 0, 0),
-            "legacy late simulation",
-        );
-        Self::render(LEGACY, 0);
-        Self::render(LEGACY, 0);
         let facts = self.read(LEGACY);
         self.check(
             facts.marker_mask == 63,
@@ -464,6 +462,17 @@ impl MarkerFixture {
                 && Self::modern(KEYED, RSF_GAME_CPU_SIMULATION_BEGIN, KEYED_FLAGS),
             "keyed input and simulation",
         );
+        // Submission never derives the simulation end; it waits for the observed one.
+        Self::render(KEYED, 1);
+        let facts = self.read(KEYED);
+        self.check(
+            facts.stage_mask == 7 && facts.marker_mask == 1,
+            "keyed submit before simulation end refused",
+        );
+        self.check(
+            Self::modern(KEYED, RSF_GAME_CPU_SIMULATION_END, KEYED_FLAGS),
+            "keyed simulation end",
+        );
         REENTRY_SOURCE.store(KEYED, Ordering::Release);
         Self::render(KEYED, 1);
         Self::render(KEYED, 1);
@@ -472,11 +481,10 @@ impl MarkerFixture {
             "accepted start tolerates synchronous reentry",
         );
         let facts = self.read(KEYED);
+        let normalized = RSF_GAME_CPU_DERIVED_BOUNDARY | RSF_GAME_CPU_INPUT_SUBSTITUTE;
         self.check(
-            facts.stage_mask == 15
-                && facts.flags & RSF_GAME_CPU_DERIVED_BOUNDARY != 0
-                && facts.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE == 0,
-            "existing keyed submit derives only simulation end",
+            facts.stage_mask == 15 && facts.marker_mask == 7 && facts.flags & normalized == 0,
+            "keyed submit opens on the observed simulation interval",
         );
         Self::render(KEYED, 0);
         Self::render(KEYED, 0);
@@ -543,8 +551,8 @@ impl MarkerFixture {
         Self::dispatch(ptr::from_ref(&event).cast())
     }
 
-    /// A real pre-poll reservation with actual poll entry and accepted BIND keeps the canonical
-    /// derivation; no second pacing token is acquired at submission.
+    /// A real pre-poll reservation with actual poll entry, accepted BIND and the observed simulation
+    /// interval keeps the canonical order; no second pacing token is acquired at submission.
     fn reserved_poll(&mut self) {
         self.check(
             Self::source_event(RSF_GAME_CPU_SOURCE_RESERVE, 0),
@@ -558,6 +566,12 @@ impl MarkerFixture {
                 && Self::modern(PROSPECTIVE, RSF_GAME_CPU_FRAME_BEGIN, 0)
                 && Self::source_event(RSF_GAME_CPU_SOURCE_BIND, 0),
             "real poll adopted and bound",
+        );
+        // The observed begin replaces the one derived at BIND; only observed boundaries mark.
+        self.check(
+            Self::modern(PROSPECTIVE, RSF_GAME_CPU_SIMULATION_BEGIN, KEYED_FLAGS)
+                && Self::modern(PROSPECTIVE, RSF_GAME_CPU_SIMULATION_END, KEYED_FLAGS),
+            "bound poll observed simulation",
         );
         let submission = rsf_game_render_pass {
             struct_size: size_of::<rsf_game_render_pass>() as u32,
@@ -626,7 +640,7 @@ impl MarkerFixture {
         );
         if fixture.success {
             println!(
-                "PASS: generic marker admission, fallback refusal, keyed/bound derivation, failed start and repeated ends"
+                "PASS: generic marker admission, fallback refusal, observed keyed/bound simulation, failed start and repeated ends"
             );
         }
         fixture.success
