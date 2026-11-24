@@ -1,11 +1,17 @@
-"""The exact-build Anomaly profiles, read from their Rust owners for the evidence tools and the packager.
+"""The Anomaly profiles of the two 1.5.3 DX11 builds, read from their Rust owners for the evidence tools and the packager.
 
-games/anomaly/src/native_profile.rs, geometry_profile.rs and sr_profile.rs hold every per-build record (PROFILES:
-Standard, then AVX) and the layout constants both builds share. `native`, `geometry` and `sr` return one build's
-records as a dict: every scalar under its lower-case Rust name (shared constants and the build's fields), plus the site
-lists as (name, rva, hex) tuples. `path` reads another copy of the owner (the evidence scripts' negative tests)."""
+games/anomaly/src/native_profile.rs, geometry_profile.rs and sr_profile.rs hold the recorded per-build records (RECORDED:
+Standard, then AVX: the fixtures' data) and the layout constants both builds share; the adapter itself builds its records
+from the sites games/anomaly/src/discovery.rs finds. `native`, `geometry` and `sr` return one build's records as a dict:
+every scalar under its lower-case Rust name (shared constants and the build's fields), plus the site lists as
+(name, rva, hex) tuples. Unless `discovered=False` (the packager), they first resolve discovery.rs in the installed
+executable (tools/anomaly_discovery.py) and require every recorded site and RVA to be the discovered one, so the
+evidence checks run on what the patterns find. `path` reads another copy of the owner (the evidence scripts' negative
+tests)."""
 import pathlib
 import re
+
+import anomaly_discovery
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / 'games/anomaly/src'
 NATIVE = SRC / 'native_profile.rs'
@@ -67,7 +73,7 @@ def _expand(text):
     return re.sub(r'\bENGINE\[(\d)\]\.(\w+)(\.rva)?', replace, text)
 
 def _record(text, build):
-    body = re.search(r'static PROFILES: \[Profile; 2\] = \[(.*?)\n\];', text, re.S)[1]
+    body = re.search(r'static RECORDED: \[Profile; 2\] = \[(.*?)\n\];', text, re.S)[1]
     records = re.split(r'\n    Profile \{', body)[1:]
     assert len(records) == len(BUILDS), 'two exact-build profiles, Standard then AVX'
     return records[BUILDS.index(build)]
@@ -85,17 +91,19 @@ def _text(record, field):
     return re.search(rf'\b{field}: {_NAME},', record)[1]
 
 
-def native(build, path=NATIVE):
+def native(build, path=NATIVE, discovered=True):
     text = _read(path)
     record = _record(text, build)
     profile = constants(text) | _scalars(record)
     profile.update(label=_text(record, 'label'), executable=_text(record, 'executable'),
                    sha256=_text(record, 'sha256'), sites=sites(_list(record, 'sites')),
                    unique=guards(_list(record, 'guards')))
+    if discovered:
+        anomaly_discovery.require_record(build, NATIVE.name, profile)
     return profile
 
 
-def geometry(build, path=GEOMETRY):
+def geometry(build, path=GEOMETRY, discovered=True):
     text = _expand(_read(path))
     record = _record(text, build)
     profile = constants(text) | _scalars(record)
@@ -108,10 +116,12 @@ def geometry(build, path=GEOMETRY):
                    unique=guards(_list(record, 'unique')),
                    hierarchy_vtables=[int(v, 16) for v in
                                       re.findall(r'0x[0-9a-f]+', re.search(r'hierarchy_vtables: \[([^\]]*)\]', record)[1])])
+    if discovered:
+        anomaly_discovery.require_record(build, GEOMETRY.name, profile)
     return profile
 
 
-def sr(build, path=SR):
+def sr(build, path=SR, discovered=True):
     text = _expand(_read(path))
     record = _record(text, build)
     profile = constants(text) | _scalars(record)
@@ -131,4 +141,6 @@ def sr(build, path=SR):
         world=[(n, int(o, 16), int(f), a == 'true', h == 'true') for n, o, f, a, h in _calls('world', world[2], 5)],
         world_declared=int(world[1]),
         absent=[int(v, 16) for v in re.findall(r'0x[0-9a-f]+', re.search(r'WORLD_ABSENT_OFFSETS: \[u32; 4\] = \[([^\]]+)\];', text)[1])])
+    if discovered:
+        anomaly_discovery.require_record(build, SR.name, profile)
     return profile

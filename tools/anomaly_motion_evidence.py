@@ -174,6 +174,12 @@ def mem(op):
 
 def verify(pe, log):
     sites, ints, hexes, tess, unique, compiler = parse_profile(PROFILE)
+    # Every recorded site is the one games/anomaly/src/discovery.rs finds in this executable.
+    discovery = geometry.profiles.anomaly_discovery
+    discovery.require_sites(geometry.BUILD, 'motion_profile.rs', [(n, r) for n, (r, _) in sites.items()]
+                            + [(n, r) for n, r, _ in unique] + [(t[0], t[2]) for t in tess]
+                            + [('CreateHWShader (' + ('hull' if t[1] == 'H' else 'domain') + ')', t[4]) for t in tess])
+    discovery.require_fields(geometry.BUILD, 'motion_profile.rs', {k: v for k, v in ints.items() if k.endswith('_rva')})
     for name, h in hexes.items():
         assert pe.code.count(bytes.fromhex(h)) == 1, ('non-unique code guard', name)
     all_sites = [(n, r, h.hex()) for n, (r, h) in sites.items()]

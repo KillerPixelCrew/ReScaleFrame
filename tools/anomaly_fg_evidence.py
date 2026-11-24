@@ -68,6 +68,9 @@ def verify_input(pe, log):
         assert len(raw) == 16 and pe.read(rva, 16) == raw and pe.unique_in_text(raw), ('input expected16', name)
     frame, keyboard, mouse = [r for _, r, _ in sites]
     table_rva = int(re.search(r'slot_rva: (0x[0-9a-f]+),', text)[1], 16)
+    # Every recorded site is the one games/anomaly/src/discovery.rs finds in this executable.
+    profiles.anomaly_discovery.require_sites(sr.geometry.BUILD, 'input/profile.rs', [(n, r) for n, r, _ in sites])
+    profiles.anomaly_discovery.require_fields(sr.geometry.BUILD, 'input/profile.rs', {'slot_rva': table_rva})
     table = next(t for t in pe.tables('CInput') if t['this_offset'] == 0)
     assert int(table['vtable'], 16) == table_rva and int(table['slots'][0], 16) == frame, 'CInput primary pureFrame slot 0'
     raw = bytes.fromhex(re.findall(r'"([0-9a-f]{64,})"', text)[-1])

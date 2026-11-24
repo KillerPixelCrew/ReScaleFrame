@@ -1013,6 +1013,8 @@ def measure_self_test():
 
 
 def verify(pe):
+    # Every recorded site is the one games/anomaly/src/discovery.rs finds in this executable.
+    profiles.anomaly_discovery.require_record(geometry.BUILD, profiles.SR.name, TEXT)
     p = TEXT
     log = [f'image sha256 {geometry.HASH}']
     f = verify_guards(pe, p, log)
@@ -1039,7 +1041,8 @@ def verify(pe):
           'projection/first-person/mip-bias sites')
 
 
-TEXT = profiles.sr(geometry.BUILD, PROFILE)
+# The burst measurements need neither the executable nor capstone; --verify resolves the sites (verify below).
+TEXT = profiles.sr(geometry.BUILD, PROFILE, discovered=False)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -1058,7 +1061,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.profile:
         PROFILE = pathlib.Path(args.profile)
-        TEXT = profiles.sr(geometry.BUILD, PROFILE)
+        TEXT = profiles.sr(geometry.BUILD, PROFILE, discovered=False)
     if args.measure_self_test:
         raise SystemExit(measure_self_test())
     if args.measure_jitter:

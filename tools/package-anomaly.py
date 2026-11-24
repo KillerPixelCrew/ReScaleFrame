@@ -236,7 +236,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
                                     'See the per-family notices, Sharpening-THIRD_PARTY.md and RUST-DEPENDENCIES.md.\n'}.items():
         (stage / 'ReScaleFrame/licenses' / name).write_text(text, encoding='utf-8', newline='\n')
     dependency_notices(stage)
-    builds = [anomaly_profiles.native(build) for build in anomaly_profiles.BUILDS]
+    builds = [anomaly_profiles.native(build, discovered=False) for build in anomaly_profiles.BUILDS]
     manifest = {'product': 'ReScaleFrame for S.T.A.L.K.E.R. Anomaly', 'version': version, 'source_commit': revision,
                 'platform': 'Windows x64', 'streamline': '2.14.1', 'fidelityfx_sdk': '2.3.0', 'xess_sdk': '3.0.2',
                 'carrier_target': 'rsf_proxy_thin_dinput8',
