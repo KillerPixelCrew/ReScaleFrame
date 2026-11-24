@@ -104,7 +104,10 @@ pub(super) fn get_status(godot: &'static Godot) -> Dictionary {
         dictionary: &mut dictionary,
         rendering,
     };
-    extension::status(admitted, &mut Properties::new(&mut |key, property| sink.put(key, property)));
+    extension::status(
+        admitted,
+        &mut Properties::new(&mut |key, property| sink.put(key, property)),
+    );
     dictionary
 }
 

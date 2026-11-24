@@ -269,7 +269,10 @@ fn passthrough_providers_need_no_context() {
         configure(&vulkan, |s| s.sr_backend = backend);
         assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
         let value = status(&vulkan);
-        assert_eq!((value.active_sr, value.sr_result), (backend, backend_result::OK));
+        assert_eq!(
+            (value.active_sr, value.sr_result),
+            (backend, backend_result::OK)
+        );
     }
     // The stale context was retired before the first passthrough.
     assert_eq!(

@@ -178,4 +178,3 @@ extern "C" fn rsfg_shutdown() -> i32 {
     }
     result
 }
-

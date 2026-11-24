@@ -325,12 +325,9 @@ pub(super) unsafe fn rsf_latencyvk_device_destroyed(device: *mut c_void) {
 
 #[test]
 fn typed_creation_negotiates_on_owners_and_preserves_engine_records() {
-    assert!(
-        crate::vk_creation_resolver(None, true, None, ptr::null_mut()).is_none()
-    );
-    let begin = |xess| {
-        crate::vk_creation_resolver(Some(mock_proc), xess, None, ptr::null_mut()).unwrap()
-    };
+    assert!(crate::vk_creation_resolver(None, true, None, ptr::null_mut()).is_none());
+    let begin =
+        |xess| crate::vk_creation_resolver(Some(mock_proc), xess, None, ptr::null_mut()).unwrap();
     let gipa = begin(true);
     assert!(unsafe { gipa(ptr::null_mut(), ptr::null()) }.is_none());
     let create = unsafe {

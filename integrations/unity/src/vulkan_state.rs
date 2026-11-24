@@ -28,12 +28,12 @@
 use crate::bridge_interop::VULKAN;
 use crate::device_creation::{Claim, Creation};
 use crate::sys::{RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
-use crate::vulkan_resolver::{DEVICE_LOST, SUCCESS};
 pub(super) use crate::sys::{
     rsf_unity_vulkan_command_handles as CommandSlot,
     rsf_unity_vulkan_device_handles as DeviceHandles,
     rsf_unity_vulkan_image_handles as ImageHandles,
 };
+use crate::vulkan_resolver::{DEVICE_LOST, SUCCESS};
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;

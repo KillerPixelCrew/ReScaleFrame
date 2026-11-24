@@ -292,7 +292,9 @@ impl Capture {
             layout,
             copy_source: u32::from(self.usage.contains(TRANSFER_SRC)),
         };
-        unsafe { snapshot(self.owner, &record, &image, c"final_color".as_ptr()) != backend_result::OK }
+        unsafe {
+            snapshot(self.owner, &record, &image, c"final_color".as_ptr()) != backend_result::OK
+        }
     }
 
     fn present_image(&self, owner: *mut rsf_fgvk, index: usize) -> Option<(u64, u32)> {
@@ -306,7 +308,8 @@ impl Capture {
                 return None;
             }
             let mut images = [0u64; SWAPCHAIN_IMAGES];
-            if unsafe { rsf_fgvk_images(owner, &mut count, images.as_mut_ptr()) } != backend_result::OK
+            if unsafe { rsf_fgvk_images(owner, &mut count, images.as_mut_ptr()) }
+                != backend_result::OK
                 || unsafe { rsf_fgvk_image_layout(owner, &mut layout) } != backend_result::OK
                 || index >= count as usize
             {

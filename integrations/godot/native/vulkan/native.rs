@@ -280,7 +280,8 @@ impl Platform {
             return None;
         }
         let mut count = 0;
-        (unsafe { rsf_fgvk_max_generated(owner, &mut count) } == backend_result::OK).then_some(count)
+        (unsafe { rsf_fgvk_max_generated(owner, &mut count) } == backend_result::OK)
+            .then_some(count)
     }
 
     /// The FSR4 FG generated-frame capacity on the presenter's device; zero when the probe

@@ -2,7 +2,6 @@
 //! Package entry points backed by the linked Unity SDK and Runtime shims.
 use super::services::backend_log;
 use super::{PACKAGE, routing, services};
-use rsf_game_sys::backend_result;
 use crate::bridge_native::package::*;
 use crate::generation::RSF_DLSS_ENGINE_UNITY;
 use crate::preview::*;
@@ -13,6 +12,7 @@ use crate::sys::{
     rsf_sr12_setup, rsf_unity_package_view_setup,
 };
 use crate::vulkan_state::bridge::rsf_uvk_bridge_update_window;
+use rsf_game_sys::backend_result;
 use std::ffi::{c_int, c_void};
 use std::sync::atomic::Ordering::SeqCst;
 use windows::Win32::Graphics::{

@@ -63,10 +63,7 @@ pub(super) fn rsf_unity_package_session_seed() -> u64 {
     unsafe { GetTickCount64() }
 }
 
-pub(super) unsafe fn rsf_unity_package_timestamp(
-    counter: *mut u64,
-    frequency: *mut u64,
-) {
+pub(super) unsafe fn rsf_unity_package_timestamp(counter: *mut u64, frequency: *mut u64) {
     let (mut now, mut ticks) = (0, 0);
     unsafe {
         QueryPerformanceCounter(&mut now);
@@ -76,10 +73,7 @@ pub(super) unsafe fn rsf_unity_package_timestamp(
     }
 }
 
-pub(super) unsafe fn rsf_unity_package_local_app_data(
-    output: *mut u16,
-    capacity: u32,
-) -> u32 {
+pub(super) unsafe fn rsf_unity_package_local_app_data(output: *mut u16, capacity: u32) -> u32 {
     let length = unsafe { GetEnvironmentVariableW(w!("LOCALAPPDATA"), output, capacity) };
     if length < capacity { length } else { 0 }
 }

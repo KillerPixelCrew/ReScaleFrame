@@ -188,11 +188,21 @@ impl Vulkan {
                 && sr.result != backend_result::OK
                 && spend(&mut contexts.diagnostics)
             {
-                let _ = Platform.vulkan_sr_log(call, VK_LOG_FSR4_DISPATCH, sr.result, backend_result::OK);
+                let _ = Platform.vulkan_sr_log(
+                    call,
+                    VK_LOG_FSR4_DISPATCH,
+                    sr.result,
+                    backend_result::OK,
+                );
             }
             let _ = Platform.vulkan_sr_dump_result(call, contexts.backend, sr.result);
             if sr.result == backend_result::INVALID_ARGUMENT && spend(&mut contexts.diagnostics) {
-                let _ = Platform.vulkan_sr_log(call, VK_LOG_INPUT_REFUSAL, sr.result, backend_result::OK);
+                let _ = Platform.vulkan_sr_log(
+                    call,
+                    VK_LOG_INPUT_REFUSAL,
+                    sr.result,
+                    backend_result::OK,
+                );
             }
         }
         if evaluate && sr.result == backend_result::OK && output == backend_result::OK {

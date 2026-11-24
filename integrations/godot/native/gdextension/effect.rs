@@ -8,8 +8,8 @@ use super::api::{self, Bind, GString, Godot, PackedBytes, Ref, StringName, Typed
 use super::sys::*;
 use super::{Dictionary, EFFECT_CLASS, Sink};
 use crate::effect::Effect;
-use crate::properties::{Properties, Property};
 use crate::platform::{EFFECT_MOTION_FORMAT, EffectFrame, EffectReadback, EffectResources};
+use crate::properties::{Properties, Property};
 use std::ffi::{CStr, c_char, c_void};
 
 /// `CompositorEffect::EFFECT_CALLBACK_TYPE_POST_TRANSPARENT`.
@@ -482,8 +482,8 @@ impl Readback {
             self.pipeline,
             self.shader,
         ] {
-            freed &= rid == 0
-                || unsafe { self.godot.call(Bind::FREE_RID, self.device, &[arg(&rid)]) };
+            freed &=
+                rid == 0 || unsafe { self.godot.call(Bind::FREE_RID, self.device, &[arg(&rid)]) };
         }
         freed
     }

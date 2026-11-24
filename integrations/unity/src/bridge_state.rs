@@ -232,11 +232,7 @@ impl State {
     /// Admits like `admit_packet`, then retains each non-null resource of the stored copy under
     /// the state mutex, so the address is never returned, and the packet never taken, without its
     /// lease. A refused packet retains nothing.
-    fn admit_leased(
-        &mut self,
-        packet: &rsf_unity_packet,
-        session_id: u64,
-    ) -> Option<usize> {
+    fn admit_leased(&mut self, packet: &rsf_unity_packet, session_id: u64) -> Option<usize> {
         let slot = self.admit_packet(packet, session_id)?;
         let entry = &mut self.pending[slot];
         let stored = &entry.packet;
@@ -535,11 +531,7 @@ pub fn rsf_unity_frames_managed_stage() -> u32 {
 /// # Safety
 /// `packet` is null or readable for its leading size field, and for a whole packet when that
 /// field matches. A leased packet's non-null resources must be live COM objects.
-unsafe fn admit(
-    packet: *const rsf_unity_packet,
-    session_id: u64,
-    leased: bool,
-) -> *mut c_void {
+unsafe fn admit(packet: *const rsf_unity_packet, session_id: u64, leased: bool) -> *mut c_void {
     if packet.is_null() {
         return ptr::null_mut();
     }

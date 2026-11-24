@@ -314,11 +314,7 @@ fn d3d_ring(bridge: u32) -> Option<MutexGuard<'static, ProducerRing>> {
     Some(owner.lock().unwrap_or_else(PoisonError::into_inner))
 }
 
-pub(crate) fn rsf_unity_package_sr_slot_reset(
-    bridge: u32,
-    commands: *mut c_void,
-    slot: u32,
-) {
+pub(crate) fn rsf_unity_package_sr_slot_reset(bridge: u32, commands: *mut c_void, slot: u32) {
     if let Some(mut ring) = d3d_ring(bridge) {
         ring.reset(commands, slot);
     }

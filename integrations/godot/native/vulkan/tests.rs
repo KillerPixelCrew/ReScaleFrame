@@ -423,7 +423,14 @@ fn sr_plan_changes_leave_the_runtime_presenter_current() {
 #[test]
 fn fg_result_belongs_to_this_pass_even_when_the_presenter_is_missing() {
     let vulkan = booted();
-    let run = || vulkan.fg_pass(SCREEN_FLIGHT, true, |_, _| backend_result::OK, || backend_result::OK);
+    let run = || {
+        vulkan.fg_pass(
+            SCREEN_FLIGHT,
+            true,
+            |_, _| backend_result::OK,
+            || backend_result::OK,
+        )
+    };
     assert_eq!(run(), backend_result::OK);
     assert_eq!(
         vulkan.fg_pass(SCREEN_FLIGHT, false, |_, _| panic!(), || panic!()),

@@ -18,8 +18,10 @@ pub(crate) type VkProc = unsafe extern "C" fn(*mut c_void, *const c_char) -> Opt
 
 pub(crate) const VK_SUCCESS: i32 = vk::Result::SUCCESS.as_raw();
 pub(crate) const VK_ERROR_OUT_OF_HOST_MEMORY: i32 = vk::Result::ERROR_OUT_OF_HOST_MEMORY.as_raw();
-pub(crate) const VK_ERROR_INITIALIZATION_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
-pub(crate) const VK_ERROR_EXTENSION_NOT_PRESENT: i32 = vk::Result::ERROR_EXTENSION_NOT_PRESENT.as_raw();
+pub(crate) const VK_ERROR_INITIALIZATION_FAILED: i32 =
+    vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
+pub(crate) const VK_ERROR_EXTENSION_NOT_PRESENT: i32 =
+    vk::Result::ERROR_EXTENSION_NOT_PRESENT.as_raw();
 pub(crate) const VK_ERROR_FEATURE_NOT_PRESENT: i32 = vk::Result::ERROR_FEATURE_NOT_PRESENT.as_raw();
 
 /// `RSF_VK_XESS_*`.
