@@ -2,7 +2,7 @@
 //! Cold native creation and Steam Present cooperation for Skyrim SE.
 //!
 //! The game creates its device and swapchain once through its discovered import thunk. Only
-//! the exact game call, or the exact Display Tweaks 0.5.25 relay of it, may open the Runtime's
+//! the game's own call, or the Display Tweaks relay of it to its discovered wrapper, may open the Runtime's
 //! mode-3 creation scope around the complete original call; any outer wrapper keeps its arguments,
 //! outputs and HRESULT. The Steam overlay forwarding is installed through the shared Steam facade
 //! only while the game's renderer owner has no device (the cold owner). Anything else refuses
@@ -12,10 +12,10 @@ use crate::layout::*;
 use crate::platform::{CreationCall, CreationScope, NativeChain, Platform};
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::rsf_game_host_services;
-use std::ffi::{CStr, c_void};
+use std::ffi::{CStr, CString, c_void};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use rsf_game_sys::RSF_OK as OK;
 
@@ -38,20 +38,17 @@ const CALLER_UNREADABLE: &CStr = c"Native creation caller unreadable.";
 const CALLER_DIFFERS: &CStr =
     c"Native creation caller differs from native or verified Display Tweaks route.";
 const DISPLAY_PROFILE: &CStr =
-    c"Display Tweaks creation profile fingerprint or module pin refused.";
+    c"Display Tweaks creation route refused: module pin failed or module changed.";
 const DISPLAY_RELAY: &CStr =
     c"Display Tweaks creation relay, original thunk or call-return bytes refused.";
 const THUNK_REFUSED: &CStr = c"Native creation thunk bytes refused.";
 const UNEXPECTED_CALLER: &CStr = c"Native creation refused: unexpected guarded-route caller.";
-const DISPLAY_MATCHED: &CStr = c"Skyrim native creation matched exact Display Tweaks0.5.25 pre/native/post route; native thunk and game outputs retained.";
-const PREPARED: &CStr = c"Skyrim native creation root prepared: discovered game import thunk -> current D3D11 IAT slot; guarded native or exact Display Tweaks call route; scoped inner creation, outer chain retained; no graphics created yet.";
+const PREPARED: &CStr = c"Skyrim native creation root prepared: discovered game import thunk -> current D3D11 IAT slot; guarded native or discovered Display Tweaks call route; scoped inner creation, outer chain retained; no graphics created yet.";
 
 /// Process-lived trampoline of the game thunk. Published before the hook can be enabled.
 static ORIGINAL: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static LIVE: AtomicBool = AtomicBool::new(false);
 static CALLS: AtomicU32 = AtomicU32::new(0);
-/// The Display Tweaks module whose file fingerprint already matched and which is pinned.
-static DISPLAY_MODULE: AtomicUsize = AtomicUsize::new(0);
 static REPORTS: AtomicU32 = AtomicU32::new(0);
 static SHARED: Mutex<Shared> = Mutex::new(Shared {
     services: None,
@@ -108,7 +105,7 @@ fn mapped(platform: &Platform, address: usize, size: usize, allocation: usize, c
         && end <= region_end
 }
 
-/// The verified return address of the guarded creation call: the game's own call, or the exact
+/// The verified return address of the guarded creation call: the game's own call, or the
 /// Display Tweaks relay to its wrapper's call of the unchanged thunk.
 fn creation_caller(platform: &Platform) -> Result<usize, &'static CStr> {
     let base = platform.main_module();
@@ -128,15 +125,13 @@ fn creation_caller(platform: &Platform) -> Result<usize, &'static CStr> {
     if module == 0 || call[0] != 0xe8 {
         return Err(CALLER_DIFFERS);
     }
-    if DISPLAY_MODULE.load(Ordering::Acquire) != module {
-        if platform.module_sha256(module).as_ref() != Some(DISPLAY_TWEAKS_SHA256)
-            || platform.pin_module(module) != module
-        {
-            return Err(DISPLAY_PROFILE);
-        }
-        DISPLAY_MODULE.store(module, Ordering::Release);
-    }
-    // The exact build patches only the game's E8 displacement. Its SKSE relay jumps to Display
+    let route = match DISPLAY.get_or_init(|| display_route(platform, module)) {
+        Ok(route) if route.module == module => route,
+        Ok(_) => return Err(DISPLAY_PROFILE),
+        Err(refusal) => return Err(refusal.as_c_str()),
+    };
+    let sites = route.sites;
+    // Display Tweaks patches only the game's E8 displacement. Its SKSE relay jumps to Display
     // pre/post work, which calls the unchanged native thunk.
     let relay = target;
 
@@ -150,19 +145,52 @@ fn creation_caller(platform: &Platform) -> Result<usize, &'static CStr> {
     let mut destination = [0; size_of::<usize>()];
     destination.copy_from_slice(&relay_bytes[RELAY_JUMP.len()..]);
     let destination = usize::from_le_bytes(destination);
-    let invoke = module.wrapping_add(DISPLAY_INVOKE);
-    let retained = module.wrapping_add(DISPLAY_RETAINED);
-    if destination != module.wrapping_add(DISPLAY_ENTRY)
-        || !mapped(platform, destination, DISPLAY_PROLOGUE.len(), module, true)
-        || !mapped(platform, invoke, DISPLAY_INVOKE_BYTES.len(), module, true)
+    let invoke = module.wrapping_add(sites.call);
+    let retained = module.wrapping_add(sites.retained);
+    let [wrapper_bytes, call_bytes] = discovery::DISPLAY_SPANS;
+    if destination != module.wrapping_add(sites.wrapper)
+        || !mapped(platform, destination, wrapper_bytes, module, true)
+        || !mapped(platform, invoke, call_bytes, module, true)
         || !mapped(platform, retained, size_of::<usize>(), module, false)
-        || !platform.matches(destination, &DISPLAY_PROLOGUE)
-        || !platform.matches(invoke, &DISPLAY_INVOKE_BYTES)
+        || !discovery::display_tweaks_current(platform, module, &sites)
         || platform.read_usize(retained) != Some(thunk(platform))
     {
         return Err(DISPLAY_RELAY);
     }
-    Ok(module.wrapping_add(DISPLAY_RETURN))
+    Ok(module.wrapping_add(sites.call_return))
+}
+
+/// The Display Tweaks route discovered in its loaded module, pinned for the process, with the
+/// messages that name it; the module's file hash is logged only.
+struct DisplayRoute {
+    module: usize,
+    sites: discovery::DisplayTweaks,
+    matched: CString,
+}
+
+static DISPLAY: OnceLock<Result<DisplayRoute, CString>> = OnceLock::new();
+
+fn display_route(platform: &Platform, module: usize) -> Result<DisplayRoute, CString> {
+    let message = |text: String| CString::new(text).unwrap_or_default();
+    let digest = platform.module_sha256(module).map_or_else(
+        || "unreadable".into(),
+        |digest| String::from_utf8_lossy(&digest).into_owned(),
+    );
+    let sites = discovery::display_tweaks(platform, module).map_err(|reason| {
+        message(format!(
+            "Display Tweaks creation route refused: {reason} in SSEDisplayTweaks.dll SHA-256 {digest}."
+        ))
+    })?;
+    if platform.pin_module(module) != module {
+        return Err(DISPLAY_PROFILE.into());
+    }
+    Ok(DisplayRoute {
+        module,
+        sites,
+        matched: message(format!(
+            "Skyrim native creation matched the Display Tweaks pre/native/post route discovered in SSEDisplayTweaks.dll SHA-256 {digest}; native thunk and game outputs retained."
+        )),
+    })
 }
 
 fn guard(platform: &Platform) -> Result<usize, &'static CStr> {
@@ -351,8 +379,10 @@ pub(crate) fn enter(platform: &Platform, call: &mut CreationCall) {
         && shared.begin != 0
         && let Some((owner, window)) = owned_call(platform, call, services)
     {
-        if call.caller != create_return(platform.main_module()) {
-            platform.log(services, DISPLAY_MATCHED);
+        if call.caller != create_return(platform.main_module())
+            && let Some(Ok(route)) = DISPLAY.get()
+        {
+            platform.log(services, &route.matched);
         }
         call.owner = owner;
         call.window = window as *mut c_void;

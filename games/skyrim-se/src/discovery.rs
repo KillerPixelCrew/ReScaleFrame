@@ -593,5 +593,86 @@ pub(crate) fn verify(platform: &Platform, base: usize, site: Site) -> bool {
             || rip_target(resolved, bytes, 2, 6) == Some(rva(Site::CreateImport)))
 }
 
+/// SSE Display Tweaks' creation wrapper (where its relay of the game's creation call lands) and
+/// its call of the retained game thunk, `mov r10,[rip+slot]` ... `call r10; mov ebx,eax`, whose
+/// site is the call's return address. Derived from 0.5.25 with tools/derive-site-patterns.py
+/// (docs/research/evidence/skyrim-display-tweaks-sites-0.5.25.spec); its file hash is logged only.
+const DISPLAY_TWEAKS: [Signature; 2] = [
+    at(
+        "Display Tweaks creation wrapper",
+        "40 53 55 56 57 41 54 41 55 41 56 41 57 48 81 EC C8 01 00 00",
+    ),
+    returns(
+        "Display Tweaks thunk call",
+        DISPLAY_CALL_RETURN,
+        "4C 8B 15 ?? ?? ?? ?? 4C 8B C5 48 89 44 24 58 8B D6 8B 84 24 40 02 00 00 48 89 5C 24 50 4C 89 64 24 48 4C 89 7C 24 40 4C 89 6C 24 38 89 44 24 30 8B 84 24 38 02 00 00 89 44 24 28 48 89 7C 24 20 48 8B 7C 24 70 48 8B CF 41 FF D2 8B D8",
+    ),
+];
+/// The return of `call r10` within the thunk call pattern.
+const DISPLAY_CALL_RETURN: usize = 75;
+
+/// Display Tweaks sites as module RVAs: the wrapper, the thunk call's pattern start and return,
+/// and the retained slot holding the game thunk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DisplayTweaks {
+    pub(crate) wrapper: usize,
+    pub(crate) call: usize,
+    pub(crate) call_return: usize,
+    pub(crate) retained: usize,
+}
+
+/// The byte spans of the wrapper and thunk call patterns.
+pub(crate) const DISPLAY_SPANS: [usize; 2] = [20, 77];
+
+fn resolve_display_tweaks(
+    code: &[Section],
+    mut read: impl FnMut(usize, &mut [u8]) -> bool,
+) -> Result<DisplayTweaks, String> {
+    let found = signature::resolve(code, &DISPLAY_TWEAKS).map_err(|refusal| refusal.to_string())?;
+    let call = found[1] - DISPLAY_CALL_RETURN;
+    let mut operand = [0; 7];
+    let retained = read(call, &mut operand)
+        .then(|| rip_target(call, &operand, 3, 7))
+        .flatten()
+        .ok_or_else(|| refused("Display Tweaks thunk call")(Miss::Operand))?;
+    Ok(DisplayTweaks {
+        wrapper: found[0],
+        call,
+        call_return: found[1],
+        retained,
+    })
+}
+
+/// Discovers the Display Tweaks sites in the module loaded at `module`.
+pub(crate) fn display_tweaks(platform: &Platform, module: usize) -> Result<DisplayTweaks, String> {
+    let code = signature::mapped_sections(module, rsf_game_sys::win32::read_process, |_, flags| {
+        flags & EXECUTE != 0
+    })
+    .ok_or("Display Tweaks sections unreadable")?;
+    resolve_display_tweaks(&signature::views(&code), |rva, out| {
+        platform.read(module.wrapping_add(rva), out)
+    })
+}
+
+/// Whether both Display Tweaks patterns still match in live memory at their discovered sites.
+pub(crate) fn display_tweaks_current(
+    platform: &Platform,
+    module: usize,
+    sites: &DisplayTweaks,
+) -> bool {
+    DISPLAY_TWEAKS
+        .iter()
+        .zip([sites.wrapper, sites.call_return])
+        .all(|(signature, rva)| {
+            signature.guard(rva).is_some_and(|(text, start)| {
+                let Some(pattern) = Pattern::parse(text) else {
+                    return false;
+                };
+                let mut bytes = vec![0; pattern.len()];
+                platform.read(module.wrapping_add(start), &mut bytes) && pattern.matches(&bytes)
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests;

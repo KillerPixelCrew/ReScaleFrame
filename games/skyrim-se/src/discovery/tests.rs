@@ -101,3 +101,54 @@ fn every_site_resolves_in_the_installed_executable() {
         );
     }
 }
+
+/// The Display Tweaks sites resolve uniquely in the installed SSEDisplayTweaks.dll, and to the
+/// recorded 0.5.25 RVAs when it is that build. Skipped when it is not installed;
+/// `RSF_SKYRIM_DISPLAY_TWEAKS` names another copy.
+#[test]
+fn display_tweaks_sites_resolve_in_the_installed_plugin() {
+    let path = std::env::var_os("RSF_SKYRIM_DISPLAY_TWEAKS")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            signature::steam_file(
+                "Skyrim Special Edition\\Data\\SKSE\\Plugins\\SSEDisplayTweaks.dll",
+            )
+        });
+    let Some(path) = path else {
+        eprintln!("skipped: SSEDisplayTweaks.dll is not installed");
+        return;
+    };
+    let bytes = std::fs::read(&path).expect("read the installed plugin");
+    let image = Pe32Plus::parse(&bytes).expect("PE32+ module");
+    let code = image
+        .sections(false)
+        .into_iter()
+        .filter(|section| section.2 & EXECUTE != 0)
+        .map(|(_, rva, _, bytes)| Section { rva, bytes })
+        .collect::<Vec<_>>();
+    let read = |rva: usize, out: &mut [u8]| {
+        image
+            .span(rva, out.len())
+            .map(|(bytes, _)| out.copy_from_slice(bytes))
+            .is_some()
+    };
+    let sites = resolve_display_tweaks(&code, read)
+        .unwrap_or_else(|refusal| panic!("{} in {}", refusal, path.display()));
+    // The PE timestamp of the 0.5.25 build whose RVAs are recorded.
+    if image.timestamp() != 0x6a93_3ece {
+        eprintln!(
+            "{} is not 0.5.25; its sites resolved uniquely",
+            path.display()
+        );
+        return;
+    }
+    assert_eq!(
+        sites,
+        DisplayTweaks {
+            wrapper: 0x2_7250,
+            call: 0x2_72e9,
+            call_return: 0x2_7334,
+            retained: 0x5_e168,
+        }
+    );
+}
