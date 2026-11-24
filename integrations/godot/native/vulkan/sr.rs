@@ -100,17 +100,16 @@ impl Vulkan {
     }
 
     /// The SR section of `rsfg_render_vulkan`, called by `vulkan/native.rs` with the guard held after
-    /// its argument, depth-domain and FG checks. Returns the export's result; a leaf exception
-    /// returns 0 without a report, as the export's catch did.
+    /// its argument, depth-domain and FG checks. Returns the export's result.
     pub(crate) fn sr_render(&self, pass: &VkSrPass) -> c_int {
         let view = self.view_for_device(Some(pass.device.addr())).0;
         let mut contexts = *self.contexts();
         let result = self.sr_pass(pass, &view, &mut contexts);
         *self.contexts() = contexts;
-        result.unwrap_or(0)
+        result
     }
 
-    fn sr_pass(&self, pass: &VkSrPass, view: &VkView, contexts: &mut Contexts) -> Option<c_int> {
+    fn sr_pass(&self, pass: &VkSrPass, view: &VkView, contexts: &mut Contexts) -> c_int {
         let call = pass.call;
         // Every outcome below is reported once; the session derives the status from it.
         let mut sr = VkSrFrame::default();
@@ -139,7 +138,7 @@ impl Vulkan {
             sr.result = backend_result::OK;
             sr.outcome = SR_EVALUATED;
             self.sr_frame(&sr);
-            return Some(1);
+            return 1;
         }
         if !contexts.live() {
             contexts.ready = false;
@@ -150,11 +149,8 @@ impl Vulkan {
                 quality: view.settings.quality,
                 preset: view.settings.dlss_preset,
             };
-            let (completed, created) = Platform.vulkan_sr_create(call, &request);
+            let created = Platform.vulkan_sr_create(call, &request);
             contexts.session = created.handle.addr();
-            if !completed {
-                return None;
-            }
             sr.result = created.result;
             if !contexts.live() || sr.result != backend_result::OK {
                 return self.record(call, &mut sr, contexts, &view.settings, false);
@@ -163,7 +159,7 @@ impl Vulkan {
             contexts.backend = backend;
             contexts.ready = true;
         }
-        let (width, height) = Platform.vulkan_sr_plan(call, contexts.session as *mut c_void)?;
+        let (width, height) = Platform.vulkan_sr_plan(call, contexts.session as *mut c_void);
         sr.render_width = width;
         sr.render_height = height;
         self.record(call, &mut sr, contexts, &view.settings, true)
@@ -176,34 +172,26 @@ impl Vulkan {
         contexts: &mut Contexts,
         settings: &crate::platform::Settings,
         evaluate: bool,
-    ) -> Option<c_int> {
+    ) -> c_int {
         let (session, sharpening) = if evaluate {
             (contexts.session as *mut c_void, sharpening(settings))
         } else {
             (std::ptr::null_mut(), crate::platform::Sharpening::default())
         };
-        let (output, commands) =
-            Platform.vulkan_sr_record(call, session, &sharpening, &mut sr.result)?;
+        let (provider, output, commands) = Platform.vulkan_sr_record(call, session, &sharpening);
+        if let Some(provider) = provider {
+            sr.result = provider;
+        }
         if evaluate {
             if contexts.backend == SR_FSR4
                 && sr.result != backend_result::OK
                 && spend(&mut contexts.diagnostics)
             {
-                let _ = Platform.vulkan_sr_log(
-                    call,
-                    VK_LOG_FSR4_DISPATCH,
-                    sr.result,
-                    backend_result::OK,
-                );
+                Platform.vulkan_sr_log(call, VK_LOG_FSR4_DISPATCH, sr.result, backend_result::OK);
             }
-            let _ = Platform.vulkan_sr_dump_result(call, contexts.backend, sr.result);
+            Platform.vulkan_sr_dump_result(call, contexts.backend, sr.result);
             if sr.result == backend_result::INVALID_ARGUMENT && spend(&mut contexts.diagnostics) {
-                let _ = Platform.vulkan_sr_log(
-                    call,
-                    VK_LOG_INPUT_REFUSAL,
-                    sr.result,
-                    backend_result::OK,
-                );
+                Platform.vulkan_sr_log(call, VK_LOG_INPUT_REFUSAL, sr.result, backend_result::OK);
             }
         }
         if evaluate && sr.result == backend_result::OK && output == backend_result::OK {
@@ -212,11 +200,11 @@ impl Vulkan {
         } else if !commands.is_null() {
             sr.outcome = SR_REFUSED;
             if spend(&mut contexts.diagnostics) {
-                let _ = Platform.vulkan_sr_log(call, VK_LOG_REJECTED, sr.result, output);
+                Platform.vulkan_sr_log(call, VK_LOG_REJECTED, sr.result, output);
             }
         }
         self.sr_frame(sr);
-        Some(c_int::from(output == backend_result::OK))
+        c_int::from(output == backend_result::OK)
     }
 }
 

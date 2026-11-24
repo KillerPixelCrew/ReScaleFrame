@@ -19,7 +19,6 @@ fn reset() {
     fake::VK_EVALUATED.set(0);
     fake::VK_NEXT.set(0x7000);
     fake::VK_FALLBACK.set(0);
-    fake::VK_THROWS.set(None);
     fake::VK_SPLIT_OPEN_RESULT.set(0);
     fake::VK_SPLIT_RECORD.set(true);
     fake::VK_STOP.set(1);
@@ -372,48 +371,6 @@ fn an_fsr4_dispatch_without_a_continuation_is_not_counted() {
         (value.evaluated_frames, value.refused_frames),
         (before.evaluated_frames, before.refused_frames)
     );
-}
-
-#[test]
-fn a_leaf_exception_refuses_the_pass_without_a_report() {
-    let vulkan = booted();
-    fake::VK_THROWS.set(Some("evaluate"));
-    assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 0);
-    assert_eq!(status(&vulkan).evaluated_frames, 0);
-    assert_eq!(status(&vulkan).sr_result, backend_result::OK);
-    // A creation that wrote its handle before the exception keeps it for retirement.
-    let vulkan = booted();
-    fake::VK_THROWS.set(Some("create"));
-    assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 0);
-    let (kept, _) = handles(&vulkan);
-    assert_ne!(kept, 0);
-    fake::VK_THROWS.set(None);
-    fake::take_vk_sr_calls();
-    assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
-    assert_eq!(fake::take_vk_sr_calls()[2], ("destroy", kept));
-}
-
-#[test]
-fn diagnostic_failures_preserve_fallback_and_evaluation_outcomes() {
-    let vulkan = booted();
-    configure(&vulkan, |settings| settings.sr_backend = SR_FSR3);
-    let input = pass(DEVICE, OUTPUT);
-    fake::VK_EVALUATED.set(backend_result::INVALID_ARGUMENT);
-    fake::VK_THROWS.set(Some("dump"));
-    assert_eq!(render(&vulkan, &input), 1);
-    assert!(fake::take_vk_sr_calls().contains(&("fallback", 0)));
-    assert_eq!(vulkan.status().0.refused_frames, 1);
-
-    fake::VK_THROWS.set(Some("log"));
-    assert_eq!(render(&vulkan, &input), 1);
-    assert!(fake::take_vk_sr_calls().contains(&("fallback", 0)));
-    assert_eq!(vulkan.status().0.refused_frames, 2);
-
-    fake::VK_EVALUATED.set(backend_result::OK);
-    fake::VK_THROWS.set(Some("dump"));
-    assert_eq!(render(&vulkan, &input), 1);
-    assert_eq!(vulkan.status().0.evaluated_frames, 1);
-    fake::VK_THROWS.set(None);
 }
 
 #[test]

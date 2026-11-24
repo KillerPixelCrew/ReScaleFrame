@@ -62,7 +62,6 @@ thread_local! {
     pub(crate) static VK_LATENCY_RESULT: Cell<i32> = const { Cell::new(0) };
     /// The D3D12 leaves in call order, each with its main argument.
     static D3D12_CALLS: RefCell<Vec<(&'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    pub(crate) static CAPTURE_SR_BEGIN: Cell<u32> = const { Cell::new(1) };
     pub(crate) static WAIT: Cell<u32> = const { Cell::new(1) };
     pub(crate) static BIND: Cell<u32> = const { Cell::new(1) };
     pub(crate) static SIGNAL: Cell<u32> = const { Cell::new(1) };
@@ -77,7 +76,6 @@ thread_local! {
     static CONTEXTS: Cell<usize> = const { Cell::new(0) };
     pub(crate) static EVALUATED: Cell<i32> = const { Cell::new(0) };
     pub(crate) static EVALUATE: Cell<Option<SrEvaluate>> = const { Cell::new(None) };
-    pub(crate) static RENDER_BEGIN: Cell<u32> = const { Cell::new(1) };
     pub(crate) static END_SESSION: Cell<u32> = const { Cell::new(1) };
     /// The last Present pass: source frame, session, role, screen, swapchain and colour input.
     #[allow(clippy::type_complexity)]
@@ -100,8 +98,6 @@ thread_local! {
     pub(crate) static VK_NEXT: Cell<usize> = const { Cell::new(0x7000) };
     pub(crate) static VK_FALLBACK: Cell<i32> = const { Cell::new(0) };
     pub(crate) static VK_SHARPENING: Cell<Option<Sharpening>> = const { Cell::new(None) };
-    /// A leaf that reports an exception.
-    pub(crate) static VK_THROWS: Cell<Option<&'static str>> = const { Cell::new(None) };
     /// The window the last status facts described.
     pub(crate) static FACTS_WINDOW: Cell<Option<usize>> = const { Cell::new(None) };
     /// The identity every window reports: owner process, current process and class.
@@ -151,9 +147,7 @@ impl Platform {
         41
     }
 
-    pub(crate) fn prepare_capture(&self) -> bool {
-        true
-    }
+    pub(crate) fn prepare_capture(&self) {}
 
     pub(crate) fn fg_install(&self, _: &FgInstall) -> i32 {
         INSTALLS.set(INSTALLS.get() + 1);
@@ -318,32 +312,28 @@ impl Platform {
         _: *mut c_void,
         _: &rsf_game_render_pass,
         request: &SrEvaluate,
-    ) -> Option<i32> {
+    ) -> i32 {
         d3d12("evaluate", request.slot.into());
         EVALUATE.set(Some(*request));
-        Some(EVALUATED.get())
+        EVALUATED.get()
     }
 
     pub(crate) fn sr_refusal_log(&self, _: &rsf_game_render_pass, desired: (u32, u32)) {
         d3d12("refusal_log", desired.0.into());
     }
 
-    pub(crate) fn capture_sr_begin(&self, _: &rsf_game_render_pass) -> bool {
-        CAPTURE_SR_BEGIN.get() != 0
-    }
+    pub(crate) fn capture_sr_begin(&self, _: &rsf_game_render_pass) {}
 
-    pub(crate) fn final_scene(&self, _: *mut c_void, _: &rsf_game_render_pass, slot: u32) -> bool {
+    pub(crate) fn final_scene(&self, _: *mut c_void, _: &rsf_game_render_pass, slot: u32) {
         d3d12("final_scene", slot.into());
-        true
     }
 
     pub(crate) fn fg_submitted(&self, _: u64, frame: u64) {
         d3d12("fg_submitted", frame);
     }
 
-    pub(crate) fn render_begin(&self, _: u64, frame: u64) -> bool {
+    pub(crate) fn render_begin(&self, _: u64, frame: u64) {
         d3d12("render_begin", frame);
-        RENDER_BEGIN.get() != 0
     }
 
     pub(crate) fn present_window(&self, pass: &rsf_game_render_pass) {
@@ -362,9 +352,8 @@ impl Platform {
         END_SESSION.get() != 0
     }
 
-    pub(crate) fn d3d12_release(&self, context: *mut c_void, _: u64) -> bool {
+    pub(crate) fn d3d12_release(&self, context: *mut c_void, _: u64) {
         d3d12("release", context.addr() as u64);
-        true
     }
 
     pub(crate) fn vulkan_presenter_drain(&self, disable: bool) -> i32 {
@@ -394,11 +383,7 @@ impl Platform {
         result
     }
 
-    pub(crate) fn vulkan_sr_create(
-        &self,
-        _: *mut c_void,
-        request: &VkSrCreate,
-    ) -> (bool, VkSrContext) {
+    pub(crate) fn vulkan_sr_create(&self, _: *mut c_void, request: &VkSrCreate) -> VkSrContext {
         let mut created = VkSrContext {
             handle: ptr::null_mut(),
             result: 0,
@@ -406,9 +391,9 @@ impl Platform {
         let split = request.backend == 4;
         if split && VK_SPLIT_OPEN_RESULT.get() != 0 {
             created.result = VK_SPLIT_OPEN_RESULT.get();
-            return (true, created);
+            return created;
         }
-        let completed = vk_sr(
+        vk_sr(
             if split { "fsr4_create" } else { "create" },
             request.backend.into(),
         );
@@ -422,27 +407,22 @@ impl Platform {
             }
         }
         created.result = result;
-        if completed != 0 && result == 0 && request.backend == 1 {
+        if result == 0 && request.backend == 1 {
             vk_sr("preset", request.preset.into());
         }
-        (completed != 0, created)
+        created
     }
 
-    pub(crate) fn vulkan_sr_plan(
-        &self,
-        _: *mut c_void,
-        context: *mut c_void,
-    ) -> Option<(u32, u32)> {
-        let planned = VK_PLAN.get();
-        (vk_sr(
+    pub(crate) fn vulkan_sr_plan(&self, _: *mut c_void, context: *mut c_void) -> (u32, u32) {
+        vk_sr(
             if vk_is_split(context) {
                 "fsr4_plan"
             } else {
                 "plan"
             },
             context.addr() as u64,
-        ) != 0)
-            .then_some(planned)
+        );
+        VK_PLAN.get()
     }
 
     pub(crate) fn vulkan_sr_record(
@@ -450,9 +430,9 @@ impl Platform {
         _: *mut c_void,
         context: *mut c_void,
         sharpening: &Sharpening,
-        provider: &mut i32,
-    ) -> Option<(i32, *mut c_void)> {
+    ) -> (Option<i32>, i32, *mut c_void) {
         let mut commands = 0x20;
+        let mut provider = None;
         if !context.is_null() {
             // The owner lends the resolved options for the evaluation it records.
             VK_SHARPENING.set(Some(*sharpening));
@@ -460,36 +440,34 @@ impl Platform {
             let result = if split && !VK_SPLIT_RECORD.get() {
                 -8
             } else {
-                if vk_sr(
+                vk_sr(
                     if split { "fsr4_evaluate" } else { "evaluate" },
                     context.addr() as u64,
-                ) == 0
-                {
-                    return None;
-                }
+                );
                 if split {
                     commands = VK_NEXT.get();
                 }
                 VK_EVALUATED.get()
             };
-            *provider = result;
+            provider = Some(result);
             if result == 0 {
-                return Some((0, ptr::without_provenance_mut(commands)));
+                return (provider, 0, ptr::without_provenance_mut(commands));
             }
         }
         let next = ptr::without_provenance_mut(commands);
         if commands == 0 {
-            return Some((-8, next));
+            return (provider, -8, next);
         }
-        (vk_sr("fallback", 0) != 0).then_some((VK_FALLBACK.get(), next))
+        vk_sr("fallback", 0);
+        (provider, VK_FALLBACK.get(), next)
     }
 
-    pub(crate) fn vulkan_sr_log(&self, _: *mut c_void, kind: u32, _: i32, _: i32) -> Option<()> {
-        (vk_sr("log", kind.into()) != 0).then_some(())
+    pub(crate) fn vulkan_sr_log(&self, _: *mut c_void, kind: u32, _: i32, _: i32) {
+        vk_sr("log", kind.into());
     }
 
-    pub(crate) fn vulkan_sr_dump_result(&self, _: *mut c_void, backend: u32, _: i32) -> Option<()> {
-        (vk_sr("dump", backend.into()) != 0).then_some(())
+    pub(crate) fn vulkan_sr_dump_result(&self, _: *mut c_void, backend: u32, _: i32) {
+        vk_sr("dump", backend.into());
     }
 
     pub(crate) fn window_identity(&self, window: *mut c_void) -> WindowIdentity {
@@ -595,10 +573,8 @@ pub(crate) const fn context_handle(nth: usize) -> u64 {
     (nth * 0x1000) as u64
 }
 
-/// Records the call; zero when the test made it throw.
-fn vk_sr(call: &'static str, argument: u64) -> u32 {
+fn vk_sr(call: &'static str, argument: u64) {
     VK_SR_CALLS.with_borrow_mut(|calls| calls.push((call, argument)));
-    u32::from(VK_THROWS.get() != Some(call))
 }
 
 /// The Vulkan SR leaf calls since the last take.

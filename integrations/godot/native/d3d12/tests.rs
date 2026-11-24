@@ -394,21 +394,12 @@ fn present_reuses_the_rendered_identity_or_reports_a_miss() {
     );
     assert_eq!(status(&control).active_sr, 1);
     control.d3d12.render_begin(&control, 2);
-    fake::CAPTURE_SR_BEGIN.set(0);
-    assert_eq!(render(&control, &sr(2)), 0);
-    fake::CAPTURE_SR_BEGIN.set(1);
     control.d3d12.present(&control, chain);
     assert_eq!(
         fake::WINDOW.get(),
         Some((2, 42, RSF_GAME_RENDER_WINDOW, SCREEN_UNKNOWN, CHAIN, 0))
     );
     assert_eq!(status(&control).active_sr, 0);
-    // A render-begin leaf exception clears the frame, so Present has nothing to show.
-    fake::WINDOW.set(None);
-    fake::RENDER_BEGIN.set(0);
-    control.d3d12.render_begin(&control, 3);
-    control.d3d12.present(&control, chain);
-    assert_eq!(fake::WINDOW.get(), None);
 }
 
 #[test]

@@ -233,12 +233,11 @@ impl Platform {
         unsafe { GetTickCount64() }
     }
 
-    pub(crate) fn prepare_capture(&self) -> bool {
+    /// A disabled or null Runtime capture owner does not stop rendering.
+    pub(crate) fn prepare_capture(&self) {
         let capture = unsafe { rsf_core_capture12_create(1) };
         let retired = lock_or_recover(&CAPTURE).replace(Arc::new(Capture(capture)));
         drop(retired);
-        // A disabled/null Runtime capture owner does not stop rendering.
-        true
     }
 
     pub(crate) fn fg_install(&self, install: &FgInstall) -> i32 {
@@ -553,17 +552,12 @@ impl Platform {
         commands: Handle,
         pass: &rsf_game_render_pass,
         request: &SrEvaluate,
-    ) -> Option<i32> {
+    ) -> i32 {
         let mut frame = *pass;
         frame.screen = request.screen;
         unsafe {
             rsf_sr12_set_sharpening(context.cast(), &request.sharpening);
-            Some(rsf_sr12_evaluate(
-                context.cast(),
-                commands,
-                &frame,
-                request.slot,
-            ))
+            rsf_sr12_evaluate(context.cast(), commands, &frame, request.slot)
         }
     }
 
@@ -604,37 +598,29 @@ impl Platform {
         }
     }
 
-    pub(crate) fn capture_sr_begin(&self, pass: &rsf_game_render_pass) -> bool {
+    pub(crate) fn capture_sr_begin(&self, pass: &rsf_game_render_pass) {
         if let Some(capture) = capture() {
             capture.event(pass.session_id, pass.source_frame_id, c"native-sr-begin", 0);
         }
-        true
     }
 
-    pub(crate) fn final_scene(
-        &self,
-        commands: Handle,
-        pass: &rsf_game_render_pass,
-        slot: u32,
-    ) -> bool {
+    pub(crate) fn final_scene(&self, commands: Handle, pass: &rsf_game_render_pass, slot: u32) {
         if let Some(capture) = capture() {
             capture.flush(slot);
             capture.record_final_scene(commands, pass, slot);
         }
         unsafe { rsf_fg12_hudless(commands, pass) };
-        true
     }
 
     pub(crate) fn fg_submitted(&self, session_id: u64, frame_id: u64) {
         unsafe { rsf_fg12_submitted(session_id, frame_id) };
     }
 
-    pub(crate) fn render_begin(&self, session_id: u64, frame_id: u64) -> bool {
+    pub(crate) fn render_begin(&self, session_id: u64, frame_id: u64) {
         let result = unsafe { rsf_fg12_render_begin(session_id, frame_id) };
         if let Some(capture) = capture() {
             capture.event(session_id, frame_id, c"render-submit-begin", result);
         }
-        true
     }
 
     pub(crate) fn present_window(&self, pass: &rsf_game_render_pass) {
@@ -646,7 +632,7 @@ impl Platform {
     }
 
     /// Capture flush, context destroy (null accepted) and the session's frame dump cancel.
-    pub(crate) fn d3d12_release(&self, context: Handle, session_id: u64) -> bool {
+    pub(crate) fn d3d12_release(&self, context: Handle, session_id: u64) {
         if let Some(capture) = capture() {
             capture.flush(u32::MAX);
         }
@@ -654,7 +640,6 @@ impl Platform {
             rsf_sr12_destroy(context.cast());
             rsf_input_dump_cancel(session_id);
         }
-        true
     }
 
     /// The session's Runtime-owned endpoint table. It is immutable and lives as long as the DLL.

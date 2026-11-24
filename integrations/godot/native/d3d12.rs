@@ -197,8 +197,8 @@ impl D3d12 {
                 _ => return 0,
             }
         }
-        if pass.role == RSF_GAME_RENDER_SR && !Platform.capture_sr_begin(pass) {
-            return 0;
+        if pass.role == RSF_GAME_RENDER_SR {
+            Platform.capture_sr_begin(pass);
         }
         if pass.role == RSF_GAME_RENDER_FINAL_SCENE {
             return self.final_scene(commands, pass);
@@ -248,11 +248,8 @@ impl D3d12 {
             screen: screen(&settings, pass.screen),
             sharpening: sharpening(&settings),
         };
-        let Some(evaluated) =
-            Platform.sr_evaluate(context.handle as *mut c_void, commands, pass, &request)
-        else {
-            return 0;
-        };
+        let evaluated =
+            Platform.sr_evaluate(context.handle as *mut c_void, commands, pass, &request);
         let (plan, diagnose) = {
             let mut ledger = self.ledger();
             let diagnose = evaluated == backend_result::INVALID_ARGUMENT
@@ -355,9 +352,7 @@ impl D3d12 {
             };
             slot
         };
-        if !Platform.final_scene(commands, pass, slot) {
-            return 0;
-        }
+        Platform.final_scene(commands, pass, slot);
         let mut ledger = self.ledger();
         ledger.pending.push(Pending {
             commands: commands as usize,
@@ -472,7 +467,7 @@ impl D3d12 {
         }
     }
 
-    /// `rsfg_render_begin` on a booted session. A leaf exception clears the frame, as before.
+    /// `rsfg_render_begin` on a booted session.
     pub(crate) fn render_begin(&self, control: &Control, frame: u64) {
         {
             let mut ledger = self.ledger();
@@ -481,8 +476,8 @@ impl D3d12 {
             ledger.attempted_sr = None;
             ledger.sr_slot = None;
         }
-        if frame != 0 && !Platform.render_begin(control.session_id(), frame) {
-            self.ledger().current_frame = 0;
+        if frame != 0 {
+            Platform.render_begin(control.session_id(), frame);
         }
     }
 
@@ -535,9 +530,7 @@ impl D3d12 {
         if !Platform.d3d12_wait(submitted) || !Platform.fg_end_session(session) {
             return 0;
         }
-        if !Platform.d3d12_release(handle as *mut c_void, session) {
-            return 0;
-        }
+        Platform.d3d12_release(handle as *mut c_void, session);
         self.ledger().context = None;
         1
     }

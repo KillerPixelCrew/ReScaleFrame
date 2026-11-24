@@ -4,6 +4,7 @@
 use crate::platform::{Settings, Setup};
 use crate::sys::*;
 use crate::vulkan::native::{vk_capture_present, vk_render_begin};
+use rsf_game_sys::ffi_util::checked;
 use rsf_game_sys::{RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_PRESENT, rsf_game_render_pass};
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -39,13 +40,6 @@ unsafe extern "C" fn rsfg_configure(settings: *const Settings) -> i32 {
     unsafe { crate::rsf_godot_configure(settings) }
 }
 
-/// The engine's declared size word is safe to read before borrowing the full pass.
-unsafe fn sized_pass<'a>(pass: *const rsf_game_render_pass) -> Option<&'a rsf_game_render_pass> {
-    (!pass.is_null()
-        && unsafe { pass.cast::<u32>().read() } as usize >= size_of::<rsf_game_render_pass>())
-    .then(|| unsafe { &*pass })
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_render(
     device: Handle,
@@ -56,7 +50,7 @@ unsafe extern "C" fn rsfg_render(
     if !crate::CONTROL.booted() || device.is_null() || queue.is_null() || commands.is_null() {
         return 0;
     }
-    let Some(pass) = (unsafe { sized_pass(pass) }) else {
+    let Some(pass) = (unsafe { checked(pass) }) else {
         return 0;
     };
     if rsf_game_sys::depth_domains_requested(&pass.depth_domains) {
@@ -93,7 +87,7 @@ unsafe extern "C" fn rsfg_vk_execution(pass: *const rsf_game_render_pass, begin:
     if !crate::CONTROL.vulkan.booted() {
         return 0;
     }
-    let Some(pass) = (unsafe { sized_pass(pass) }) else {
+    let Some(pass) = (unsafe { checked(pass) }) else {
         return 0;
     };
     if pass.role == RSF_GAME_RENDER_FRAME {

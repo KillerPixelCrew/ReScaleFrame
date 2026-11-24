@@ -9,8 +9,7 @@ use crate::vulkan::handle;
 use crate::{CONTROL, vk_creation_resolver};
 use ash::vk;
 use rsf_game_sys::backend_result;
-use rsf_game_sys::ffi_util::lock_or_recover;
-use rsf_game_sys::ffi_util::{ascii_wide, wide};
+use rsf_game_sys::ffi_util::{ascii_wide, checked, lock_or_recover, wide};
 use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE,
@@ -90,14 +89,6 @@ fn log_text(message: String) {
     if let Ok(message) = CString::new(message) {
         log(&message);
     }
-}
-
-unsafe fn checked<'a, T>(value: *const T) -> Option<&'a T> {
-    if value.is_null() || (unsafe { value.cast::<u32>().read() } as usize) < size_of::<T>() {
-        return None;
-    }
-    // Callers lend these records through the full synchronous native entry point.
-    Some(unsafe { &*value })
 }
 
 fn runtime_path(root: &CStr, suffix: &[u8]) -> CString {
@@ -812,11 +803,7 @@ impl Platform {
     }
 
     /// The FSR4 bridge code; zero is success.
-    pub(crate) fn vulkan_sr_create(
-        &self,
-        call: Handle,
-        request: &VkSrCreate,
-    ) -> (bool, VkSrContext) {
+    pub(crate) fn vulkan_sr_create(&self, call: Handle, request: &VkSrCreate) -> VkSrContext {
         let call = unsafe { &*call.cast::<Recording<'_>>() };
         let packet = call.packet;
         let camera = packet.pass.camera;
@@ -862,30 +849,29 @@ impl Platform {
                 &mut owner,
             )
         };
-        (
-            true,
-            VkSrContext {
-                handle: owner,
-                result,
-            },
-        )
+        VkSrContext {
+            handle: owner,
+            result,
+        }
     }
 
-    pub(crate) fn vulkan_sr_plan(&self, call: Handle, owner: Handle) -> Option<(u32, u32)> {
+    pub(crate) fn vulkan_sr_plan(&self, call: Handle, owner: Handle) -> (u32, u32) {
         let call = unsafe { &mut *call.cast::<Recording<'_>>() };
         let (mut w, mut h) = (0, 0);
         let _ = unsafe { linked::rsf_core_srvk_session_plan(owner, &mut w, &mut h) };
         call.plan = [w, h];
-        Some((w, h))
+        (w, h)
     }
 
+    /// Records the context's evaluation when there is one, else only the fallback. The
+    /// provider's result is returned when a context evaluated, then the bridge result and the
+    /// command buffer recording continues on.
     pub(crate) fn vulkan_sr_record(
         &self,
         call: Handle,
         owner: Handle,
         sharpening: &Sharpening,
-        provider: &mut i32,
-    ) -> Option<(i32, Handle)> {
+    ) -> (Option<i32>, i32, Handle) {
         let call = unsafe { &mut *call.cast::<Recording<'_>>() };
         let packet = call.packet;
         let fallback = rsf_srvk_fallback {
@@ -928,13 +914,14 @@ impl Platform {
             })
         };
         let mut next = ptr::null_mut();
+        let mut provider = 0;
         let result = unsafe {
             linked::record(
                 owner,
                 frame.as_ref().map_or(ptr::null(), ptr::from_ref),
                 &fallback,
                 call.handoff.is_some() && !call.continuation.is_null(),
-                provider,
+                &mut provider,
                 &mut next,
             )
         };
@@ -942,16 +929,10 @@ impl Platform {
         if !call.continuation.is_null() {
             unsafe { call.continuation.write(call.commands) };
         }
-        Some((result, next))
+        ((!owner.is_null()).then_some(provider), result, next)
     }
 
-    pub(crate) fn vulkan_sr_log(
-        &self,
-        call: Handle,
-        kind: u32,
-        provider: i32,
-        fallback: i32,
-    ) -> Option<()> {
+    pub(crate) fn vulkan_sr_log(&self, call: Handle, kind: u32, provider: i32, fallback: i32) {
         let call = unsafe { &*call.cast::<Recording<'_>>() };
         let message = match kind {
             VK_LOG_REJECTED => {
@@ -990,20 +971,13 @@ impl Platform {
                     record.camera.vertical_fov_radians,
                 )
             }
-            _ => return Some(()),
+            _ => return,
         };
         log_text(message);
-        Some(())
     }
 
-    pub(crate) fn vulkan_sr_dump_result(
-        &self,
-        call: Handle,
-        backend: u32,
-        result: i32,
-    ) -> Option<()> {
+    pub(crate) fn vulkan_sr_dump_result(&self, call: Handle, backend: u32, result: i32) {
         let call = unsafe { &*call.cast::<Recording<'_>>() };
         unsafe { rsf_input_dump_result(call.record, c"sr".as_ptr(), backend, result) };
-        Some(())
     }
 }

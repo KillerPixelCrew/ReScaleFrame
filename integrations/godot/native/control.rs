@@ -260,9 +260,7 @@ impl Control {
         if self.booted() {
             return 1;
         }
-        if !Platform.prepare_capture() {
-            return 0;
-        }
+        Platform.prepare_capture();
         // SAFETY: non-null NUL-terminated strings borrowed for the call.
         let (runtime, version, project) = unsafe {
             (
