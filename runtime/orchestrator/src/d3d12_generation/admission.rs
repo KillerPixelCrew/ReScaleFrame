@@ -181,7 +181,7 @@ pub(crate) unsafe extern "C" fn rsf_core_fg12_frame(frame: *const Frame, device:
     OK
 }
 
-extern "C" fn rsf_core_fg12_streamline_loaded() -> u32 {
+pub(super) extern "C" fn rsf_core_fg12_streamline_loaded() -> u32 {
     use windows::core::w;
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     u32::from(!unsafe { GetModuleHandleW(w!("sl.dlss_g.dll").as_ptr()) }.is_null())
@@ -211,7 +211,7 @@ pub(crate) unsafe extern "C" fn rsf_core_fg12_setup_header(
     OK
 }
 
-unsafe extern "C" fn check_setup(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn check_setup(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
     let result = unsafe { rsf_core_fg12_setup_header(setup, out, chain) };
     if result == OK {
         unsafe { rsf_core_fg12_setup(setup) }
@@ -220,7 +220,7 @@ unsafe extern "C" fn check_setup(setup: *const Setup, out: *mut Raw, chain: *mut
     }
 }
 
-unsafe extern "C" fn load_library(setup: &Setup, name: *const u16) -> Raw {
+pub(super) unsafe extern "C" fn load_library(setup: &Setup, name: *const u16) -> Raw {
     if setup.runtime_directory_utf8.is_null() || name.is_null() {
         return null_mut();
     }
@@ -241,10 +241,4 @@ unsafe extern "C" fn load_library(setup: &Setup, name: *const u16) -> Raw {
     module
 }
 
-pub(super) static NATIVE_CHECKS: Checks = Checks {
-    setup: check_setup,
-    frame: rsf_core_fg12_frame,
-    command: rsf_core_fg12_command,
-    streamline_loaded: rsf_core_fg12_streamline_loaded,
-    load_library,
-};
+

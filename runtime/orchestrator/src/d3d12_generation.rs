@@ -59,30 +59,26 @@ const UI_LAYER: u32 = 2;
 const HUDLESS: u32 = 4;
 const HUDLESS_UI: u32 = 8;
 
-#[repr(C)]
-struct Checks {
-    setup: unsafe extern "C" fn(*const Setup, *mut Raw, *mut Raw) -> i32,
-    frame: unsafe extern "C" fn(*const Frame, Raw) -> i32,
-    command: unsafe extern "C" fn(Raw, Raw) -> i32,
+// The admission checks each owner's leaves supply (admission.rs, or the XeLL fixture's fakes).
+type LoadLibrary = unsafe extern "C" fn(&Setup, *const u16) -> Raw;
+
+fn preflight(
+    setup: &Setup,
     streamline_loaded: unsafe extern "C" fn() -> u32,
-    load_library: unsafe extern "C" fn(&Setup, *const u16) -> Raw,
+    supported: bool,
+) -> Result<(), i32> {
+    if setup.streamline_host.is_null() && unsafe { streamline_loaded() } != 0 {
+        return Err(NEEDS_RESTART);
+    }
+    if !supported {
+        return Err(NOT_SUPPORTED);
+    }
+    Ok(())
 }
 
-impl Checks {
-    fn preflight(&self, setup: &Setup, supported: bool) -> Result<(), i32> {
-        if setup.streamline_host.is_null() && unsafe { (self.streamline_loaded)() } != 0 {
-            return Err(NEEDS_RESTART);
-        }
-        if !supported {
-            return Err(NOT_SUPPORTED);
-        }
-        Ok(())
-    }
-
-    fn module(&self, setup: &Setup, name: &str) -> Option<SdkModule> {
-        let name: Vec<u16> = name.encode_utf16().chain([0]).collect();
-        SdkModule::adopt_system(unsafe { (self.load_library)(setup, name.as_ptr()) })
-    }
+fn sdk_module(load_library: LoadLibrary, setup: &Setup, name: &str) -> Option<SdkModule> {
+    let name: Vec<u16> = name.encode_utf16().chain([0]).collect();
+    SdkModule::adopt_system(unsafe { load_library(setup, name.as_ptr()) })
 }
 
 #[repr(C)]
@@ -93,10 +89,7 @@ struct Extent {
     format: u32,
 }
 
-const _: () = {
-    assert!(size_of::<Checks>() == 5 * size_of::<Raw>());
-    assert!(size_of::<Extent>() == 12);
-};
+const _: () = assert!(size_of::<Extent>() == 12);
 
 struct Bindings {
     raw: Raw,
@@ -110,15 +103,15 @@ type Resolve = unsafe extern "C" fn(&Setup, Raw, Raw, &mut Raw) -> i32;
 impl Bindings {
     fn open(
         setup: &Setup,
-        checks: &Checks,
+        load_library: LoadLibrary,
         primary: &str,
         latency: Option<&str>,
         resolve: Resolve,
         close: unsafe extern "C" fn(Raw),
     ) -> Result<Self, i32> {
-        let module = checks.module(setup, primary);
+        let module = sdk_module(load_library, setup, primary);
         let latency = match latency {
-            Some(name) => Some(checks.module(setup, name).ok_or(LOAD_FAILED)?),
+            Some(name) => Some(sdk_module(load_library, setup, name).ok_or(LOAD_FAILED)?),
             None => None,
         };
         let module = module.ok_or(LOAD_FAILED)?;
@@ -393,11 +386,11 @@ pub(crate) unsafe fn read_options(options: *const Options) -> Result<Options, i3
 }
 
 unsafe fn read_frame<'a>(
-    check: &Checks,
+    check: unsafe extern "C" fn(*const Frame, Raw) -> i32,
     frame: *const Frame,
     device: Raw,
 ) -> Result<(&'a Frame, &'a Record), i32> {
-    let result = unsafe { (check.frame)(frame, device) };
+    let result = unsafe { check(frame, device) };
     if result != OK {
         return Err(result);
     }

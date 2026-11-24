@@ -70,16 +70,7 @@ static QUEUE: MockCom = MockCom::new();
 static CHAIN: MockCom = MockCom::new();
 static FENCE: MockCom = MockCom::new();
 
-static CHECKS: Checks = Checks {
-    setup: setup_outputs,
-    // This fixture drives begin, configure and markers. Refuse unexpected prepare work.
-    frame: refuse_frame,
-    command: refuse_command,
-    streamline_loaded: no_streamline,
-    load_library,
-};
-
-unsafe extern "C" fn setup_outputs(_: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn setup_outputs(_: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
     unsafe {
         out.write(null_mut());
         chain.write(null_mut());
@@ -87,19 +78,20 @@ unsafe extern "C" fn setup_outputs(_: *const Setup, out: *mut Raw, chain: *mut R
     OK
 }
 
-unsafe extern "C" fn refuse_frame(_: *const Frame, _: Raw) -> i32 {
+// This fixture drives begin, configure and markers. Refuse unexpected prepare work.
+pub(super) unsafe extern "C" fn refuse_frame(_: *const Frame, _: Raw) -> i32 {
     INVALID
 }
 
-unsafe extern "C" fn refuse_command(_: Raw, _: Raw) -> i32 {
+pub(super) unsafe extern "C" fn refuse_command(_: Raw, _: Raw) -> i32 {
     INVALID
 }
 
-unsafe extern "C" fn no_streamline() -> u32 {
+pub(super) unsafe extern "C" fn no_streamline() -> u32 {
     0
 }
 
-unsafe extern "C" fn load_library(_: &Setup, _: *const u16) -> Raw {
+pub(super) unsafe extern "C" fn load_library(_: &Setup, _: *const u16) -> Raw {
     // The owner retires these real module references without resolving SDK exports.
     let kernel32 = rsf_game_sys::ffi_util::wide("kernel32.dll");
     unsafe { LoadLibraryW(kernel32.as_ptr()) }
@@ -115,11 +107,10 @@ pub(super) mod leaf {
         create_context as create_fg, create_context as create_xell, ok2 as destroy_fg,
         ok2 as destroy_xell, ok3 as compose, ok3 as count, ok3 as present_id,
     };
-    use crate::d3d12_generation::Checks;
-
-    pub(in crate::d3d12_generation::xess) fn checks() -> &'static Checks {
-        &super::CHECKS
-    }
+    pub(in crate::d3d12_generation::xess) use super::{
+        load_library, no_streamline as streamline_loaded, refuse_command as check_command,
+        refuse_frame as check_frame, setup_outputs as check_setup,
+    };
 }
 pub(super) unsafe extern "C" fn resolve(_: &Setup, _: Raw, _: Raw, out: &mut Raw) -> i32 {
     *out = DEVICE.raw();

@@ -341,7 +341,7 @@ impl Session for Xess {
 
     unsafe fn prepare(&self, list: Raw, frame: *const Frame) -> i32 {
         let (frame, record) =
-            match unsafe { read_frame(leaf::checks(), frame, self.device.as_raw()) } {
+            match unsafe { read_frame(leaf::check_frame, frame, self.device.as_raw()) } {
                 Ok(frame) => frame,
                 Err(result) => return result,
             };
@@ -376,7 +376,7 @@ impl Session for Xess {
                 FEATURE_FAILED
             };
         }
-        let result = unsafe { (leaf::checks().command)(list, self.device.as_raw()) };
+        let result = unsafe { leaf::check_command(list, self.device.as_raw()) };
         if result != OK {
             return result;
         }
@@ -470,17 +470,17 @@ impl Session for Xess {
 static PROVIDER: Provider = provider::<Xess>();
 
 unsafe fn rsf_core_xeg12_create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
-    let result = unsafe { (leaf::checks().setup)(setup, out, chain) };
+    let result = unsafe { leaf::check_setup(setup, out, chain) };
     if result != OK {
         return result;
     }
     let setup = unsafe { &*setup };
-    if let Err(result) = leaf::checks().preflight(setup, setup.chain.ui_mode != UI_LAYER) {
+    if let Err(result) = preflight(setup, leaf::streamline_loaded, setup.chain.ui_mode != UI_LAYER) {
         return result;
     }
     let sdk = match Bindings::open(
         setup,
-        leaf::checks(),
+        leaf::load_library,
         "libxess_fg.dll",
         Some("libxell.dll"),
         leaf::resolve,

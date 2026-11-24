@@ -504,7 +504,7 @@ impl Session for Fsr {
 
     unsafe fn prepare(&self, command: Raw, frame: *const Frame) -> i32 {
         let (frame, record) =
-            match unsafe { read_frame(&admission::NATIVE_CHECKS, frame, self.device.as_raw()) } {
+            match unsafe { read_frame(admission::rsf_core_fg12_frame, frame, self.device.as_raw()) } {
                 Ok(frame) => frame,
                 Err(result) => return result,
             };
@@ -517,7 +517,7 @@ impl Session for Fsr {
         let hudless = enabled && self.ui_mode == HUDLESS;
         if enabled {
             let result =
-                unsafe { (admission::NATIVE_CHECKS.command)(command, self.device.as_raw()) };
+                unsafe { admission::rsf_core_fg12_command(command, self.device.as_raw()) };
             if result != OK {
                 return result;
             }
@@ -710,8 +710,8 @@ fn select_version(handle: Raw, setup: &Setup, query: QueryVersions) -> Option<Ve
     ffx_version::admitted(versions, setup.feature_major, setup.version_id)
 }
 
-fn rsf_core_fsr12_probe(checks: &Checks, setup: &Setup, query: QueryVersions) -> u32 {
-    let Some(module) = checks.module(setup, MODULE) else {
+fn rsf_core_fsr12_probe(setup: &Setup, query: QueryVersions) -> u32 {
+    let Some(module) = sdk_module(admission::load_library, setup, MODULE) else {
         return 0;
     };
     // The native query receives the resolved ffxQuery export.
@@ -722,20 +722,21 @@ fn rsf_core_fsr12_probe(checks: &Checks, setup: &Setup, query: QueryVersions) ->
 }
 
 unsafe fn rsf_core_fsr12_create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
-    let result = unsafe { (admission::NATIVE_CHECKS.setup)(setup, out, chain) };
+    let result = unsafe { admission::check_setup(setup, out, chain) };
     if result != OK {
         return result;
     }
     let setup = unsafe { &*setup };
-    if let Err(result) = admission::NATIVE_CHECKS.preflight(
+    if let Err(result) = preflight(
         setup,
+        admission::rsf_core_fg12_streamline_loaded,
         matches!(setup.feature_major, 3 | 4) && matches!(setup.chain.ui_mode, UI_NONE | HUDLESS),
     ) {
         return result;
     }
     let sdk = match Bindings::open(
         setup,
-        &admission::NATIVE_CHECKS,
+        admission::load_library,
         MODULE,
         None,
         native::resolve,

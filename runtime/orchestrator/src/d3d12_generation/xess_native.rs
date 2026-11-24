@@ -350,11 +350,10 @@ pub(super) mod leaf {
         create_fg, create_xell, destroy_fg, destroy_xell, drain, enabled, marker, max_count,
         present_id, present_status, resolve, sleep, sleep_mode, tag, version,
     };
-    use crate::d3d12_generation::{Checks, admission};
-
-    pub(in crate::d3d12_generation::xess) fn checks() -> &'static Checks {
-        &admission::NATIVE_CHECKS
-    }
+    pub(in crate::d3d12_generation::xess) use crate::d3d12_generation::admission::{
+        check_setup, load_library, rsf_core_fg12_command as check_command,
+        rsf_core_fg12_frame as check_frame, rsf_core_fg12_streamline_loaded as streamline_loaded,
+    };
 }
 fn rsf_core_xeg12_native_provider(compiled: u32) -> *const Provider {
     static NATIVE_PROVIDER: Provider = Provider {

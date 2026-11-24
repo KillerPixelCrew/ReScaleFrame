@@ -462,7 +462,7 @@ unsafe fn rsf_core_fsr12_native_supported(
     setup.runtime_directory_utf8 = directory;
     setup.chain.d3d12_device = device;
     setup.feature_major = 4;
-    rsf_core_fsr12_probe(&admission::NATIVE_CHECKS, &setup, probe_versions)
+    rsf_core_fsr12_probe(&setup, probe_versions)
 }
 
 fn rsf_core_fsr12_native_provider(compiled: u32) -> *const Provider {
