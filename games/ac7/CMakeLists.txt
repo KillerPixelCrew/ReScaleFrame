@@ -1,32 +1,35 @@
 # The carriers' Rust (rsf-ac7: view reader, carrier policy, motion capture, velocity pass). It holds
-# no reference to the renderer's MinHook, render scopes or engine relays.
-rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
-# The crate's guarded engine reads are the SEH leaf rsf_ac7_memory, so every consumer of the
-# archive links it. The D3D11
-# leaves it calls come from ReScaleFrame::GraphicsLeaves or, in carriers and fixtures that link the
-# Runtime archive, from that archive; each binary links exactly one of the two.
-target_link_libraries(rsf_ac7_rust INTERFACE rsf_ac7_memory)
+# no reference to the renderer's MinHook, render scopes or engine relays. The carrier feature adds the
+# Runtime (with the Runtime archive's features) and the loader the carrier proxy embeds, so the proxy
+# links this one archive (RSF_EMBEDDED_ARCHIVES in loader/proxy).
+get_property(rsf_runtime_embed_args GLOBAL PROPERTY RSF_RUNTIME_EMBED_ARGS)
+rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7 --features carrier ${rsf_runtime_embed_args})
+# The crate's C leaves (rsf_ac7_leaves below), so every consumer of an archive that carries rsf-ac7
+# links them. The D3D11 leaves it calls come from the archive that carries it: the embedded Runtime
+# in the carrier archive, rsf-graphics in the adapter and view fixture archives.
+target_link_libraries(rsf_ac7_rust INTERFACE rsf_ac7_leaves)
 target_include_directories(rsf_ac7_rust INTERFACE include)
 add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_rust)
 
-# The adapter DLL's Rust (rsf-ac7-plugin, games/ac7/plugin, which carries the rsf-ac7 code it uses):
-# exact-build identity, the GameSDK table, the renderer lifecycle and the native renderer (code-site
-# admission, patch transactions, hook guards, the prepare/start/quiesce/stop transaction, TrueSky
-# patches and relays, the renderer object, detours and pass leases). The detours call MinHook
-# through rsf-minhook-sys; the Windows input facts, the render scope C create calls and the shader
-# factory leaf come from the call table of src/native_renderer_platform.c (in the render scope
-# library), which plugin.c and the native graph fixture bind at run time. The crate also owns the
-# queued render scopes and exports ac7_render_scope.h except its two C create calls, which pass the
-# C11 SEH exception leaves of render_scope_entry.c (src/ac7_scope_owner.h). Every target that calls
-# that header links this archive (or the fixture archive) after rsf_ac7_render_scope, which links
-# neither: this DLL and the render scope, D3D11 present bridge and native graph fixtures.
+# The adapter DLL's Rust (rsf-ac7-plugin, games/ac7/plugin, which carries the rsf-ac7 code it uses,
+# rsf-graphics and the rsf-windows input facts): exact-build identity, the GameSDK table, the
+# renderer lifecycle and the native renderer (code-site admission, patch transactions, hook guards,
+# the prepare/start/quiesce/stop transaction, TrueSky patches and relays, the renderer object,
+# detours and pass leases). The detours call MinHook through rsf-minhook-sys; the Windows input
+# facts, the render scope C create calls and the shader factory leaf come from the call table of
+# src/native_renderer_platform.c (in the render scope library), which plugin.c and the native graph
+# fixture bind at run time. The crate also owns the queued render scopes and exports
+# ac7_render_scope.h except its two C create calls, which pass the C11 SEH exception leaves of
+# render_scope_entry.c (src/ac7_scope_owner.h). Every target that calls that header links this
+# archive (or one that carries the crate) after rsf_ac7_render_scope, which links none: this DLL
+# and the render scope, D3D11 present bridge and native graph fixtures.
 rsf_add_rust_static(rsf_ac7_plugin_rust rsf_rust_ac7_plugin rsf-ac7-plugin rsf_ac7_plugin)
-target_link_libraries(rsf_ac7_plugin_rust INTERFACE rsf_ac7_memory)
+target_link_libraries(rsf_ac7_plugin_rust INTERFACE rsf_ac7_leaves ReScaleFrame::Graphics minhook bcrypt)
 target_include_directories(rsf_ac7_plugin_rust INTERFACE include)
 add_library(rsf_game_ac7 SHARED src/plugin.c)
 set_target_properties(rsf_game_ac7 PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_render_scope rsf_ac7_plugin_rust
-    ReScaleFrame::GraphicsLeaves minhook rsf_build_options)
+    minhook rsf_build_options)
 set_target_properties(rsf_game_ac7 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.AC7")
 
 # The velocity replay stays with the game; graphics supplies only draw observations and the shared
@@ -43,18 +46,20 @@ add_library(rsf_ac7_capture_trampolines STATIC
     src/motion_capture_trampolines.c src/ac7_hooks.c)
 target_include_directories(rsf_ac7_capture_trampolines PRIVATE include)
 target_link_libraries(rsf_ac7_capture_trampolines PRIVATE ReScaleFrame::GameSDK rsf_ac7_memory minhook rsf_build_options)
-# Rust owns the public entry points and calls these native effects in return. Load the
-# small trampoline archive in full so either side can resolve the other.
+# The C leaves rsf-ac7 calls: the SEH memory reads and the motion capture trampolines. Rust owns the
+# capture's public entry points and calls the trampolines in return, so the small trampoline archive
+# loads in full and either side can resolve the other.
+add_library(rsf_ac7_leaves INTERFACE)
+target_link_libraries(rsf_ac7_leaves INTERFACE rsf_ac7_memory
+    "$<LINK_LIBRARY:WHOLE_ARCHIVE,rsf_ac7_capture_trampolines>")
 add_library(rsf_ac7_motion_capture INTERFACE)
 target_include_directories(rsf_ac7_motion_capture INTERFACE include)
-target_link_libraries(rsf_ac7_motion_capture INTERFACE
-    ReScaleFrame::GameSDK "$<LINK_LIBRARY:WHOLE_ARCHIVE,rsf_ac7_capture_trampolines>"
-    rsf_ac7_rust ReScaleFrame::Graphics)
+target_link_libraries(rsf_ac7_motion_capture INTERFACE ReScaleFrame::GameSDK rsf_ac7_rust ReScaleFrame::Graphics)
 add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)
 
 add_library(rsf_ac7_render_scope STATIC src/render_scope_entry.c src/native_renderer_platform.c)
 target_include_directories(rsf_ac7_render_scope PUBLIC include)
-target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_memory rsf_windows_input_facts rsf_build_options ReScaleFrame::RuntimeCommon)
+target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_ac7_memory rsf_build_options ReScaleFrame::RuntimeCommon)
 
 target_include_directories(rsf_ac7_render_scope PRIVATE "${CMAKE_SOURCE_DIR}/runtime/graphics/include")
 add_library(ReScaleFrame::AC7RenderScope ALIAS rsf_ac7_render_scope)

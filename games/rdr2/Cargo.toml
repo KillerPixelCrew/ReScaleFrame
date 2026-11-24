@@ -7,7 +7,8 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["staticlib"]
+# rlib so the Unity SR D3D12 fixture's archive can carry the runtime setup it calls.
+crate-type = ["staticlib", "rlib"]
 
 [features]
 # The F10 frame capture, camera and native-settings probes, D3D12 trace, vendor census, module
@@ -20,6 +21,9 @@ capture-fixture = ["research", "dep:rsf-test-support", "windows/Win32_Graphics_D
 rsf-game-sys = { path = "../../sdk/game" }
 
 [target."cfg(windows)".dependencies]
+# The vendor census and module dumps the ASI links call rsf-loader; this archive carries it so the ASI
+# links one Rust archive (RSF_EMBEDDED_ARCHIVES).
+rsf-loader = { path = "../../loader" }
 rsf-minhook-sys = { path = "../../third_party/minhook" }
 rsf-windows = { path = "../../integrations/windows" }
 # The capture fixture's WARP D3D12 device; absent from the shipping build.

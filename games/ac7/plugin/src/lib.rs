@@ -15,10 +15,12 @@
 //! velocity pass are rsf-ac7, which the carriers link without this crate and its hooks.
 
 pub use rsf_ac7::sys;
-// The adapter DLL gets the D3D11 leaves rsf-ac7 calls from their CMake archive; unit tests link
-// the crate directly.
-#[cfg(all(test, windows))]
+// The D3D11 leaves rsf-ac7 calls and the input facts the render scope library calls, carried in
+// this archive (Cargo.toml).
+#[cfg(windows)]
 use rsf_graphics as _;
+#[cfg(windows)]
+use rsf_windows as _;
 mod cloud_depth;
 #[cfg(windows)]
 mod com_resource;

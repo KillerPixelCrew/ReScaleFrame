@@ -18,6 +18,9 @@ pub mod sys {
     pub use rsf_game_sys::*;
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
+// Links the D3D11 state leaves the C leaves call into this archive (Cargo.toml).
+#[cfg(windows)]
+use rsf_graphics as _;
 #[cfg(windows)]
 mod adapter_options;
 #[cfg(all(windows, any(test, feature = "native-entry")))]

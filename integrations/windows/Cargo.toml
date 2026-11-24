@@ -7,10 +7,10 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib"]
 
 [features]
-# The xinput_facts.h C exports, for the CMake rsf_windows_input_facts archive.
+# The xinput_facts.h C exports, for AC7's native platform table (rsf-ac7-plugin enables it).
 xinput-facts = []
 
 [dependencies]

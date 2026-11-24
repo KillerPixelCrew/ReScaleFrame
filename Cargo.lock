@@ -565,7 +565,9 @@ dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
  "rsf-graphics",
+ "rsf-loader",
  "rsf-minhook-sys",
+ "rsf-orchestrator",
  "rsf-shader-compiler",
  "rsf-test-support",
  "rsf-windows",
@@ -593,6 +595,7 @@ dependencies = [
  "rsf-minhook-sys",
  "rsf-shader-compiler",
  "rsf-test-support",
+ "rsf-windows",
  "windows",
 ]
 
@@ -606,6 +609,7 @@ version = "0.1.2"
 dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-graphics",
  "rsf-minhook-sys",
  "rsf-shader-compiler",
  "rsf-test-support",
@@ -682,6 +686,7 @@ dependencies = [
  "rsf-game-sys",
  "rsf-graphics",
  "rsf-orchestrator",
+ "rsf-rdr2",
  "rsf-test-support",
  "rsf-unity",
  "windows",
@@ -759,6 +764,7 @@ version = "0.1.2"
 dependencies = [
  "jni-sys",
  "rsf-game-sys",
+ "rsf-orchestrator",
  "windows-sys",
 ]
 
@@ -837,6 +843,7 @@ dependencies = [
  "rsf-ac7-plugin",
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-minecraft",
  "rsf-orchestrator",
  "rsf-test-support",
  "windows",
@@ -867,6 +874,7 @@ version = "0.1.2"
 dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-loader",
  "rsf-minhook-sys",
  "rsf-test-support",
  "rsf-windows",

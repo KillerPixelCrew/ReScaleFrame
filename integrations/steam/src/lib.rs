@@ -648,8 +648,8 @@ fn prepare(host: &rsf_game_host_services, cold_owner: impl FnOnce() -> bool) -> 
 }
 
 /// Prepares the Steam overlay's D3D11 chain hooks. Exported for games/fallout4/src/creation.rs,
-/// which links this crate as the CMake archive rsf_steam_d3d11_chain; Skyrim, which depends on the
-/// crate, calls it by path.
+/// which declares it over the C ABI with its own bindings; Skyrim calls it by path. Both embed
+/// this crate in their archive.
 ///
 /// # Safety
 ///

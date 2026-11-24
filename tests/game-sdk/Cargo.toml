@@ -7,8 +7,11 @@ publish.workspace = true
 license.workspace = true
 
 [features]
+# The Anomaly SR temporal device fixture calls the Runtime's motion passes, so it links rsf-anomaly's
+# fixture entries and the Runtime from one archive.
+anomaly-sr-device-fixture = ["rsf-anomaly/sr-fixtures"]
 unity-sr-d3d12-fixture = [
-  "dep:rsf-unity", "dep:windows", "windows-sys/Win32_System_Threading",
+  "dep:rsf-rdr2", "dep:rsf-unity", "dep:windows", "windows-sys/Win32_System_Threading",
   "windows-sys/Win32_System_WindowsProgramming",
 ]
 vk-latency-fixtures = ["dep:ash", "windows-sys/Win32_System_Threading", "windows-sys/Win32_UI_WindowsAndMessaging"]
@@ -29,6 +32,8 @@ rsf-anomaly = { path = "../../games/anomaly" }
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-graphics = { path = "../../runtime/graphics/rust" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
+# The RDR2 runtime setup the Unity SR D3D12 fixture calls.
+rsf-rdr2 = { path = "../../games/rdr2", optional = true }
 rsf-test-support = { path = "../support" }
 rsf-unity = { path = "../../integrations/unity", optional = true }
 windows = { workspace = true, optional = true, features = [

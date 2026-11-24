@@ -24,10 +24,13 @@ pub mod sys {
     pub use rsf_game_sys::*;
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
-// The adapter DLL gets the D3D11 state leaves from their CMake archive; unit tests link the
-// crate directly.
-#[cfg(all(test, windows))]
+// The D3D11 state leaves come from the archive that carries this crate (the adapter's, or the
+// Runtime's in the carriers); the view fixtures' archive and the unit tests carry them here.
+#[cfg(all(windows, any(test, feature = "view-fixtures")))]
 use rsf_graphics as _;
+// The carrier proxy's Runtime and loader, carried in its archive (Cargo.toml).
+#[cfg(all(windows, feature = "carrier"))]
+use {rsf_loader as _, rsf_orchestrator as _};
 mod carrier;
 pub mod contact_shadow;
 use rsf_game_sys::dxbc_chunks;

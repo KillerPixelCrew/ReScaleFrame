@@ -11,7 +11,9 @@ license.workspace = true
 # launcher: one archive, so rsf-ac7 is linked once.
 ac7-render-scope = ["dep:rsf-ac7-plugin"]
 d3d11-host-device-fixtures = []
+# The GL interop fixture calls the Minecraft observer, carried in its archive.
 gl-device-fixture = [
+  "dep:rsf-minecraft",
   "windows/Win32_Graphics_OpenGL",
   "windows/Win32_System_WindowsProgramming",
 ]
@@ -32,6 +34,7 @@ workspace = true
 rsf-ac7 = { path = "../../games/ac7" }
 rsf-ac7-plugin = { path = "../../games/ac7/plugin", features = ["warp-fixture"], optional = true }
 rsf-game-sys = { path = "../../sdk/game" }
+rsf-minecraft = { path = "../../games/minecraft", optional = true }
 rsf-test-support = { path = "../support" }
 rsf-orchestrator = { path = "../../runtime/orchestrator" }
 windows = { workspace = true, features = [

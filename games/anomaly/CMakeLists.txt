@@ -3,8 +3,8 @@
 # compiles them in: the plugin below and, through rsf_anomaly_fixtures_rust, each fixture executable
 # (tests/CMakeLists.txt, anomaly_support.cmake, anomaly_fg.cmake, overlay_dll_api.cmake). An interface library, so the
 # sources build with each consumer's definitions (rsf_anomaly_geometry_hooks_test sets RSF_ANOMALY_GEOMETRY_TESTING).
-# The D3D11 state leaves they call come from ReScaleFrame::GraphicsLeaves or from the Runtime archive that embeds
-# them; a binary that links both defines them twice, so each consumer links the one it carries.
+# The D3D11 state leaves they call come from rsf-graphics, which every rsf-anomaly archive carries, so no consumer
+# links ReScaleFrame::GraphicsLeaves beside it.
 add_library(rsf_anomaly_native_leaves INTERFACE)
 target_sources(rsf_anomaly_native_leaves INTERFACE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/native_observer_platform.c"
@@ -44,8 +44,7 @@ foreach(symbol IN ITEMS rsf_anomaly_start rsf_anomaly_observation rsf_get_game_p
         target_link_options(rsf_game_anomaly PRIVATE "LINKER:--undefined=${symbol}")
     endif()
 endforeach()
-target_link_libraries(rsf_game_anomaly PRIVATE rsf_anomaly_plugin_rust rsf_anomaly_native_leaves
-    ReScaleFrame::GraphicsLeaves rsf_build_options)
+target_link_libraries(rsf_game_anomaly PRIVATE rsf_anomaly_plugin_rust rsf_anomaly_native_leaves rsf_build_options)
 set_target_properties(rsf_game_anomaly PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.Anomaly")
 
 # Motion MRT (src/motion_stage.h): verified shader variants at create_shader, b13 packers, RTV2 binder, draw-time

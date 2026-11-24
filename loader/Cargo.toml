@@ -7,7 +7,8 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["staticlib"]
+# rlib so the RDR2 archive can carry it.
+crate-type = ["staticlib", "rlib"]
 
 [target.'cfg(windows)'.dependencies]
 rsf-game-sys = { path = "../sdk/game" }

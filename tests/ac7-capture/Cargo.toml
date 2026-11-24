@@ -13,6 +13,9 @@ crate-type = ["staticlib"]
 rsf-ac7 = { path = "../../games/ac7" }
 
 [target."cfg(windows)".dependencies]
+# AC7 motion capture and the Runtime's D3D11 observer, carried in this archive so the fixture
+# executable links one Rust archive.
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
 rsf-test-support = { path = "../support" }
 windows = { workspace = true, features = [
   "Win32_Globalization",
@@ -25,9 +28,8 @@ windows = { workspace = true, features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 
-# Unit tests link the crates whose archives the fixture executable gets from CMake.
+# Unit tests link the crate whose archive the fixture executable gets from CMake.
 [target."cfg(windows)".dev-dependencies]
-rsf-orchestrator = { path = "../../runtime/orchestrator" }
 rsf-runtime-common = { path = "../../runtime/common" }
 
 [lints]

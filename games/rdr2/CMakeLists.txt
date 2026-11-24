@@ -37,6 +37,8 @@ set_target_properties(rsf_asi_rdr2 PROPERTIES OUTPUT_NAME "ReScaleFrame.RDR2" PR
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/rdr2/lib/$<CONFIG>"
     PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/rdr2/bin/$<CONFIG>")
 add_dependencies(rsf_asi_rdr2 rsf_orchestrator rsf_game_rdr2)
+# The census and module dump libraries call rsf-loader, which the RDR2 archive carries.
+set_target_properties(rsf_asi_rdr2 PROPERTIES RSF_EMBEDDED_ARCHIVES rsf_loader_rust)
 
 # Explicit research helper, never autoloaded or included in the ASI deployment.
 add_library(rsf_rdr2_attach SHARED EXCLUDE_FROM_ALL src/attach_entry.c)

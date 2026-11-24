@@ -4,9 +4,8 @@ mod digest;
 #[cfg(windows)]
 pub mod minhook;
 mod window_input;
-// The XInput facts are C exports (xinput_facts.h) for AC7's native platform table, which links them
-// from the rsf_windows_input_facts archive. Built into every crate that uses this one, a binary with
-// two such Rust archives would define them twice.
+// The XInput facts are C exports (xinput_facts.h) for AC7's native platform table; rsf-ac7-plugin
+// enables them, so they are in the AC7 adapter's archive and in archives that carry that crate.
 #[cfg(all(windows, feature = "xinput-facts"))]
 mod xinput_facts;
 

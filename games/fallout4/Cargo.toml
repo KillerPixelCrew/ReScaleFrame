@@ -13,6 +13,10 @@ crate-type = ["staticlib"]
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-minhook-sys = { path = "../../third_party/minhook" }
 
+# The Steam D3D11 chain, embedded so the DLL links one Rust archive (as Skyrim SE does).
+[target."cfg(windows)".dependencies.rsf-steam]
+path = "../../integrations/steam"
+
 [target."cfg(windows)".dependencies.windows]
 workspace = true
 features = [
@@ -35,10 +39,9 @@ features = [
   "Win32_UI_WindowsAndMessaging",
 ]
 
-# Unit tests link the crates whose archives the adapter DLL gets from CMake.
+# Unit tests link the crate whose archive the adapter DLL gets from CMake.
 [target."cfg(windows)".dev-dependencies]
 rsf-runtime-common = { path = "../../runtime/common" }
-rsf-steam = { path = "../../integrations/steam" }
 
 [build-dependencies]
 cc.workspace = true

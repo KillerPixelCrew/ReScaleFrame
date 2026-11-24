@@ -7,8 +7,8 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-# rlib: the Skyrim SE archive embeds it, so its DLL carries one copy of rsf-windows.
-crate-type = ["rlib", "staticlib"]
+# The Skyrim SE and Fallout 4 archives embed it, so each DLL carries one copy of rsf-windows.
+crate-type = ["rlib"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }

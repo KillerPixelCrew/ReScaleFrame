@@ -9,13 +9,16 @@ license.workspace = true
 # The Gradle mod owns src/; the native adapter lives in native/.
 [lib]
 path = "native/lib.rs"
-crate-type = ["staticlib"]
+# rlib so the GL interop fixture's archive can carry the observer.
+crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
 
 [target."cfg(windows)".dependencies]
 jni-sys = "=0.3.0"
+# The DLL embeds the Runtime; this archive carries it so the DLL links one Rust archive.
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
 
 [target."cfg(windows)".dependencies.windows-sys]
 workspace = true

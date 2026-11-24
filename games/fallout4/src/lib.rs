@@ -43,11 +43,11 @@ mod resolution;
 mod screen;
 mod session;
 
-// The adapter DLL gets the common helpers and the Steam chain from their CMake archives; unit tests
-// link the crates directly.
+// The adapter DLL gets the common helpers from their CMake archive; unit tests link the crate
+// directly. The Steam chain is embedded in this archive.
 #[cfg(all(test, windows))]
 use rsf_runtime_common as _;
-#[cfg(all(test, windows))]
+#[cfg(windows)]
 use rsf_steam as _;
 
 use crate::sys::{

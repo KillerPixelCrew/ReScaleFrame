@@ -19,6 +19,9 @@ mod sys {
     pub use rsf_game_sys::*;
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
+// The loader code the ASI's census and module dumps call, carried in this archive (Cargo.toml).
+#[cfg(windows)]
+use rsf_loader as _;
 mod asi;
 mod camera;
 #[cfg(all(windows, feature = "research"))]

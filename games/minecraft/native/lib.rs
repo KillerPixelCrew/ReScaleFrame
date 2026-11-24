@@ -3,6 +3,8 @@
 
 #![cfg(windows)]
 
+// The embedded Runtime, carried in this archive (Cargo.toml).
+use rsf_orchestrator as _;
 mod frame;
 #[cfg(not(test))]
 mod jni;

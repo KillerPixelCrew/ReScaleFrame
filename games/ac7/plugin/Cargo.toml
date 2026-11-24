@@ -20,6 +20,10 @@ rsf-game-sys = { path = "../../../sdk/game" }
 rsf-minhook-sys = { path = "../../../third_party/minhook" }
 
 [target."cfg(windows)".dependencies]
+# The D3D11 leaves rsf-ac7 calls and the Windows input facts the render scope library calls
+# (xinput_facts.h). The archive carries both, so the DLL links one Rust archive.
+rsf-graphics = { path = "../../../runtime/graphics/rust" }
+rsf-windows = { path = "../../../integrations/windows", features = ["xinput-facts"] }
 # The native graph WARP fixture's device; absent from the shipping build.
 rsf-test-support = { path = "../../../tests/support", optional = true }
 windows = { workspace = true, features = [
@@ -42,10 +46,6 @@ windows = { workspace = true, features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 rsf-shader-compiler = { path = "../../../runtime/shader_patch/compiler" }
-
-[target."cfg(windows)".dev-dependencies]
-# Unit tests link the D3D11 leaves the adapter DLL gets from CMake.
-rsf-graphics = { path = "../../../runtime/graphics/rust" }
 
 [lints]
 workspace = true

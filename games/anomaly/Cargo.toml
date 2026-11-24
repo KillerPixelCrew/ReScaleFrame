@@ -37,6 +37,9 @@ sr-fixtures = ["dep:rsf-test-support", "windows/Win32_Graphics_Dxgi"]
 rsf-game-sys = { path = "../../sdk/game" }
 
 [target."cfg(windows)".dependencies]
+# The D3D11 state leaves the adapter's C leaves call. The archive carries them so a binary links one
+# Rust archive, not this one beside rsf-graphics' (both would define rsf-game-sys' exports).
+rsf-graphics = { path = "../../runtime/graphics/rust" }
 rsf-windows = { path = "../../integrations/windows" }
 # MinHook declarations; linked unbundled, so the CMake binaries keep their one `minhook` target.
 rsf-minhook-sys = { path = "../../third_party/minhook" }
