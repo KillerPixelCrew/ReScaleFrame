@@ -129,15 +129,11 @@ impl Platform {
     }
 
     pub(crate) fn read_u32(&self, address: usize) -> Option<u32> {
-        let mut value = [0; 4];
-        self.read(address, &mut value)
-            .then(|| u32::from_le_bytes(value))
+        rsf_game_sys::win32::read(address)
     }
 
     pub(crate) fn read_usize(&self, address: usize) -> Option<usize> {
-        let mut value = [0; size_of::<usize>()];
-        self.read(address, &mut value)
-            .then(|| usize::from_le_bytes(value))
+        rsf_game_sys::win32::read(address)
     }
 
     /// Reads `expected.len()` bytes at `address` and compares them.

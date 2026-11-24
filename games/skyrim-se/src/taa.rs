@@ -3,6 +3,9 @@
 
 use crate::platform::Platform;
 use std::ffi::c_void;
+use windows_sys::Win32::System::{
+    Diagnostics::Debug::WriteProcessMemory, Threading::GetCurrentProcess,
+};
 
 const OWNER: usize = 0x1f0;
 const CLEAR_MASK: usize = 0x30;
@@ -26,25 +29,13 @@ pub(crate) fn clear_main_history(platform: &Platform, taa: usize) -> Option<()> 
     .then_some(())
 }
 
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetCurrentProcess() -> *mut c_void;
-    fn WriteProcessMemory(
-        process: *mut c_void,
-        address: *mut c_void,
-        source: *const c_void,
-        bytes: usize,
-        copied: *mut usize,
-    ) -> i32;
-}
-
 pub(crate) fn write(platform: &Platform, address: usize, bytes: &[u8]) -> bool {
     let error = platform.last_error();
     let mut copied = 0;
     let written = unsafe {
         WriteProcessMemory(
             GetCurrentProcess(),
-            std::ptr::with_exposed_provenance_mut(address),
+            address as *const c_void,
             bytes.as_ptr().cast(),
             bytes.len(),
             &mut copied,
