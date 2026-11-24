@@ -227,26 +227,24 @@ pub(super) unsafe extern "C" fn source_view(device: Handle, source: Handle, form
     view.map_or(ptr::null_mut(), Interface::into_raw)
 }
 
-pub(super) unsafe fn context_matches(device: Handle, context: Handle) -> i32 {
-    i32::from(unsafe {
-        rsf_d3d11_output_is_immediate(context) != 0 && same_device(device, context)
-    })
+pub(super) unsafe fn context_matches(device: Handle, context: Handle) -> bool {
+    unsafe { rsf_d3d11_output_is_immediate(context) != 0 && same_device(device, context) }
 }
 
-pub(super) unsafe fn describe_source(device: Handle, source: Handle, out: &mut SourceInfo) -> i32 {
+/// The source's extent and formats, or None when it belongs to another device.
+pub(super) unsafe fn describe_source(device: Handle, source: Handle) -> Option<SourceInfo> {
     if !unsafe { same_device(device, source) } {
-        return 0;
+        return None;
     }
     let desc = unsafe { texture_desc(source) };
-    *out = SourceInfo {
+    Some(SourceInfo {
         width: desc.width,
         height: desc.height,
         slices: desc.layers,
         samples: desc.samples,
         format: desc.format,
         view_format: srv_format(DXGI_FORMAT(desc.format as i32)).0 as u32,
-    };
-    1
+    })
 }
 
 pub(super) fn prepare_compute(context: &ID3D11DeviceContext) {
@@ -302,8 +300,6 @@ pub(super) fn dispatch_compute<const N: usize>(
     }
 }
 
-#[repr(C)]
-#[derive(Default)]
 pub(super) struct SourceInfo {
     pub width: u32,
     pub height: u32,
@@ -312,8 +308,6 @@ pub(super) struct SourceInfo {
     pub format: u32,
     pub view_format: u32,
 }
-
-const _: () = assert!(size_of::<SourceInfo>() == 24);
 
 impl SourceInfo {
     pub(super) fn single_surface(&self) -> bool {

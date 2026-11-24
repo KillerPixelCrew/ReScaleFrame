@@ -2,7 +2,7 @@
 use crate::com_ref;
 use crate::d3d11_output::SavedBindings;
 use crate::graphics_d3d11::{
-    GROUP_EDGE, Handle, SourceInfo, SourceViews, compute_shader, compute_texture, constant_buffer,
+    GROUP_EDGE, Handle, SourceViews, compute_shader, compute_texture, constant_buffer,
     context_matches, copy_params, describe_source, dispatch_compute, prepare_compute,
     rsf_call_native_log, rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view,
     target_view,
@@ -10,7 +10,7 @@ use crate::graphics_d3d11::{
 use crate::sr_session::has_capacity;
 use crate::sys::{RSF_MOTION_DECODE_ABI_VERSION as ABI, rsf_motion_decode_setup as Setup};
 use rsf_game_sys::rsf_motion_decode_params as Params;
-use std::ffi::{CString, c_void};
+use std::ffi::CString;
 use std::ptr::{self, null_mut};
 use std::sync::{Mutex, TryLockError};
 use windows::Win32::Graphics::Direct3D11::{
@@ -56,8 +56,7 @@ fn say(setup: &Setup, message: &str) {
     }
 }
 
-unsafe fn make_resources(device: Handle, setup: &Setup, bytes: u32, out: &mut Resources) -> i32 {
-    let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.expect("live device");
+fn make_resources(device: &ID3D11Device, setup: &Setup) -> Result<[IUnknown; 4], i32> {
     let shader = match shader_code(SHADER, c"motion_decode", c"main", c"cs_5_0", 0) {
         Ok(code) => compute_shader(device, &code),
         Err(message) => {
@@ -69,7 +68,7 @@ unsafe fn make_resources(device: Handle, setup: &Setup, bytes: u32, out: &mut Re
     };
     let Some(shader) = shader else {
         say(setup, "motion decode shader could not be created");
-        return SHADER_FAILED;
+        return Err(SHADER_FAILED);
     };
     let format = if setup.output_format == 0 {
         DXGI_FORMAT_R16G16_FLOAT
@@ -78,34 +77,26 @@ unsafe fn make_resources(device: Handle, setup: &Setup, bytes: u32, out: &mut Re
     };
     let Some(texture) = compute_texture(device, setup.width, setup.height, format) else {
         say(setup, "decoded motion target could not be created");
-        return RESOURCE_FAILED;
+        return Err(RESOURCE_FAILED);
     };
     let Some(view) = target_view(device, &texture, 0) else {
         say(setup, "unordered access view could not be created");
-        return RESOURCE_FAILED;
+        return Err(RESOURCE_FAILED);
     };
-    let Some(buffer) = constant_buffer(device, bytes, true) else {
+    let Some(buffer) = constant_buffer(device, size_of::<Constants>() as u32, true) else {
         say(setup, "constant buffer could not be created");
-        return RESOURCE_FAILED;
+        return Err(RESOURCE_FAILED);
     };
-    *out = [
-        shader.into_raw(),
-        texture.into_raw(),
-        view.into_raw(),
-        buffer.into_raw(),
-    ];
-    OK
+    Ok([shader.into(), texture.into(), view.into(), buffer.into()])
 }
 
 unsafe fn dispatch(
     context: Handle,
     resources: &Resources,
     source: Handle,
-    constants: *const c_void,
-    bytes: usize,
-    x: u32,
-    y: u32,
-) -> i32 {
+    constants: &Constants,
+    groups: [u32; 2],
+) -> bool {
     let raw = context;
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.expect("live context");
     let shader =
@@ -117,15 +108,19 @@ unsafe fn dispatch(
             .Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
             .is_err()
         {
-            return 0;
+            return false;
         }
-        ptr::copy_nonoverlapping(constants.cast::<u8>(), mapped.pData.cast(), bytes);
+        ptr::copy_nonoverlapping(
+            ptr::from_ref(constants).cast::<u8>(),
+            mapped.pData.cast(),
+            size_of::<Constants>(),
+        );
         context.Unmap(buffer, 0);
     }
     let Some(_saved) =
         (unsafe { SavedBindings::new(raw, rsf_d3d11_state_save, rsf_d3d11_state_restore) })
     else {
-        return 0;
+        return false;
     };
     prepare_compute(context);
     dispatch_compute(
@@ -134,11 +129,11 @@ unsafe fn dispatch(
         &[source],
         &[resources[2]],
         Some(&[u32::MAX]),
-        [x, y],
+        groups,
         false,
         Some(resources[3]),
     );
-    1
+    true
 }
 
 const _: () = {
@@ -200,14 +195,10 @@ pub(super) unsafe extern "C" fn rsf_motion_decode_create(
         return ABI_MISMATCH;
     }
     unsafe { out.write(null_mut()) };
-    let mut raw = [null_mut(); 4];
-    let status = unsafe { make_resources(device, setup, size_of::<Constants>() as u32, &mut raw) };
-    let resources = unsafe { com_ref::adopt_all(raw) };
-    if status != OK {
-        return status;
-    }
-    let Some(resources) = resources else {
-        return RESOURCE_FAILED;
+    let native = unsafe { ID3D11Device::from_raw_borrowed(&device) }.expect("live device");
+    let resources = match make_resources(native, setup) {
+        Ok(resources) => resources,
+        Err(status) => return status,
     };
     let owner = crate::allocate_handle(Pass {
         sources: Mutex::new(SourceViews::new()),
@@ -243,18 +234,17 @@ pub(super) unsafe extern "C" fn rsf_motion_decode_run(
         return INVALID;
     };
     let device = pass.device.as_raw();
-    if unsafe { context_matches(device, context) } == 0 {
+    if !unsafe { context_matches(device, context) } {
         return SOURCE_MISMATCH;
     }
     let (width, height) = (pass.setup.width, pass.setup.height);
     let Some(constants) = constants(params, width, height) else {
         return INVALID;
     };
-    let mut extent = SourceInfo::default();
-    if unsafe { describe_source(device, texture, &mut extent) } == 0 {
+    let Some(extent) = (unsafe { describe_source(device, texture) }) else {
         say(&pass.setup, "source belongs to another device");
         return SOURCE_MISMATCH;
-    }
+    };
     if extent.width != width || extent.height != height || !extent.single_surface() {
         say(
             &pass.setup,
@@ -276,19 +266,9 @@ pub(super) unsafe extern "C" fn rsf_motion_decode_run(
         say(&pass.setup, "source view could not be created");
         return RESOURCE_FAILED;
     };
-    let resources = std::array::from_fn(|i| pass.resources[i].as_raw());
-    if unsafe {
-        dispatch(
-            context,
-            &resources,
-            view.as_raw(),
-            ptr::from_ref(&constants).cast(),
-            size_of::<Constants>(),
-            width.div_ceil(GROUP_EDGE),
-            height.div_ceil(GROUP_EDGE),
-        )
-    } != 0
-    {
+    let resources = pass.resources.each_ref().map(Interface::as_raw);
+    let groups = [width, height].map(|size| size.div_ceil(GROUP_EDGE));
+    if unsafe { dispatch(context, &resources, view.as_raw(), &constants, groups) } {
         OK
     } else {
         RESOURCE_FAILED

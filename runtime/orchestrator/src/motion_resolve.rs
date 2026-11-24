@@ -7,7 +7,6 @@ use crate::graphics_d3d11::{
     rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view, target_view,
 };
 use crate::sys::rsf_motion_resolve_params as Params;
-use std::ffi::c_void;
 use std::ptr::{self, null_mut};
 use std::sync::{Mutex, TryLockError};
 use windows::Win32::Graphics::Direct3D11::{
@@ -19,7 +18,7 @@ use windows::core::Interface;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
 const PARAMS_V1: usize = std::mem::offset_of!(Params, jitter_pixels);
-const R32_FLOAT: u32 = 41;
+const R32_FLOAT: u32 = DXGI_FORMAT_R32_FLOAT.0 as u32;
 
 type Resources = [Handle; 6];
 
@@ -38,57 +37,42 @@ struct Constants {
 
 const SHADER: &[u8] = include_bytes!("../../graphics/shaders/motion_resolve.hlsl");
 
-unsafe fn make_resources(
-    device: Handle,
-    width: u32,
-    height: u32,
-    bytes: u32,
-    out: &mut Resources,
-) -> i32 {
-    let device = unsafe { ID3D11Device::from_raw_borrowed(&device) }.expect("live device");
-    let make = || {
-        let code = shader_code(SHADER, c"motion_resolve", c"main", c"cs_5_0", 0).ok()?;
-        let shader = compute_shader(device, &code)?;
-        let constants = constant_buffer(device, bytes, false)?;
-        // R16G16_FLOAT crosses into D3D12. Upstream decoding retains R32G32_FLOAT precision.
-        let motion = compute_texture(device, width, height, DXGI_FORMAT_R16G16_FLOAT)?;
-        let motion_view = target_view(device, &motion, 0)?;
-        let depth = compute_texture(device, width, height, DXGI_FORMAT_R32_FLOAT)?;
-        let depth_view = target_view(device, &depth, 0)?;
-        Some([
-            shader.into_raw(),
-            constants.into_raw(),
-            motion.into_raw(),
-            depth.into_raw(),
-            motion_view.into_raw(),
-            depth_view.into_raw(),
-        ])
-    };
-    let Some(resources) = make() else {
-        return 0;
-    };
-    *out = resources;
-    1
+fn make_resources(device: &ID3D11Device, width: u32, height: u32) -> Option<[IUnknown; 6]> {
+    let code = shader_code(SHADER, c"motion_resolve", c"main", c"cs_5_0", 0).ok()?;
+    let shader = compute_shader(device, &code)?;
+    let constants = constant_buffer(device, size_of::<Constants>() as u32, false)?;
+    // R16G16_FLOAT crosses into D3D12. Upstream decoding retains R32G32_FLOAT precision.
+    let motion = compute_texture(device, width, height, DXGI_FORMAT_R16G16_FLOAT)?;
+    let motion_view = target_view(device, &motion, 0)?;
+    let depth = compute_texture(device, width, height, DXGI_FORMAT_R32_FLOAT)?;
+    let depth_view = target_view(device, &depth, 0)?;
+    Some([
+        shader.into(),
+        constants.into(),
+        motion.into(),
+        depth.into(),
+        motion_view.into(),
+        depth_view.into(),
+    ])
 }
 
 unsafe fn dispatch(
     context: Handle,
     resources: &Resources,
     sources: &[Handle; 3],
-    constants: *const c_void,
-    x: u32,
-    y: u32,
-) -> i32 {
+    constants: &Constants,
+    groups: [u32; 2],
+) -> bool {
     let raw = context;
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.expect("live context");
     let shader =
         unsafe { ID3D11ComputeShader::from_raw_borrowed(&resources[0]) }.expect("live shader");
     let buffer = unsafe { ID3D11Buffer::from_raw_borrowed(&resources[1]) }.expect("live buffer");
-    unsafe { context.UpdateSubresource(buffer, 0, None, constants, 0, 0) };
+    unsafe { context.UpdateSubresource(buffer, 0, None, ptr::from_ref(constants).cast(), 0, 0) };
     let Some(_saved) =
         (unsafe { SavedBindings::new(raw, rsf_d3d11_state_save, rsf_d3d11_state_restore) })
     else {
-        return 0;
+        return false;
     };
     prepare_compute(context);
     dispatch_compute(
@@ -97,11 +81,11 @@ unsafe fn dispatch(
         sources,
         &[resources[4], resources[5]],
         None,
-        [x, y],
+        groups,
         false,
         Some(resources[1]),
     );
-    1
+    true
 }
 
 const _: () = {
@@ -118,15 +102,9 @@ pub(super) struct Pass {
 
 impl Pass {
     fn source(&self, texture: Handle) -> Option<SourceInfo> {
-        let mut info = SourceInfo::default();
-        if unsafe { describe_source(self.device.as_raw(), texture, &mut info) } == 0
-            || !info.single_surface()
-            || info.width < self.width
-            || info.height < self.height
-        {
-            return None;
-        }
-        Some(info)
+        unsafe { describe_source(self.device.as_raw(), texture) }.filter(|info| {
+            info.single_surface() && info.width >= self.width && info.height >= self.height
+        })
     }
 }
 
@@ -165,21 +143,8 @@ pub(super) unsafe extern "C" fn rsf_motion_resolve_create(
         return 0;
     }
     unsafe { out.write(null_mut()) };
-    let mut raw = [null_mut(); 6];
-    let status = unsafe {
-        make_resources(
-            device,
-            width,
-            height,
-            size_of::<Constants>() as u32,
-            &mut raw,
-        )
-    };
-    let resources = unsafe { com_ref::adopt_all(raw) };
-    if status == 0 {
-        return 0;
-    }
-    let Some(resources) = resources else {
+    let native = unsafe { ID3D11Device::from_raw_borrowed(&device) }.expect("live device");
+    let Some(resources) = make_resources(native, width, height) else {
         return 0;
     };
     let pass = crate::allocate_handle(Pass {
@@ -214,7 +179,7 @@ pub(super) unsafe extern "C" fn rsf_motion_resolve_run(
         return 0;
     };
     let device = pass.device.as_raw();
-    if unsafe { context_matches(device, context) } == 0 {
+    if !unsafe { context_matches(device, context) } {
         return 0;
     }
     let (Some(motion_info), Some(depth_info)) = (pass.source(motion), pass.source(depth)) else {
@@ -263,17 +228,9 @@ pub(super) unsafe extern "C" fn rsf_motion_resolve_run(
         depth_view.as_raw(),
         layer_view.as_ref().map_or(null_mut(), Interface::as_raw),
     ];
-    let resources = std::array::from_fn(|i| pass.resources[i].as_raw());
-    unsafe {
-        dispatch(
-            context,
-            &resources,
-            &bindings,
-            ptr::from_ref(&constants).cast(),
-            pass.width.div_ceil(GROUP_EDGE),
-            pass.height.div_ceil(GROUP_EDGE),
-        )
-    }
+    let resources = pass.resources.each_ref().map(Interface::as_raw);
+    let groups = [pass.width, pass.height].map(|size| size.div_ceil(GROUP_EDGE));
+    i32::from(unsafe { dispatch(context, &resources, &bindings, &constants, groups) })
 }
 
 unsafe fn resolve_texture(pass: *const Pass, output: usize) -> Handle {
