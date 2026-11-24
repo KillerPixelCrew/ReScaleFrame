@@ -2,10 +2,14 @@
 //! Anomaly's synchronous cold entry. The thin carrier calls `rsf_anomaly_start` with the absolute adapter INI before
 //! genuine DirectInput creation. This module selects the exact executable build, borrows the Runtime DLL the carrier
 //! already loaded and starts Observe through the Runtime's stable plugin-session C ABI. This module owns the step
-//! order, refusals, retry state and adapter log. `Leaves` names the stage calls (bootstrap/native.rs binds them).
+//! order, refusals, retry state and adapter log. The stage calls are bootstrap/native.rs's (the tests' fakes under test).
 
 #[cfg(feature = "native-entry")]
 mod native;
+#[cfg(not(test))]
+use native as leaves;
+#[cfg(test)]
+use tests as leaves;
 
 use crate::AMD64;
 use crate::executable::with_verified_build;
@@ -41,19 +45,6 @@ const START_REFUSED: u32 = 6;
 const OVERLAY_REFUSED: u32 = 9;
 
 const RSF_OK: i32 = 0;
-
-/// The stage calls `orchestrate` makes, in order: the adapter's in bootstrap/native.rs, counting fakes in tests.
-struct Leaves {
-    sr: unsafe fn(*const u16, bool, rsf_game_log_fn) -> bool,
-    motion: unsafe fn(*const u16, rsf_game_log_fn),
-    fg: unsafe fn(*const u16, bool, HMODULE, usize, rsf_game_log_fn) -> bool,
-    fg_installed: unsafe fn() -> bool,
-    input_observation: unsafe fn(*mut *const c_char) -> bool,
-    publish_input_observer: unsafe fn(),
-    input_hook: unsafe fn(HMODULE, usize, *mut *const c_char) -> bool,
-    overlay: unsafe fn(HMODULE, *const u16, rsf_game_log_fn) -> bool,
-    overlay_sink: unsafe fn(),
-}
 
 type PrepareFn = unsafe extern "C" fn(*const SessionOptions, *mut *mut c_void) -> i32;
 type ControlFn = unsafe extern "C" fn(*mut c_void) -> i32;
@@ -143,13 +134,7 @@ fn log_result(operation: &str, result: i32) {
 
 /// The cold-start order: restart options, SR, motion, the FG bridge and input facts before the engine creates its
 /// device, then the Observe session, then the overlay. A retry repeats only the steps that have not completed.
-fn orchestrate(
-    entry: &mut Entry,
-    leaves: &Leaves,
-    request: &Request,
-    runtime: &Runtime,
-    register_options: fn(&[u16]),
-) -> u32 {
+fn orchestrate(entry: &mut Entry, request: &Request, runtime: &Runtime) -> u32 {
     let ini = request.ini.as_ptr();
     if request.observe
         && entry.observation == Observation::RetainedAfterRefusal
@@ -158,22 +143,22 @@ fn orchestrate(
         return PREPARE_REFUSED;
     }
     if !entry.options_registered {
-        register_options(request.ini);
+        leaves::register_options(request.ini);
         entry.options_registered = true;
     }
     if !entry.stages_configured {
         // SR Stage 1 rides on Observe: the observer's start installs it after the geometry hooks.
-        if unsafe { (leaves.sr)(ini, request.observe, LOG_FN) } && !request.observe {
+        if unsafe { leaves::sr(ini, request.observe, LOG_FN) } && !request.observe {
             write_log(b"Anomaly SR stage refused: SRStage/SRStageCapture require Mode=Observe; game left stock.");
         }
         // Observe records motion variants even when disabled, so the pack can turn on live later.
         if request.observe {
-            unsafe { (leaves.motion)(ini, LOG_FN) };
+            unsafe { leaves::motion(ini, LOG_FN) };
         }
         // FG also rides on Observe. Its presentation bridge must intercept the engine's swap-chain creation, so it
         // installs here, before the device exists. A refusal leaves presentation stock.
         let fg =
-            unsafe { (leaves.fg)(ini, request.observe, runtime.module, request.build, LOG_FN) };
+            unsafe { leaves::fg(ini, request.observe, runtime.module, request.build, LOG_FN) };
         if fg && !request.observe {
             write_log(
                 b"Anomaly FG refused: FG/FGBridge require Mode=Observe; presentation stays stock.",
@@ -181,8 +166,8 @@ fn orchestrate(
         }
         entry.stages_configured = request.observe;
     }
-    if request.observe && unsafe { (leaves.fg_installed)() } {
-        entry.input = install_input(entry.input, leaves, request.build);
+    if request.observe && leaves::fg_installed() {
+        entry.input = install_input(entry.input, request.build);
     }
     if request.observe && entry.observation != Observation::Active {
         let status = start_observation(entry, request, runtime);
@@ -191,13 +176,13 @@ fn orchestrate(
         }
     }
     if request.overlay {
-        if !unsafe { (leaves.overlay)(runtime.module, ini, LOG_FN) } {
+        if !unsafe { leaves::overlay(runtime.module, ini, LOG_FN) } {
             return OVERLAY_REFUSED;
         }
         // With the bridge presenting, the engine's Present never reaches the DXGI hooks; the panel draws from the
         // bridge's before_present into the engine-facing back buffer instead.
-        if unsafe { (leaves.fg_installed)() } {
-            unsafe { (leaves.overlay_sink)() };
+        if leaves::fg_installed() {
+            unsafe { leaves::overlay_sink() };
         }
     }
     entry.started = true;
@@ -212,20 +197,20 @@ enum InputInstallation {
 }
 
 /// The engine input hook installs only after DirectInput observation, so its facts always have their receipts.
-fn install_input(mut state: InputInstallation, leaves: &Leaves, build: usize) -> InputInstallation {
+fn install_input(mut state: InputInstallation, build: usize) -> InputInstallation {
     let mut reason = ptr::null();
     if matches!(state, InputInstallation::Pending) {
-        if !unsafe { (leaves.input_observation)(&mut reason) } {
+        if !unsafe { leaves::input_observation(&mut reason) } {
             log_input_refusal(reason, b"Anomaly DirectInput observation refused.");
             return state;
         }
-        unsafe { (leaves.publish_input_observer)() };
+        unsafe { leaves::publish_input_observer() };
         state = InputInstallation::DirectInput;
     }
     if matches!(state, InputInstallation::DirectInput) {
         reason = ptr::null();
         let image = unsafe { GetModuleHandleW(ptr::null()) };
-        if !unsafe { (leaves.input_hook)(image, build, &mut reason) } {
+        if !unsafe { leaves::input_hook(image, build, &mut reason) } {
             log_input_refusal(reason, b"Anomaly input hook refused.");
             return state;
         }

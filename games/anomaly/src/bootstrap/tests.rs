@@ -24,46 +24,46 @@ static STOP_RESULT: AtomicI32 = AtomicI32::new(-4);
 static OPTIONS_VALID: AtomicBool = AtomicBool::new(true);
 static SESSION: u8 = 0;
 
-fn register_options(_: &[u16]) {
+pub(super) fn register_options(_: &[u16]) {
     REGISTERED.fetch_add(1, SeqCst);
 }
-unsafe fn sr(_: *const u16, configure: bool, _: rsf_game_log_fn) -> bool {
+pub(super) unsafe fn sr(_: *const u16, configure: bool, _: rsf_game_log_fn) -> bool {
     if configure {
         SR.fetch_add(1, SeqCst);
     }
     true
 }
-unsafe fn motion(_: *const u16, _: rsf_game_log_fn) {
+pub(super) unsafe fn motion(_: *const u16, _: rsf_game_log_fn) {
     MOTION.fetch_add(1, SeqCst);
 }
-unsafe fn fg(_: *const u16, configure: bool, _: HMODULE, _: usize, _: rsf_game_log_fn) -> bool {
+pub(super) unsafe fn fg(_: *const u16, configure: bool, _: HMODULE, _: usize, _: rsf_game_log_fn) -> bool {
     if configure {
         FG.fetch_add(1, SeqCst);
     }
     true
 }
-unsafe fn fg_installed() -> bool {
+pub(super) fn fg_installed() -> bool {
     FG.load(SeqCst) != 0
 }
-unsafe fn input_observation(_: *mut *const c_char) -> bool {
+pub(super) unsafe fn input_observation(_: *mut *const c_char) -> bool {
     RECEIPTS.fetch_add(1, SeqCst);
     true
 }
-unsafe fn publish_input_observer() {
+pub(super) unsafe fn publish_input_observer() {
     PUBLISHED.fetch_add(1, SeqCst);
 }
-unsafe fn input_hook(_: HMODULE, _: usize, _: *mut *const c_char) -> bool {
+pub(super) unsafe fn input_hook(_: HMODULE, _: usize, _: *mut *const c_char) -> bool {
     let attempt = INPUT.fetch_add(1, SeqCst);
     if attempt <= 1 && PUBLISHED.load(SeqCst) != 1 {
         OPTIONS_VALID.store(false, SeqCst);
     }
     INPUT_ACCEPTS.load(SeqCst)
 }
-unsafe fn overlay(_: HMODULE, _: *const u16, _: rsf_game_log_fn) -> bool {
+pub(super) unsafe fn overlay(_: HMODULE, _: *const u16, _: rsf_game_log_fn) -> bool {
     OVERLAY.fetch_add(1, SeqCst);
     OVERLAY_ACCEPTS.load(SeqCst)
 }
-unsafe fn overlay_sink() {
+pub(super) unsafe fn overlay_sink() {
     SINK.fetch_add(1, SeqCst);
 }
 unsafe extern "C" fn prepare(options: *const SessionOptions, session: *mut *mut c_void) -> i32 {
@@ -125,17 +125,6 @@ fn counts() -> [u32; 9] {
 // refused session, the motion pack row) twice, and reconfigured stages beside a partial Runtime session.
 #[test]
 fn retry_repeats_only_unfinished_steps() {
-    let leaves = Leaves {
-        sr,
-        motion,
-        fg,
-        fg_installed,
-        input_observation,
-        publish_input_observer,
-        input_hook,
-        overlay,
-        overlay_sink,
-    };
     let ini: Vec<u16> = "C:\\anomaly.ini\0".encode_utf16().collect();
     let request = Request {
         ini: &ini,
@@ -153,7 +142,7 @@ fn retry_repeats_only_unfinished_steps() {
 
     let mut entry = Entry::new();
     assert_eq!(
-        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
+        orchestrate(&mut entry, &request, &runtime),
         OVERLAY_REFUSED
     );
     assert_eq!(counts(), [1, 1, 1, 1, 1, 1, 1, 1, 0]);
@@ -162,7 +151,7 @@ fn retry_repeats_only_unfinished_steps() {
     INPUT_ACCEPTS.store(true, SeqCst);
     OVERLAY_ACCEPTS.store(true, SeqCst);
     assert_eq!(
-        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
+        orchestrate(&mut entry, &request, &runtime),
         READY
     );
     assert!(entry.started && entry.observation == Observation::Active);
@@ -174,13 +163,13 @@ fn retry_repeats_only_unfinished_steps() {
     PREPARE_RESULT.store(-4, SeqCst);
     let mut entry = Entry::new();
     assert_eq!(
-        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
+        orchestrate(&mut entry, &request, &runtime),
         PREPARE_REFUSED
     );
     assert!(!entry.session.is_null() && entry.observation == Observation::RetainedAfterRefusal);
     assert_eq!(counts(), [2, 2, 2, 2, 3, 2, 1, 2, 1]);
     assert_eq!(
-        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
+        orchestrate(&mut entry, &request, &runtime),
         PREPARE_REFUSED
     );
     assert_eq!(counts(), [2, 2, 2, 2, 3, 2, 1, 2, 1]);
@@ -190,7 +179,7 @@ fn retry_repeats_only_unfinished_steps() {
 
     QUIESCE_RESULT.store(RSF_OK, SeqCst);
     assert_eq!(
-        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
+        orchestrate(&mut entry, &request, &runtime),
         PREPARE_REFUSED
     );
     assert_eq!(entry.session, retained);
@@ -200,7 +189,7 @@ fn retry_repeats_only_unfinished_steps() {
     PREPARE_RESULT.store(RSF_OK, SeqCst);
     STOP_RESULT.store(RSF_OK, SeqCst);
     assert_eq!(
-        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
+        orchestrate(&mut entry, &request, &runtime),
         READY
     );
     assert_eq!(counts(), [2, 2, 2, 2, 3, 3, 2, 3, 2]);
@@ -211,14 +200,14 @@ fn retry_repeats_only_unfinished_steps() {
     START_RESULT.store(-4, SeqCst);
     let mut entry = Entry::new();
     assert_eq!(
-        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
+        orchestrate(&mut entry, &request, &runtime),
         START_REFUSED
     );
     assert!(!entry.session.is_null() && entry.observation == Observation::Prepared);
     assert_eq!(counts(), [3, 3, 3, 3, 4, 4, 3, 3, 2]);
     START_RESULT.store(RSF_OK, SeqCst);
     assert_eq!(
-        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
+        orchestrate(&mut entry, &request, &runtime),
         READY
     );
     assert_eq!(counts(), [3, 3, 3, 3, 4, 4, 4, 4, 3]);

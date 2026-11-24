@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
-//! The adapter's stage calls for the cold start: the C entries of the stage leaves (sr_stage_platform.c,
+//! The adapter's stage calls for the cold start (`bootstrap::leaves`): the C entries of the stage leaves (sr_stage_platform.c,
 //! motion_stage_platform.c, fg_stage_platform.c, bootstrap_platform.c, native_hooks_platform.c) and the Rust stages.
 use super::*;
 use crate::engine_guards::{Image, Read};
 use crate::engine_slots::Exchange;
 use crate::executable::running_build;
 use crate::fg_stage::rsf_anomaly_fg_stage_input_received;
-use crate::fg_stage::{rsf_anomaly_fg_installed, rsf_anomaly_fg_set_overlay_sink};
+pub(super) use crate::adapter_options::register as register_options;
+pub(super) use crate::fg_stage::rsf_anomaly_fg_installed as fg_installed;
+use crate::fg_stage::rsf_anomaly_fg_set_overlay_sink;
 use crate::input::rsf_anomaly_input_install;
 use crate::input::rsf_anomaly_input_received;
 use crate::native_hooks::HookOps;
@@ -39,9 +41,17 @@ const RUNTIME_MISSING: u32 = 3;
 const MODE_REFUSED: u32 = 7;
 const FAULT: u32 = 8;
 
+pub(super) use self::rsf_anomaly_bootstrap_input_hook as input_hook;
+pub(super) use self::rsf_anomaly_motion_configure_native as motion;
+pub(super) use self::rsf_anomaly_sr_configure_native as sr;
+
 unsafe extern "C" {
-    fn rsf_anomaly_sr_configure_native(ini: *const u16, apply: bool, log: rsf_game_log_fn) -> bool;
-    fn rsf_anomaly_motion_configure_native(ini: *const u16, log: rsf_game_log_fn);
+    pub(super) fn rsf_anomaly_sr_configure_native(
+        ini: *const u16,
+        apply: bool,
+        log: rsf_game_log_fn,
+    ) -> bool;
+    pub(super) fn rsf_anomaly_motion_configure_native(ini: *const u16, log: rsf_game_log_fn);
     fn rsf_anomaly_fg_configure_native(
         ini: *const u16,
         apply: bool,
@@ -50,7 +60,7 @@ unsafe extern "C" {
         log: rsf_game_log_fn,
     ) -> bool;
     /// Installs the CInput detour (its unwind boundary is C) through `rsf_anomaly_bootstrap_install_input`.
-    fn rsf_anomaly_bootstrap_input_hook(
+    pub(super) fn rsf_anomaly_bootstrap_input_hook(
         image: HMODULE,
         build: usize,
         reason: *mut *const c_char,
@@ -58,25 +68,25 @@ unsafe extern "C" {
     fn rsf_anomaly_minhook_ops() -> &'static HookOps;
 }
 
-static LEAVES: Leaves = Leaves {
-    sr: |ini, apply, log| unsafe { rsf_anomaly_sr_configure_native(ini, apply, log) },
-    motion: |ini, log| unsafe { rsf_anomaly_motion_configure_native(ini, log) },
-    fg: |ini, apply, runtime, build, log| unsafe {
+pub(super) unsafe fn fg(
+    ini: *const u16,
+    apply: bool,
+    runtime: HMODULE,
+    build: usize,
+    log: rsf_game_log_fn,
+) -> bool {
+    unsafe {
         rsf_anomaly_fg_configure_native(ini, apply, runtime, rsf_anomaly_sr_depth_rva(build), log)
-    },
-    fg_installed: rsf_anomaly_fg_installed,
-    input_observation: |reason| unsafe {
-        rsf_anomaly_overlay_install_default_input(rsf_anomaly_minhook_ops(), &mut *reason)
-    },
-    publish_input_observer,
-    input_hook: |image, build, reason| unsafe {
-        rsf_anomaly_bootstrap_input_hook(image, build, reason)
-    },
-    overlay: |runtime, ini, log| unsafe {
-        start_overlay(runtime, ini, log, rsf_anomaly_minhook_ops())
-    },
-    overlay_sink: set_overlay_sink,
-};
+    }
+}
+
+pub(super) unsafe fn input_observation(reason: *mut *const c_char) -> bool {
+    unsafe { rsf_anomaly_overlay_install_default_input(rsf_anomaly_minhook_ops(), &mut *reason) }
+}
+
+pub(super) unsafe fn overlay(runtime: HMODULE, ini: *const u16, log: rsf_game_log_fn) -> bool {
+    unsafe { start_overlay(runtime, ini, log, rsf_anomaly_minhook_ops()) }
+}
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_bootstrap_install_input(
     image: *mut c_void,
@@ -109,7 +119,7 @@ unsafe extern "C" fn input_received(kind: u8) {
     rsf_anomaly_input_received(kind, rsf_anomaly_fg_stage_input_received);
 }
 
-unsafe fn publish_input_observer() {
+pub(super) unsafe fn publish_input_observer() {
     rsf_anomaly_overlay_set_input_observer(Some(input_received));
 }
 
@@ -136,7 +146,7 @@ unsafe extern "C" fn overlay_present(user: *mut c_void, chain: *mut rsf_anomaly_
     rsf_anomaly_overlay_present(user, chain.cast());
 }
 
-unsafe fn set_overlay_sink() {
+pub(super) unsafe fn overlay_sink() {
     rsf_anomaly_fg_set_overlay_sink(Some(overlay_present), null_mut());
 }
 
@@ -174,7 +184,7 @@ fn observe_selected(ini: &[u16]) -> bool {
         .eq("Observe".encode_utf16())
 }
 
-unsafe fn enter(configuration: *const u16, leaves: &Leaves) -> u32 {
+unsafe fn enter(configuration: *const u16) -> u32 {
     let Some(ini) = (unsafe { crate::ini::path(configuration) }) else {
         return CONFIGURATION_REFUSED;
     };
@@ -222,19 +232,13 @@ unsafe fn enter(configuration: *const u16, leaves: &Leaves) -> u32 {
         observe,
         overlay,
     };
-    orchestrate(
-        &mut entry,
-        leaves,
-        &request,
-        &runtime,
-        crate::adapter_options::register,
-    )
+    orchestrate(&mut entry, &request, &runtime)
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "system" fn rsf_anomaly_start(configuration: *const u16) -> u32 {
     catch_unwind(AssertUnwindSafe(|| unsafe {
-        enter(configuration, &LEAVES)
+        enter(configuration)
     }))
     .unwrap_or_else(|_| {
         write_log(b"Anomaly startup refused after a contained panic.");
