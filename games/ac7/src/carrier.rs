@@ -106,7 +106,7 @@ const PATCH_INVALID_ARGUMENT: i32 = -1;
 const JITTER_RVA: u32 = 0x112b1f3;
 const TRANSLUCENT_VELOCITY_RVA: u32 = 0x11823de;
 const SEPARATE_TRANSLUCENCY_RVA: u32 = 0x10be329;
-const SCALE_IMMEDIATE_OFFSET: u32 = 7;
+const SCALE_IMMEDIATE_OFFSET: usize = 7;
 const JITTER_GATE: &[u8; 6] = b"\x0f\x85\xdd\x03\x00\x00";
 const NOP6: &[u8; 6] = b"\x66\x0f\x1f\x44\x00\x00";
 const TRANSLUCENT_VELOCITY_GATE: &[u8; 6] = b"\x0f\x87\x68\x03\x00\x00";
@@ -153,44 +153,24 @@ unsafe extern "C" fn rsf_ac7_carrier_wait_decrypted(
     }
 }
 
-/// The separate translucency multiplier that puts the layer at `target_percent` of native when
-/// the scene renders at `render_percent`. Zero render means native, zero target means the scene's.
-pub(crate) fn rsf_ac7_translucency_scale(render_percent: u32, target_percent: u32) -> f32 {
-    if target_percent == 0 {
-        return 1.0;
-    }
-    let render = if render_percent == 0 {
-        100
-    } else {
-        render_percent
-    };
-    target_percent as f32 / render as f32
-}
-
-/// A nonnull depth report points to a writable float.
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_ac7_carrier_translucency_scale(
-    render_percent: u32,
+/// The separate translucency multiplier on the scene buffer, which the native renderer keeps at
+/// output size: `target_percent` of native (zero means the scene's), or `override_percent`
+/// directly when nonzero. The second value is a request above 1.0 refused for missing depth.
+pub(crate) fn translucency_scale(
     target_percent: u32,
     override_percent: u32,
-    depth_conformed: c_int,
-    depth_limited_request: *mut f32,
-) -> f32 {
-    let requested = if override_percent == 0 {
-        rsf_ac7_translucency_scale(render_percent, target_percent)
-    } else {
-        override_percent as f32 / 100.0
+    depth_conformed: bool,
+) -> (f32, Option<f32>) {
+    let requested = match (override_percent, target_percent) {
+        (0, 0) => 1.0,
+        (0, percent) | (percent, _) => percent as f32 / 100.0,
     };
     // The immediate is downstream of the engine's own clamp. Depth can only match a
     // larger colour target after the separate-translucency depth gates are installed.
-    let depth_limited = requested > 1.0 && depth_conformed == 0;
-    if !depth_limited_request.is_null() {
-        unsafe { depth_limited_request.write(if depth_limited { requested } else { 0.0 }) };
-    }
-    if depth_limited {
-        1.0
+    if requested > 1.0 && !depth_conformed {
+        (1.0, Some(requested))
     } else {
-        requested.clamp(0.25, 4.0)
+        (requested.clamp(0.25, 4.0), None)
     }
 }
 
@@ -231,10 +211,10 @@ type Patch = unsafe extern "C" fn(u32, *const u8, u32, *const u8, u32, *mut u8) 
 type ReadNumber = unsafe extern "C" fn(*const c_char, u32) -> u32;
 
 const _: () = {
-    assert!(size_of::<CarrierLeaves>() == 72);
+    assert!(size_of::<CarrierLeaves>() == 56);
     assert!(offset_of!(CarrierLeaves, read_number) == 8);
-    assert!(offset_of!(CarrierLeaves, prepare_native_game) == 56);
-    assert!(offset_of!(CarrierLeaves, install_motion_capture) == 64);
+    assert!(offset_of!(CarrierLeaves, prepare_native_game) == 40);
+    assert!(offset_of!(CarrierLeaves, install_motion_capture) == 48);
 };
 
 struct PatchIo {
@@ -370,24 +350,13 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
         return;
     }
     let leaves = unsafe { &*leaves };
-    let (
-        Some(read),
-        Some(patch),
-        Some(jitter),
-        Some(set_depth),
-        Some(register_scale),
-        Some(prepare),
-        Some(install_motion_capture),
-    ) = (
+    let (Some(read), Some(patch), Some(jitter), Some(prepare), Some(install_motion_capture)) = (
         leaves.read_number,
         leaves.patch,
         leaves.install_jitter,
-        leaves.set_depth_conformed,
-        leaves.register_translucency_scale,
         leaves.prepare_native_game,
         leaves.install_motion_capture,
-    )
-    else {
+    ) else {
         return;
     };
     let io = PatchIo {
@@ -410,15 +379,36 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
             number(c"RSF_TRANSLUCENT_VELOCITY_RVA", TRANSLUCENT_VELOCITY_RVA),
         );
     }
-    // Publish depth conformance before the scale callback uses it to choose the allowed scale.
-    unsafe { set_depth(c_int::from(apply_depth_gates(&io))) };
+    let depth_conformed = apply_depth_gates(&io);
     if number(FULL_TRANSLUCENCY.key, FULL_TRANSLUCENCY.fallback) != 0 {
         let rva = number(c"RSF_FULL_TRANSLUCENCY_RVA", SEPARATE_TRANSLUCENCY_RVA);
+        let target = number(c"RSF_TRANSLUCENCY_TARGET", 100);
+        let (scale, refused) = translucency_scale(
+            target,
+            number(c"RSF_TRANSLUCENCY_SCALE", 0),
+            depth_conformed,
+        );
+        if let Some(request) = refused
+            && target != 0
+        {
+            io.log(&format!(
+                "separate translucency asked for {}% of the scene, but the depth patches did not \
+                 apply, so the engine has no depth to bind at that size. Held at 100%",
+                (request * 100.0) as i32
+            ));
+        }
+        // The patch carries the scale as the immediate of its mov eax.
+        let mut bytes = *SEPARATE_TRANSLUCENCY_PATCH;
+        bytes[SCALE_IMMEDIATE_OFFSET..SCALE_IMMEDIATE_OFFSET + 4]
+            .copy_from_slice(&scale.to_bits().to_le_bytes());
         let expected = Some(&SEPARATE_TRANSLUCENCY_GATE[..]);
         let mut previous = [0; 15];
-        let result = io.write(rva, SEPARATE_TRANSLUCENCY_PATCH, expected, &mut previous);
+        let result = io.write(rva, &bytes, expected, &mut previous);
         if result == PATCH_OK {
-            unsafe { register_scale(rva, SCALE_IMMEDIATE_OFFSET) };
+            io.log(&format!(
+                "separate translucency halving removed at rva 0x{rva:x}, scale {}% of the scene",
+                (scale * 100.0) as i32
+            ));
         } else {
             io.log(&format!(
                 "separate translucency halving NOT removed at rva 0x{rva:x}, result {result} (expected bytes did not match?)"

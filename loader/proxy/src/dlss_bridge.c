@@ -35,12 +35,6 @@
 #include "dlss_bridge.h"
 #include "overlay_host.h"
 
-/* Unreal's velocity encoding, from Common.ush: In * (0.499 * 0.5) + 32767/65535. Written here as
-   the decode a backend needs, which is the reciprocal of that scale and the same bias. The sentinel
-   is far outside any real screen space motion and still exact in half precision. */
-#define RSF_UNREAL_MOTION_SCALE (1.0f / (0.499f * 0.5f))
-#define RSF_UNREAL_MOTION_BIAS (32767.0f / 65535.0f)
-#define RSF_MOTION_SENTINEL (-1000.0f)
 static rsf_plugin_session* game_session;
 static int game_prepared;
 static uint32_t performance_hud_enabled = 1;
@@ -48,10 +42,8 @@ static uint32_t performance_hud_enabled = 1;
    switch above: this carrier has no settings file of its own for either yet. */
 static uint32_t overlay_ui_preferences;
 static SRWLOCK game_prepare_guard = SRWLOCK_INIT;
-static volatile LONG shutdown_requested;
 
 static volatile LONG native_owner;
-int rsf_bridge_native_owned(void) { return InterlockedCompareExchange(&native_owner, 0, 0) != 0; }
 static void on_native_pass(void* user, void* list, const rsf_game_render_pass* pass, uint32_t begin);
 static void route_dump(void* context, void* texture, const char* name);
 static void on_native_scope(void* user, void* list, const rsf_game_render_pass* pass, uint32_t begin)
@@ -626,49 +618,19 @@ int rsf_bridge_present_extent(uint32_t* width, uint32_t* height)
     return 1;
 }
 
-void rsf_bridge_request_shutdown(void)
-{ InterlockedExchange(&shutdown_requested, 1); }
-static int drain_shutdown(void)
-{
-    if (!InterlockedCompareExchange(&shutdown_requested, 0, 0)) return 0;
-    bridge.enabled_requested = 0; rsf_native_sr_set_enabled(0);
-    if (game_session) {
-        const rsf_result quiet = rsf_plugin_session_quiesce(game_session);
-        if (quiet != RSF_OK) return 1;
-        const rsf_result stopped = rsf_plugin_session_stop(game_session);
-        if (stopped != RSF_OK) return 1;
-        game_session = NULL; game_prepared = 0;
-    }
-    // Queued native callbacks are finished before their backend, input refs or context disappear.
-    const rsf_frame_tap_result untapped = rsf_frame_tap_uninstall();
-    if (untapped != RSF_FRAME_TAP_OK && untapped != RSF_FRAME_TAP_ERROR_NOT_INSTALLED) {
-        return 1;
-    }
-    rsf_ac7_velocity_release();
-    rsf_dlss_pipeline_stop(); bridge.started = 0;
-    rsf_input_dump_cancel(0);
-    InterlockedExchange(&native_owner, 0); rsf_ac7_motion_capture_native_owner(0);
-    rsf_ac7_carrier_set_startup_attempted(1);
-    InterlockedExchange(&shutdown_requested, 0);
-    say("renderer shutdown completed after native command and resource retirement");
-    return 1;
-}
-
 /* Called before the game's own Present, from the observer. */
 static void on_present(void* user, void* swapchain)
 {
+    rsf_game_render_pass window = {0}; window.struct_size = sizeof(window);
+    const int window_matched = rsf_native_window_match(swapchain, &window);
+    static unsigned matches_reported = 0;
     (void)user;
-    if (drain_shutdown()) return;
-    if (rsf_bridge_native_owned()) {
-        rsf_game_render_pass window = {0}; window.struct_size = sizeof(window);
-        static unsigned matched = 0;
-        if (rsf_native_window_match(swapchain, &window) && matched < 6) {
-            ++matched;
-            say("native window Present match: source %llu scope %llu, viewport %llx window %llx RHI %llx",
-                (unsigned long long)window.source_frame_id, (unsigned long long)window.scope_id,
-                (unsigned long long)window.viewport_key, (unsigned long long)window.window_key,
-                (unsigned long long)window.rhi_viewport_key);
-        }
+    if (window_matched && InterlockedCompareExchange(&native_owner, 0, 0) && matches_reported < 6) {
+        ++matches_reported;
+        say("native window Present match: source %llu scope %llu, viewport %llx window %llx RHI %llx",
+            (unsigned long long)window.source_frame_id, (unsigned long long)window.scope_id,
+            (unsigned long long)window.viewport_key, (unsigned long long)window.window_key,
+            (unsigned long long)window.rhi_viewport_key);
     }
 
     {
@@ -708,11 +670,7 @@ static void on_present(void* user, void* swapchain)
         rsf_frame_tap_refresh();
         publish_native_settings();
     }
-    {
-        rsf_game_render_pass window = {0}; window.struct_size = sizeof(window);
-        const int matched = rsf_native_window_match(swapchain, &window);
-        rsf_input_dump_present(swapchain, bridge.context, matched ? &window : NULL);
-    }
+    rsf_input_dump_present(swapchain, bridge.context, window_matched ? &window : NULL);
 
     /* Last, so the panel is drawn over the finished frame. It takes no part in the
        reconstruction and is never one of its inputs. */

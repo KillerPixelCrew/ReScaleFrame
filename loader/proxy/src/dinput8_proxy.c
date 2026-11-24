@@ -373,12 +373,11 @@ static void start_capture_support(void)
 
        Loading it beside the proxy was meant to save setting a path. It cost more than it saved, so
        the path is still found automatically, but only when capture is actually wanted. */
-    if (read_number("RSF_RENDERDOC", 0) == 0 &&
-        !read_text("RSF_RENDERDOC_DLL", library, sizeof(library))) {
+    const int explicit_library = read_text("RSF_RENDERDOC_DLL", library, sizeof(library));
+    if (!explicit_library && read_number("RSF_RENDERDOC", 0) == 0) {
         return;
     }
-    if (!read_text("RSF_RENDERDOC_DLL", library, sizeof(library)) &&
-        !beside_this_module("renderdoc.dll", library, sizeof(library))) {
+    if (!explicit_library && !beside_this_module("renderdoc.dll", library, sizeof(library))) {
         note("no renderdoc.dll beside the proxy and RSF_RENDERDOC_DLL is not set, so F11 has "
              "nothing to capture with");
         return;
@@ -404,24 +403,9 @@ static void observer_note(void* user, const char* message)
     note("%s", message);
 }
 
-/* Installed before the module dump rather than after it. The creation hook only sees textures
-   made after it is in place, and the target we are after is allocated during engine startup. */
 /* Defined below, next to the actions themselves. Declared here because they are registered when
    the observer is installed, which is before anything can call them. */
 static void register_overlay_actions(void);
-
-/* Defined next to the other console variable work, and called from the render scale paths above
-   it, which run whenever the scale is applied or restored. */
-static void set_separate_translucency_scale(void);
-static void register_translucency_scale(uint32_t rva, uint32_t immediate_offset);
-/* Whether the engine will build a depth for a layer larger than the scene, which is what a scale
-   above 1.0 depends on. Settled at patch time, read whenever the scale is chosen. */
-static int translucency_depth_conformed;
-
-static void set_translucency_depth_conformed(int conformed)
-{
-    translucency_depth_conformed = conformed;
-}
 
 static void start_observer(void)
 {
@@ -458,13 +442,10 @@ static void start_observer(void)
         rsf_ac7_motion_capture_configure(observe_directory, observer_note, NULL);
         options.on_buffer = rsf_ac7_motion_capture_buffer;
     }
-    /* Unreal's encoding, from Common.ush: In * (0.499 * 0.5) + 32767/65535. Written out as the
-       decode a backend needs, which is the reciprocal of that scale and the same bias. The
-       sentinel is far outside any real screen space motion and still representable in half. */
     options.decode_motion = read_number("RSF_DECODE_MOTION", 1);
-    options.motion_scale = 1.0f / (0.499f * 0.5f);
-    options.motion_bias = 32767.0f / 65535.0f;
-    options.motion_invalid_value = -1000.0f;
+    options.motion_scale = RSF_UNREAL_MOTION_SCALE;
+    options.motion_bias = RSF_UNREAL_MOTION_BIAS;
+    options.motion_invalid_value = RSF_MOTION_SENTINEL;
     /* Where the reconstruction gets drawn when it is asked for. Registered at install because the
        observer's options are written once, and harmless until something turns the display on. */
     options.on_present = rsf_bridge_present_hook();
@@ -549,11 +530,6 @@ static void set_jitter_enabled(int enabled)
 static void action_set_jitter(unsigned long open)
 {
     set_jitter_enabled(open != 0);
-}
-
-static unsigned long action_jitter_open(void)
-{
-    return (unsigned long)jitter_patch.enabled;
 }
 
 static unsigned long action_jitter_available(void)
@@ -745,10 +721,10 @@ static void start_generation(void)
 }
 
 _Static_assert(sizeof(wchar_t) == sizeof(uint16_t), "AC7 carrier UTF-16 ABI");
-_Static_assert(sizeof(rsf_ac7_carrier_leaves) == 72, "AC7 carrier ABI");
+_Static_assert(sizeof(rsf_ac7_carrier_leaves) == 56, "AC7 carrier ABI");
 _Static_assert(offsetof(rsf_ac7_carrier_leaves, read_number) == 8, "AC7 carrier ABI");
-_Static_assert(offsetof(rsf_ac7_carrier_leaves, prepare_native_game) == 56, "AC7 carrier ABI");
-_Static_assert(offsetof(rsf_ac7_carrier_leaves, install_motion_capture) == 64, "AC7 carrier ABI");
+_Static_assert(offsetof(rsf_ac7_carrier_leaves, prepare_native_game) == 40, "AC7 carrier ABI");
+_Static_assert(offsetof(rsf_ac7_carrier_leaves, install_motion_capture) == 48, "AC7 carrier ABI");
 static const rsf_ac7_carrier_leaves carrier_leaves = {
     .struct_size = sizeof(rsf_ac7_carrier_leaves),
     .abi_version = RSF_AC7_CARRIER_ABI_VERSION,
@@ -756,8 +732,6 @@ static const rsf_ac7_carrier_leaves carrier_leaves = {
     .patch = rsf_patch_code,
     .log = observer_note,
     .install_jitter = install_jitter,
-    .set_depth_conformed = set_translucency_depth_conformed,
-    .register_translucency_scale = register_translucency_scale,
     .prepare_native_game = prepare_native_game,
     .install_motion_capture = rsf_ac7_motion_capture_install,
 };
@@ -921,109 +895,6 @@ static void start_dlss(void)
    the present hook where the panel was drawn, which is the boundary the review finding wants and
    is why the panel can drive them safely when a hotkey worker cannot. */
 
-
-/* The separate translucency scale, as the patch below leaves it: a four byte immediate inside the
-   instruction stream, which is why it can be changed while the game runs.
-
-   Null until the patch goes in. Nothing else may write it, and a write is a single aligned store,
-   so a render thread reading the instruction either sees the old scale or the new one. Both are
-   valid floats and neither can be half of the other's bits. */
-static volatile uint32_t* translucency_scale_slot;
-static float translucency_scale_now;
-
-/* Choose the separate translucency scale for the render scale that is now in effect.
-
-   The scale is a multiplier on the scene buffer, so what it is worth depends entirely on how large
-   that buffer is. At a 50% render scale a scale of 1.0 puts the layer at half of native, and 2.0
-   puts it at native. That relationship is the whole reason this cannot be a constant: DLSS, XeSS
-   and FSR each pick their own render scale per quality level, and a fixed multiplier would mean a
-   different translucency resolution for every one of them.
-
-   So the settings are percentages of the presented resolution, and the multiplier is derived:
-
-     RSF_TRANSLUCENCY_TARGET        percent of native, default 100; 0 means "match the scene"
-     RSF_TRANSLUCENCY_SCALE         a direct multiplier in percent, overriding it when nonzero
-
-   Render the briefing at full output resolution across quality changes. Applying the
-   vanilla 0.5 multiplier to an already reduced scene would halve its detail again. This changes
-   the engine's allocation, viewport and depth setup together, before the layer is rasterized.
-   The unjittered route composites it after scene SR; changing its scale cannot itself remove jitter.
-   Pooled allocation padding still follows the engine's alignment rules. */
-static void set_separate_translucency_scale(void)
-{
-    union {
-        float value;
-        uint32_t bits;
-    } scale;
-    unsigned long render_percent;
-    unsigned long target;
-    const unsigned long override_percent = read_number("RSF_TRANSLUCENCY_SCALE", 0);
-    static int ceiling_reported;
-    DWORD protection = 0;
-    DWORD restored = 0;
-
-    if (!translucency_scale_slot) {
-        return;
-    }
-
-    /* The native renderer owns the scene size; the carrier no longer changes it. */
-    render_percent = 100;
-    target = read_number("RSF_TRANSLUCENCY_TARGET", 100);
-
-    /* Above scene resolution only when the patched engine can build matching depth. */
-    float depth_limited_request = 0.0f;
-    scale.value = rsf_ac7_carrier_translucency_scale(render_percent, target, override_percent,
-        translucency_depth_conformed, &depth_limited_request);
-    if (depth_limited_request != 0.0f && target != 0 && !ceiling_reported) {
-        ceiling_reported = 1;
-        note("separate translucency asked for %d%% of the scene, but the depth patches did not "
-             "apply, so the engine has no depth to bind at that size. Held at 100%%",
-             (int)(depth_limited_request * 100.0f));
-    }
-
-    if (*translucency_scale_slot == scale.bits) {
-        return;
-    }
-    if (!VirtualProtect((LPVOID)translucency_scale_slot, sizeof(uint32_t), PAGE_EXECUTE_READWRITE,
-                        &protection)) {
-        note("separate translucency scale could not be made writable, left at %d%%",
-             (int)(translucency_scale_now * 100.0f));
-        return;
-    }
-    *translucency_scale_slot = scale.bits;
-    VirtualProtect((LPVOID)translucency_scale_slot, sizeof(uint32_t), protection, &restored);
-    FlushInstructionCache(GetCurrentProcess(), (LPCVOID)translucency_scale_slot, sizeof(uint32_t));
-    translucency_scale_now = scale.value;
-    note("separate translucency scale now %d%% of the scene, which at a %lu%% render scale is "
-         "%d%% of native",
-         (int)(scale.value * 100.0f), render_percent,
-         (int)(scale.value * (float)render_percent));
-}
-
-/* Publish the aligned immediate of the verified scale instruction to the live scale writer. */
-static void register_translucency_scale(uint32_t rva, uint32_t immediate_offset)
-{
-    unsigned char* base = (unsigned char*)GetModuleHandleW(NULL);
-    unsigned char* immediate = base ? base + rva + immediate_offset : NULL;
-    if (!immediate || ((uintptr_t)immediate & 3u) != 0) {
-        note("separate translucency halving removed at rva 0x%lx, but its scale sits at an "
-             "unaligned address and stays at 100%% of the scene for this run",
-             (unsigned long)rva);
-        return;
-    }
-    translucency_scale_slot = (volatile uint32_t*)(void*)immediate;
-    translucency_scale_now = 1.0f;
-    note("separate translucency halving removed at rva 0x%lx, scale carried at 0x%p and "
-         "adjustable while the game runs",
-         (unsigned long)rva, (void*)immediate);
-    set_separate_translucency_scale();
-}
-
-static void action_trigger_dump(void)
-{
-    report_and_dump();
-}
-
 static void action_trigger_capture(void)
 {
 #if RSF_HAVE_FRAME_CAPTURE
@@ -1113,11 +984,10 @@ static void register_overlay_actions(void)
     memset(&actions, 0, sizeof(actions));
     actions.start_backend = start_dlss;
     actions.start_backend_at_extent = start_dlss_at_extent;
-    actions.trigger_dump = action_trigger_dump;
+    actions.trigger_dump = report_and_dump;
     actions.trigger_capture = action_trigger_capture;
     actions.capture_count = action_capture_count;
     actions.set_jitter = action_set_jitter;
-    actions.jitter_open = action_jitter_open;
     actions.jitter_available = action_jitter_available;
     actions.startup_ready = rsf_ac7_carrier_startup_ready;
     actions.save_quality = action_save_quality;

@@ -15,10 +15,15 @@
 typedef void (*rsf_bridge_log_fn)(void* user, const char* message);
 
 /* Native game-controller lifecycle. Preparation belongs before graphics activation. */
-int rsf_bridge_native_owned(void);
 int rsf_bridge_prepare_game(const wchar_t* plugin_path, const rsf_game_probe* probe,
                             rsf_bridge_log_fn log, void* log_user);
 
+/* Unreal's velocity encoding, from Common.ush: In * (0.499 * 0.5) + 32767/65535. Written here as
+   the decode a backend needs, which is the reciprocal of that scale and the same bias. The sentinel
+   is far outside any real screen space motion and still exact in half precision. */
+#define RSF_UNREAL_MOTION_SCALE (1.0f / (0.499f * 0.5f))
+#define RSF_UNREAL_MOTION_BIAS (32767.0f / 65535.0f)
+#define RSF_MOTION_SENTINEL (-1000.0f)
 
 /* Acquire the game's device, start the backend, and begin watching frames.
 
@@ -83,7 +88,6 @@ typedef struct rsf_bridge_actions {
        is zero when the patch could not find its site, so the panel refuses instead of offering a
        switch that does nothing. Null means this build has no jitter control. */
     void (*set_jitter)(unsigned long open);
-    unsigned long (*jitter_open)(void);
     unsigned long (*jitter_available)(void);
     unsigned long (*startup_ready)(void);
     void (*save_quality)(unsigned long quality);
@@ -105,8 +109,5 @@ void rsf_bridge_set_sdk_directories(const char* fsr2, const char* fsr3, const ch
 int rsf_bridge_running(void);
 /* Tells the bridge whether the motion capture is configured, so the constant watch it needs stays armed. */
 void rsf_bridge_set_motion_capture(int on);
-/* Request from a frontend thread. The graphics owner quiesces native producers and keeps the
-   backend/device alive until queued plugin work has drained; no work runs under DllMain. */
-void rsf_bridge_request_shutdown(void);
 
 #endif /* RSF_DLSS_BRIDGE_H */

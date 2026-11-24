@@ -87,7 +87,7 @@ still borrow it. The follow-up after merging `744be82` uses the counted-call pat
   `frame_tap.h` states this for set_plan and uninstall.
 
 The bridge (`loader/proxy/src/dlss_bridge.c`) calls set and clear plan (`apply_tail`,
-`stop_reinsert`, `watch_for_stalled_plan`) and uninstall (`drain_shutdown`) from its Present
+`stop_reinsert`, `watch_for_stalled_plan`) and uninstall (a refused `rsf_bridge_start`) from its Present
 callback, between context calls on the render thread, and its `on_gate` saves and restores state
 around `rsf_promote_finish` without touching the plan. That path never waits.
 

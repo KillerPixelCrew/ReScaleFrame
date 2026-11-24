@@ -19,7 +19,7 @@ int rsf_ac7_carrier_probe(rsf_game_probe* probe, const char* sha256);
 typedef int32_t (*rsf_ac7_carrier_patch_fn)(uint32_t rva, const uint8_t* bytes, uint32_t count,
     const uint8_t* expected, uint32_t expected_count, uint8_t* previous);
 
-#define RSF_AC7_CARRIER_ABI_VERSION 3u
+#define RSF_AC7_CARRIER_ABI_VERSION 4u
 typedef struct rsf_ac7_carrier_leaves {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -27,8 +27,6 @@ typedef struct rsf_ac7_carrier_leaves {
     rsf_ac7_carrier_patch_fn patch;
     rsf_game_log_fn log;
     void (*install_jitter)(int32_t mode, uint32_t rva);
-    void (*set_depth_conformed)(int conformed);
-    void (*register_translucency_scale)(uint32_t rva, uint32_t immediate_offset);
     int (*prepare_native_game)(void);
     int (*install_motion_capture)(void);
 } rsf_ac7_carrier_leaves;
@@ -42,7 +40,7 @@ int32_t rsf_ac7_carrier_wait_decrypted(int32_t (*measure)(double*), int32_t stil
 unsigned long rsf_ac7_carrier_startup_ready(void);
 
 /* A valid presenting extent spends one automatic attempt before start is called. Re-enabling
-   clears the attempt flag and shutdown marks it spent. Manual start takes its own path. */
+   clears the attempt flag. Manual start takes its own path. */
 int rsf_ac7_carrier_startup_attempted(void);
 void rsf_ac7_carrier_set_startup_attempted(int attempted);
 void rsf_ac7_carrier_try_auto_start(int enabled, int started, unsigned long (*ready)(void),
@@ -61,10 +59,6 @@ void rsf_ac7_carrier_override_start_extent(uint32_t (*read_number)(const char* n
    patch result. */
 int32_t rsf_ac7_carrier_patch_jitter(rsf_ac7_carrier_patch_fn patch, uint32_t rva, int enabled,
     uint8_t previous[6]);
-
-/* Reports the requested scale before applying the 100% ceiling for missing depth conformance. */
-float rsf_ac7_carrier_translucency_scale(uint32_t render_percent, uint32_t target_percent,
-    uint32_t override_percent, int depth_conformed, float* depth_limited_request);
 
 #ifdef __cplusplus
 }
