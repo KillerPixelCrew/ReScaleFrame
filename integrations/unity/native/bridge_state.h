@@ -23,12 +23,6 @@ typedef struct rsf_unity_source_submission {
     uint64_t session_id, source_frame_id, view_key;
 } rsf_unity_source_submission;
 
-/* Retain and release each non-null native resource pointer of a leased packet. */
-typedef struct rsf_unity_texture_ops {
-    void (*retain)(void*);
-    void (*release)(void*);
-} rsf_unity_texture_ops;
-
 #ifdef __cplusplus
 extern "C" {
 #endif

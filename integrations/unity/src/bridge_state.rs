@@ -12,7 +12,7 @@
 //! D3D11 and Vulkan each borrow a Runtime submission ring through `bridge_interop.rs`.
 //!
 //! The D3D11 and D3D12 routes retain native textures at admission and hold the packet
-//! through its callback. The texture ops supply AddRef and Release. Vulkan carries borrowed
+//! through its callback, with AddRef and Release on each texture. Vulkan carries borrowed
 //! image identities and returns its packet slot when taken.
 //!
 //! A fence completion of 0 stands for "no fence": every recorded submission is then in flight.
@@ -20,7 +20,7 @@ use crate::sys::{
     RSF_UNITY_BRIDGE_ABI_VERSION, RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS,
     RSF_UNITY_FRAMES_SOURCES, RSF_UNITY_PACKET_HUDLESS, RSF_UNITY_PACKET_INPUTS_ONLY,
     RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_WINDOW, rsf_unity_config, rsf_unity_frame_admission,
-    rsf_unity_packet, rsf_unity_source_submission, rsf_unity_texture_ops,
+    rsf_unity_packet, rsf_unity_source_submission,
 };
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_KEYED,
@@ -47,11 +47,10 @@ const NO_SOURCE: rsf_unity_source_submission = rsf_unity_source_submission {
 };
 
 /// The references a stored packet holds on its colour, depth, motion and output resources, in
-/// that order, and the leaf that drops them. A null resource holds nothing.
+/// that order. A null resource holds nothing.
 #[derive(Clone, Copy)]
 struct Lease {
     resources: [*mut c_void; 4],
-    release: unsafe extern "C" fn(*mut c_void),
 }
 
 impl Lease {
@@ -59,7 +58,7 @@ impl Lease {
     fn end(self) {
         for resource in self.resources {
             if !resource.is_null() {
-                unsafe { (self.release)(resource) };
+                unsafe { release_texture(resource) };
             }
         }
     }
@@ -237,20 +236,17 @@ impl State {
         &mut self,
         packet: &rsf_unity_packet,
         session_id: u64,
-        ops: rsf_unity_texture_ops,
     ) -> Option<usize> {
-        let retain = ops.retain?;
-        let release = ops.release?;
         let slot = self.admit_packet(packet, session_id)?;
         let entry = &mut self.pending[slot];
         let stored = &entry.packet;
         let resources = [stored.color, stored.depth, stored.motion, stored.output];
         for resource in resources {
             if !resource.is_null() {
-                unsafe { retain(resource) };
+                unsafe { retain_texture(resource) };
             }
         }
-        entry.lease = Some(Lease { resources, release });
+        entry.lease = Some(Lease { resources });
         Some(slot)
     }
 
@@ -538,11 +534,11 @@ pub fn rsf_unity_frames_managed_stage() -> u32 {
 ///
 /// # Safety
 /// `packet` is null or readable for its leading size field, and for a whole packet when that
-/// field matches. `ops` must accept every non-null resource the packet names.
+/// field matches. A leased packet's non-null resources must be live COM objects.
 unsafe fn admit(
     packet: *const rsf_unity_packet,
     session_id: u64,
-    lease: Option<rsf_unity_texture_ops>,
+    leased: bool,
 ) -> *mut c_void {
     if packet.is_null() {
         return ptr::null_mut();
@@ -556,9 +552,10 @@ unsafe fn admit(
     if state.closed || !ACTIVE.load(Ordering::SeqCst) {
         return ptr::null_mut();
     }
-    let slot = match lease {
-        Some(ops) => state.admit_leased(&packet, session_id, ops),
-        None => state.admit_packet(&packet, session_id),
+    let slot = if leased {
+        state.admit_leased(&packet, session_id)
+    } else {
+        state.admit_packet(&packet, session_id)
     };
     slot.map_or(ptr::null_mut(), |slot| state.packet_address(slot))
 }
@@ -569,7 +566,7 @@ pub(crate) unsafe fn rsf_unity_frames_admit_packet(
     packet: *const rsf_unity_packet,
     session_id: u64,
 ) -> *mut c_void {
-    unsafe { admit(packet, session_id, None) }
+    unsafe { admit(packet, session_id, false) }
 }
 
 /// Stores a packet and retains its native textures. The returned address already holds the lease.
@@ -578,7 +575,7 @@ pub(crate) unsafe fn rsf_unity_frames_admit_leased_packet(
     packet: *const rsf_unity_packet,
     session_id: u64,
 ) -> *mut c_void {
-    unsafe { admit(packet, session_id, Some(TEXTURES)) }
+    unsafe { admit(packet, session_id, true) }
 }
 
 /// Copies out the queued packet stored at `address` with its slot.
@@ -891,22 +888,21 @@ pub(crate) fn rsf_unity_frames_release() {
     }
 }
 
-#[cfg(windows)]
-const TEXTURES: rsf_unity_texture_ops = rsf_unity_texture_ops {
-    retain: Some(rsf_unity_retain_texture),
-    release: Some(rsf_unity_release_texture),
-};
+#[cfg(test)]
+use tests::{release_texture, retain_texture};
 
-#[cfg(windows)]
-unsafe extern "C" fn rsf_unity_retain_texture(texture: *mut c_void) {
+/// Takes one more COM reference on a non-null texture.
+#[cfg(not(test))]
+unsafe fn retain_texture(texture: *mut c_void) {
     use windows::core::{IUnknown, Interface};
     if let Some(resource) = unsafe { IUnknown::from_raw_borrowed(&texture) } {
         let _ = resource.clone().into_raw();
     }
 }
 
-#[cfg(windows)]
-unsafe extern "C" fn rsf_unity_release_texture(texture: *mut c_void) {
+/// Drops the reference `retain_texture` took.
+#[cfg(not(test))]
+unsafe fn release_texture(texture: *mut c_void) {
     use windows::core::{IUnknown, Interface};
     if !texture.is_null() {
         drop(unsafe { IUnknown::from_raw(texture) });
@@ -1047,18 +1043,13 @@ mod tests {
             const { std::cell::RefCell::new(Vec::new()) };
     }
 
-    unsafe extern "C" fn retain(resource: *mut c_void) {
+    pub(super) unsafe fn retain_texture(resource: *mut c_void) {
         LEASE_CALLS.with(|calls| calls.borrow_mut().push(("retain", resource.addr())));
     }
 
-    unsafe extern "C" fn release(resource: *mut c_void) {
+    pub(super) unsafe fn release_texture(resource: *mut c_void) {
         LEASE_CALLS.with(|calls| calls.borrow_mut().push(("release", resource.addr())));
     }
-
-    const LEASE: rsf_unity_texture_ops = rsf_unity_texture_ops {
-        retain: Some(retain),
-        release: Some(release),
-    };
 
     fn lease_calls() -> Vec<(&'static str, usize)> {
         LEASE_CALLS.with(|calls| std::mem::take(&mut *calls.borrow_mut()))
@@ -1070,7 +1061,7 @@ mod tests {
         let mut first = packet(1);
         first.motion = ptr::null_mut();
         first.flags = RSF_UNITY_PACKET_PROBE;
-        let slot = state.admit_leased(&first, SESSION, LEASE).unwrap();
+        let slot = state.admit_leased(&first, SESSION).unwrap();
         // Retained before the address exists; a null resource holds nothing.
         assert_eq!(
             lease_calls(),
@@ -1113,19 +1104,19 @@ mod tests {
     #[test]
     fn a_refused_leased_admission_retains_nothing() {
         let mut state = State::new();
-        assert!(state.admit_leased(&packet(1), SESSION + 1, LEASE).is_none());
+        assert!(state.admit_leased(&packet(1), SESSION + 1).is_none());
         for frame in 1..=PACKETS as u64 {
             assert!(state.admit_packet(&packet(frame), SESSION).is_some());
         }
-        assert!(state.admit_leased(&packet(99), SESSION, LEASE).is_none());
+        assert!(state.admit_leased(&packet(99), SESSION).is_none());
         assert!(lease_calls().is_empty());
     }
 
     #[test]
     fn release_cancels_queued_and_consuming_leases() {
         let mut state = State::new();
-        let queued = state.admit_leased(&packet(1), SESSION, LEASE).unwrap();
-        let consuming = state.admit_leased(&packet(2), SESSION, LEASE).unwrap();
+        let queued = state.admit_leased(&packet(1), SESSION).unwrap();
+        let consuming = state.admit_leased(&packet(2), SESSION).unwrap();
         state.admit_packet(&packet(3), SESSION).unwrap();
         let address = state.packet_address(consuming).cast_const();
         assert!(state.take_packet(address).is_some());
