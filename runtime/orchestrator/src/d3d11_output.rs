@@ -9,75 +9,27 @@ use std::ptr;
 use std::ptr::NonNull;
 use windows::core::{IUnknown, Interface};
 
-pub(super) type CreateBlit = unsafe extern "C" fn(*mut c_void) -> *mut Pass;
-pub(super) type DrawBlit =
-    unsafe extern "C" fn(*mut Pass, *mut c_void, *mut c_void, *mut c_void, u32, u32) -> u32;
-pub(super) type DestroyBlit = unsafe extern "C" fn(*mut Pass);
-
+// A fullscreen copy pass on one device, in plain or RGBA copy mode.
 pub(super) struct FullscreenBlit {
     pass: NonNull<Pass>,
-    draw: DrawBlit,
-    destroy: DestroyBlit,
-}
-
-unsafe extern "C" fn create_copy(device: *mut c_void) -> *mut Pass {
-    let setup = rsf_fullscreen_setup {
-        struct_size: size_of::<rsf_fullscreen_setup>() as u32,
-        abi_version: RSF_FULLSCREEN_PASS_ABI_VERSION,
-        log: None,
-        log_user: ptr::null_mut(),
-    };
-    let mut pass = ptr::null_mut();
-    if unsafe { rsf_fullscreen_pass_create(device, &setup, &mut pass) } == 0 {
-        pass.cast()
-    } else {
-        ptr::null_mut()
-    }
-}
-
-unsafe extern "C" fn draw_copy<const MODE: u32>(
-    pass: *mut Pass,
-    context: *mut c_void,
-    target: *mut c_void,
-    source: *mut c_void,
-    width: u32,
-    height: u32,
-) -> u32 {
-    let draw = rsf_fullscreen_draw {
-        struct_size: size_of::<rsf_fullscreen_draw>() as u32,
-        mode: MODE,
-        exposure: 1.0,
-        width,
-        height,
-    };
-    u32::from(unsafe { rsf_fullscreen_pass_draw(pass.cast(), context, target, source, &draw) } == 0)
-}
-
-unsafe extern "C" fn destroy_copy(pass: *mut Pass) {
-    unsafe { rsf_fullscreen_pass_destroy(pass.cast()) };
+    mode: u32,
 }
 
 impl FullscreenBlit {
     pub(super) unsafe fn new_copy(device: &IUnknown, rgba: bool) -> Option<Self> {
-        let draw = if rgba {
-            draw_copy::<COPY_RGBA>
-        } else {
-            draw_copy::<COPY>
+        let setup = rsf_fullscreen_setup {
+            struct_size: size_of::<rsf_fullscreen_setup>() as u32,
+            abi_version: RSF_FULLSCREEN_PASS_ABI_VERSION,
+            log: None,
+            log_user: ptr::null_mut(),
         };
-        unsafe { Self::new(device, create_copy, draw, destroy_copy) }
-    }
-
-    pub(super) unsafe fn new(
-        device: &IUnknown,
-        create: CreateBlit,
-        draw: DrawBlit,
-        destroy: DestroyBlit,
-    ) -> Option<Self> {
-        let pass = NonNull::new(unsafe { create(device.as_raw()) })?;
+        let mut pass = ptr::null_mut();
+        if unsafe { rsf_fullscreen_pass_create(device.as_raw(), &setup, &mut pass) } != 0 {
+            return None;
+        }
         Some(Self {
-            pass,
-            draw,
-            destroy,
+            pass: NonNull::new(pass)?,
+            mode: if rgba { COPY_RGBA } else { COPY },
         })
     }
 
@@ -89,13 +41,20 @@ impl FullscreenBlit {
         width: u32,
         height: u32,
     ) -> bool {
-        unsafe { (self.draw)(self.pass.as_ptr(), context, target, source, width, height) != 0 }
+        let draw = rsf_fullscreen_draw {
+            struct_size: size_of::<rsf_fullscreen_draw>() as u32,
+            mode: self.mode,
+            exposure: 1.0,
+            width,
+            height,
+        };
+        unsafe { rsf_fullscreen_pass_draw(self.pass.as_ptr(), context, target, source, &draw) == 0 }
     }
 }
 
 impl Drop for FullscreenBlit {
     fn drop(&mut self) {
-        unsafe { (self.destroy)(self.pass.as_ptr()) };
+        unsafe { rsf_fullscreen_pass_destroy(self.pass.as_ptr()) };
     }
 }
 

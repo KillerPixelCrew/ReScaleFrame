@@ -31,14 +31,13 @@ fn select(vendor: u32, requested: u32, offered: u32) -> u32 {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_d3d11_sr_admit(request: *mut Admission) -> i32 {
-    if request.is_null() || unsafe { request.cast::<u32>().read() } < size_of::<Admission>() as u32
-    {
+    if !unsafe { rsf_game_sys::ffi_util::has_capacity(request) } {
         return -1;
     }
-    if unsafe { request.cast::<u32>().add(1).read() } != RSF_D3D11_SR_ADMISSION_ABI_VERSION {
+    let request = unsafe { &mut *request };
+    if request.abi_version != RSF_D3D11_SR_ADMISSION_ABI_VERSION {
         return -2;
     }
-    let request = unsafe { &mut *request };
     let directories = [
         request.streamline_directory_utf8,
         request.fidelityfx_directory_utf8,
