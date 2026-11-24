@@ -30,8 +30,8 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
 use windows_sys::Win32::System::LibraryLoader::{
-    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleFileNameW,
-    GetModuleHandleExW, GetModuleHandleW, GetProcAddress,
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
+    GetModuleHandleW, GetProcAddress,
 };
 use windows_sys::Win32::System::Memory::{
     MEM_COMMIT, MEM_FREE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ,
@@ -459,12 +459,10 @@ fn fail(host: &rsf_game_host_services, message: &CStr) -> bool {
 }
 
 fn recognized(module: HMODULE) -> bool {
-    let mut path = vec![0u16; 32768];
-    let length = unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), path.len() as u32) };
-    if length == 0 || length as usize >= path.len() {
+    let Some(path) = (unsafe { rsf_game_sys::win32::module_path(module) }) else {
         return false;
-    }
-    let path = std::ffi::OsString::from_wide(&path[..length as usize]);
+    };
+    let path = std::ffi::OsString::from_wide(path.units());
     rsf_windows::sha256_file(path.as_ref()) == Some(STEAM_SHA256)
 }
 

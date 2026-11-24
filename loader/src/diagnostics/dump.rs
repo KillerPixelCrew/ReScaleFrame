@@ -16,7 +16,7 @@ use windows_sys::Win32::{
         Diagnostics::Debug::{
             FlushInstructionCache, IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_DIRECTORY_ENTRY_IMPORT,
         },
-        LibraryLoader::{GetModuleFileNameW, GetModuleHandleW},
+        LibraryLoader::GetModuleHandleW,
         Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect},
         Threading::GetCurrentProcess,
     },
@@ -142,8 +142,7 @@ pub(super) unsafe extern "C" fn rsf_patch_code(
 
 fn module_path(base: usize) -> [u16; PATH] {
     let mut output = [0; PATH];
-    let length = unsafe { GetModuleFileNameW(base as _, output.as_mut_ptr(), PATH as u32) };
-    if length == 0 || length >= PATH as u32 {
+    if unsafe { rsf_game_sys::win32::module_path_in(base as _, &mut output) }.is_none() {
         output.fill(0);
         for (unit, byte) in output.iter_mut().zip(b"<unknown>") {
             *unit = u16::from(*byte);

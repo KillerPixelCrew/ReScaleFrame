@@ -28,7 +28,6 @@ use windows_sys::Win32::{
         Diagnostics::Debug::{
             AddVectoredExceptionHandler, EXCEPTION_POINTERS, RtlCaptureStackBackTrace,
         },
-        LibraryLoader::GetModuleFileNameW,
         Performance::{QueryPerformanceCounter, QueryPerformanceFrequency},
         Threading::{
             CreateEventW, CreateThread, GetCurrentProcessId, GetCurrentThreadId, SetEvent, Sleep,
@@ -176,8 +175,7 @@ fn output_dir(options: &rsf_census_options) -> Option<[u16; PATH_CAP]> {
 fn executable_name() -> [u8; PATH_CAP * 3] {
     let mut path = [0u16; PATH_CAP];
     let mut output = [0u8; PATH_CAP * 3];
-    let count = unsafe { GetModuleFileNameW(null_mut(), path.as_mut_ptr(), PATH_CAP as u32) };
-    if count != 0 && count < PATH_CAP as u32 {
+    if unsafe { rsf_game_sys::win32::module_path_in(null_mut(), &mut path) }.is_some() {
         unsafe {
             WideCharToMultiByte(
                 CP_UTF8,

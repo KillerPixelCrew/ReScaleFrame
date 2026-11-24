@@ -2,12 +2,8 @@
 use std::ffi::c_void;
 use std::slice;
 use windows::{
-    Win32::{
-        Foundation::HMODULE,
-        Storage::FileSystem::{
-            FILE_SHARE_READ, GetFileAttributesExW, GetFileExInfoStandard, WIN32_FILE_ATTRIBUTE_DATA,
-        },
-        System::LibraryLoader::GetModuleFileNameW,
+    Win32::Storage::FileSystem::{
+        FILE_SHARE_READ, GetFileAttributesExW, GetFileExInfoStandard, WIN32_FILE_ATTRIBUTE_DATA,
     },
     core::PCWSTR,
 };
@@ -19,10 +15,7 @@ pub(super) unsafe fn module_digest(module: *mut c_void, sizes: &[u32]) -> Option
     let mut path = Vec::new();
     path.try_reserve_exact(CAPACITY).ok()?;
     path.resize(CAPACITY, 0);
-    let len = unsafe { GetModuleFileNameW(Some(HMODULE(module)), &mut path) } as usize;
-    if len == 0 || len >= path.len() {
-        return None;
-    }
+    unsafe { rsf_game_sys::win32::module_path_in(module, &mut path) }?;
     let mut attributes = WIN32_FILE_ATTRIBUTE_DATA::default();
     if unsafe {
         GetFileAttributesExW(

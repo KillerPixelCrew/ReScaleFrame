@@ -2,14 +2,14 @@
 use super::{PATH_CAPACITY, entry, load_library, module_path, null, null_mut, spawn_startup, wide};
 use rsf_game_sys::ffi_util::ascii_wide;
 use rsf_game_sys::session::carrier_log::CarrierLog;
+use rsf_game_sys::win32::module_path_in;
 use std::cell::UnsafeCell;
 use std::ffi::{CString, OsString, c_void};
 use std::os::windows::ffi::OsStringExt;
 use windows_sys::Win32::Foundation::{GetLastError, HMODULE};
 use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
 use windows_sys::Win32::System::LibraryLoader::{
-    DisableThreadLibraryCalls, GetModuleFileNameW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
-    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+    DisableThreadLibraryCalls, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
 };
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
@@ -125,10 +125,8 @@ unsafe extern "C" fn rsf_shim_attach(instance: HMODULE, event: u32) -> BOOL {
     if event != DLL_PROCESS_ATTACH {
         return 1;
     }
-    let storage = EXECUTABLE.0.get().cast::<u16>();
-    let count = unsafe { GetModuleFileNameW(null_mut(), storage, PATH_CAPACITY as u32) } as usize;
-    if count != 0 && count < PATH_CAPACITY {
-        let path = unsafe { std::slice::from_raw_parts(storage, count) };
+    let storage = unsafe { &mut *EXECUTABLE.0.get() };
+    if let Some(path) = unsafe { module_path_in(null_mut(), storage) } {
         let leaf = path
             .rsplit(|&unit| unit == u16::from(b'\\'))
             .next()

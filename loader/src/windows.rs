@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{CloseHandle, HMODULE, MAX_PATH};
 use windows_sys::Win32::System::LibraryLoader::{
-    DisableThreadLibraryCalls, GetModuleFileNameW, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+    DisableThreadLibraryCalls, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::{CreateThread, LPTHREAD_START_ROUTINE};
@@ -23,10 +23,8 @@ fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
 }
 
 fn module_path(module: HMODULE) -> Option<PathBuf> {
-    let mut units = vec![0; PATH_CAPACITY];
-    let count = unsafe { GetModuleFileNameW(module, units.as_mut_ptr(), units.len() as u32) };
-    (count != 0 && (count as usize) < units.len())
-        .then(|| PathBuf::from(OsString::from_wide(&units[..count as usize])))
+    let path = unsafe { rsf_game_sys::win32::module_path(module) }?;
+    Some(PathBuf::from(OsString::from_wide(path.units())))
 }
 
 fn load_system(name: &str, load: impl FnOnce(*const u16, u32) -> HMODULE) -> HMODULE {

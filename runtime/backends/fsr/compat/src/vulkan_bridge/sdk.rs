@@ -17,8 +17,7 @@ pub(super) fn own_directory(out: &mut [u16]) -> usize {
             Foundation::{HMODULE, MAX_PATH},
             System::LibraryLoader::{
                 GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW,
-                GetModuleHandleExW,
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleHandleExW,
             },
         },
         core::PCWSTR,
@@ -38,11 +37,10 @@ pub(super) fn own_directory(out: &mut [u16]) -> usize {
         return 0;
     }
     let mut path = [0_u16; MAX_PATH as usize];
-    let length = unsafe { GetModuleFileNameW(Some(module), &mut path) } as usize;
-    if length == 0 || length >= path.len() {
+    let Some(name) = (unsafe { rsf_game_sys::win32::module_path_in(module.0, &mut path) }) else {
         return 0;
-    }
-    let Some(separator) = path[..length]
+    };
+    let Some(separator) = name
         .iter()
         .rposition(|&unit| unit == u16::from(b'\\') || unit == u16::from(b'/'))
     else {
@@ -52,7 +50,7 @@ pub(super) fn own_directory(out: &mut [u16]) -> usize {
     if directory > out.len() {
         return 0;
     }
-    out[..directory].copy_from_slice(&path[..directory]);
+    out[..directory].copy_from_slice(&name[..directory]);
     directory
 }
 

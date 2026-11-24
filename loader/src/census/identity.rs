@@ -16,7 +16,6 @@ use windows_sys::Win32::{
     Globalization::{CP_UTF8, WideCharToMultiByte},
     System::{
         Diagnostics::Debug::RtlPcToFileHeader,
-        LibraryLoader::GetModuleFileNameW,
         Threading::{GetCurrentThread, GetThreadDescription},
     },
 };
@@ -94,12 +93,12 @@ pub(super) extern "C" fn rsf_census_module_name(index: u32) -> *const c_char {
                 return result;
             }
             let mut path = [0u16; MAX_PATH as usize];
-            let length = unsafe { GetModuleFileNameW(base as _, path.as_mut_ptr(), MAX_PATH) };
-            if length == 0 || length >= MAX_PATH {
+            let Some(name) = (unsafe { rsf_game_sys::win32::module_path_in(base as _, &mut path) })
+            else {
                 let _ = write!(&mut result[..MODULE_BYTES - 1], "module@{base:#x}");
                 return result;
-            }
-            let begin = path[..length as usize]
+            };
+            let begin = name
                 .iter()
                 .rposition(|&unit| unit == u16::from(b'\\'))
                 .map_or(0, |i| i + 1);

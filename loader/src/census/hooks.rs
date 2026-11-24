@@ -18,7 +18,7 @@ use std::sync::{
 use windows_sys::Win32::{
     Foundation::{FARPROC, GetLastError, HANDLE, HMODULE, MAX_PATH, SetLastError},
     System::LibraryLoader::{
-        GetModuleFileNameW, GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_AS_DATAFILE,
+        GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_AS_DATAFILE,
         LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE, LOAD_LIBRARY_AS_IMAGE_RESOURCE,
     },
 };
@@ -420,9 +420,8 @@ fn post_load(module: HMODULE, flags: u32) {
     }
     let last_error = unsafe { GetLastError() };
     let mut path = [0u16; MAX_PATH as usize];
-    let len = unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), MAX_PATH) };
-    if len != 0 && len < MAX_PATH {
-        hook_module(cfg, module, &path[..len as usize]);
+    if let Some(name) = unsafe { rsf_game_sys::win32::module_path_in(module, &mut path) } {
+        hook_module(cfg, module, name);
     }
     unsafe { SetLastError(last_error) };
 }
