@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! The FidelityFX Vulkan SR leaves of vulkan_sr.rs: the SDK capsule, its guarded SDK calls and
 //! the Vulkan graphics, sharpening and capture state. `NATIVE` in vulkan_sr.rs names them.
+use crate::dx12_vulkan_platform::typed;
 use super::ffx_descriptors::abi::{
     FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE, FFX_API_DESC_TYPE_OVERRIDE_VERSION,
     FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION, FFX_API_QUERY_DESC_TYPE_GET_VERSIONS,
@@ -112,10 +113,10 @@ pub(super) unsafe extern "C" fn bind(owner: Handle, exports: &FfxExports) {
     // Admission resolved these four non-null exports by their exact SDK names.
     native(owner).sdk = unsafe {
         Sdk {
-            create: std::mem::transmute::<rsf_vk_function, PfnFfxCreateContext>(create),
-            destroy: std::mem::transmute::<rsf_vk_function, PfnFfxDestroyContext>(destroy),
-            query: std::mem::transmute::<rsf_vk_function, PfnFfxQuery>(query),
-            dispatch: std::mem::transmute::<rsf_vk_function, PfnFfxDispatch>(dispatch),
+            create: typed(create),
+            destroy: typed(destroy),
+            query: typed(query),
+            dispatch: typed(dispatch),
             effect: ptr::null_mut(),
         }
     };
@@ -305,12 +306,7 @@ fn create(
     properties: rsf_vk_function,
 ) -> Option<Graphics> {
     // Admission resolves these slots by their exact Vulkan command names.
-    macro_rules! procedure {
-        ($value:expr, $ty:ident) => {
-            unsafe { std::mem::transmute::<unsafe extern "C" fn(), vk::$ty>($value?) }
-        };
-    }
-    let properties = procedure!(properties, PFN_vkGetPhysicalDeviceMemoryProperties);
+    let properties: vk::PFN_vkGetPhysicalDeviceMemoryProperties = unsafe { typed(properties) }?;
     let [
         create,
         destroy,
@@ -327,9 +323,9 @@ fn create(
         capture: ptr::null_mut(),
         sharpen: Sharpen::default(),
         memory_types: 0,
-        barrier: procedure!(barrier, PFN_vkCmdPipelineBarrier),
-        clear: procedure!(clear, PFN_vkCmdClearColorImage),
-        copy: procedure!(copy, PFN_vkCmdCopyImage),
+        barrier: unsafe { typed(barrier) }?,
+        clear: unsafe { typed(clear) }?,
+        copy: unsafe { typed(copy) }?,
     };
     graphics.images = rsf_core_vkfg_bind_images(
         setup.device,

@@ -2,10 +2,10 @@
 // The capture owner's Vulkan leaves. Unit tests call fakes instead, so the leaves are unused there.
 #![cfg_attr(test, allow(dead_code))]
 use super::{Allocation, Handle, Image};
-use crate::dx12_vulkan_platform::lookup;
+use crate::dx12_vulkan_platform::entry;
 use crate::sys::rsf_vk_get_proc;
 use ash::vk::{self, Handle as _};
-use std::{mem, ptr};
+use std::ptr;
 
 const _: () = assert!(size_of::<vk::PhysicalDeviceMemoryProperties>() == 520);
 
@@ -23,12 +23,13 @@ macro_rules! dispatch {
                 if device.is_null() {
                     return None;
                 }
-                $(let $field = lookup(proc, device, $name)?;)+
+                // Each name is paired with its exact system-ABI signature.
+                $(let $field = unsafe { entry::<vk::$ty>(proc, device, $name) }?;)+
                 Some(Self {
                     device: vk::Device::from_raw(device as u64),
                     memory,
                     events: Events::load(device, proc),
-                    $($field: unsafe { mem::transmute::<unsafe extern "C" fn(), vk::$ty>($field) },)+
+                    $($field,)+
                 })
             }
         }
@@ -47,26 +48,10 @@ impl Events {
         // Each pointer comes from the supplied resolver for this device.
         unsafe {
             Some(Self {
-                create: mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCreateEvent>(lookup(
-                    proc,
-                    device,
-                    c"vkCreateEvent",
-                )?),
-                destroy: mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkDestroyEvent>(lookup(
-                    proc,
-                    device,
-                    c"vkDestroyEvent",
-                )?),
-                set: mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdSetEvent>(lookup(
-                    proc,
-                    device,
-                    c"vkCmdSetEvent",
-                )?),
-                status: mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetEventStatus>(lookup(
-                    proc,
-                    device,
-                    c"vkGetEventStatus",
-                )?),
+                create: entry(proc, device, c"vkCreateEvent")?,
+                destroy: entry(proc, device, c"vkDestroyEvent")?,
+                set: entry(proc, device, c"vkCmdSetEvent")?,
+                status: entry(proc, device, c"vkGetEventStatus")?,
             })
         }
     }

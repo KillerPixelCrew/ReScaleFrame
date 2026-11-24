@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-use crate::dx12_vulkan_platform::lookup;
+use crate::dx12_vulkan_platform::entry;
 use crate::sys::{rsf_srvk_image as Source, rsf_srvk_setup};
 use crate::vulkan_fg_resources::Image;
 use ash::vk::{self, Handle as _};
 use std::ffi::c_void;
-use std::{mem, ptr};
+use std::ptr;
 
 const ALL: vk::PipelineStageFlags = vk::PipelineStageFlags::ALL_COMMANDS;
 const MEMORY: vk::AccessFlags = vk::AccessFlags::from_raw(
@@ -30,24 +30,15 @@ pub(super) struct Dispatch {
 
 impl Dispatch {
     pub(super) fn load(setup: &rsf_srvk_setup) -> Option<Self> {
-        let resolve = |name| lookup(setup.device_proc, setup.device, name);
-        Some(Self {
-            barrier: unsafe {
-                mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdPipelineBarrier>(resolve(
-                    c"vkCmdPipelineBarrier",
-                )?)
-            },
-            copy: unsafe {
-                mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdCopyImage>(resolve(
-                    c"vkCmdCopyImage",
-                )?)
-            },
-            blit: unsafe {
-                mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkCmdBlitImage>(resolve(
-                    c"vkCmdBlitImage",
-                )?)
-            },
-        })
+        let (proc, device) = (setup.device_proc, setup.device);
+        // Each name is paired with the field's exact system-ABI signature.
+        unsafe {
+            Some(Self {
+                barrier: entry(proc, device, c"vkCmdPipelineBarrier")?,
+                copy: entry(proc, device, c"vkCmdCopyImage")?,
+                blit: entry(proc, device, c"vkCmdBlitImage")?,
+            })
+        }
     }
 
     fn transition(

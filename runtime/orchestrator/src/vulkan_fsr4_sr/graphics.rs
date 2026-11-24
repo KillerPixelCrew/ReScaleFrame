@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::dx12_vulkan_platform::typed;
 use super::leaf::guarded;
 use super::{Barrier, Frame, Handle, Image, Record, Setup};
 use crate::frame_capture_vk::{
@@ -33,19 +34,14 @@ struct Graphics {
 impl Graphics {
     fn open(setup: &Setup, entries: &[rsf_vk_function; 5]) -> Option<Self> {
         let [memory, barrier, copy, wait, idle] = *entries;
-        macro_rules! typed {
-            ($proc:ident, $ty:ident) => {
-                // Each procedure was resolved by its exact Vulkan command name.
-                unsafe { std::mem::transmute::<unsafe extern "C" fn(), vk::$ty>($proc?) }
-            };
-        }
+        // Each procedure was resolved by its exact Vulkan command name.
         Some(Self {
             device: vk::Device::from_raw(setup.device as u64),
-            memory_properties: typed!(memory, PFN_vkGetPhysicalDeviceMemoryProperties),
-            barrier: typed!(barrier, PFN_vkCmdPipelineBarrier),
-            copy: typed!(copy, PFN_vkCmdCopyImage),
-            wait: typed!(wait, PFN_vkWaitSemaphores),
-            idle: typed!(idle, PFN_vkDeviceWaitIdle),
+            memory_properties: unsafe { typed(memory) }?,
+            barrier: unsafe { typed(barrier) }?,
+            copy: unsafe { typed(copy) }?,
+            wait: unsafe { typed(wait) }?,
+            idle: unsafe { typed(idle) }?,
             sharpen: Sharpen::default(),
             capture: Capture::new_native(false),
         })

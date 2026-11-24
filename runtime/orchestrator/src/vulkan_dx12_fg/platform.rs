@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::dx12_vulkan_platform::{adapter_luid, device_local_mask, lookup};
+use crate::dx12_vulkan_platform::{adapter_luid, device_local_mask, entry};
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_complete_group, rsf_core_capture_vk_discard_group,
     rsf_core_capture_vk_flush, rsf_core_capture_vk_provider, rsf_core_capture_vk_record,
 };
 use ash::vk::{self, Handle as _};
-use std::mem;
 
 const _: () = {
     assert!(size_of::<vk::PresentInfoKHR<'_>>() == 64);
@@ -25,17 +24,14 @@ macro_rules! device_dispatch {
         impl Dispatch {
             fn load(graphics: &Graphics) -> Option<Self> {
                 graphics.instance_proc?;
-                $(let $field = lookup(graphics.device_proc, graphics.device, $name)?;)+
-                let memory = lookup(graphics.instance_proc, graphics.instance, c"vkGetPhysicalDeviceMemoryProperties");
-                let formats = lookup(graphics.instance_proc, graphics.instance, c"vkGetPhysicalDeviceFormatProperties");
+                // Each name is paired with its exact system-ABI signature.
+                $(let $field = unsafe { entry::<vk::$ty>(graphics.device_proc, graphics.device, $name) }?;)+
+                let memory = unsafe { entry(graphics.instance_proc, graphics.instance, c"vkGetPhysicalDeviceMemoryProperties") };
+                let formats = unsafe { entry(graphics.instance_proc, graphics.instance, c"vkGetPhysicalDeviceFormatProperties") };
                 Some(Self {
-                    $($field: unsafe { mem::transmute::<unsafe extern "C" fn(), vk::$ty>($field) },)+
-                    memory_properties: unsafe {
-                        mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetPhysicalDeviceMemoryProperties>(memory?)
-                    },
-                    format_properties: unsafe {
-                        mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetPhysicalDeviceFormatProperties>(formats?)
-                    },
+                    $($field,)+
+                    memory_properties: memory?,
+                    format_properties: formats?,
                 })
             }
         }

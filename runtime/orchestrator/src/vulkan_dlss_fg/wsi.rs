@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::Setup;
-use crate::dx12_vulkan_platform::lookup;
+use crate::dx12_vulkan_platform::entry;
 use crate::vulkan_fg_copy::ImageCopy;
 use crate::vulkan_fg_copy::{Barrier, rsf_core_vkfg_record_barrier, rsf_core_vkfg_record_copy};
 use ash::vk::{self, Handle as _};
-use std::{ffi::c_void, mem};
+use std::ffi::c_void;
 
 pub(super) struct Wsi {
     device: vk::Device,
@@ -24,17 +24,13 @@ pub(super) struct Wsi {
 impl Wsi {
     pub(super) fn surface_usage(setup: &Setup, surface: vk::SurfaceKHR) -> Option<u32> {
         let graphics = &setup.graphics;
-        let address = lookup(
-            graphics.instance_proc,
-            graphics.instance,
-            c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
-        )?;
         let query = unsafe {
-            mem::transmute::<
-                unsafe extern "C" fn(),
-                vk::PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR,
-            >(address)
-        };
+            entry::<vk::PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(
+                graphics.instance_proc,
+                graphics.instance,
+                c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+            )
+        }?;
         let mut capabilities = vk::SurfaceCapabilitiesKHR::default();
         let result = unsafe {
             query(
@@ -48,30 +44,25 @@ impl Wsi {
 
     pub(super) fn load(setup: &Setup) -> Option<Self> {
         let graphics = &setup.graphics;
-        macro_rules! entry {
-            ($name:literal, $ty:ident) => {
-                unsafe {
-                    mem::transmute::<unsafe extern "C" fn(), vk::$ty>(lookup(
-                        graphics.device_proc,
-                        graphics.device,
-                        $name,
-                    )?)
-                }
+        // Each name is paired with the field's exact system-ABI signature.
+        macro_rules! device {
+            ($name:literal) => {
+                unsafe { entry(graphics.device_proc, graphics.device, $name) }?
             };
         }
         Some(Self {
             device: vk::Device::from_raw(graphics.device as u64),
             queue: vk::Queue::from_raw(setup.queues[0] as u64),
             allocator: setup.allocator.cast(),
-            create: entry!(c"vkCreateSwapchainKHR", PFN_vkCreateSwapchainKHR),
-            destroy: entry!(c"vkDestroySwapchainKHR", PFN_vkDestroySwapchainKHR),
-            images: entry!(c"vkGetSwapchainImagesKHR", PFN_vkGetSwapchainImagesKHR),
-            acquire: entry!(c"vkAcquireNextImageKHR", PFN_vkAcquireNextImageKHR),
-            present: entry!(c"vkQueuePresentKHR", PFN_vkQueuePresentKHR),
-            idle: entry!(c"vkDeviceWaitIdle", PFN_vkDeviceWaitIdle),
-            wait_inputs: entry!(c"vkWaitSemaphores", PFN_vkWaitSemaphores),
-            barrier: entry!(c"vkCmdPipelineBarrier", PFN_vkCmdPipelineBarrier),
-            copy: entry!(c"vkCmdCopyImage", PFN_vkCmdCopyImage),
+            create: device!(c"vkCreateSwapchainKHR"),
+            destroy: device!(c"vkDestroySwapchainKHR"),
+            images: device!(c"vkGetSwapchainImagesKHR"),
+            acquire: device!(c"vkAcquireNextImageKHR"),
+            present: device!(c"vkQueuePresentKHR"),
+            idle: device!(c"vkDeviceWaitIdle"),
+            wait_inputs: device!(c"vkWaitSemaphores"),
+            barrier: device!(c"vkCmdPipelineBarrier"),
+            copy: device!(c"vkCmdCopyImage"),
         })
     }
 

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-use crate::dx12_vulkan_platform::lookup;
+use crate::dx12_vulkan_platform::entry;
 use crate::sys::rsf_srvk_setup as Graphics;
 use ash::vk::{self, Handle as _};
-use std::{mem, ptr};
+use std::ptr;
 
 macro_rules! command_dispatch {
     ($($field:ident: $ty:ident = $name:literal),+ $(,)?) => {
@@ -13,10 +13,11 @@ macro_rules! command_dispatch {
 
         impl Commands {
             pub(super) fn load(graphics: &Graphics) -> Option<Self> {
-                $(let $field = lookup(graphics.device_proc, graphics.device, $name)?;)+
+                // Each name is paired with its exact system-ABI signature.
+                $(let $field = unsafe { entry::<vk::$ty>(graphics.device_proc, graphics.device, $name) }?;)+
                 Some(Self {
                     device: vk::Device::from_raw(graphics.device as u64),
-                    $($field: unsafe { mem::transmute::<unsafe extern "C" fn(), vk::$ty>($field) },)+
+                    $($field,)+
                 })
             }
         }

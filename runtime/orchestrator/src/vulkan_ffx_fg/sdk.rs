@@ -11,6 +11,7 @@
 // inside an SDK call. Only the SDK-written contexts, the chain and the
 // replacement table change after publication, so they are UnsafeCell fields
 // and every later step takes a shared reference.
+use crate::dx12_vulkan_platform::typed;
 use super::startup::{self, CoreEntries, Platform, WsiEntries};
 use super::{BGRA8, FEATURE_FAILED, Frame, Handle, INIT_FAILED, Image, OK, RGBA8, Record, Setup};
 use crate::frame_capture_vk::{
@@ -624,12 +625,7 @@ unsafe extern "C" fn lookup_instance(
     unsafe { (leaf.host.resolve)(graphics.instance_proc, graphics.instance, name, out) }
 }
 
-// startup::open resolved each slot by its exact SDK export or Vulkan command name.
-macro_rules! typed {
-    ($entry:expr, $ty:ty) => {
-        unsafe { std::mem::transmute::<rsf_vk_function, $ty>($entry) }
-    };
-}
+// startup::open resolved each slot by its exact SDK export or Vulkan command name; 	yped`n// pairs it with the field's signature.
 
 unsafe extern "C" fn bind_core(native: Handle, entries: &CoreEntries) {
     let leaf = unsafe { unpublished(native) };
@@ -644,15 +640,15 @@ unsafe extern "C" fn bind_core(native: Handle, entries: &CoreEntries) {
         idle,
     ] = *entries;
     leaf.sdk = Sdk {
-        configure: typed!(configure, PfnFfxConfigure),
-        create: typed!(create, PfnFfxCreateContext),
-        destroy: typed!(destroy, PfnFfxDestroyContext),
-        query: typed!(query, PfnFfxQuery),
-        dispatch: typed!(dispatch, PfnFfxDispatch),
+        configure: unsafe { typed(configure) },
+        create: unsafe { typed(create) },
+        destroy: unsafe { typed(destroy) },
+        query: unsafe { typed(query) },
+        dispatch: unsafe { typed(dispatch) },
     };
-    leaf.barrier = typed!(barrier, Option<vk::PFN_vkCmdPipelineBarrier>);
-    leaf.copy = typed!(copy, Option<vk::PFN_vkCmdCopyImage>);
-    leaf.idle = typed!(idle, Option<vk::PFN_vkDeviceWaitIdle>);
+    leaf.barrier = unsafe { typed(barrier) };
+    leaf.copy = unsafe { typed(copy) };
+    leaf.idle = unsafe { typed(idle) };
 }
 
 unsafe extern "C" fn read_memory(native: Handle, query: rsf_vk_function) -> i32 {
@@ -699,12 +695,12 @@ unsafe extern "C" fn initialize_capture(native: Handle, resources: &mut Handle) 
 unsafe extern "C" fn bind_wsi(native: Handle, entries: &WsiEntries) {
     let leaf = unsafe { unpublished(native) };
     let [dispatch, present, acquire, images, create, destroy] = *entries;
-    leaf.wsi_dispatch = typed!(dispatch, Option<SetWsiDispatch>);
-    leaf.native_present = typed!(present, Option<vk::PFN_vkQueuePresentKHR>);
-    leaf.native_acquire = typed!(acquire, Option<vk::PFN_vkAcquireNextImageKHR>);
-    leaf.native_images = typed!(images, Option<vk::PFN_vkGetSwapchainImagesKHR>);
-    leaf.native_create = typed!(create, Option<vk::PFN_vkCreateSwapchainKHR>);
-    leaf.native_destroy = typed!(destroy, Option<vk::PFN_vkDestroySwapchainKHR>);
+    leaf.wsi_dispatch = unsafe { typed(dispatch) };
+    leaf.native_present = unsafe { typed(present) };
+    leaf.native_acquire = unsafe { typed(acquire) };
+    leaf.native_images = unsafe { typed(images) };
+    leaf.native_create = unsafe { typed(create) };
+    leaf.native_destroy = unsafe { typed(destroy) };
 }
 
 pub(super) unsafe extern "C" fn open(

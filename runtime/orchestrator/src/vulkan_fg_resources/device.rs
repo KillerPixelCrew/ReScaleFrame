@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
-use crate::dx12_vulkan_platform::{device_local_mask, lookup};
+use crate::dx12_vulkan_platform::{device_local_mask, lookup, typed};
 use crate::sys::rsf_fgvk_setup;
 use crate::sys::{rsf_srvk_setup, rsf_vk_function};
 use crate::vulkan_fg_resources::Platform as rsf_vkfg_platform;
@@ -24,20 +24,17 @@ impl Images {
     fn load(mut lookup: impl FnMut(&'static std::ffi::CStr) -> rsf_vk_function) -> Option<Self> {
         // The host loader and the supplied entry array both identify the exact Vulkan commands.
         macro_rules! get {
-            ($name:literal, $ty:ident) => {
-                unsafe { std::mem::transmute::<unsafe extern "C" fn(), vk::$ty>(lookup($name)?) }
+            ($name:literal) => {
+                unsafe { typed(lookup($name)) }?
             };
         }
         Some(Self {
-            create: get!(c"vkCreateImage", PFN_vkCreateImage),
-            destroy: get!(c"vkDestroyImage", PFN_vkDestroyImage),
-            requirements: get!(
-                c"vkGetImageMemoryRequirements",
-                PFN_vkGetImageMemoryRequirements
-            ),
-            allocate: get!(c"vkAllocateMemory", PFN_vkAllocateMemory),
-            free: get!(c"vkFreeMemory", PFN_vkFreeMemory),
-            bind: get!(c"vkBindImageMemory", PFN_vkBindImageMemory),
+            create: get!(c"vkCreateImage"),
+            destroy: get!(c"vkDestroyImage"),
+            requirements: get!(c"vkGetImageMemoryRequirements"),
+            allocate: get!(c"vkAllocateMemory"),
+            free: get!(c"vkFreeMemory"),
+            bind: get!(c"vkBindImageMemory"),
         })
     }
 }
@@ -82,22 +79,22 @@ impl Device {
         let lookup = |name: &CStr| lookup(graphics.device_proc, graphics.device, name);
         let mut device = Self::new(graphics.device, Images::load(lookup)?);
         macro_rules! get {
-            ($name:literal, $ty:ident) => {
-                unsafe { std::mem::transmute::<unsafe extern "C" fn(), vk::$ty>(lookup($name)?) }
+            ($name:literal) => {
+                unsafe { typed(lookup($name)) }?
             };
         }
         if with_view {
             device.views = Some((
-                get!(c"vkCreateImageView", PFN_vkCreateImageView),
-                get!(c"vkDestroyImageView", PFN_vkDestroyImageView),
+                get!(c"vkCreateImageView"),
+                get!(c"vkDestroyImageView"),
             ));
         }
         if let Some(fg) = fg {
             device.fences = Some(Fences {
-                create: get!(c"vkCreateFence", PFN_vkCreateFence),
-                destroy: get!(c"vkDestroyFence", PFN_vkDestroyFence),
-                reset: get!(c"vkResetFences", PFN_vkResetFences),
-                wait: get!(c"vkWaitForFences", PFN_vkWaitForFences),
+                create: get!(c"vkCreateFence"),
+                destroy: get!(c"vkDestroyFence"),
+                reset: get!(c"vkResetFences"),
+                wait: get!(c"vkWaitForFences"),
                 submit: fg.graphics_submit?,
                 queue_user: fg.queue_user,
             });

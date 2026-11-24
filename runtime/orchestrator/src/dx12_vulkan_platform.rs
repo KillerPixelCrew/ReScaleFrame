@@ -18,6 +18,25 @@ pub(super) fn lookup(proc: rsf_vk_get_proc, object: Handle, name: &CStr) -> rsf_
     unsafe { proc?(object, name.as_ptr()) }
 }
 
+/// Types a resolved Vulkan or SDK entry as its function-pointer type `T`.
+///
+/// # Safety
+///
+/// `T` is the exact system-ABI signature of the entry `function` was resolved for.
+pub(crate) unsafe fn typed<T: Copy>(function: rsf_vk_function) -> Option<T> {
+    const { assert!(size_of::<T>() == size_of::<unsafe extern "C" fn()>()) };
+    // The caller pairs the entry name with its signature.
+    function.map(|function| unsafe { mem::transmute_copy::<unsafe extern "C" fn(), T>(&function) })
+}
+
+/// Resolves the Vulkan command `name` through `proc` for `object`, typed as `T`.
+///
+/// # Safety
+///
+/// `T` is the exact system-ABI signature of the command `name`.
+pub(crate) unsafe fn entry<T: Copy>(proc: rsf_vk_get_proc, object: Handle, name: &CStr) -> Option<T> {
+    unsafe { typed(lookup(proc, object, name)) }
+}
 // Selects the resolver and dispatch object for an `instance` or `device` scoped entry.
 macro_rules! scope {
     ($setup:ident, instance) => {
@@ -41,13 +60,13 @@ macro_rules! dispatch {
                 // Query all entries before checking for a missing address.
                 $(let $field = {
                     let (proc, object) = scope!(setup, $scope);
-                    lookup(proc, object, $name)
+                    // The Vulkan name and its exact system-ABI signature are paired here.
+                    unsafe { entry::<vk::$ty>(proc, object, $name) }
                 };)+
                 Some(Self {
                     physical: vk::PhysicalDevice::from_raw(setup.physical_device as u64),
                     device: vk::Device::from_raw(setup.device as u64),
-                    // The Vulkan name and its exact system-ABI signature are paired here.
-                    $($field: unsafe { mem::transmute::<unsafe extern "C" fn(), vk::$ty>($field?) },)+
+                    $($field: $field?,)+
                 })
             }
         }
@@ -72,15 +91,14 @@ dispatch! {
 
 pub(super) unsafe extern "C" fn adapter_luid(setup: *const Setup, out: *mut u64) -> i32 {
     let setup = unsafe { &*setup };
-    let Some(get) = lookup(
-        setup.instance_proc,
-        setup.instance,
-        c"vkGetPhysicalDeviceProperties2",
-    ) else {
+    let Some(get) = (unsafe {
+        entry::<vk::PFN_vkGetPhysicalDeviceProperties2>(
+            setup.instance_proc,
+            setup.instance,
+            c"vkGetPhysicalDeviceProperties2",
+        )
+    }) else {
         return vk::Result::ERROR_EXTENSION_NOT_PRESENT.as_raw();
-    };
-    let get = unsafe {
-        mem::transmute::<unsafe extern "C" fn(), vk::PFN_vkGetPhysicalDeviceProperties2>(get)
     };
     let mut identity = vk::PhysicalDeviceIDProperties::default();
     let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut identity);
