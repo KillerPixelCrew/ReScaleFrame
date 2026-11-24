@@ -9,6 +9,8 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::{Common::*, *};
 use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::*;
+use rsf_test_support::Window;
+use windows::Win32::UI::WindowsAndMessaging::{WINDOW_STYLE, WS_OVERLAPPEDWINDOW, WS_POPUP};
 use windows::core::{Interface, PCWSTR};
 use windows_sys::Win32::Foundation::POINT;
 use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
@@ -20,40 +22,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-struct Window(HWND);
-impl Window {
-    fn new(class: *const u16, style: u32, width: i32, height: i32) -> Option<Self> {
-        let instance = unsafe { GetModuleHandleW(ptr::null()) };
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(DefWindowProcW),
-            hInstance: instance,
-            lpszClassName: class,
-            ..Default::default()
-        };
-        unsafe { RegisterClassW(&wc) };
-        let window = unsafe {
-            CreateWindowExW(
-                0,
-                class,
-                w!("Anomaly fixture"),
-                style,
-                0,
-                0,
-                width,
-                height,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                instance,
-                ptr::null(),
-            )
-        };
-        (!window.is_null()).then_some(Self(HWND(window)))
-    }
-}
-impl Drop for Window {
-    fn drop(&mut self) {
-        unsafe { DestroyWindow(self.0.0) };
-    }
+/// A fixture window of its own class: the engine's, a foreign one, or the input test's.
+fn window(class: PCWSTR, style: WINDOW_STYLE, width: i32, height: i32) -> Option<Window> {
+    Window::new(class, windows::core::w!("Anomaly fixture"), style, width, height).ok()
 }
 
 struct Graphics {
@@ -162,10 +133,10 @@ unsafe extern "C" fn settings_apply(_: *const rsf_render_settings) -> i32 {
 }
 
 fn dxgi(checks: &mut Checks) -> Option<()> {
-    let engine = Window::new(w!("_XRAY_1.5"), WS_POPUP, 64, 64)?;
-    let other = Window::new(w!("RSF_NOT_THE_ENGINE"), WS_POPUP, 64, 64)?;
-    let game = Graphics::new(engine.0, D3D_DRIVER_TYPE_WARP, 64, 64, false)?;
-    let side = Graphics::new(other.0, D3D_DRIVER_TYPE_WARP, 64, 64, false)?;
+    let engine = window(windows::core::w!("_XRAY_1.5"), WS_POPUP, 64, 64)?;
+    let other = window(windows::core::w!("RSF_NOT_THE_ENGINE"), WS_POPUP, 64, 64)?;
+    let game = Graphics::new(engine.handle, D3D_DRIVER_TYPE_WARP, 64, 64, false)?;
+    let side = Graphics::new(other.handle, D3D_DRIVER_TYPE_WARP, 64, 64, false)?;
     let first = unsafe { game.chain.Present(0, DXGI_PRESENT(0)) };
     checks.check(first.is_ok(), "engine chain presents");
     checks.check(
@@ -213,7 +184,7 @@ fn dxgi(checks: &mut Checks) -> Option<()> {
         *lock(&NOTIFIED) == [RSF_OVERLAY_NOTIFY_RESIZE],
         "engine resize notified once",
     );
-    let second = Graphics::new(engine.0, D3D_DRIVER_TYPE_WARP, 64, 64, false)?;
+    let second = Graphics::new(engine.handle, D3D_DRIVER_TYPE_WARP, 64, 64, false)?;
     lock(&NOTIFIED).clear();
     unsafe {
         let _ = second.chain.Present(0, DXGI_PRESENT(0));
@@ -230,7 +201,7 @@ fn dxgi(checks: &mut Checks) -> Option<()> {
 }
 
 fn directinput(checks: &mut Checks, format: *const DIDATAFORMAT) -> Option<()> {
-    let window = Window::new(w!("RSF_DINPUT_TEST"), WS_POPUP, 64, 64)?;
+    let window = window(windows::core::w!("RSF_DINPUT_TEST"), WS_POPUP, 64, 64)?;
     let module = unsafe { crate::runtime_module::Module::system(w!("dinput8.dll")) }?;
     let create = module.symbol(c"DirectInput8Create")?;
     let iid = windows_sys::core::GUID::from_u128(0xbf798030_483a_4da2_aa99_5d64ed369700);
@@ -259,7 +230,7 @@ fn directinput(checks: &mut Checks, format: *const DIDATAFORMAT) -> Option<()> {
     unsafe {
         mouse.SetDataFormat(format.cast_mut()).ok()?;
         mouse
-            .SetCooperativeLevel(window.0, DISCL_NONEXCLUSIVE | DISCL_BACKGROUND)
+            .SetCooperativeLevel(window.handle, DISCL_NONEXCLUSIVE | DISCL_BACKGROUND)
             .ok()?;
         mouse.Acquire().ok()?;
     }
@@ -490,10 +461,10 @@ fn visibility(query: rsf_get_overlay_api_fn) -> Result<i32, Box<dyn std::error::
     if runtime.is_null() {
         return Err("the imported Runtime DLL is absent".into());
     }
-    let window = Window::new(w!("_XRAY_1.5"), WS_OVERLAPPEDWINDOW, 640, 360)
+    let window = window(windows::core::w!("_XRAY_1.5"), WS_OVERLAPPEDWINDOW, 640, 360)
         .ok_or("creating the hidden engine window failed")?;
-    let Some(gpu) = Graphics::new(window.0, D3D_DRIVER_TYPE_HARDWARE, 640, 360, true)
-        .or_else(|| Graphics::new(window.0, D3D_DRIVER_TYPE_WARP, 640, 360, true))
+    let Some(gpu) = Graphics::new(window.handle, D3D_DRIVER_TYPE_HARDWARE, 640, 360, true)
+        .or_else(|| Graphics::new(window.handle, D3D_DRIVER_TYPE_WARP, 640, 360, true))
     else {
         println!("SKIP: no D3D11 device");
         return Ok(77);
@@ -556,7 +527,7 @@ fn visibility(query: rsf_get_overlay_api_fn) -> Result<i32, Box<dyn std::error::
     let mut click = POINT { x: 120, y: 80 };
     checks.check(
         unsafe {
-            ClientToScreen(window.0.0, &mut click) != 0 && SetCursorPos(click.x, click.y) != 0
+            ClientToScreen(window.handle.0, &mut click) != 0 && SetCursorPos(click.x, click.y) != 0
         },
         "position the cursor before opening",
     );
@@ -566,11 +537,11 @@ fn visibility(query: rsf_get_overlay_api_fn) -> Result<i32, Box<dyn std::error::
     );
     let pointer = 120 | (80 << 16);
     unsafe {
-        SendMessageW(window.0.0, WM_MOUSEMOVE, 0, pointer);
-        SendMessageW(window.0.0, WM_LBUTTONDOWN, 1, pointer);
+        SendMessageW(window.handle.0, WM_MOUSEMOVE, 0, pointer);
+        SendMessageW(window.handle.0, WM_LBUTTONDOWN, 1, pointer);
     }
     frames(&gpu, 2)?;
-    unsafe { SendMessageW(window.0.0, WM_LBUTTONUP, 0, pointer) };
+    unsafe { SendMessageW(window.handle.0, WM_LBUTTONUP, 0, pointer) };
     frames(&gpu, 10)?;
 
     let mut settings = rsf_render_settings {

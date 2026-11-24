@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::core::{BOOL, Interface};
-use windows_sys::Win32::Foundation::{HWND, MAX_PATH, RECT};
+use windows_sys::Win32::Foundation::{HWND, MAX_PATH};
 use windows_sys::Win32::Storage::FileSystem::{
     GetFileAttributesA, GetTempPathA, INVALID_FILE_ATTRIBUTES,
 };
@@ -103,46 +103,29 @@ fn describe_adapter(role: &str, adapter: windows::core::Result<IDXGIAdapter>) {
     }
 }
 
-fn fixture_window() -> Option<HWND> {
-    let class = WNDCLASSW {
-        hInstance: unsafe { GetModuleHandleW(ptr::null()) },
-        lpfnWndProc: Some(DefWindowProcW),
-        lpszClassName: w!("_XRAY_1.5"),
-        ..Default::default()
-    };
-    let mut rect = RECT {
+/// A shown window of the engine's class with a client area of the output size.
+fn fixture_window() -> Option<rsf_test_support::Window> {
+    use windows::Win32::UI::WindowsAndMessaging::{AdjustWindowRect, WS_OVERLAPPEDWINDOW};
+    let mut rect = Rect {
         right: WIDTH as i32,
         bottom: HEIGHT as i32,
         ..Default::default()
     };
+    unsafe { AdjustWindowRect(&mut rect, WS_OVERLAPPEDWINDOW, false) }.ok()?;
+    let window = rsf_test_support::Window::new(
+        windows::core::w!("_XRAY_1.5"),
+        windows::core::w!("Anomaly FG fixture"),
+        WS_OVERLAPPEDWINDOW,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+    )
+    .ok()?;
     unsafe {
-        if RegisterClassW(&class) == 0 {
-            return None;
-        }
-        AdjustWindowRect(&mut rect, WS_OVERLAPPEDWINDOW, 0);
-        let window = CreateWindowExW(
-            0,
-            class.lpszClassName,
-            w!("Anomaly FG fixture"),
-            WS_OVERLAPPEDWINDOW,
-            0,
-            0,
-            rect.right - rect.left,
-            rect.bottom - rect.top,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            class.hInstance,
-            ptr::null(),
-        );
-        if window.is_null() {
-            return None;
-        }
-        ShowWindow(window, SW_SHOW);
-        SetForegroundWindow(window);
-        Some(window)
+        ShowWindow(window.handle.0, SW_SHOW);
+        SetForegroundWindow(window.handle.0);
     }
+    Some(window)
 }
-
 fn create_chain(
     adapter: &IDXGIAdapter1,
     window: HWND,
@@ -763,7 +746,7 @@ pub(super) fn run(
     } else {
         None
     };
-    let Some((chain, device, context)) = create_chain(&adapter, window) else {
+    let Some((chain, device, context)) = create_chain(&adapter, window.handle.0) else {
         eprintln!("FAIL D3D11CreateDeviceAndSwapChain");
         return 1;
     };
@@ -806,5 +789,5 @@ pub(super) fn run(
         eprintln!("FAIL fixture resources");
         return 1;
     };
-    scene.scenarios(window, backend, switching)
+    scene.scenarios(window.handle.0, backend, switching)
 }

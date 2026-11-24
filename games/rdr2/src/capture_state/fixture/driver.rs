@@ -6,23 +6,20 @@ use crate::capture_state::install::{arm_fixture, stop_fixture};
 use rsf_game_sys::win32::typed_export;
 use std::ffi::{CStr, CString, c_void};
 use std::mem::ManuallyDrop;
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::{null, null_mut};
-use windows::Win32::Foundation::{HANDLE, HWND, RECT};
+use windows::Win32::Foundation::{HANDLE, RECT};
 use windows::Win32::Graphics::{
     Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, Fxc::D3DCompile, ID3DBlob, ID3DInclude},
     Direct3D12::*,
     Dxgi::{Common::*, *},
 };
+use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW;
 use windows::core::{BOOL, Interface, PCSTR};
 use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
 use windows_sys::Win32::System::{
-    LibraryLoader::{GetModuleHandleW, LoadLibraryW},
+    LibraryLoader::LoadLibraryW,
     Threading::{CreateEventW, WaitForSingleObject},
-};
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, WS_OVERLAPPEDWINDOW,
 };
 
 const WIDTH: u32 = 64;
@@ -69,16 +66,6 @@ fn require(condition: bool, operation: &'static str) -> Result {
     condition.then_some(()).ok_or_else(|| operation.to_owned())
 }
 
-fn wide(path: &Path) -> Vec<u16> {
-    path.as_os_str().encode_wide().chain([0]).collect()
-}
-
-struct Window(HWND);
-impl Drop for Window {
-    fn drop(&mut self) {
-        unsafe { DestroyWindow(self.0.0) };
-    }
-}
 struct Event(HANDLE);
 impl Drop for Event {
     fn drop(&mut self) {
@@ -308,7 +295,7 @@ fn run_ngx(list: &ID3D12GraphicsCommandList, inputs: &Inputs, leaves: NgxLeaves)
     type Create = unsafe extern "C" fn(*mut c_void, u32, *mut c_void, *mut *mut c_void) -> i32;
     type Evaluate = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> i32;
     let exe = std::env::current_exe().map_err(|error| error.to_string())?;
-    let path = wide(&exe.with_file_name("_nvngx.dll"));
+    let path = rsf_test_support::wide_os(exe.with_file_name("_nvngx.dll"));
     let ngx = unsafe { LoadLibraryW(path.as_ptr()) };
     require(!ngx.is_null(), "NGX fixture load")?;
     let get: Get = unsafe { typed_export(ngx, c"NVSDK_NGX_D3D12_GetParameters") }
@@ -405,7 +392,7 @@ fn debug_messages(info: &ID3D12InfoQueue) -> Result {
 
 fn run(root: &Path, rgb10: bool, driver: Driver) -> Result {
     std::fs::create_dir_all(root).map_err(|error| error.to_string())?;
-    let directory = wide(root);
+    let directory = rsf_test_support::wide_os(root);
     require(
         unsafe { (driver.setup)(directory.as_ptr()) },
         "probe install",
@@ -434,24 +421,16 @@ fn run(root: &Path, rgb10: bool, driver: Driver) -> Result {
         unsafe { device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC::default()) },
         "queue",
     )?;
-    let hwnd = unsafe {
-        CreateWindowExW(
-            0,
-            windows::core::w!("STATIC").0,
-            windows::core::w!("RSF capture fixture").0,
+    let window = hr(
+        rsf_test_support::Window::new(
+            windows::core::w!("RSF_CAPTURE_FIXTURE"),
+            windows::core::w!("RSF capture fixture"),
             WS_OVERLAPPEDWINDOW,
-            0,
-            0,
             WIDTH as i32,
             HEIGHT as i32,
-            null_mut(),
-            null_mut(),
-            GetModuleHandleW(null()),
-            null(),
-        )
-    };
-    require(!hwnd.is_null(), "hidden window")?;
-    let window = Window(HWND(hwnd));
+        ),
+        "hidden window",
+    )?;
     let format = if rgb10 {
         DXGI_FORMAT_R10G10B10A2_UNORM
     } else {
@@ -472,7 +451,7 @@ fn run(root: &Path, rgb10: bool, driver: Driver) -> Result {
     };
     let chain1 = hr(
         unsafe {
-            factory.CreateSwapChainForHwnd(&queue, window.0, &desc, None, None::<&IDXGIOutput>)
+            factory.CreateSwapChainForHwnd(&queue, window.handle, &desc, None, None::<&IDXGIOutput>)
         },
         "swapchain",
     )?;

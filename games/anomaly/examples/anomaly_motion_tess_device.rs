@@ -35,27 +35,18 @@ mod probe {
                 {
                     continue;
                 }
-                let mut device = None;
-                let mut context = None;
                 let flags = if debug {
                     D3D11_CREATE_DEVICE_DEBUG
                 } else {
                     D3D11_CREATE_DEVICE_FLAG(0)
                 };
-                let result = unsafe {
-                    D3D11CreateDevice(
-                        &adapter,
-                        D3D_DRIVER_TYPE_UNKNOWN,
-                        Default::default(),
-                        flags,
-                        Some(&[D3D_FEATURE_LEVEL_11_0]),
-                        D3D11_SDK_VERSION,
-                        Some(&mut device),
-                        None,
-                        Some(&mut context),
-                    )
-                };
-                if let (Ok(()), Some(device), Some(context)) = (result, device, context) {
+                let created = rsf_test_support::d3d11_device_on(
+                    Some(&*adapter),
+                    D3D_DRIVER_TYPE_UNKNOWN,
+                    flags,
+                    Some(&[D3D_FEATURE_LEVEL_11_0]),
+                );
+                if let Ok((device, context)) = created {
                     let end = desc
                         .Description
                         .iter()
