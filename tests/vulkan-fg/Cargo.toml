@@ -17,8 +17,10 @@ wsi-dispatch = ["dep:ash"]
 streamline-selected = []
 streamline-dispatch = ["dep:ash"]
 xess-sr = ["dep:ash", "dep:windows-sys"]
-# The owner entries and production table are C symbols only in the orchestrator's test-fixtures build.
-xess-input-range = ["dep:ash", "rsf-orchestrator/test-fixtures"]
+# The owner entries and production table are C symbols only in the orchestrator's test-fixtures build;
+# the owner reaches XeSS through the Vulkan SR table, so both of its Vulkan SR features are on (CMake
+# registers the test only with the XeSS and FidelityFX Vulkan headers).
+xess-input-range = ["dep:ash", "rsf-orchestrator/test-fixtures", "rsf-orchestrator/xess-vk", "rsf-orchestrator/ffx-vk"]
 xess-device = [
   "dep:ash", "dep:windows-sys", "windows-sys/Win32_Graphics_Gdi",
   "windows-sys/Win32_UI_WindowsAndMessaging",
