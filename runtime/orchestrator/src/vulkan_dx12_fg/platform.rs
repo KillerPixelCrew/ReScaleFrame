@@ -5,6 +5,10 @@ use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_complete_group, rsf_core_capture_vk_discard_group,
     rsf_core_capture_vk_flush, rsf_core_capture_vk_provider, rsf_core_capture_vk_record,
 };
+use crate::vulkan_fg_copy::{
+    COLOR_RANGE, ImageCopy, rsf_core_vkfg_record_barrier as record_barrier,
+    rsf_core_vkfg_record_copy as record_copy,
+};
 use ash::vk::{self, Handle as _};
 
 const _: () = {
@@ -393,13 +397,6 @@ unsafe extern "C" fn end(platform: Handle, list: Handle) -> i32 {
     unsafe { (dispatch.end)(command(list)).as_raw() }
 }
 
-const RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
-    aspect_mask: vk::ImageAspectFlags::COLOR,
-    base_mip_level: 0,
-    level_count: 1,
-    base_array_layer: 0,
-    layer_count: 1,
-};
 const LAYERS: vk::ImageSubresourceLayers = vk::ImageSubresourceLayers {
     aspect_mask: vk::ImageAspectFlags::COLOR,
     mip_level: 0,
@@ -409,57 +406,15 @@ const LAYERS: vk::ImageSubresourceLayers = vk::ImageSubresourceLayers {
 
 unsafe extern "C" fn barrier(platform: Handle, list: Handle, plan: *const Barrier) {
     let dispatch = dispatch_for(unsafe { &*platform.cast::<Platform>() });
-    let plan = unsafe { &*plan };
-    let transition = vk::ImageMemoryBarrier::default()
-        .src_access_mask(vk::AccessFlags::from_raw(plan.source_access))
-        .dst_access_mask(vk::AccessFlags::from_raw(plan.target_access))
-        .old_layout(vk::ImageLayout::from_raw(plan.old_layout as i32))
-        .new_layout(vk::ImageLayout::from_raw(plan.new_layout as i32))
-        .src_queue_family_index(plan.source_family)
-        .dst_queue_family_index(plan.target_family)
-        .image(vk::Image::from_raw(plan.image))
-        .subresource_range(RANGE);
-    unsafe {
-        (dispatch.barrier)(
-            command(list),
-            vk::PipelineStageFlags::from_raw(plan.source_stages),
-            vk::PipelineStageFlags::from_raw(plan.target_stages),
-            vk::DependencyFlags::empty(),
-            0,
-            ptr::null(),
-            0,
-            ptr::null(),
-            1,
-            &transition,
-        );
-    }
+    unsafe { record_barrier(dispatch.barrier, command(list), &*plan) };
 }
 
 unsafe extern "C" fn copy(platform: Handle, list: Handle, plan: *const Transfer) {
     let dispatch = dispatch_for(unsafe { &*platform.cast::<Platform>() });
     let plan = unsafe { &*plan };
-    let [width, height] = plan.target_extent;
-    let region = vk::ImageCopy::default()
-        .src_subresource(LAYERS)
-        .dst_subresource(LAYERS)
-        .extent(vk::Extent3D {
-            width,
-            height,
-            depth: 1,
-        });
-    unsafe {
-        (dispatch.copy)(
-            command(list),
-            vk::Image::from_raw(plan.source),
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            vk::Image::from_raw(plan.target),
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            1,
-            &region,
-        );
-    }
+    let copy = ImageCopy::transfer(plan.source, plan.target, plan.target_extent);
+    unsafe { record_copy(dispatch.copy, command(list), &copy) };
 }
-
 unsafe extern "C" fn blit(platform: Handle, list: Handle, plan: *const Transfer) {
     let dispatch = dispatch_for(unsafe { &*platform.cast::<Platform>() });
     let plan = unsafe { &*plan };
@@ -502,7 +457,7 @@ unsafe extern "C" fn clear(platform: Handle, list: Handle, target: u64) {
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             &zero,
             1,
-            &RANGE,
+            &COLOR_RANGE,
         );
     }
 }

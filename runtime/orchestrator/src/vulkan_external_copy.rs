@@ -18,10 +18,7 @@ pub(super) struct Transfer {
     pub target_extent: [u32; 2],
 }
 
-const _: () = {
-    assert!(size_of::<Barrier>() == 40);
-    assert!(size_of::<Transfer>() == 32);
-};
+const _: () = assert!(size_of::<Transfer>() == 32);
 
 pub(super) struct Plan {
     pub before: [Barrier; 2],
