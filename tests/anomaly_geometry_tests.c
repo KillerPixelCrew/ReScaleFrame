@@ -96,24 +96,22 @@ static bool capture_copy(draw_copy* copy)
 }
 
 /* DrawScope with the registry key of an acquired identity. */
-typedef struct scope {
-    rsf_anomaly_geometry_visual node;
-} scope;
+typedef rsf_anomaly_geometry_visual scope;
 
 static void scope_enter(scope* s, const rsf_anomaly_geometry_registry* registry, bool keyed,
     rsf_anomaly_geometry_key key, uint8_t kind, const float* world, const uint8_t* skeleton, uint8_t pass,
     uint8_t type, uint8_t verdict)
 {
     memset(s, 0, sizeof(*s));
-    s->node.registry = registry;
-    if (keyed) s->node.key = key;
-    s->node.world = (uintptr_t)world;
-    s->node.skeleton = (uintptr_t)skeleton;
-    s->node.kind = kind;
-    s->node.pass = pass;
-    s->node.type = type;
-    s->node.verdict = verdict;
-    rsf_anomaly_geometry_visual_enter(&s->node);
+    s->registry = registry;
+    if (keyed) s->key = key;
+    s->world = (uintptr_t)world;
+    s->skeleton = (uintptr_t)skeleton;
+    s->kind = kind;
+    s->pass = pass;
+    s->type = type;
+    s->verdict = verdict;
+    rsf_anomaly_geometry_visual_enter(s);
 }
 
 static void draw_enter(scope* s, const rsf_anomaly_geometry_registry* registry, bool keyed,
@@ -123,55 +121,44 @@ static void draw_enter(scope* s, const rsf_anomaly_geometry_registry* registry, 
         RSF_ANOMALY_DRAW_IDENTIFIED);
 }
 
-static void draw_leave(scope* s) { rsf_anomaly_geometry_visual_leave(&s->node); }
+static void draw_leave(scope* s) { rsf_anomaly_geometry_visual_leave(s); }
 
 static const rsf_anomaly_geometry_visual* borrowed(void)
 {
     return (const rsf_anomaly_geometry_visual*)rsf_anomaly_geometry_borrow_draw();
 }
 
-typedef struct view_scope {
-    rsf_anomaly_geometry_context node;
-} view_scope;
+typedef rsf_anomaly_geometry_context view_scope;
 
 static void view_enter(view_scope* v, uint8_t view, uint8_t domain)
 {
-    rsf_anomaly_geometry_context_enter(&v->node, view, domain, false);
+    rsf_anomaly_geometry_context_enter(v, view, domain, false);
 }
 
 static void inherit_enter(view_scope* v, uint8_t domain)
 {
-    rsf_anomaly_geometry_context_enter(&v->node, UNSET, domain, true);
+    rsf_anomaly_geometry_context_enter(v, UNSET, domain, true);
 }
 
-static void view_leave(view_scope* v) { rsf_anomaly_geometry_context_leave(&v->node); }
+static void view_leave(view_scope* v) { rsf_anomaly_geometry_context_leave(v); }
 
 static bool same_key(const rsf_anomaly_geometry_key* a, const rsf_anomaly_geometry_key* b)
 {
     return a->owner == b->owner && a->visual == b->visual && a->generation == b->generation;
 }
 
-/* The identity registry through its Rust owner. */
-typedef struct identities {
-    rsf_anomaly_geometry_registry* state;
-} identities;
-
-static bool acquire(const identities* ids, uint64_t owner, uint64_t visual, rsf_anomaly_geometry_key* key)
+static bool acquire(rsf_anomaly_geometry_registry* registry, uint64_t owner, uint64_t visual,
+    rsf_anomaly_geometry_key* key)
 {
-    const uint64_t generation = rsf_anomaly_geometry_register(ids->state, owner, visual);
+    const uint64_t generation = rsf_anomaly_geometry_register(registry, owner, visual);
     if (!generation) return false;
     *key = (rsf_anomaly_geometry_key){owner, visual, generation};
     return true;
 }
 
-static uint64_t find_generation(const identities* ids, uint64_t owner, uint64_t visual)
+static void retire_identity(rsf_anomaly_geometry_registry* registry, uint64_t owner, uint64_t visual)
 {
-    return rsf_anomaly_geometry_find(ids->state, owner, visual);
-}
-
-static void retire_identity(const identities* ids, uint64_t owner, uint64_t visual)
-{
-    (void)rsf_anomaly_geometry_retire(ids->state, owner, visual);
+    (void)rsf_anomaly_geometry_retire(registry, owner, visual);
 }
 
 static void store(void* buffer, size_t offset, const void* value, size_t size)
@@ -253,7 +240,7 @@ static feed_result feed_current_draw(void* history, const frame_token* frame,
 
 static float world[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 7, 8, 9, 1};
 static unsigned char parent[256], skeleton[64], bones[336];
-static identities main_identities;
+static rsf_anomaly_geometry_registry* main_registry;
 static rsf_anomaly_geometry_key live;
 
 static DWORD WINAPI isolated_worker(void* result)
@@ -269,7 +256,7 @@ static void run_capture(const void* unused)
     CHECK(!borrowed());
     {
         scope draw;
-        draw_enter(&draw, main_identities.state, true, live, KIND_RIGID, world, NULL);
+        draw_enter(&draw, main_registry, true, live, KIND_RIGID, world, NULL);
         CHECK(borrowed() && same_key(&borrowed()->key, &live));
         CHECK(borrowed()->view == UNSET && borrowed()->domain == UNSET);
         draw_copy copy;
@@ -283,30 +270,30 @@ static void run_capture(const void* unused)
         copy_release(&later);
         {
             scope unmatched;
-            draw_enter(&unmatched, main_identities.state, false, (rsf_anomaly_geometry_key){0}, KIND_RIGID, NULL, NULL);
+            draw_enter(&unmatched, main_registry, false, (rsf_anomaly_geometry_key){0}, KIND_RIGID, NULL, NULL);
             draw_copy none;
             CHECK(!borrowed() && !capture_copy(&none));
             draw_leave(&unmatched);
         }
         CHECK(borrowed() && same_key(&borrowed()->key, &live));
-        retire_identity(&main_identities, live.owner, live.visual);
+        retire_identity(main_registry, live.owner, live.visual);
         CHECK(!borrowed()); /* An active scope is invalidated by retirement. */
         draw_leave(&draw);
     }
     CHECK(!borrowed());
     rsf_anomaly_geometry_key contextual;
-    CHECK(acquire(&main_identities, 0x10, 0x40, &contextual));
+    CHECK(acquire(main_registry, 0x10, 0x40, &contextual));
     {
         view_scope frame;
         view_enter(&frame, SCOPE, WORLD);
         scope draw;
-        draw_enter(&draw, main_identities.state, true, contextual, KIND_RIGID, world, NULL);
+        draw_enter(&draw, main_registry, true, contextual, KIND_RIGID, world, NULL);
         CHECK(borrowed()->view == SCOPE && borrowed()->domain == WORLD);
         {
             view_scope hud;
             view_enter(&hud, SCOPE, FIRST_PERSON);
             scope hands;
-            draw_enter(&hands, main_identities.state, true, contextual, KIND_RIGID, world, NULL);
+            draw_enter(&hands, main_registry, true, contextual, KIND_RIGID, world, NULL);
             CHECK(borrowed()->domain == FIRST_PERSON);
             /* Another thread sees no scope of this thread. */
             bool isolated = false;
@@ -324,7 +311,7 @@ static void run_capture(const void* unused)
     }
     {
         scope no_world;
-        draw_enter(&no_world, main_identities.state, true, contextual, KIND_RIGID, NULL, NULL);
+        draw_enter(&no_world, main_registry, true, contextual, KIND_RIGID, NULL, NULL);
         draw_copy copy;
         CHECK(capture_copy(&copy) && !copy.has_world);
         copy_release(&copy);
@@ -334,7 +321,7 @@ static void run_capture(const void* unused)
     world[0] = NAN;
     {
         scope invalid;
-        draw_enter(&invalid, main_identities.state, true, contextual, KIND_RIGID, world, NULL);
+        draw_enter(&invalid, main_registry, true, contextual, KIND_RIGID, world, NULL);
         draw_copy copy;
         CHECK(capture_copy(&copy) && !copy.has_world);
         copy_release(&copy);
@@ -354,7 +341,7 @@ static void run_capture(const void* unused)
     memcpy(bones + 168 + 64, world, sizeof(world));
     {
         scope skin;
-        draw_enter(&skin, main_identities.state, true, contextual, KIND_HARDWARE_SKINNED, world, skeleton);
+        draw_enter(&skin, main_registry, true, contextual, KIND_HARDWARE_SKINNED, world, skeleton);
         draw_copy copy;
         CHECK(capture_copy(&copy) && copy.bone_count == 2 && copy.palette_layout != 0);
         CHECK(copy.bones[0].values[3] == 17 && copy.bones[1].values[3] == 37);
@@ -441,10 +428,9 @@ static void run_history(const void* unused)
 {
     (void)unused;
     float feed_world[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3, 4, 5, 1};
-    identities feed;
-    feed.state = rsf_anomaly_geometry_registry_create();
+    rsf_anomaly_geometry_registry* feed = rsf_anomaly_geometry_registry_create();
     rsf_anomaly_geometry_key rigid_key, skin_key;
-    CHECK(acquire(&feed, 0x1, 0x100, &rigid_key) && acquire(&feed, 0x1, 0x200, &skin_key));
+    CHECK(acquire(feed, 0x1, 0x100, &rigid_key) && acquire(feed, 0x1, 0x200, &skin_key));
     void* history = rsf_anomaly_plan_history_create();
     rsf_anomaly_geometry_retirements* queue = rsf_anomaly_geometry_retirements_create();
     frame_token first;
@@ -452,7 +438,7 @@ static void run_history(const void* unused)
     CHECK(feed_current_draw(history, &first, queue).status == FEED_NO_DRAW);
     {
         scope draw;
-        draw_enter(&draw, feed.state, true, rigid_key, KIND_RIGID, feed_world, NULL);
+        draw_enter(&draw, feed, true, rigid_key, KIND_RIGID, feed_world, NULL);
         CHECK(feed_current_draw(history, &first, queue).status == FEED_MISSING_CONTEXT);
         draw_leave(&draw);
     }
@@ -460,7 +446,7 @@ static void run_history(const void* unused)
         view_scope view;
         view_enter(&view, SCOPE, WORLD);
         scope draw;
-        draw_enter(&draw, feed.state, true, rigid_key, KIND_RIGID, feed_world, NULL);
+        draw_enter(&draw, feed, true, rigid_key, KIND_RIGID, feed_world, NULL);
         CHECK(feed_current_draw(history, &first, queue).status == FEED_WRONG_VIEW);
         draw_leave(&draw);
         view_leave(&view);
@@ -469,7 +455,7 @@ static void run_history(const void* unused)
         view_scope view;
         view_enter(&view, MAIN, WORLD);
         scope draw;
-        draw_enter(&draw, feed.state, true, rigid_key, KIND_RIGID, feed_world, NULL);
+        draw_enter(&draw, feed, true, rigid_key, KIND_RIGID, feed_world, NULL);
         feed_result fed = feed_current_draw(history, &first, queue);
         CHECK(fed.status == FEED_CAPTURED && fed.has_history && fed.history == CAPTURED);
         CHECK(feed_current_draw(history, &first, queue).history == REPEATED);
@@ -481,7 +467,7 @@ static void run_history(const void* unused)
         view_scope hands;
         view_enter(&hands, MAIN, FIRST_PERSON);
         scope held;
-        draw_enter(&held, feed.state, true, rigid_key, KIND_RIGID, feed_world, NULL);
+        draw_enter(&held, feed, true, rigid_key, KIND_RIGID, feed_world, NULL);
         const feed_result refused = feed_current_draw(history, &first, queue);
         CHECK(refused.status == FEED_REJECTED && refused.history == MISSING_PROJECTION);
         draw_leave(&held);
@@ -493,7 +479,7 @@ static void run_history(const void* unused)
         view_scope view;
         view_enter(&view, MAIN, WORLD);
         scope draw;
-        draw_enter(&draw, feed.state, true, rigid_key, pass ? KIND_TREE : KIND_SOFTWARE_SKINNED, feed_world, NULL);
+        draw_enter(&draw, feed, true, rigid_key, pass ? KIND_TREE : KIND_SOFTWARE_SKINNED, feed_world, NULL);
         CHECK(feed_current_draw(history, &first, queue).status == FEED_UNSUPPORTED_KIND);
         draw_leave(&draw);
         view_leave(&view);
@@ -520,7 +506,7 @@ static void run_history(const void* unused)
         view_scope view;
         view_enter(&view, MAIN, WORLD);
         scope draw;
-        draw_enter(&draw, feed.state, true, rigid_key, KIND_RIGID, NULL, NULL);
+        draw_enter(&draw, feed, true, rigid_key, KIND_RIGID, NULL, NULL);
         CHECK(feed_current_draw(history, &first, queue).status == FEED_MISSING_WORLD);
         draw_leave(&draw);
         view_leave(&view);
@@ -534,7 +520,7 @@ static void run_history(const void* unused)
         view_scope view;
         view_enter(&view, MAIN, WORLD);
         scope draw;
-        draw_enter(&draw, feed.state, true, skin_key, KIND_HARDWARE_SKINNED, feed_world, skeleton);
+        draw_enter(&draw, feed, true, skin_key, KIND_HARDWARE_SKINNED, feed_world, skeleton);
         const feed_result fed = feed_current_draw(history, &first, queue);
         CHECK(fed.status == FEED_CAPTURED && fed.has_history && fed.history == CAPTURED);
         count = 0; /* Unreadable palette must not become an invented identity pose. */
@@ -552,7 +538,7 @@ static void run_history(const void* unused)
         view_scope view;
         view_enter(&view, MAIN, WORLD);
         scope draw;
-        draw_enter(&draw, feed.state, true, rigid_key, KIND_RIGID, feed_world, NULL);
+        draw_enter(&draw, feed, true, rigid_key, KIND_RIGID, feed_world, NULL);
         draw_copy capture;
         CHECK(capture_copy(&capture));
         rsf_anomaly_plan_pose pose;
@@ -570,7 +556,7 @@ static void run_history(const void* unused)
     CHECK(lifecycle);
     WaitForSingleObject(lifecycle, INFINITE);
     CloseHandle(lifecycle);
-    retire_identity(&feed, rigid_key.owner, rigid_key.visual);
+    retire_identity(feed, rigid_key.owner, rigid_key.visual);
     CHECK(rsf_anomaly_geometry_dropped(queue) == 0);
     CHECK(drain_history(queue, history) == 1 && drain_history(queue, history) == 0);
     sink(queue, &rigid_key);
@@ -582,12 +568,12 @@ static void run_history(const void* unused)
     for (size_t i = 0; i < 4; ++i) retired_pose.world.values[i * 4 + i] = 1;
     CHECK(capture_pose(history, &second, &rigid_key, &retired_pose).status == RETIRED);
     rsf_anomaly_geometry_key recycled;
-    CHECK(acquire(&feed, 0x1, 0x100, &recycled) && recycled.generation > rigid_key.generation);
+    CHECK(acquire(feed, 0x1, 0x100, &recycled) && recycled.generation > rigid_key.generation);
     {
         view_scope view;
         view_enter(&view, MAIN, WORLD);
         scope draw;
-        draw_enter(&draw, feed.state, true, recycled, KIND_RIGID, feed_world, NULL);
+        draw_enter(&draw, feed, true, recycled, KIND_RIGID, feed_world, NULL);
         const feed_result fed = feed_current_draw(history, &second, queue);
         CHECK(fed.status == FEED_CAPTURED && fed.has_history && fed.history == CAPTURED);
         draw_leave(&draw);
@@ -598,7 +584,7 @@ static void run_history(const void* unused)
     CHECK(stats.capture_faults == 0);
     rsf_anomaly_geometry_retirements_destroy(queue);
     rsf_anomaly_plan_history_destroy(history);
-    rsf_anomaly_geometry_registry_destroy(feed.state);
+    rsf_anomaly_geometry_registry_destroy(feed);
 }
 
 static void run_coverage(const void* unused)
@@ -614,10 +600,9 @@ static void run_inheritance(const void* unused)
 {
     (void)unused;
     /* The enclosing view survives a projection-domain change, and a classification travels with the draw. */
-    identities scoped;
-    scoped.state = rsf_anomaly_geometry_registry_create();
+    rsf_anomaly_geometry_registry* scoped = rsf_anomaly_geometry_registry_create();
     rsf_anomaly_geometry_key key;
-    CHECK(acquire(&scoped, 0x9, 0x900, &key));
+    CHECK(acquire(scoped, 0x9, 0x900, &key));
     {
         view_scope main_frame;
         view_enter(&main_frame, SCOPE, WORLD);
@@ -625,7 +610,7 @@ static void run_inheritance(const void* unused)
             view_scope hud_window;
             inherit_enter(&hud_window, FIRST_PERSON);
             scope draw;
-            scope_enter(&draw, scoped.state, true, key, KIND_RIGID, world, NULL, RSF_ANOMALY_PASS_SHADOW,
+            scope_enter(&draw, scoped, true, key, KIND_RIGID, world, NULL, RSF_ANOMALY_PASS_SHADOW,
                 RSF_ANOMALY_TYPE_PROGRESSIVE, RSF_ANOMALY_DRAW_IGNORED_SHADOW);
             CHECK(borrowed()->view == SCOPE && borrowed()->domain == FIRST_PERSON);
             CHECK(borrowed()->pass == RSF_ANOMALY_PASS_SHADOW);
@@ -635,7 +620,7 @@ static void run_inheritance(const void* unused)
             view_leave(&hud_window);
         }
         scope after;
-        draw_enter(&after, scoped.state, true, key, KIND_RIGID, world, NULL);
+        draw_enter(&after, scoped, true, key, KIND_RIGID, world, NULL);
         CHECK(borrowed()->domain == WORLD);
         CHECK(borrowed()->verdict == RSF_ANOMALY_DRAW_IDENTIFIED && borrowed()->pass == RSF_ANOMALY_PASS_MAIN);
         draw_leave(&after);
@@ -646,12 +631,12 @@ static void run_inheritance(const void* unused)
         view_scope orphan;
         inherit_enter(&orphan, FIRST_PERSON);
         scope draw;
-        draw_enter(&draw, scoped.state, true, key, KIND_RIGID, world, NULL);
+        draw_enter(&draw, scoped, true, key, KIND_RIGID, world, NULL);
         CHECK(borrowed()->view == UNSET && borrowed()->domain == FIRST_PERSON);
         draw_leave(&draw);
         view_leave(&orphan);
     }
-    rsf_anomaly_geometry_registry_destroy(scoped.state);
+    rsf_anomaly_geometry_registry_destroy(scoped);
 }
 
 static void run_sink(const void* unused)
@@ -662,17 +647,16 @@ static void run_sink(const void* unused)
     void* history = rsf_anomaly_plan_history_create();
     frame_token frame;
     CHECK(begin_frame(history, MAIN, 40, &frame));
-    identities ids;
-    ids.state = rsf_anomaly_geometry_registry_create();
+    rsf_anomaly_geometry_registry* ids = rsf_anomaly_geometry_registry_create();
     rsf_anomaly_geometry_key key;
-    CHECK(acquire(&ids, 0x1, 0x700, &key));
+    CHECK(acquire(ids, 0x1, 0x700, &key));
     float sink_world[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 6, 7, 1};
     draw_copy copy;
     {
         view_scope view;
         view_enter(&view, MAIN, WORLD);
         scope draw;
-        draw_enter(&draw, ids.state, true, key, KIND_RIGID, sink_world, NULL);
+        draw_enter(&draw, ids, true, key, KIND_RIGID, sink_world, NULL);
         CHECK(capture_copy(&copy));
         draw_leave(&draw);
         view_leave(&view);
@@ -695,16 +679,16 @@ static void run_sink(const void* unused)
     sink(queue, &key);
     CHECK(feed_draw(history, &frame, queue, &copy).history == RETIRED);
     copy_release(&copy);
-    rsf_anomaly_geometry_registry_destroy(ids.state);
+    rsf_anomaly_geometry_registry_destroy(ids);
     rsf_anomaly_plan_history_destroy(history);
     rsf_anomaly_geometry_retirements_destroy(queue);
 }
 
 int main(void)
 {
-    main_identities.state = rsf_anomaly_geometry_registry_create();
-    CHECK(acquire(&main_identities, 0x10, 0x20, &live));
-    CHECK(find_generation(&main_identities, 0x10, 0x20) == live.generation);
+    main_registry = rsf_anomaly_geometry_registry_create();
+    CHECK(acquire(main_registry, 0x10, 0x20, &live));
+    CHECK(rsf_anomaly_geometry_find(main_registry, 0x10, 0x20) == live.generation);
     const rsf_test_anomaly_geometry_contract scenarios = {
         {NULL, run_capture}, {NULL, run_history}, {NULL, run_coverage}, {NULL, run_inheritance}, {NULL, run_sink},
     };
@@ -712,7 +696,7 @@ int main(void)
     rsf_anomaly_geometry_stats stats;
     rsf_anomaly_geometry_stats_read(&stats);
     CHECK(stats.capture_faults == 0);
-    rsf_anomaly_geometry_registry_destroy(main_identities.state);
+    rsf_anomaly_geometry_registry_destroy(main_registry);
     puts("Anomaly geometry registry, TLS, real-layout world/palette capture, classification, context scopes, history feed: PASS");
     return 0;
 }

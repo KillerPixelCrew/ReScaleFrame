@@ -345,9 +345,11 @@ static void collect_line(void* user, const char* line)
     strncpy_s(lines[line_count++], sizeof(lines[0]), line, _TRUNCATE);
 }
 
-static uint64_t cell(const rsf_anomaly_geometry_coverage* c, unsigned pass, unsigned type, unsigned verdict)
+/* How much the draw count of one (pass, type, verdict) cell grew between two coverage reads. */
+static uint64_t cell_delta(const rsf_anomaly_geometry_coverage* after, const rsf_anomaly_geometry_coverage* before,
+    unsigned pass, unsigned type, unsigned verdict)
 {
-    return c->draws[pass][type][verdict];
+    return after->draws[pass][type][verdict] - before->draws[pass][type][verdict];
 }
 
 static rsf_anomaly_geometry_coverage coverage_now(void)
@@ -469,8 +471,7 @@ static void run_flush_capture(const void* unused)
         CHECK(sunk_count == 1 && sunk[0].key.visual == (uintptr_t)child);
         CHECK(sunk[0].view == SCOPE && sunk[0].domain == FIRST_PERSON);
         CHECK(sunk[0].has_world && sunk[0].world_x == 123);
-        CHECK(cell(&after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IDENTIFIED) ==
-            cell(&before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IDENTIFIED) + 1);
+        CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IDENTIFIED) == 1);
         CHECK(after.flush_total[0] == before.flush_total[0] + 1 &&
             after.flush_in_visual[0] == before.flush_in_visual[0] + 1);
         CHECK(after.captured == before.captured + 1 && after.sunk == before.sunk + 1 &&
@@ -532,10 +533,8 @@ static void run_phase(const void* unused)
         rsf_anomaly_geometry_context_leave(&scope);
         const rsf_anomaly_geometry_coverage after = coverage_now();
         CHECK(sunk_count == 0 && after.captured == before.captured);
-        CHECK(cell(&after, RSF_ANOMALY_PASS_SHADOW, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IGNORED_SHADOW) ==
-            cell(&before, RSF_ANOMALY_PASS_SHADOW, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IGNORED_SHADOW) + 1);
-        CHECK(cell(&after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IDENTIFIED) ==
-            cell(&before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IDENTIFIED));
+        CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_SHADOW, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IGNORED_SHADOW) == 1);
+        CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IDENTIFIED) == 0);
         CHECK(after.flush_total[1] == before.flush_total[1] + 1 &&
             after.flush_in_visual[1] == before.flush_in_visual[1] + 1);
         set_u32(gp.phase, 7);
@@ -543,8 +542,7 @@ static void run_phase(const void* unused)
         render(child, 0.375f);
         rsf_anomaly_geometry_context_leave(&scope);
         const rsf_anomaly_geometry_coverage unknown = coverage_now();
-        CHECK(cell(&unknown, RSF_ANOMALY_PASS_UNKNOWN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IDENTIFIED) ==
-            cell(&after, RSF_ANOMALY_PASS_UNKNOWN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IDENTIFIED) + 1);
+        CHECK(cell_delta(&unknown, &after, RSF_ANOMALY_PASS_UNKNOWN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IDENTIFIED) == 1);
         CHECK(sunk_count == 0 && unknown.captured == before.captured);
         set_u32(gp.phase, PHASE_NORMAL);
     }
@@ -588,24 +586,21 @@ static void run_identities(const void* unused)
         sunk_count = 0;
         render(unregistered, 0.375f);
         const rsf_anomaly_geometry_coverage after = coverage_now();
-        CHECK(cell(&after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IGNORED_STATIC_WORLD) ==
-            cell(&before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IGNORED_STATIC_WORLD) + 1);
+        CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IGNORED_STATIC_WORLD) == 1);
         CHECK(sunk_count == 0 && after.captured == before.captured);
         CHECK(after.flush_in_visual[0] == before.flush_in_visual[0] + 1);
 
         memcpy(module + gp.world, world, sizeof(world));
         render(unregistered, 0.375f);
         const rsf_anomaly_geometry_coverage moving = coverage_now();
-        CHECK(cell(&moving, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC) ==
-            cell(&after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC) + 1);
+        CHECK(cell_delta(&moving, &after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC) == 1);
         CHECK(sunk_count == 0 && moving.captured == before.captured);
 
         set_u32(gp.phase, PHASE_SMAP);
         render(unregistered, 0.375f);
         set_u32(gp.phase, PHASE_NORMAL);
         const rsf_anomaly_geometry_coverage shadow = coverage_now();
-        CHECK(cell(&shadow, RSF_ANOMALY_PASS_SHADOW, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IGNORED_SHADOW) ==
-            cell(&moving, RSF_ANOMALY_PASS_SHADOW, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IGNORED_SHADOW) + 1);
+        CHECK(cell_delta(&shadow, &moving, RSF_ANOMALY_PASS_SHADOW, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_IGNORED_SHADOW) == 1);
     }
     /* The same visual live under two owners cannot be named, and says so instead of guessing. */
     {
@@ -618,8 +613,7 @@ static void run_identities(const void* unused)
         sunk_count = 0;
         render(child, 0.375f);
         const rsf_anomaly_geometry_coverage after = coverage_now();
-        CHECK(cell(&after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_UNIDENTIFIED_AMBIGUOUS) ==
-            cell(&before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_UNIDENTIFIED_AMBIGUOUS) + 1);
+        CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_UNIDENTIFIED_AMBIGUOUS) == 1);
         CHECK(sunk_count == 0);
         void* second = visual;
         expected_owner = &other_owner;
@@ -652,10 +646,8 @@ static void run_foliage(const void* unused)
     seen_count = 0;
     tree_st(tree_visual, 0.5f);
     rsf_anomaly_geometry_coverage after = coverage_now();
-    CHECK(cell(&after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_UNIDENTIFIED_DEFORMED) ==
-        cell(&before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_UNIDENTIFIED_DEFORMED) + 1);
-    CHECK(cell(&after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE) ==
-        cell(&before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE));
+    CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_UNIDENTIFIED_DEFORMED) == 1);
+    CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE) == 0);
 
     rsf_anomaly_geometry_set_foliage(true);
     CHECK(rsf_anomaly_geometry_foliage());
@@ -665,12 +657,9 @@ static void run_foliage(const void* unused)
     tree_st(tree_visual, 0.5f);
     tree_pm(tree_visual, 0.25f);
     after = coverage_now();
-    CHECK(cell(&after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE) ==
-        cell(&before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE) + 1);
-    CHECK(cell(&after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_PM, RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE) ==
-        cell(&before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_PM, RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE) + 1);
-    CHECK(cell(&after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_UNIDENTIFIED_DEFORMED) ==
-        cell(&before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_UNIDENTIFIED_DEFORMED));
+    CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE) == 1);
+    CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_PM, RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE) == 1);
+    CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_UNIDENTIFIED_DEFORMED) == 0);
     CHECK(stats_now().draws_identified == stats_before.draws_identified + 2);
     CHECK(after.captured == before.captured); /* A foliage identity is not a registry capture. */
     CHECK(seen_count == 2);
@@ -685,8 +674,7 @@ static void run_foliage(const void* unused)
     before = coverage_now();
     tree_st(tree_visual, 0.5f);
     after = coverage_now();
-    CHECK(cell(&after, RSF_ANOMALY_PASS_SHADOW, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_IGNORED_SHADOW) ==
-        cell(&before, RSF_ANOMALY_PASS_SHADOW, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_IGNORED_SHADOW) + 1);
+    CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_SHADOW, RSF_ANOMALY_TYPE_TREE_ST, RSF_ANOMALY_DRAW_IGNORED_SHADOW) == 1);
     set_u32(gp.phase, PHASE_NORMAL);
 
     /* CDetailManager::Render: every flush inside it is a detail draw in its pass; outside it none is. */
@@ -872,8 +860,7 @@ static void run_retirement(const void* unused)
         expect_identity = false;
         render(child, 0.375f);
         const rsf_anomaly_geometry_coverage after = coverage_now();
-        CHECK(cell(&after, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_UNIDENTIFIED_NO_CAPTURE) ==
-            cell(&before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_UNIDENTIFIED_NO_CAPTURE) + 1);
+        CHECK(cell_delta(&after, &before, RSF_ANOMALY_PASS_MAIN, RSF_ANOMALY_TYPE_STATIC, RSF_ANOMALY_DRAW_UNIDENTIFIED_NO_CAPTURE) == 1);
     }
 }
 

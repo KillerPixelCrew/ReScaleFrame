@@ -47,6 +47,18 @@ static int g_failures = 0;
         }                                                               \
     } while (0)
 
+/* A check whose failure leaves the rest of the phase nothing to call. */
+#define REQUIRE(cond)                                                   \
+    do {                                                                \
+        CHECK(cond);                                                    \
+        if (!(cond)) return;                                            \
+    } while (0)
+#define REQUIRE_RET(cond, value)                                        \
+    do {                                                                \
+        CHECK(cond);                                                    \
+        if (!(cond)) return (value);                                    \
+    } while (0)
+
 /* Store `value` as `type` at a byte offset of a payload buffer. */
 #define PUT(type, base, offset, value)                                           \
     do {                                                                         \
@@ -64,77 +76,48 @@ typedef struct FakeResource {
     D3D12_RESOURCE_DESC desc;
 } FakeResource;
 
+/* Only GetDesc answers; the census never reads the other slots, so they refuse. */
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4100)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#endif
 static HRESULT STDMETHODCALLTYPE res_query_interface(ID3D12Resource* self, REFIID iid, void** out)
 {
-    (void)self;
-    (void)iid;
-    (void)out;
     return E_NOINTERFACE;
 }
-static ULONG STDMETHODCALLTYPE res_add_ref(ID3D12Resource* self)
-{
-    (void)self;
-    return 2;
-}
-static ULONG STDMETHODCALLTYPE res_release(ID3D12Resource* self)
-{
-    (void)self;
-    return 1;
-}
+static ULONG STDMETHODCALLTYPE res_add_ref(ID3D12Resource* self) { return 2; }
+static ULONG STDMETHODCALLTYPE res_release(ID3D12Resource* self) { return 1; }
 static HRESULT STDMETHODCALLTYPE res_get_private_data(ID3D12Resource* self, REFGUID guid, UINT* size,
                                                       void* data)
 {
-    (void)self;
-    (void)guid;
-    (void)size;
-    (void)data;
     return E_FAIL;
 }
 static HRESULT STDMETHODCALLTYPE res_set_private_data(ID3D12Resource* self, REFGUID guid, UINT size,
                                                       const void* data)
 {
-    (void)self;
-    (void)guid;
-    (void)size;
-    (void)data;
     return E_FAIL;
 }
 static HRESULT STDMETHODCALLTYPE res_set_private_data_interface(ID3D12Resource* self, REFGUID guid,
                                                                 const IUnknown* data)
 {
-    (void)self;
-    (void)guid;
-    (void)data;
     return E_FAIL;
 }
-static HRESULT STDMETHODCALLTYPE res_set_name(ID3D12Resource* self, LPCWSTR name)
-{
-    (void)self;
-    (void)name;
-    return S_OK;
-}
+static HRESULT STDMETHODCALLTYPE res_set_name(ID3D12Resource* self, LPCWSTR name) { return S_OK; }
 static HRESULT STDMETHODCALLTYPE res_get_device(ID3D12Resource* self, REFIID iid, void** out)
 {
-    (void)self;
-    (void)iid;
-    (void)out;
     return E_FAIL;
 }
 static HRESULT STDMETHODCALLTYPE res_map(ID3D12Resource* self, UINT subresource,
                                          const D3D12_RANGE* range, void** data)
 {
-    (void)self;
-    (void)subresource;
-    (void)range;
-    (void)data;
     return E_FAIL;
 }
 static void STDMETHODCALLTYPE res_unmap(ID3D12Resource* self, UINT subresource,
                                         const D3D12_RANGE* range)
 {
-    (void)self;
-    (void)subresource;
-    (void)range;
 }
 static D3D12_RESOURCE_DESC* STDMETHODCALLTYPE res_get_desc(ID3D12Resource* self,
                                                            D3D12_RESOURCE_DESC* out)
@@ -144,43 +127,31 @@ static D3D12_RESOURCE_DESC* STDMETHODCALLTYPE res_get_desc(ID3D12Resource* self,
 }
 static D3D12_GPU_VIRTUAL_ADDRESS STDMETHODCALLTYPE res_get_gpu_address(ID3D12Resource* self)
 {
-    (void)self;
     return 0;
 }
 static HRESULT STDMETHODCALLTYPE res_write_to_subresource(ID3D12Resource* self, UINT dst,
                                                           const D3D12_BOX* box, const void* src,
                                                           UINT row_pitch, UINT depth_pitch)
 {
-    (void)self;
-    (void)dst;
-    (void)box;
-    (void)src;
-    (void)row_pitch;
-    (void)depth_pitch;
     return E_FAIL;
 }
 static HRESULT STDMETHODCALLTYPE res_read_from_subresource(ID3D12Resource* self, void* dst,
                                                            UINT row_pitch, UINT depth_pitch,
                                                            UINT src, const D3D12_BOX* box)
 {
-    (void)self;
-    (void)dst;
-    (void)row_pitch;
-    (void)depth_pitch;
-    (void)src;
-    (void)box;
     return E_FAIL;
 }
 static HRESULT STDMETHODCALLTYPE res_get_heap_properties(ID3D12Resource* self,
                                                          D3D12_HEAP_PROPERTIES* properties,
                                                          D3D12_HEAP_FLAGS* flags)
 {
-    (void)self;
-    (void)properties;
-    (void)flags;
     return E_FAIL;
 }
-
+#ifdef _MSC_VER
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
 static const ID3D12ResourceVtbl kResourceVtbl = {
     res_query_interface,
     res_add_ref,
@@ -473,10 +444,7 @@ static void observe_ngx_release(void* handle)
 static void run_ngx(Frame* frame)
 {
     HMODULE m = load_fixture(L"_nvngx.dll");
-    if (!m) {
-        ++g_failures;
-        return;
-    }
+    REQUIRE(m);
     int (*get_params)(void**) = PROC(int (*)(void**), m, "NVSDK_NGX_D3D12_GetParameters");
     int (*create)(void*, unsigned, void*, void**) =
         PROC(int (*)(void*, unsigned, void*, void**), m, "NVSDK_NGX_D3D12_CreateFeature");
@@ -484,8 +452,7 @@ static void run_ngx(Frame* frame)
         PROC(int (*)(void*, void*, void*, void*), m, "NVSDK_NGX_D3D12_EvaluateFeature");
     int (*release)(void*) = PROC(int (*)(void*), m, "NVSDK_NGX_D3D12_ReleaseFeature");
     NgxSeen seen = PROC(NgxSeen, m, "fixture_ngx_seen");
-    CHECK(get_params && create && evaluate && release && seen);
-    if (!(get_params && create && evaluate && release && seen)) return;
+    REQUIRE(get_params && create && evaluate && release && seen);
     observer_seen = seen;
     rsf_census_observe_ngx_d3d12(observe_ngx_create, observe_ngx_evaluate, observe_ngx_release);
 
@@ -542,15 +509,11 @@ static void run_nvapi(HMODULE* out_module)
 {
     HMODULE m = load_fixture(L"rsf_fixture_nvapi.dll");
     *out_module = m;
-    if (!m) {
-        ++g_failures;
-        return;
-    }
+    REQUIRE(m);
     void* (*qi)(unsigned) = PROC(void* (*)(unsigned), m, "nvapi_QueryInterface");
     void* (*raw)(void) = PROC(void* (*)(void), m, "fixture_nvapi_raw_marker");
     void (*seen)(void**, void**, int*) = PROC(void (*)(void**, void**, int*), m, "fixture_nvapi_seen");
-    CHECK(qi && raw && seen);
-    if (!(qi && raw && seen)) return;
+    REQUIRE(qi && raw && seen);
     /* This module is not on the census' detour list, so the pointer GetProcAddress returned is a
        recording thunk and differs from the fixture's own function. */
     CHECK(qi(0x12345678) == NULL);
@@ -594,17 +557,13 @@ typedef struct XessExecute {
 static void run_xess(Frame* frame)
 {
     HMODULE m = load_fixture(L"libxess.dll");
-    if (!m) {
-        ++g_failures;
-        return;
-    }
+    REQUIRE(m);
     int (*jitter)(void*, float, float) = PROC(int (*)(void*, float, float), m, "xessSetJitterScale");
     int (*execute)(void*, void*, const void*) =
         PROC(int (*)(void*, void*, const void*), m, "xessD3D12Execute");
     void (*seen)(void**, float*, float*, int*) =
         PROC(void (*)(void**, float*, float*, int*), m, "fixture_xess_seen");
-    CHECK(jitter && execute && seen);
-    if (!(jitter && execute && seen)) return;
+    REQUIRE(jitter && execute && seen);
     void* ctx = (void*)(uintptr_t)0x7E55;
     CHECK(jitter(ctx, 0.25f, -0.5f) == 0);
     void* sc = NULL;
@@ -702,8 +661,7 @@ static int probe_vulkan(void)
     void* (*raw)(const char*) = PROC(void* (*)(const char*), vk, "fixture_vk_raw");
     void (*seen)(void**, unsigned*, unsigned*, const void**) =
         PROC(void (*)(void**, unsigned*, unsigned*, const void**), vk, "fixture_vk_seen");
-    CHECK(gipa && gdpa && raw && seen);
-    if (!(gipa && gdpa && raw && seen)) return 1;
+    REQUIRE_RET(gipa && gdpa && raw && seen, 1);
 
     CHECK(gipa(NULL, "vkNoSuchFunction") == NULL);
     typedef int (*CreateInstance)(const void*, const void*, void**);
@@ -720,12 +678,9 @@ static int probe_vulkan(void)
     Present present = FN_FROM_PTR(Present, gipa(NULL, "vkQueuePresentKHR"));
     CreateSwapchain create_swapchain =
         FN_FROM_PTR(CreateSwapchain, gdpa(NULL, "vkCreateSwapchainKHR"));
-    CHECK(create_instance && create_device && get_queue && submit && submit2 && present &&
-          create_swapchain);
-    if (!(create_instance && create_device && get_queue && submit && submit2 && present &&
-          create_swapchain)) {
-        return 1;
-    }
+    REQUIRE_RET(create_instance && create_device && get_queue && submit && submit2 && present &&
+                    create_swapchain,
+                1);
     /* The pointers handed out are recording thunks, not the fixture's functions. */
     CHECK((void*)(uintptr_t)create_instance != raw("vkCreateInstance"));
     CHECK((void*)(uintptr_t)submit != raw("vkQueueSubmit"));
@@ -813,8 +768,7 @@ static int probe_vulkan(void)
     int (*sl_get)(unsigned, const char*, void**) =
         PROC(int (*)(unsigned, const char*, void**), sl, "slGetFeatureFunction");
     void* (*sl_raw)(const char*) = PROC(void* (*)(const char*), sl, "fixture_sl_raw");
-    CHECK(sl_init && sl_get && sl_raw);
-    if (!(sl_init && sl_get && sl_raw)) return 1;
+    REQUIRE_RET(sl_init && sl_get && sl_raw, 1);
     const wchar_t log_path[] = L"C:\\census\\logs";
     const uint32_t features[] = {0, 1000};
     unsigned char prefs[144] = {0};
@@ -895,8 +849,7 @@ static int probe_ffx(void)
     unsigned (*query)(void**, void*) = PROC(unsigned (*)(void**, void*), m, "ffxQuery");
     unsigned (*dispatch)(void**, const void*) =
         PROC(unsigned (*)(void**, const void*), m, "ffxDispatch");
-    CHECK(create && destroy && configure && query && dispatch);
-    if (!(create && destroy && configure && query && dispatch)) return 1;
+    REQUIRE_RET(create && destroy && configure && query && dispatch, 1);
 
     Frame frame;
     init_frame(&frame);

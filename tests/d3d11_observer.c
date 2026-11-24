@@ -198,6 +198,23 @@ static const SeenTexture* find_texture(void* texture)
     return NULL;
 }
 
+/* The most recent record for an address: a recycled address names its newest object. */
+static const SeenShader* find_shader(void* shader)
+{
+    for (size_t index = shaders_count; index-- > 0;) {
+        if (seen_shaders[index].shader == shader) return &seen_shaders[index];
+    }
+    return NULL;
+}
+
+static const SeenLayout* find_layout(void* layout)
+{
+    for (size_t index = layouts_count; index-- > 0;) {
+        if (seen_layouts[index].layout == layout) return &seen_layouts[index];
+    }
+    return NULL;
+}
+
 static ID3D11Buffer* make_constant_buffer(ID3D11Device* device, UINT bytes, const void* payload) {
     D3D11_BUFFER_DESC desc = {0};
     desc.ByteWidth = bytes;
@@ -378,27 +395,22 @@ int main(int argc, char* argv[])
                     &layout);
                 check(SUCCEEDED(made) && layout, "The probe input layout must be created.");
                 if (layout) {
-                    bool found = false;
-                    for (size_t index = 0; index < layouts_count; ++index) {
-                        const SeenLayout seen = seen_layouts[index];
-                        if (seen.layout != layout) {
-                            continue;
-                        }
-                        found = true;
-                        check(seen.count == 5 && seen.copied == 5,
+                    const SeenLayout* seen = find_layout(layout);
+                    check(seen != NULL, "Creating an input layout must reach the callback.");
+                    if (seen) {
+                        check(seen->count == 5 && seen->copied == 5,
                               "All five elements must be reported.");
-                        check(seen.elements[4].semantic_index == 4 &&
-                                  seen.elements[4].format ==
+                        check(seen->elements[4].semantic_index == 4 &&
+                                  seen->elements[4].format ==
                                       (uint32_t)DXGI_FORMAT_R16G16_UINT &&
-                                  seen.elements[4].input_slot == 0 &&
-                                  seen.elements[4].byte_offset == 36 &&
-                                  seen.elements[4].per_instance == 0,
+                                  seen->elements[4].input_slot == 0 &&
+                                  seen->elements[4].byte_offset == 36 &&
+                                  seen->elements[4].per_instance == 0,
                               "The last element must arrive with its index, format, slot, offset "
                               "and step class intact.");
-                        check(seen.elements[0].byte_offset == 0 && seen.elements[1].byte_offset == 16,
+                        check(seen->elements[0].byte_offset == 0 && seen->elements[1].byte_offset == 16,
                               "Offsets must not be renumbered.");
                     }
-                    check(found, "Creating an input layout must reach the callback.");
                     ID3D11InputLayout_Release(layout);
                 }
 
@@ -407,20 +419,15 @@ int main(int argc, char* argv[])
                                           ID3D10Blob_GetBufferSize(pixel_code), NULL, &pixel);
                 check(pixel != NULL, "The probe pixel shader must be created.");
                 if (pixel) {
-                    bool found = false;
-                    for (size_t index = 0; index < shaders_count; ++index) {
-                        const SeenShader seen = seen_shaders[index];
-                        if (seen.shader != pixel) {
-                            continue;
-                        }
-                        found = true;
-                        check(seen.stage == RSF_OBSERVER_STAGE_PIXEL,
+                    const SeenShader* seen = find_shader(pixel);
+                    check(seen != NULL, "Creating a pixel shader must reach the callback.");
+                    if (seen) {
+                        check(seen->stage == RSF_OBSERVER_STAGE_PIXEL,
                               "A pixel shader must be reported as one.");
-                        check(seen.had_bytecode && seen.bytes == ID3D10Blob_GetBufferSize(pixel_code),
+                        check(seen->had_bytecode && seen->bytes == ID3D10Blob_GetBufferSize(pixel_code),
                               "The bytecode must arrive whole, because hashing it is the caller's "
                               "job and a truncated blob hashes to a plausible wrong answer.");
                     }
-                    check(found, "Creating a pixel shader must reach the callback.");
                 }
 
                 // Created here rather than assumed to happen during device setup: whether a
@@ -438,20 +445,15 @@ int main(int argc, char* argv[])
                                            ID3D10Blob_GetBufferSize(vertex_code), NULL, &vertex);
                 check(vertex != NULL, "The probe vertex shader must be created.");
                 if (vertex) {
-                    bool found = false;
-                    for (size_t index = 0; index < shaders_count; ++index) {
-                        const SeenShader seen = seen_shaders[index];
-                        if (seen.shader != vertex) {
-                            continue;
-                        }
-                        found = true;
-                        check(seen.stage == RSF_OBSERVER_STAGE_VERTEX,
+                    const SeenShader* seen = find_shader(vertex);
+                    check(seen != NULL, "Creating a vertex shader must reach the callback.");
+                    if (seen) {
+                        check(seen->stage == RSF_OBSERVER_STAGE_VERTEX,
                               "A vertex shader must be reported as one: the two stages share a "
                               "callback and only this field separates them.");
-                        check(seen.bytes == ID3D10Blob_GetBufferSize(vertex_code),
+                        check(seen->bytes == ID3D10Blob_GetBufferSize(vertex_code),
                               "The vertex bytecode must arrive whole.");
                     }
-                    check(found, "Creating a vertex shader must reach the callback.");
                     ID3D11VertexShader_Release(vertex);
                 }
                 if (pixel) {
