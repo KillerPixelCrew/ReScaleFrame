@@ -57,21 +57,13 @@ pub(crate) fn feature_mask(reflex: bool, frame_generation: bool, super_resolutio
     features
 }
 
-// The bridge's native leaves (they own the SDK types, the typed entry points and the Authenticode
-// and SHA-256 check of the interposer file) in production; unit tests call same-named fakes.
+// The bridge's native leaves (the Windows loader calls, the SDK types, the typed entry points and the
+// Authenticode and SHA-256 check of the interposer file) in production; unit tests call same-named
+// fakes.
 #[cfg(not(test))]
 use crate::win32::lifecycle_leaf as leaf;
 #[cfg(test)]
 use tests as leaf;
-
-pub(crate) trait System {
-    unsafe fn load(&self, path: *const u16) -> *mut c_void;
-    unsafe fn free(&self, module: NonNull<c_void>);
-    unsafe fn close(&self, handle: *mut c_void);
-    unsafe fn symbol(&self, module: *mut c_void, name: *const c_char) -> *mut c_void;
-    unsafe fn loaded(&self, path: *const u16) -> *mut c_void;
-    fn verbose(&self) -> bool;
-}
 
 struct Paths {
     // NUL-terminated plugin directory.
@@ -128,7 +120,7 @@ unsafe fn terminated(text: *const u16) -> Vec<u16> {
 
 // Admits only the interposer verified through the handle that stays open while
 // the loader maps it. The handle denies writes, renames and deletes.
-unsafe fn admit(system: &impl System, directory: &[u16]) -> Result<NonNull<c_void>, i32> {
+unsafe fn admit(directory: &[u16]) -> Result<NonNull<c_void>, i32> {
     let mut path = directory.to_vec();
     path.extend(INTERPOSER.encode_utf16());
     if path.len() >= MAX_PATH {
@@ -139,8 +131,8 @@ unsafe fn admit(system: &impl System, directory: &[u16]) -> Result<NonNull<c_voi
     if verified.is_null() || verified == INVALID_HANDLE {
         return Err(UNVERIFIED);
     }
-    let module = unsafe { system.load(path.as_ptr()) };
-    unsafe { system.close(verified) };
+    let module = unsafe { leaf::load(path.as_ptr()) };
+    unsafe { leaf::close(verified) };
     NonNull::new(module).ok_or(LOAD_FAILED)
 }
 
@@ -221,7 +213,6 @@ impl Lifecycle {
 
     pub(crate) unsafe fn initialize(
         &self,
-        system: &impl System,
         directory: *const u16,
         project: *const c_char,
         features: u32,
@@ -256,7 +247,7 @@ impl Lifecycle {
                 }
                 module
             }
-            None => match unsafe { admit(system, &directory) } {
+            None => match unsafe { admit(&directory) } {
                 Ok(module) => {
                     session.module = Some(module);
                     self.published
@@ -268,10 +259,10 @@ impl Lifecycle {
             },
         };
         let resolved = unsafe { leaf::resolve(module.as_ptr()) } == 0;
-        let instance = unsafe { system.symbol(module.as_ptr(), c"vkGetInstanceProcAddr".as_ptr()) };
-        let device = unsafe { system.symbol(module.as_ptr(), c"vkGetDeviceProcAddr".as_ptr()) };
+        let instance = unsafe { leaf::symbol(module.as_ptr(), c"vkGetInstanceProcAddr".as_ptr()) };
+        let device = unsafe { leaf::symbol(module.as_ptr(), c"vkGetDeviceProcAddr".as_ptr()) };
         if !resolved || instance.is_null() || device.is_null() {
-            unsafe { self.abandon(system, &mut session, loaded_here) };
+            unsafe { self.abandon(&mut session, loaded_here) };
             return MISSING_EXPORT;
         }
         self.published.instance.store(instance, Ordering::Release);
@@ -294,13 +285,13 @@ impl Lifecycle {
             selected[count] = feature;
             count += 1;
         }
-        let verbose = system.verbose();
+        let verbose = leaf::verbose();
         self.diagnostics.set_verbose(verbose);
         let preferences =
             sdk_records::preferences(&selected[..count], plugin, project, verbose, leaf::LOG);
         let result = unsafe { leaf::init(&preferences, crate::sdk_api::SDK_VERSION) };
         if result != 0 {
-            unsafe { self.abandon(system, &mut session, loaded_here) };
+            unsafe { self.abandon(&mut session, loaded_here) };
             return result;
         }
         session.initialized = true;
@@ -348,7 +339,7 @@ impl Lifecycle {
 
     // Call only after shutdown and after every Vulkan object and API table that
     // references the interposer is destroyed. A failed shutdown keeps the module.
-    pub(crate) unsafe fn unload(&self, system: &impl System) -> i32 {
+    pub(crate) unsafe fn unload(&self) -> i32 {
         let Some(mut session) = self.session() else {
             return BUSY;
         };
@@ -362,20 +353,20 @@ impl Lifecycle {
         if !self.frame_token.try_close() {
             return BUSY;
         }
-        unsafe { self.release(system, &mut session) };
+        unsafe { self.release(&mut session) };
         0
     }
 
-    unsafe fn abandon(&self, system: &impl System, session: &mut Session, loaded_here: bool) {
+    unsafe fn abandon(&self, session: &mut Session, loaded_here: bool) {
         if loaded_here {
-            unsafe { self.release(system, session) };
+            unsafe { self.release(session) };
         } else {
             unsafe { leaf::clear() };
         }
     }
 
     // Withdraws the published entry points before the loader can unmap them.
-    unsafe fn release(&self, system: &impl System, session: &mut Session) {
+    unsafe fn release(&self, session: &mut Session) {
         self.published.initialized.store(false, Ordering::Release);
         self.published.instance.store(null_mut(), Ordering::Release);
         self.published.device.store(null_mut(), Ordering::Release);
@@ -384,7 +375,7 @@ impl Lifecycle {
             #[cfg(windows)]
             self.reset_frame_generation(session);
             unsafe { leaf::clear() };
-            unsafe { system.free(module) };
+            unsafe { leaf::free(module) };
         }
     }
 
@@ -425,31 +416,23 @@ impl Lifecycle {
         }
     }
 
-    pub(crate) unsafe fn interposer_symbol(
-        &self,
-        system: &impl System,
-        name: *const c_char,
-    ) -> *mut c_void {
+    pub(crate) unsafe fn interposer_symbol(&self, name: *const c_char) -> *mut c_void {
         let module = self.published.module.load(Ordering::Acquire);
         if module.is_null() || name.is_null() {
             return null_mut();
         }
-        unsafe { system.symbol(module, name) }
+        unsafe { leaf::symbol(module, name) }
     }
 
-    pub(crate) unsafe fn common_symbol(
-        &self,
-        system: &impl System,
-        name: *const c_char,
-    ) -> *mut c_void {
+    pub(crate) unsafe fn common_symbol(&self, name: *const c_char) -> *mut c_void {
         let path = self.common.lock().unwrap_or_else(PoisonError::into_inner);
         if path.is_empty() || name.is_null() {
             return null_mut();
         }
-        let common = unsafe { system.loaded(path.as_ptr()) };
+        let common = unsafe { leaf::loaded(path.as_ptr()) };
         if common.is_null() {
             return null_mut();
         }
-        unsafe { system.symbol(common, name) }
+        unsafe { leaf::symbol(common, name) }
     }
 }

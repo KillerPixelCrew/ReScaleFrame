@@ -13,6 +13,7 @@
 //!
 //! `wintrust.dll` and `crypt32.dll` are loaded from System32 on first use, never by a load-time
 //! import, so the game directory cannot supply them.
+use crate::sdk_api::export;
 use std::ffi::{CStr, c_char, c_void};
 use std::os::windows::io::{FromRawHandle, IntoRawHandle, OwnedHandle};
 use std::ptr::{null, null_mut};
@@ -37,9 +38,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_BEGIN, FILE_FLAG_SEQUENTIAL_SCAN, FILE_SHARE_READ, OPEN_EXISTING, ReadFile,
     SetFilePointerEx,
 };
-use windows_sys::Win32::System::LibraryLoader::{
-    GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-};
+use windows_sys::Win32::System::LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows_sys::core::{GUID, w};
 
 type Handle = *mut c_void;
@@ -174,12 +173,6 @@ struct Crypt32 {
     find_certificate: CertFindCertificateInStore,
     free_certificate: CertFreeCertificateContext,
     decode: CryptDecodeObjectEx,
-}
-
-unsafe fn export<F: Copy>(module: Handle, name: &CStr) -> Option<F> {
-    let address = unsafe { GetProcAddress(module, name.as_ptr().cast()) }?;
-    // The caller names the exact signature of the export it resolves.
-    Some(unsafe { std::mem::transmute_copy::<_, F>(&address) })
 }
 
 fn crypt32() -> Option<&'static Crypt32> {
@@ -568,6 +561,8 @@ unsafe fn open_verified(path: *const u16, expected: &[u8; 32], require_signature
 
 /// Opens the interposer the build admits: the corrected build by digest, otherwise the pinned
 /// retail build by digest and signature. Returns the verified handle or INVALID_HANDLE_VALUE.
+/// Unit tests reach the lifecycle through a fake leaf instead.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe fn open_by_digest(path: *const u16) -> HANDLE {
     match CORRECTED {
         Some(expected) => unsafe { open_verified(path, &expected, false) },

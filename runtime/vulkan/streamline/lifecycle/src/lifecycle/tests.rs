@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::sys::{rsf_slvk_sdk_log, rsf_slvk_sdk_preferences};
+use rsf_game_sys::ffi_util::wide;
 use std::cell::RefCell;
 
 const MODULE: usize = 0x1000;
@@ -45,40 +46,36 @@ fn configure(update: impl FnOnce(&mut State)) {
     STATE.with_borrow_mut(update);
 }
 
-struct Fake;
-
-impl System for Fake {
-    unsafe fn load(&self, _: *const u16) -> *mut c_void {
-        record("load");
-        without_provenance_mut(MODULE)
-    }
-
-    unsafe fn free(&self, module: NonNull<c_void>) {
-        assert_eq!(module.as_ptr().addr(), MODULE);
-        record("free");
-    }
-
-    unsafe fn close(&self, handle: *mut c_void) {
-        assert_eq!(handle.addr(), HANDLE);
-        record("close");
-    }
-
-    unsafe fn symbol(&self, _: *mut c_void, _: *const c_char) -> *mut c_void {
-        without_provenance_mut(PROC)
-    }
-
-    unsafe fn loaded(&self, path: *const u16) -> *mut c_void {
-        let path = unsafe { terminated(path) };
-        STATE.with_borrow_mut(|state| state.common = path);
-        without_provenance_mut(MODULE)
-    }
-
-    fn verbose(&self) -> bool {
-        false
-    }
+pub(super) unsafe fn load(_: *const u16) -> *mut c_void {
+    record("load");
+    without_provenance_mut(MODULE)
 }
 
-pub(super) unsafe extern "C" fn open_verified(_: *const u16) -> *mut c_void {
+pub(super) unsafe fn free(module: NonNull<c_void>) {
+    assert_eq!(module.as_ptr().addr(), MODULE);
+    record("free");
+}
+
+pub(super) unsafe fn close(handle: *mut c_void) {
+    assert_eq!(handle.addr(), HANDLE);
+    record("close");
+}
+
+pub(super) unsafe fn symbol(_: *mut c_void, _: *const c_char) -> *mut c_void {
+    without_provenance_mut(PROC)
+}
+
+pub(super) unsafe fn loaded(path: *const u16) -> *mut c_void {
+    let path = unsafe { terminated(path) };
+    STATE.with_borrow_mut(|state| state.common = path);
+    without_provenance_mut(MODULE)
+}
+
+pub(super) fn verbose() -> bool {
+    false
+}
+
+pub(super) unsafe fn open_verified(_: *const u16) -> *mut c_void {
     record("open");
     if STATE.with_borrow(|state| state.verified) {
         without_provenance_mut(HANDLE)
@@ -87,14 +84,11 @@ pub(super) unsafe extern "C" fn open_verified(_: *const u16) -> *mut c_void {
     }
 }
 
-pub(super) unsafe extern "C" fn resolve(_: *mut c_void) -> i32 {
+pub(super) unsafe fn resolve(_: *mut c_void) -> i32 {
     STATE.with_borrow(|state| state.resolve)
 }
 
-pub(super) unsafe extern "C" fn init(
-    preferences: *const rsf_slvk_sdk_preferences,
-    version: u64,
-) -> i32 {
+pub(super) unsafe fn init(preferences: *const rsf_slvk_sdk_preferences, version: u64) -> i32 {
     record("init");
     let preferences = unsafe { &*preferences };
     assert_eq!(version, crate::sdk_api::SDK_VERSION);
@@ -114,26 +108,22 @@ pub(super) unsafe extern "C" fn init(
     })
 }
 
-pub(super) unsafe extern "C" fn shutdown(result: *mut i32) -> u32 {
+pub(super) unsafe fn shutdown(result: *mut i32) -> u32 {
     record("shutdown");
     unsafe { *result = STATE.with_borrow(|state| state.shutdown) };
     1
 }
 
-pub(super) unsafe extern "C" fn clear() {
+pub(super) unsafe fn clear() {
     record("clear");
 }
 
 pub(super) const LOG: rsf_slvk_sdk_log = None;
 
-fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain([0]).collect()
-}
-
 fn start(lifecycle: &Lifecycle, directory: &str) -> i32 {
     let directory = wide(directory);
     let features = feature_mask(true, true, false);
-    unsafe { lifecycle.initialize(&Fake, directory.as_ptr(), c"project".as_ptr(), features) }
+    unsafe { lifecycle.initialize(directory.as_ptr(), c"project".as_ptr(), features) }
 }
 
 #[test]
@@ -166,7 +156,7 @@ fn verified_handle_spans_the_load_and_keeps_the_plugin_path() {
     let features = feature_mask(true, true, false);
     for (project, features) in [(c"other", features), (c"project", FEATURE_PCL)] {
         assert_eq!(
-            unsafe { lifecycle.initialize(&Fake, directory.as_ptr(), project.as_ptr(), features,) },
+            unsafe { lifecycle.initialize(directory.as_ptr(), project.as_ptr(), features,) },
             OTHER_CONFIGURATION
         );
     }
@@ -215,7 +205,7 @@ fn shutdown_keeps_vulkan_dispatch_until_explicit_unload() {
     assert_eq!(unsafe { lifecycle.shutdown() }, 0);
     take_events();
 
-    assert_eq!(unsafe { lifecycle.unload(&Fake) }, 0);
+    assert_eq!(unsafe { lifecycle.unload() }, 0);
     assert_eq!(take_events(), ["clear", "free"]);
     assert!(lifecycle.instance_proc().is_null());
     assert!(lifecycle.device_proc().is_null());
@@ -231,7 +221,7 @@ fn failed_shutdown_is_sticky_and_refuses_unload() {
     assert_eq!(unsafe { lifecycle.shutdown() }, 5);
     assert_eq!(unsafe { lifecycle.shutdown() }, 5);
     assert_eq!(start(&lifecycle, "C:\\sl"), 5);
-    assert_eq!(unsafe { lifecycle.unload(&Fake) }, 5);
+    assert_eq!(unsafe { lifecycle.unload() }, 5);
     assert_eq!(take_events(), ["shutdown", "clear"]);
     assert_eq!(lifecycle.instance_proc().addr(), PROC);
 }
@@ -271,7 +261,7 @@ fn overlapping_lifecycle_call_is_refused_without_waiting() {
     let held = lifecycle.session.lock().unwrap();
     assert_eq!(start(&lifecycle, "C:\\sl"), BUSY);
     assert_eq!(unsafe { lifecycle.shutdown() }, BUSY);
-    assert_eq!(unsafe { lifecycle.unload(&Fake) }, BUSY);
+    assert_eq!(unsafe { lifecycle.unload() }, BUSY);
     drop(held);
     assert!(take_events().is_empty());
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
@@ -310,7 +300,7 @@ fn reflex_token_borrow_allows_older_present_and_defers_shutdown() {
                 });
                 assert_eq!(receive.recv_timeout(Duration::from_secs(2)), Ok(0));
                 assert_eq!(unsafe { lifecycle.shutdown() }, BUSY);
-                assert_eq!(unsafe { lifecycle.unload(&Fake) }, BUSY);
+                assert_eq!(unsafe { lifecycle.unload() }, BUSY);
                 assert_eq!(lifecycle.module().addr(), MODULE);
                 assert!(take_events().is_empty());
                 0
@@ -328,15 +318,12 @@ fn reflex_token_borrow_allows_older_present_and_defers_shutdown() {
 fn symbol_lookups_follow_the_published_modules() {
     let lifecycle = Lifecycle::new();
     let name = c"rsfSlVulkanWsiCall".as_ptr();
-    assert!(unsafe { lifecycle.interposer_symbol(&Fake, name) }.is_null());
-    assert!(unsafe { lifecycle.common_symbol(&Fake, name) }.is_null());
+    assert!(unsafe { lifecycle.interposer_symbol(name) }.is_null());
+    assert!(unsafe { lifecycle.common_symbol(name) }.is_null());
     assert_eq!(start(&lifecycle, "C:/sl"), 0);
     assert!(lifecycle.initialized());
-    assert_eq!(
-        unsafe { lifecycle.interposer_symbol(&Fake, name) }.addr(),
-        PROC
-    );
-    assert_eq!(unsafe { lifecycle.common_symbol(&Fake, name) }.addr(), PROC);
+    assert_eq!(unsafe { lifecycle.interposer_symbol(name) }.addr(), PROC);
+    assert_eq!(unsafe { lifecycle.common_symbol(name) }.addr(), PROC);
     STATE.with_borrow(|state| {
         assert_eq!(
             state.common,
@@ -344,6 +331,6 @@ fn symbol_lookups_follow_the_published_modules() {
         )
     });
     assert_eq!(unsafe { lifecycle.shutdown() }, 0);
-    assert_eq!(unsafe { lifecycle.unload(&Fake) }, 0);
-    assert!(unsafe { lifecycle.interposer_symbol(&Fake, name) }.is_null());
+    assert_eq!(unsafe { lifecycle.unload() }, 0);
+    assert!(unsafe { lifecycle.interposer_symbol(name) }.is_null());
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Vulkan dispatch and corrected Streamline WSI leases.
-use super::{LIFECYCLE, Win32};
+use super::LIFECYCLE;
 use ash::vk::{self, Handle as _};
 use std::ffi::{c_char, c_void};
 use std::{mem, ptr};
@@ -237,7 +237,7 @@ unsafe extern "C" fn synchronized_present(
     if !LIFECYCLE.initialized() {
         return unsafe { present(queue, info) };
     }
-    let lease = unsafe { LIFECYCLE.common_symbol(&Win32, c"rsfSlVulkanQueuePresent".as_ptr()) };
+    let lease = unsafe { LIFECYCLE.common_symbol(c"rsfSlVulkanQueuePresent".as_ptr()) };
     if lease.is_null() {
         return vk::Result::ERROR_EXTENSION_NOT_PRESENT;
     }
@@ -256,7 +256,7 @@ unsafe extern "C" fn synchronized_wsi(callback: Option<Callback>, user: *mut c_v
     if !LIFECYCLE.initialized() {
         return unsafe { callback(user) };
     }
-    let lease = unsafe { LIFECYCLE.common_symbol(&Win32, c"rsfSlVulkanWsiCall".as_ptr()) };
+    let lease = unsafe { LIFECYCLE.common_symbol(c"rsfSlVulkanWsiCall".as_ptr()) };
     if lease.is_null() {
         return vk::Result::ERROR_EXTENSION_NOT_PRESENT.as_raw();
     }
@@ -272,8 +272,7 @@ unsafe extern "C" fn without_dlss_g(callback: Option<Callback>, user: *mut c_voi
     if !LIFECYCLE.initialized() {
         return unsafe { callback(user) };
     }
-    let lease =
-        unsafe { LIFECYCLE.interposer_symbol(&Win32, c"rsfSlVulkanWithoutDlssGCall".as_ptr()) };
+    let lease = unsafe { LIFECYCLE.interposer_symbol(c"rsfSlVulkanWithoutDlssGCall".as_ptr()) };
     if lease.is_null() {
         return vk::Result::ERROR_EXTENSION_NOT_PRESENT.as_raw();
     }

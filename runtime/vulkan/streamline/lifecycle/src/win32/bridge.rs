@@ -4,29 +4,39 @@
 //! shuts down and unloads the interposer; these calls run under its session or
 //! frame-token lease. admission.rs admits the interposer by the digest the build
 //! selects.
-use super::{GetCurrentThreadId, GetProcAddress, LIFECYCLE, Win32};
+use super::LIFECYCLE;
 use crate::frame_generation::Options;
 use crate::lifecycle::feature_mask;
-use crate::sdk_api::{self, FEATURE_DLSS_G, FEATURE_PCL, FEATURE_REFLEX, OK, guarded};
+use crate::sdk_api::{self, Entries, FEATURE_DLSS_G, FEATURE_PCL, FEATURE_REFLEX, OK, guarded};
 use crate::sdk_fg_options::{self, Packed, Sample, State};
 use crate::sdk_records::{self, rsf_slvk_pack_legacy_camera, rsf_slvk_pack_legacy_tags};
 use crate::sys::{
     rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_constants, rsf_slvk_sdk_header,
-    rsf_slvk_sdk_pcl_options, rsf_slvk_sdk_pcl_state, rsf_slvk_sdk_preferences,
-    rsf_slvk_sdk_reflex_options, rsf_slvk_sdk_reflex_state, rsf_slvk_sdk_tag,
-    rsf_slvk_sdk_tag_batch,
+    rsf_slvk_sdk_pcl_options, rsf_slvk_sdk_pcl_state, rsf_slvk_sdk_reflex_options,
+    rsf_slvk_sdk_reflex_state, rsf_slvk_sdk_tag_batch,
 };
 use std::ffi::{CStr, c_char, c_void};
 use std::marker::PhantomData;
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::{PoisonError, RwLock};
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 unsafe extern "C-unwind" {
     // sdk_guard.c: the sl::FrameToken virtual conversion.
     fn rsf_slvk_token_index(token: sdk_api::Token) -> u32;
 }
 
-/// One typed SDK entry point. slShutdown, a failed slInit and unload clear it.
+/// The interposer's core entry points. slShutdown, a failed slInit and unload clear them.
+static CORE: RwLock<Option<Entries>> = RwLock::new(None);
+
+fn core() -> Entries {
+    CORE.read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .unwrap_or_default()
+}
+
+/// One typed feature function, bound through slGetFeatureFunction and cleared with the core.
 struct Entry<T>(AtomicPtr<c_void>, PhantomData<T>);
 
 impl<T: Copy> Entry<T> {
@@ -49,14 +59,6 @@ impl<T: Copy> Entry<T> {
     }
 }
 
-static INIT: Entry<sdk_api::Init<rsf_slvk_sdk_preferences>> = Entry::new();
-static SHUTDOWN: Entry<sdk_api::Shutdown> = Entry::new();
-static FEATURE: Entry<sdk_api::GetFeatureFunction> = Entry::new();
-static NEW_TOKEN: Entry<sdk_api::GetNewFrameToken> = Entry::new();
-static SUPPORTED: Entry<sdk_api::IsFeatureSupported> = Entry::new();
-static SET_TAGS: Entry<sdk_api::SetTagForFrame<rsf_slvk_sdk_tag>> = Entry::new();
-static SET_CONSTANTS: Entry<sdk_api::SetConstants<rsf_slvk_sdk_constants>> = Entry::new();
-static FREE: Entry<sdk_api::FreeResources> = Entry::new();
 static REFLEX_OPTIONS: Entry<sdk_api::Apply<rsf_slvk_sdk_reflex_options>> = Entry::new();
 static REFLEX_SLEEP: Entry<sdk_api::ReflexSleep> = Entry::new();
 static REFLEX_STATE: Entry<sdk_api::Read<rsf_slvk_sdk_reflex_state>> = Entry::new();
@@ -71,92 +73,104 @@ const VIEWPORT: u32 = 0;
 /// Resolves a feature function only when Streamline reports success and a
 /// nonnull address.
 fn bind<T: Copy>(entry: &Entry<T>, feature: u32, name: &CStr) -> bool {
-    let Some(get) = FEATURE.get() else {
+    let Some(get) = core().get_feature_function else {
         return false;
     };
     let mut address = null_mut();
     guarded(|| unsafe { get(feature, name.as_ptr(), &mut address) }) == OK && entry.set(address)
 }
 
-// Lifecycle leaves, re-exported to the owner through lifecycle_leaf.
-
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe extern "C" fn open_verified(path: *const u16) -> *mut c_void {
-    unsafe { crate::admission::open_by_digest(path) }
-}
-
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe extern "C" fn resolve(module: *mut c_void) -> i32 {
-    let export = |name: &CStr| unsafe { GetProcAddress(module, name.as_ptr()) };
-    let resolved = [
-        INIT.set(export(c"slInit")),
-        SHUTDOWN.set(export(c"slShutdown")),
-        FEATURE.set(export(c"slGetFeatureFunction")),
-        NEW_TOKEN.set(export(c"slGetNewFrameToken")),
-        SUPPORTED.set(export(c"slIsFeatureSupported")),
-        SET_TAGS.set(export(c"slSetTagForFrame")),
-        SET_CONSTANTS.set(export(c"slSetConstants")),
-        FREE.set(export(c"slFreeResources")),
-    ];
-    if resolved.iter().all(|&resolved| resolved) {
-        0
-    } else {
-        -1
-    }
-}
-
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe extern "C" fn init(
-    request: *const rsf_slvk_sdk_preferences,
-    version: u64,
-) -> i32 {
-    let Some(init) = INIT.get() else {
-        return -4;
-    };
-    guarded(|| unsafe { init(request, version) })
-}
-
-/// Nonzero when slShutdown was called; result receives its result.
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe extern "C" fn shutdown(result: *mut i32) -> u32 {
-    let Some(shutdown) = SHUTDOWN.get() else {
-        return 0;
-    };
-    let code = guarded(|| unsafe { shutdown() });
-    unsafe { result.write(code) };
-    1
-}
-
-/// Clears the SDK entry points that slShutdown, a failed slInit or unload
-/// invalidates. The Vulkan dispatch entry points stay until unload.
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) unsafe extern "C" fn clear() {
-    INIT.clear();
-    SHUTDOWN.clear();
-    FEATURE.clear();
-    NEW_TOKEN.clear();
-    SUPPORTED.clear();
-    SET_TAGS.clear();
-    SET_CONSTANTS.clear();
-    FREE.clear();
-    REFLEX_OPTIONS.clear();
-    REFLEX_SLEEP.clear();
-    REFLEX_STATE.clear();
-    PCL_MARKER.clear();
-    PCL_STATE.clear();
-    PCL_OPTIONS.clear();
-    FG_OPTIONS.clear();
-    FG_STATE.clear();
-}
-
-/// The lifecycle's native leaves. Unit tests call fakes, so these are unused there.
+/// The lifecycle's native leaves. Unit tests call fakes, so these are not compiled there.
 #[cfg(not(test))]
 pub(crate) mod lifecycle_leaf {
-    pub(crate) use super::{clear, init, open_verified, resolve, shutdown};
-    use crate::sys::rsf_slvk_sdk_log;
-    pub(crate) const LOG: rsf_slvk_sdk_log = Some(super::super::rsf_slvk_log_message);
-}
+    use super::{CORE, Entries, FG_OPTIONS, FG_STATE, guarded};
+    use super::{PCL_MARKER, PCL_OPTIONS, PCL_STATE, REFLEX_OPTIONS, REFLEX_SLEEP, REFLEX_STATE};
+    use crate::sys::{rsf_slvk_sdk_log, rsf_slvk_sdk_preferences};
+    use std::ffi::{c_char, c_void};
+    use std::ptr::{NonNull, null_mut};
+    use std::sync::PoisonError;
+    use windows_sys::Win32::Foundation::{CloseHandle, FreeLibrary};
+    use windows_sys::Win32::System::LibraryLoader::{
+        GetModuleHandleW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+        LoadLibraryExW,
+    };
 
+    pub(crate) const LOG: rsf_slvk_sdk_log = Some(super::super::rsf_slvk_log_message);
+
+    pub(crate) unsafe fn load(path: *const u16) -> *mut c_void {
+        let flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+        unsafe { LoadLibraryExW(path, null_mut(), flags) }
+    }
+
+    pub(crate) unsafe fn free(module: NonNull<c_void>) {
+        unsafe { FreeLibrary(module.as_ptr()) };
+    }
+
+    pub(crate) unsafe fn close(handle: *mut c_void) {
+        unsafe { CloseHandle(handle) };
+    }
+
+    pub(crate) unsafe fn symbol(module: *mut c_void, name: *const c_char) -> *mut c_void {
+        unsafe { crate::sdk_api::proc_address(module, name) }
+    }
+
+    pub(crate) unsafe fn loaded(path: *const u16) -> *mut c_void {
+        unsafe { GetModuleHandleW(path) }
+    }
+
+    pub(crate) fn verbose() -> bool {
+        std::env::var_os("VULKANSTORY_STREAMLINE_VERBOSE").is_some_and(|value| !value.is_empty())
+    }
+
+    pub(crate) unsafe fn open_verified(path: *const u16) -> *mut c_void {
+        unsafe { crate::admission::open_by_digest(path) }
+    }
+
+    pub(crate) unsafe fn resolve(module: *mut c_void) -> i32 {
+        let entries = unsafe { Entries::resolve(module) };
+        *CORE.write().unwrap_or_else(PoisonError::into_inner) = Some(entries);
+        let resolved = entries.init.is_some()
+            && entries.shutdown.is_some()
+            && entries.get_feature_function.is_some()
+            && entries.get_new_frame_token.is_some()
+            && entries.is_feature_supported.is_some()
+            && entries.set_tag_for_frame.is_some()
+            && entries.set_constants.is_some()
+            && entries.free_resources.is_some();
+        if resolved { 0 } else { -1 }
+    }
+
+    pub(crate) unsafe fn init(request: *const rsf_slvk_sdk_preferences, version: u64) -> i32 {
+        let Some(init) = super::core().init else {
+            return -4;
+        };
+        guarded(|| unsafe { init(request, version) })
+    }
+
+    /// Nonzero when slShutdown was called; result receives its result.
+    pub(crate) unsafe fn shutdown(result: *mut i32) -> u32 {
+        let Some(shutdown) = super::core().shutdown else {
+            return 0;
+        };
+        let code = guarded(|| unsafe { shutdown() });
+        unsafe { result.write(code) };
+        1
+    }
+
+    /// Clears the SDK entry points that slShutdown, a failed slInit or unload
+    /// invalidates. The Vulkan dispatch entry points stay until unload.
+    pub(crate) unsafe fn clear() {
+        *CORE.write().unwrap_or_else(PoisonError::into_inner) = None;
+        REFLEX_OPTIONS.clear();
+        REFLEX_SLEEP.clear();
+        REFLEX_STATE.clear();
+        PCL_MARKER.clear();
+        PCL_STATE.clear();
+        PCL_OPTIONS.clear();
+        FG_OPTIONS.clear();
+        FG_STATE.clear();
+    }
+}
 // Called by Streamline's present thread. The atomic store lets the render
 // thread report or recover on its next state query.
 unsafe extern "C" fn present_error(error: *const i32) {
@@ -188,7 +202,7 @@ pub(crate) unsafe fn fg_apply(request: &Packed) -> i32 {
 }
 
 pub(crate) unsafe fn fg_release() -> i32 {
-    let Some(free) = FREE.get() else {
+    let Some(free) = core().free_resources else {
         return -1;
     };
     let viewport = sdk_api::viewport(VIEWPORT);
@@ -224,7 +238,7 @@ unsafe extern "C" fn rsf_vk_sl_initialize_features(
     super_resolution: u32,
 ) -> i32 {
     let features = feature_mask(reflex != 0, frame_generation != 0, super_resolution != 0);
-    unsafe { LIFECYCLE.initialize(&Win32, directory, project, features) }
+    unsafe { LIFECYCLE.initialize(directory, project, features) }
 }
 
 #[unsafe(no_mangle)]
@@ -256,7 +270,7 @@ extern "C" fn rsf_vk_sl_shutdown() {
 /// object and API table that references it is destroyed.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vk_sl_unload_checked() -> i32 {
-    unsafe { LIFECYCLE.unload(&Win32) }
+    unsafe { LIFECYCLE.unload() }
 }
 
 #[unsafe(no_mangle)]
@@ -272,7 +286,7 @@ extern "C" fn rsf_vk_sl_is_frame_generation_supported(physical: *mut c_void) -> 
         return -1;
     }
     with_sdk(-1, || {
-        let Some(supported) = SUPPORTED.get() else {
+        let Some(supported) = core().is_feature_supported else {
             return -1;
         };
         let adapter = sdk_api::adapter(physical);
@@ -431,7 +445,7 @@ unsafe extern "C" fn rsf_vk_sl_begin_frame_checked(index: u32, token: *mut usize
     };
     *token = 0;
     let acquired = LIFECYCLE.frame_token.begin(|output| {
-        let Some(acquire) = NEW_TOKEN.get() else {
+        let Some(acquire) = core().get_new_frame_token else {
             return -1;
         };
         let mut frame = null();
@@ -504,7 +518,7 @@ fn submit_tags(
     commands: *mut c_void,
     images: Option<&[*const rsf_slvk_legacy_image; 4]>,
 ) -> i32 {
-    let Some(set_tags) = SET_TAGS.get() else {
+    let Some(set_tags) = core().set_tag_for_frame else {
         return -1;
     };
     let mut batch = rsf_slvk_sdk_tag_batch::default();
@@ -536,7 +550,9 @@ unsafe extern "C" fn rsf_vk_sl_tag_frame(
 ) -> i32 {
     with_token(0, -1, |frame| {
         let images = [depth, motion, hudless, ui];
-        let (Some(set_constants), Some(_)) = (SET_CONSTANTS.get(), SET_TAGS.get()) else {
+        let entries = core();
+        let (Some(set_constants), Some(_)) = (entries.set_constants, entries.set_tag_for_frame)
+        else {
             return -1;
         };
         if images.iter().any(|image| image.is_null()) {

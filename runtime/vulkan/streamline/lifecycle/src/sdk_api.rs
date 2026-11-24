@@ -148,7 +148,7 @@ impl Entries {
         if module.is_null() {
             return Self::default();
         }
-        unsafe { Self::resolve_with(|name| GetProcAddress(module, name.as_ptr())) }
+        unsafe { Self::resolve_with(|name| proc_address(module, name.as_ptr())) }
     }
 }
 
@@ -260,10 +260,15 @@ pub unsafe fn function<T: Copy>(address: *mut c_void) -> Option<T> {
     (!address.is_null()).then(|| unsafe { transmute_copy(&address) })
 }
 
+/// The address of the export `name` of `module`, or null.
+///
+/// # Safety
+/// `module` is a loaded module and `name` a NUL-terminated string.
 #[cfg(windows)]
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
+pub(crate) unsafe fn proc_address(module: *mut c_void, name: *const c_char) -> *mut c_void {
+    let address =
+        unsafe { windows_sys::Win32::System::LibraryLoader::GetProcAddress(module, name.cast()) };
+    address.map_or(ptr::null_mut(), |address| address as *mut c_void)
 }
 
 /// Resolves an export from the module without taking a module reference.
@@ -275,7 +280,7 @@ pub unsafe fn export<T: Copy>(module: *mut c_void, name: &CStr) -> Option<T> {
     if module.is_null() {
         return None;
     }
-    unsafe { function(GetProcAddress(module, name.as_ptr())) }
+    unsafe { function(proc_address(module, name.as_ptr())) }
 }
 
 /// Resolves one feature function only when Streamline reports success and a
