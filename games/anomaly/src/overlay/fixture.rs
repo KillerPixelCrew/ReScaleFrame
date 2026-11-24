@@ -419,12 +419,8 @@ fn frames(graphics: &Graphics, count: usize) -> windows::core::Result<()> {
     Ok(())
 }
 
-fn wide(path: &Path) -> Vec<u16> {
-    path.as_os_str().encode_wide().chain([0]).collect()
-}
-
 fn differing_pixels(path: &Path) -> windows::core::Result<(u32, u32, usize)> {
-    let file = wide(path);
+    let file = rsf_test_support::wide_os(path);
     unsafe {
         let factory: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
@@ -503,7 +499,7 @@ fn visibility(query: rsf_get_overlay_api_fn) -> Result<i32, Box<dyn std::error::
             .flat_map(u16::to_le_bytes)
             .collect::<Vec<_>>(),
     )?;
-    let ini = wide(&ini);
+    let ini = rsf_test_support::wide_os(&ini);
     let options = rsf_anomaly_overlay_options {
         runtime,
         configuration: ini.as_ptr(),
