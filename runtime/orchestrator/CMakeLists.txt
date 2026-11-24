@@ -79,6 +79,19 @@ foreach(rsf_vendor "FFX;ffx" "FFX_FG;ffx-fg" "XESS;xess" "XESS_FG;xess-fg")
 endforeach()
 rsf_add_rust_static(rsf_orchestrator_rust rsf_rust_core rsf-orchestrator rsf_orchestrator ${rsf_orchestrator_env}
     ${rsf_orchestrator_features})
+# A binary whose one Rust archive embeds rsf-orchestrator as an rlib (the Minecraft adapter, fixtures that
+# carry the Runtime beside their own code) lists rsf_orchestrator_rust and rsf_common_rust, whose crate the
+# Runtime carries, in RSF_EMBEDDED_ARCHIVES (cmake/rust_static.cmake): it keeps the C leaves and system libraries below but not this archive. Such an
+# archive builds with RSF_RUNTIME_EMBED_ARGS, the Runtime archive's features and environment.
+set(rsf_runtime_embed_args ${rsf_orchestrator_env})
+foreach(rsf_feature IN LISTS rsf_orchestrator_features)
+    if(rsf_feature STREQUAL "--features")
+        list(APPEND rsf_runtime_embed_args --features)
+    else()
+        list(APPEND rsf_runtime_embed_args rsf-orchestrator/${rsf_feature})
+    endif()
+endforeach()
+set_property(GLOBAL PROPERTY RSF_RUNTIME_EMBED_ARGS "${rsf_runtime_embed_args}")
 if(BUILD_TESTING)
     # The same crate with the test-fixtures feature adds the fixture exports the ctest executables call. A test
     # target that sets RSF_ORCHESTRATOR_FIXTURES links this archive wherever the shipping one is named, so the
@@ -90,13 +103,12 @@ if(BUILD_TESTING)
     rsf_add_rust_static(rsf_orchestrator_fixture_leaves_rust rsf_rust_core_fixture_leaves rsf-orchestrator
         rsf_orchestrator ${rsf_orchestrator_env} --features fixture-leaves ${rsf_orchestrator_features})
     get_target_property(rsf_orchestrator_libs rsf_orchestrator_rust INTERFACE_LINK_LIBRARIES)
-    get_target_property(rsf_orchestrator_fixture_libs rsf_orchestrator_fixture_rust INTERFACE_LINK_LIBRARIES)
-    get_target_property(rsf_orchestrator_leaves_libs rsf_orchestrator_fixture_leaves_rust INTERFACE_LINK_LIBRARIES)
-    list(POP_FRONT rsf_orchestrator_libs rsf_orchestrator_archive)
-    list(POP_FRONT rsf_orchestrator_fixture_libs rsf_orchestrator_fixture_archive)
-    list(POP_FRONT rsf_orchestrator_leaves_libs rsf_orchestrator_leaves_archive)
+    get_target_property(rsf_orchestrator_archive rsf_orchestrator_rust RSF_ARCHIVE)
+    get_target_property(rsf_orchestrator_fixture_archive rsf_orchestrator_fixture_rust RSF_ARCHIVE)
+    get_target_property(rsf_orchestrator_leaves_archive rsf_orchestrator_fixture_leaves_rust RSF_ARCHIVE)
+    list(POP_FRONT rsf_orchestrator_libs)
     set_property(TARGET rsf_orchestrator_rust PROPERTY INTERFACE_LINK_LIBRARIES
-        "$<IF:$<BOOL:$<TARGET_PROPERTY:RSF_ORCHESTRATOR_FIXTURE_LEAVES>>,${rsf_orchestrator_leaves_archive},$<IF:$<BOOL:$<TARGET_PROPERTY:RSF_ORCHESTRATOR_FIXTURES>>,${rsf_orchestrator_fixture_archive},${rsf_orchestrator_archive}>>"
+        "$<$<NOT:$<IN_LIST:rsf_orchestrator_rust,$<TARGET_PROPERTY:RSF_EMBEDDED_ARCHIVES>>>:$<IF:$<BOOL:$<TARGET_PROPERTY:RSF_ORCHESTRATOR_FIXTURE_LEAVES>>,${rsf_orchestrator_leaves_archive},$<IF:$<BOOL:$<TARGET_PROPERTY:RSF_ORCHESTRATOR_FIXTURES>>,${rsf_orchestrator_fixture_archive},${rsf_orchestrator_archive}>>>"
         ${rsf_orchestrator_libs})
 endif()
 # version: the provider version reads in mfg_provider.rs (forwarded by the dinput8 proxy itself).

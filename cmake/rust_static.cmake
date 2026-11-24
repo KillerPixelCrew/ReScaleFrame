@@ -22,6 +22,12 @@ endfunction()
 # file named for its own target. Builds of one package run one after another so that the copy is of
 # its own build. An optional `ENV NAME=value` sets one variable for the Cargo build; the remaining
 # arguments go to cargo build.
+#
+# A binary links one Rust archive: two would each carry rsf-game-sys and the other shared crates, and
+# their exports collide once both copies are pulled in. When a binary's archive embeds the crate of
+# another archive target as an rlib, the binary lists that target in its RSF_EMBEDDED_ARCHIVES
+# property; it then keeps the target's C leaves and system libraries but not its archive. The raw
+# archive path is the target's RSF_ARCHIVE property.
 function(rsf_add_rust_static target build_target package archive)
     cmake_parse_arguments(PARSE_ARGV 4 rsf "" "ENV" "")
     set(rust_archive "${RSF_CARGO_ARTIFACTS}/archives/${CMAKE_STATIC_LIBRARY_PREFIX}${target}${CMAKE_STATIC_LIBRARY_SUFFIX}")
@@ -37,7 +43,10 @@ function(rsf_add_rust_static target build_target package archive)
     rsf_serialize_rust_build(${build_target} ${package})
     add_library(${target} INTERFACE)
     add_dependencies(${target} ${build_target})
-    target_link_libraries(${target} INTERFACE "${rust_archive}" ntdll userenv ws2_32 dbghelp)
+    set_target_properties(${target} PROPERTIES RSF_ARCHIVE "${rust_archive}")
+    target_link_libraries(${target} INTERFACE
+        "$<$<NOT:$<IN_LIST:${target},$<TARGET_PROPERTY:RSF_EMBEDDED_ARCHIVES>>>:${rust_archive}>"
+        ntdll userenv ws2_32 dbghelp)
     if(MSVC)
         # legacy_stdio_definitions: the bounded swprintf entry the settings store formats with.
         target_link_libraries(${target} INTERFACE synchronization legacy_stdio_definitions)
