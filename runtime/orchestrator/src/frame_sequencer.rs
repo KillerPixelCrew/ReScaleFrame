@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use rsf_game_sys::backend_result::{INIT_FAILED, INVALID_ARGUMENT, NOT_READY};
+use rsf_game_sys::ffi_util::has_capacity;
 use rsf_game_sys::{RSF_FRAME_SOURCE_INPUT, RSF_FRAME_SOURCE_RENDERED};
 use std::sync::Mutex;
 
@@ -219,10 +220,7 @@ unsafe extern "C" fn rsf_frame_sequencer_get(
     let Some(handle) = (unsafe { handle.as_ref() }) else {
         return INVALID_ARGUMENT;
     };
-    if id == 0
-        || out.is_null()
-        || unsafe { out.cast::<u32>().read() } < size_of::<SequenceState>() as u32
-    {
+    if id == 0 || !unsafe { has_capacity(out) } {
         return INVALID_ARGUMENT;
     }
     let ledger = handle.lock().unwrap();

@@ -420,11 +420,7 @@ impl Owner {
 }
 
 unsafe extern "C" fn present(user: Handle, packet: *const Packet) -> i32 {
-    if user.is_null() || packet.is_null() {
-        return VK_INITIALIZATION_FAILED;
-    }
-    let size = unsafe { ptr::addr_of!((*packet).struct_size).read() };
-    if (size as usize) < size_of::<Packet>() {
+    if user.is_null() || !unsafe { rsf_game_sys::ffi_util::has_capacity(packet) } {
         return VK_INITIALIZATION_FAILED;
     }
     let packet = unsafe { &*packet };

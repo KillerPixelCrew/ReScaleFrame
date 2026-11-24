@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::sr_session::has_capacity;
 use crate::sys::{RSF_RENDER_LINK_ABI_VERSION, rsf_render_link as Link};
 use rsf_game_sys::backend_result::{
     ABI_MISMATCH, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, STALE_RESOURCES,
@@ -24,7 +25,7 @@ struct Table {
 type Handle = Mutex<Table>;
 
 unsafe fn validate(link: *const Link) -> Result<(), i32> {
-    if link.is_null() || unsafe { link.cast::<u32>().read() } < EMPTY.struct_size {
+    if !unsafe { has_capacity(link) } {
         return Err(INVALID_ARGUMENT);
     }
     if unsafe { (*link).abi_version } != EMPTY.abi_version {

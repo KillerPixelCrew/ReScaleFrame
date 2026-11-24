@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::sr_session::has_capacity;
 use crate::sys::{RSF_FRAME_ASSEMBLY_ABI_VERSION, rsf_pipeline_camera_frame as Camera};
 use rsf_game_sys::{
     RSF_GAME_RENDER_RESET, rsf_game_depth_domain, rsf_game_depth_domains,
@@ -184,7 +185,7 @@ pub(super) extern "C" fn rsf_native_sr_set_enabled(enabled: u32) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_native_sr_render_config(_: *mut c_void, out: *mut Config) -> i32 {
-    if out.is_null() || unsafe { out.cast::<u32>().read() } < EMPTY_CONFIG.struct_size {
+    if !unsafe { has_capacity(out) } {
         return 0;
     }
     unsafe { out.write(*SURFACE.lock().unwrap()) };
