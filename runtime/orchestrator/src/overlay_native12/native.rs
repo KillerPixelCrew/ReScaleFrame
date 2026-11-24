@@ -598,10 +598,6 @@ unsafe extern "C" fn collect(
     u32::from(unsafe { rsf_overlay_input_collect(input, width, height, elapsed) } == OK)
 }
 
-unsafe extern "C" fn completed(fence: *mut c_void) -> u64 {
-    unsafe { graphics::borrow::<ID3D12Fence>(&fence).GetCompletedValue() }
-}
-
 unsafe extern "C" fn arm(fence: *mut c_void, event: *mut c_void, value: u64) -> u32 {
     u32::from(
         unsafe {
@@ -628,7 +624,7 @@ static PLATFORM: Platform = Platform {
     destroy,
     visible: rsf_overlay_input_visible,
     set_visible: rsf_overlay_input_set_visible,
-    completed,
+    completed: graphics::fence_completed,
     arm,
     begin,
     create_pipeline,
