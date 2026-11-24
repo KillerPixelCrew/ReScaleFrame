@@ -43,7 +43,6 @@ pub(super) struct Observed {
     pub(super) fence_value: u64,
 }
 
-
 #[derive(Clone, Copy)]
 pub(super) struct Snapshot {
     status: Status,

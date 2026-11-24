@@ -153,7 +153,6 @@ struct Platform {
     tags: unsafe extern "C" fn(Handle, Handle, Handle, &Frame) -> i32,
 }
 
-
 #[derive(Clone, Copy)]
 struct Token {
     id: u64,

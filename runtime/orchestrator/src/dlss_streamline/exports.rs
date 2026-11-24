@@ -17,12 +17,10 @@ pub(crate) unsafe extern "C" fn rsf_dlss_set_device(device: Handle) -> i32 {
     unsafe { rsf_core_dlss_streamline_set_device(device) }
 }
 
-
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_dlss_query_support(support: *mut Support) -> i32 {
     unsafe { rsf_core_dlss_streamline_support(support) }
 }
-
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_dlss_evaluate(context: Handle, frame: *const Frame) -> i32 {
@@ -40,7 +38,6 @@ pub(crate) unsafe fn rsf_dlss_evaluate_shared(list: Handle, frame: *const Frame,
 pub(crate) unsafe extern "C" fn rsf_dlss_share_host(host: Handle, log: Log, user: Handle) -> i32 {
     unsafe { rsf_core_dlss_streamline_share_host(host, log, user) }
 }
-
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_dlss_release_resources() -> i32 {
