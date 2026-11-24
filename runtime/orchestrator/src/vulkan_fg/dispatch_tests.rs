@@ -7,7 +7,7 @@ pub(super) use fakes as ffx;
 pub(super) use fakes as fsr4;
 pub(super) use fakes as xess;
 
-/// The per-scenario fake state (formerly `rsf_dispatch_fixture_state`).
+/// The per-scenario fake state.
 pub(super) struct State {
     ffx_creates: u32,
     dlss_creates: u32,
@@ -99,9 +99,9 @@ pub(super) mod fakes {
     const OUT_OF_DATE: i32 = -1_000_001_004;
 
     macro_rules! frame_callbacks {
-        ($owner:ty, $prepare:ident, $hudless:ident, $submitted:ident, $present:ident, $source:ident, $bits:literal, $result:expr) => {
+        ($prepare:ident, $hudless:ident, $submitted:ident, $present:ident, $source:ident, $bits:literal, $result:expr) => {
             pub(crate) unsafe fn $prepare(
-                _: *mut $owner,
+                _: *mut c_void,
                 _: *mut c_void,
                 _: *const rsf_fgvk_frame,
             ) -> i32 {
@@ -109,22 +109,22 @@ pub(super) mod fakes {
                 FIXTURE_OK
             }
             pub(crate) unsafe fn $hudless(
-                _: *mut $owner,
+                _: *mut c_void,
                 _: *mut c_void,
                 _: *const rsf_fgvk_frame,
             ) -> i32 {
                 unsafe { f!(calls) |= $bits << 1 };
                 FIXTURE_OK
             }
-            pub(crate) unsafe fn $submitted(_: *mut $owner, _: *const *mut c_void, _: u32) {
+            pub(crate) unsafe fn $submitted(_: *mut c_void, _: *const *mut c_void, _: u32) {
                 unsafe { f!(calls) |= $bits << 2 };
             }
-            pub(crate) unsafe fn $present(_: *mut $owner, _: *const c_void) -> i32 {
+            pub(crate) unsafe fn $present(_: *mut c_void, _: *const c_void) -> i32 {
                 unsafe { f!(calls) |= $bits << 3 };
                 $result
             }
             pub(crate) unsafe fn $source(
-                owner: *mut $owner,
+                owner: *mut c_void,
                 info: *const c_void,
                 source: *const rsf_frame_record,
             ) -> i32 {
@@ -138,7 +138,6 @@ pub(super) mod fakes {
     }
 
     frame_callbacks!(
-        c_void,
         rsf_ffxgvk_prepare,
         rsf_ffxgvk_hudless,
         rsf_ffxgvk_submitted,
@@ -148,7 +147,6 @@ pub(super) mod fakes {
         SUBOPTIMAL
     );
     frame_callbacks!(
-        c_void,
         rsf_dlssgvk_prepare,
         rsf_dlssgvk_hudless,
         rsf_dlssgvk_submitted,
@@ -158,7 +156,6 @@ pub(super) mod fakes {
         OUT_OF_DATE
     );
     frame_callbacks!(
-        c_void,
         rsf_xessgvk_prepare,
         rsf_xessgvk_hudless,
         rsf_xessgvk_submitted,
@@ -168,7 +165,6 @@ pub(super) mod fakes {
         SUBOPTIMAL
     );
     frame_callbacks!(
-        c_void,
         rsf_fsr4gvk_prepare,
         rsf_fsr4gvk_hudless,
         rsf_fsr4gvk_submitted,
@@ -273,23 +269,23 @@ pub(super) mod fakes {
     }
 
     macro_rules! images {
-        ($name:ident, $type:ty, $id:expr, $count:expr) => {
-            pub(crate) unsafe fn $name(owner: *mut $type, count: *mut u32, _: *mut u64) -> i32 {
+        ($name:ident, $id:expr, $count:expr) => {
+            pub(crate) unsafe fn $name(owner: *mut c_void, count: *mut u32, _: *mut u64) -> i32 {
                 assert_eq!(owner as usize, $id);
                 unsafe { count.write($count) };
                 FIXTURE_OK
             }
         };
     }
-    images!(rsf_ffxgvk_images, c_void, FFX, 3);
-    images!(rsf_dlssgvk_images, c_void, DLSS, 4);
-    images!(rsf_fsr4gvk_images, c_void, FSR4, 3);
-    images!(rsf_xessgvk_images, c_void, XESS, 3);
+    images!(rsf_ffxgvk_images, FFX, 3);
+    images!(rsf_dlssgvk_images, DLSS, 4);
+    images!(rsf_fsr4gvk_images, FSR4, 3);
+    images!(rsf_xessgvk_images, XESS, 3);
 
     macro_rules! acquire {
-        ($name:ident, $type:ty, $verify:expr, $index:expr, $result:expr) => {
+        ($name:ident, $verify:expr, $index:expr, $result:expr) => {
             pub(crate) unsafe fn $name(
-                _: *mut $type,
+                _: *mut c_void,
                 timeout: u64,
                 semaphore: u64,
                 fence: u64,
@@ -303,10 +299,10 @@ pub(super) mod fakes {
             }
         };
     }
-    acquire!(rsf_ffxgvk_acquire, c_void, true, 2, 2);
-    acquire!(rsf_dlssgvk_acquire, c_void, false, 1, SUBOPTIMAL);
-    acquire!(rsf_fsr4gvk_acquire, c_void, true, 1, 2);
-    acquire!(rsf_xessgvk_acquire, c_void, false, 2, 2);
+    acquire!(rsf_ffxgvk_acquire, true, 2, 2);
+    acquire!(rsf_dlssgvk_acquire, false, 1, SUBOPTIMAL);
+    acquire!(rsf_fsr4gvk_acquire, true, 1, 2);
+    acquire!(rsf_xessgvk_acquire, false, 2, 2);
 
     fn enabled(value: u32, count: u32) -> i32 {
         unsafe {
@@ -348,8 +344,8 @@ pub(super) mod fakes {
     }
 
     macro_rules! status {
-        ($name:ident, $type:ty, $prepared:expr, $error:expr) => {
-            pub(crate) unsafe fn $name(_: *mut $type, status: *mut rsf_fgvk_status) -> i32 {
+        ($name:ident, $prepared:expr, $error:expr) => {
+            pub(crate) unsafe fn $name(_: *mut c_void, status: *mut rsf_fgvk_status) -> i32 {
                 let status = unsafe { &mut *status };
                 status.prepared = $prepared;
                 if let Some(error) = $error {
@@ -359,9 +355,9 @@ pub(super) mod fakes {
             }
         };
     }
-    status!(rsf_ffxgvk_get_status, c_void, 30, None);
-    status!(rsf_fsr4gvk_status, c_void, 40, Some(-77));
-    status!(rsf_xessgvk_status, c_void, 50, Some(-77));
+    status!(rsf_ffxgvk_get_status, 30, None);
+    status!(rsf_fsr4gvk_status, 40, Some(-77));
+    status!(rsf_xessgvk_status, 50, Some(-77));
 
     pub(crate) unsafe fn rsf_dlssgvk_get_status(_: Handle, status: *mut rsf_dlssgvk_status) -> i32 {
         let status = unsafe { &mut *status };
@@ -614,6 +610,20 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
         setup.graphics.struct_size = size_of_val(&setup.graphics) as u32;
         setup.graphics.abi_version = RSF_SRVK_ABI_VERSION;
         setup.graphics.backend = 5; // SR selection must not choose the FG provider.
+        // The legacy FFX count-one creation with no host record, against the current setup.
+        macro_rules! create_ffx {
+            ($owner:ident, $chain:ident) => {
+                create(
+                    platform,
+                    &setup,
+                    FFX,
+                    1,
+                    ptr::null(),
+                    &mut $owner,
+                    &mut $chain,
+                )
+            };
+        }
         let mut owner = ptr::null_mut();
         let mut chain = 0;
         assert!(
@@ -632,29 +642,13 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
         );
         setup.struct_size -= 1;
         assert!(
-            create(
-                platform,
-                &setup,
-                FFX,
-                1,
-                ptr::null(),
-                &mut owner,
-                &mut chain
-            ) == FIXTURE_INVALID_ARGUMENT,
+            create_ffx!(owner, chain) == FIXTURE_INVALID_ARGUMENT,
             "short setup refused"
         );
         setup.struct_size += 1;
         setup.abi_version += 1;
         assert!(
-            create(
-                platform,
-                &setup,
-                FFX,
-                1,
-                ptr::null(),
-                &mut owner,
-                &mut chain
-            ) == FIXTURE_ABI_MISMATCH,
+            create_ffx!(owner, chain) == FIXTURE_ABI_MISMATCH,
             "setup ABI refused"
         );
         setup.abi_version -= 1;
@@ -716,15 +710,7 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
             "FFX unsupported MFG request never clamps or allocates"
         );
         assert!(
-            create(
-                platform,
-                &setup,
-                FFX,
-                1,
-                ptr::null(),
-                &mut owner,
-                &mut chain
-            ) == FIXTURE_OK
+            create_ffx!(owner, chain) == FIXTURE_OK
                 && !owner.is_null()
                 && chain == 33
                 && f!(borrowed_setup) == ptr::from_ref(&setup)
@@ -910,16 +896,7 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
             "failed unsupported-count cleanup returns retained owner for retry"
         );
         assert!(
-            create(
-                platform,
-                &setup,
-                FFX,
-                1,
-                ptr::null(),
-                &mut second,
-                &mut second_chain
-            ) == FIXTURE_NOT_READY
-                && second.is_null(),
+            create_ffx!(second, second_chain) == FIXTURE_NOT_READY && second.is_null(),
             "partial failed creation retains global admission"
         );
         f!(calls) = 0;
@@ -941,31 +918,12 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
         );
         f!(refuse_create) = true;
         assert!(
-            create(
-                platform,
-                &setup,
-                FFX,
-                1,
-                ptr::null(),
-                &mut owner,
-                &mut chain
-            ) == FIXTURE_INIT_FAILED
-                && owner.is_null()
-                && chain == 0,
+            create_ffx!(owner, chain) == FIXTURE_INIT_FAILED && owner.is_null() && chain == 0,
             "concrete create error releases clean generic admission"
         );
         f!(refuse_create) = false;
         assert!(
-            create(
-                platform,
-                &setup,
-                FFX,
-                1,
-                ptr::null(),
-                &mut owner,
-                &mut chain
-            ) == FIXTURE_OK
-                && rsf_fgvk_destroy(owner) == FIXTURE_OK,
+            create_ffx!(owner, chain) == FIXTURE_OK && rsf_fgvk_destroy(owner) == FIXTURE_OK,
             "creation resumes after clean factory failure"
         );
         owner = ptr::null_mut();
@@ -1079,15 +1037,7 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
             assert!(
                 rsf_fgvk_drain(owner) == FIXTURE_FEATURE_FAILED
                     && rsf_fgvk_destroy(owner) == FIXTURE_FEATURE_FAILED
-                    && create(
-                        platform,
-                        &setup,
-                        FFX,
-                        1,
-                        ptr::null(),
-                        &mut second,
-                        &mut second_chain
-                    ) == FIXTURE_NOT_READY,
+                    && create_ffx!(second, second_chain) == FIXTURE_NOT_READY,
                 "FSR4 failed retirement preserves owner and process admission"
             );
             f!(refuse_destroy) = false;
@@ -1164,15 +1114,7 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
                 "XeSS native count dispatched"
             );
             assert!(
-                create(
-                    platform,
-                    &setup,
-                    FFX,
-                    1,
-                    ptr::null(),
-                    &mut second,
-                    &mut second_chain
-                ) == FIXTURE_NOT_READY,
+                create_ffx!(second, second_chain) == FIXTURE_NOT_READY,
                 "XeSS shares process owner admission"
             );
             assert!(
@@ -1254,15 +1196,7 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
             assert!(
                 rsf_fgvk_drain(owner) == FIXTURE_FEATURE_FAILED
                     && rsf_fgvk_destroy(owner) == FIXTURE_FEATURE_FAILED
-                    && create(
-                        platform,
-                        &setup,
-                        FFX,
-                        1,
-                        ptr::null(),
-                        &mut second,
-                        &mut second_chain
-                    ) == FIXTURE_NOT_READY,
+                    && create_ffx!(second, second_chain) == FIXTURE_NOT_READY,
                 "XeSS failed retirement preserves process owner"
             );
             f!(refuse_destroy) = false;
@@ -1287,31 +1221,12 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
         owner = ptr::null_mut();
         chain = 0;
         assert!(
-            create(
-                platform,
-                &setup,
-                FFX,
-                1,
-                ptr::null(),
-                &mut owner,
-                &mut chain
-            ) == FIXTURE_NOT_READY
-                && owner.is_null()
-                && chain == 0,
+            create_ffx!(owner, chain) == FIXTURE_NOT_READY && owner.is_null() && chain == 0,
             "attachment collision rolls provider creation back"
         );
         f!(refuse_destroy) = true;
         assert!(
-            create(
-                platform,
-                &setup,
-                FFX,
-                1,
-                ptr::null(),
-                &mut owner,
-                &mut chain
-            ) != FIXTURE_OK
-                && !owner.is_null(),
+            create_ffx!(owner, chain) != FIXTURE_OK && !owner.is_null(),
             "failed rollback retains partial provider owner"
         );
         f!(refuse_destroy) = false;
@@ -1332,32 +1247,14 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
         );
         f!(missing_owner) = true;
         assert!(
-            create(
-                platform,
-                &setup,
-                FFX,
-                1,
-                ptr::null(),
-                &mut owner,
-                &mut chain
-            ) == FIXTURE_INIT_FAILED
-                && owner.is_null()
-                && chain == 0,
+            create_ffx!(owner, chain) == FIXTURE_INIT_FAILED && owner.is_null() && chain == 0,
             "success without a provider is refused and does not publish the chain"
         );
         f!(missing_owner) = false;
         f!(fail_after_create) = true;
         let before_partial = f!(destroys);
         assert!(
-            create(
-                platform,
-                &setup,
-                FFX,
-                1,
-                ptr::null(),
-                &mut owner,
-                &mut chain
-            ) == FIXTURE_INIT_FAILED
+            create_ffx!(owner, chain) == FIXTURE_INIT_FAILED
                 && owner.is_null()
                 && chain == 0
                 && f!(destroys) == before_partial + 1,
@@ -1365,15 +1262,7 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
         );
         f!(fail_after_create) = false;
         assert!(
-            create(
-                platform,
-                &setup,
-                FFX,
-                1,
-                ptr::null(),
-                &mut owner,
-                &mut chain
-            ) == FIXTURE_OK,
+            create_ffx!(owner, chain) == FIXTURE_OK,
             "claim is reusable after early failures"
         );
         f!(fail_drain) = true;
@@ -1401,8 +1290,8 @@ fn run(platform: &Platform, fsr4: bool, xess: bool) {
     }
 }
 
-/// The three CMake variants of the former link-substitution contract: no optional provider, FSR4
-/// and XeSS. They share the process-wide admission, so they run in sequence.
+/// The three CMake provider variants: no optional provider, FSR4 and XeSS. They share the
+/// process-wide admission, so they run in sequence.
 #[test]
 fn dispatch_admission_routing_and_retirement() {
     static BASE: Platform = Platform {
