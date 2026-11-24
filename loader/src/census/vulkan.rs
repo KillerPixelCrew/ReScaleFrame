@@ -70,7 +70,6 @@ impl<'a> Call<'a> {
     }
 }
 
-
 fn read<const N: usize>(address: Info, offset: usize) -> Option<[u8; N]> {
     let base = address as usize;
     if !(0x10000..0x0000_7fff_ffff_0000).contains(&base) {
