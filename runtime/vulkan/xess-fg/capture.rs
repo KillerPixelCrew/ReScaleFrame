@@ -54,7 +54,7 @@ struct Event {
     width: u64,
     kind: u32,
     ordinal: u32,
-    generated: u32,
+    generated: bool,
     height: u32,
     format: u32,
     state: u32,
@@ -85,7 +85,7 @@ struct Image {
     kind: u32,
     generated_count: u32,
     actual_count: u32,
-    generated: u32,
+    generated: bool,
     source: Record,
 }
 
@@ -327,7 +327,7 @@ impl Capture {
             width: desc.width,
             kind,
             ordinal,
-            generated: u32::from(generated),
+            generated,
             height: desc.height,
             format: desc.format,
             state: resource_state,
@@ -355,7 +355,7 @@ impl Capture {
         }
         let duplicate = state.pending.iter().any(|image| {
             image.source.frame_id == record.frame_id
-                && (image.generated != 0) == generated
+                && image.generated == generated
                 && image.ordinal == ordinal
         });
         if duplicate {
@@ -406,7 +406,7 @@ impl Capture {
             kind,
             generated_count: source.generated_count,
             actual_count: source.actual_count,
-            generated: u32::from(generated),
+            generated,
             source: source.record,
         });
         unsafe { (ops.capture_copy)(commands, resource, readback, &footprint, resource_state) };
@@ -470,7 +470,7 @@ impl Event {
             self.token,
             self.kind,
             self.ordinal,
-            self.generated != 0,
+            self.generated,
             self.resource,
             self.commands,
             self.width,
@@ -485,8 +485,7 @@ impl Event {
 impl Image {
     fn publish(&self, ops: &Platform, directory: &Path) -> Result<(), &'static str> {
         let record = &self.source;
-        let generated = self.generated != 0;
-        let (role, boundary) = if generated {
+        let (role, boundary) = if self.generated {
             (
                 "fg-xess-generated-before-present",
                 "sdk-interpolation-output-callback",
@@ -585,7 +584,7 @@ impl Image {
             self.ordinal,
             self.generated_count,
             self.actual_count,
-            self.generated != 0,
+            self.generated,
             boundary,
             PROVIDER_SHA256,
             self.source_resource,
