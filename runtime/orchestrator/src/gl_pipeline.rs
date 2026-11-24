@@ -56,13 +56,10 @@ const DLSS_ENGINE_CUSTOM: u32 = 0;
 const SR12_ABI_VERSION: u32 = 1;
 
 // D3D12 states and the DXGI back-buffer format, from the Windows SDK.
-const STATE_COMMON: u32 = dxgi::STATE_COMMON;
-const STATE_PRESENT: u32 = dxgi::STATE_PRESENT;
-const STATE_RENDER_TARGET: u32 = dxgi::STATE_RENDER_TARGET;
-const STATE_SHADER_INPUT: u32 = dxgi::STATE_SHADER_INPUT;
-const STATE_COPY_DEST: u32 = dxgi::STATE_COPY_DEST;
-const STATE_COPY_SOURCE: u32 = dxgi::STATE_COPY_SOURCE;
-const CHAIN_FORMAT: u32 = dxgi::CHAIN_FORMAT;
+use dxgi::{
+    CHAIN_FORMAT, STATE_COMMON, STATE_COPY_DEST, STATE_COPY_SOURCE, STATE_PRESENT,
+    STATE_RENDER_TARGET, STATE_SHADER_INPUT,
+};
 const CHAIN_BUFFERS: u32 = 3;
 
 // Published GL surfaces, in rsf_gl_pipeline_surfaces order. The first three have the render
@@ -387,8 +384,7 @@ impl Pipeline {
         let mut selected = options.sr_backend;
         let (mut result, mut sr) = (INVALID_ARGUMENT, None);
         if selected == RSF_SR_AUTO {
-            let (mut vendor, mut software) = (0, 0);
-            unsafe { native::adapter_identity(state.device, &mut vendor, &mut software) };
+            let (vendor, software) = unsafe { native::adapter_identity(state.device) };
             let mut choices = SR_CHOICES;
             loop {
                 let candidate = crate::rsf_gpu_select_sr_backend(vendor, software, choices);
@@ -519,8 +515,7 @@ impl Pipeline {
     fn request_fg(&self, state: &mut State, requested: u32) {
         let mut backend = requested;
         if backend == RSF_FG_BACKEND_AUTO {
-            let (mut vendor, mut software) = (0, 0);
-            unsafe { native::adapter_identity(state.device, &mut vendor, &mut software) };
+            let (vendor, software) = unsafe { native::adapter_identity(state.device) };
             backend = crate::fg_choice::rsf_fg_select_auto_backend(
                 native::fg_default_backend(vendor, software),
                 native::present_backend_choices(),

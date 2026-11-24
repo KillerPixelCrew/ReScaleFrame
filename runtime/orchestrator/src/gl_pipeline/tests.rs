@@ -264,16 +264,8 @@ pub(super) unsafe extern "C" fn chain_present(_: Handle, interval: u32) -> i32 {
     event(format!("present {interval}"));
     OK
 }
-pub(super) unsafe extern "C" fn adapter_identity(
-    _: Handle,
-    vendor: *mut u32,
-    software: *mut u32,
-) -> c_int {
-    unsafe {
-        vendor.write(0x10de);
-        software.write(0);
-    }
-    1
+pub(super) unsafe fn adapter_identity(_: Handle) -> (u32, u32) {
+    (0x10de, 0)
 }
 pub(super) unsafe extern "C" fn transition(_: Handle, resource: Handle, from: u32, to: u32) {
     let resource = if world(|world| world.names.contains_key(&(resource as usize))) {

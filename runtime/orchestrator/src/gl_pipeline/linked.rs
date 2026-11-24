@@ -25,6 +25,7 @@ pub(super) use crate::d3d11_present::{
     rsf_d3d11_present_request as present_request,
     rsf_d3d11_present_switch_result as present_switch_result,
 };
+pub(super) use crate::d3d12_host::pass_depth_domains as depth_domains_requested;
 pub(super) use crate::fg_choice::rsf_fg_default_backend as fg_default_backend;
 pub(super) use crate::fg12::{
     rsf_core_fg12_cpu as fg_cpu, rsf_core_fg12_hudless as fg_hudless,
@@ -167,8 +168,3 @@ pub(super) unsafe extern "C" fn sr_destroy(owner: Handle) {
     unsafe { sr12::rsf_core_sr12_destroy(owner.cast()) }
 }
 
-pub(super) unsafe extern "C" fn depth_domains_requested(pass: *const Pass) -> u32 {
-    u32::from(rsf_game_sys::depth_domains_requested(unsafe {
-        &(*pass).depth_domains
-    }))
-}

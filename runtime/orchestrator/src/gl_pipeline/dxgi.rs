@@ -121,27 +121,10 @@ pub(super) unsafe extern "C" fn rsf_core_gl_chain_present(chain: Handle, interva
     unsafe { borrow::<IDXGISwapChain3>(&chain).Present(interval, DXGI_PRESENT(0)) }.0
 }
 
-pub(super) unsafe extern "C" fn rsf_core_gl_adapter_identity(
-    device: Handle,
-    vendor: *mut u32,
-    software: *mut u32,
-) -> i32 {
-    let device = unsafe { borrow::<ID3D12Device>(&device) };
-    let description = unsafe {
-        CreateDXGIFactory1::<IDXGIFactory4>()
-            .and_then(|factory| factory.EnumAdapterByLuid::<IDXGIAdapter1>(device.GetAdapterLuid()))
-            .and_then(|adapter| adapter.GetDesc1())
-    };
-    let Ok(description) = description else {
-        return 0;
-    };
-    unsafe {
-        vendor.write(description.VendorId);
-        software.write(u32::from(
-            description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0,
-        ));
-    }
-    1
+// The adapter's vendor ID and software flag, both zero when DXGI cannot identify it.
+pub(super) unsafe fn rsf_core_gl_adapter_identity(device: Handle) -> (u32, u32) {
+    crate::d3d12_host::adapter_identity(unsafe { borrow::<ID3D12Device>(&device) })
+        .map_or((0, 0), |(vendor, software)| (vendor, u32::from(software)))
 }
 
 pub(super) unsafe extern "C" fn rsf_core_gl_transition(
