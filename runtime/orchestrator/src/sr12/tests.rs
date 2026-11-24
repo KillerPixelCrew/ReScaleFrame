@@ -253,9 +253,9 @@ pub(super) unsafe extern "C" fn create_readback(_: Handle, bytes: u64) -> Handle
     event(format!("readback {bytes}"));
     created("readback", TextureDesc::default())
 }
-pub(super) unsafe extern "C" fn describe_stub(resource: Handle, out: *mut TextureDesc) {
+pub(super) unsafe fn describe_stub(resource: Handle) -> TextureDesc {
     event(format!("describe {}", name(resource)));
-    unsafe { out.write(object(resource).desc) };
+    object(resource).desc
 }
 pub(super) unsafe extern "C" fn owned_by(child: Handle, device: Handle) -> i32 {
     i32::from(object(child).device.get() == device as usize)

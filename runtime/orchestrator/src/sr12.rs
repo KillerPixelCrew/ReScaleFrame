@@ -312,12 +312,6 @@ impl Drop for Sr12 {
     }
 }
 
-unsafe fn describe(resource: Handle) -> TextureDesc {
-    let mut desc = TextureDesc::default();
-    unsafe { native::describe(resource, &mut desc) };
-    desc
-}
-
 // Copies the setup prefix the caller declared; later fields stay zero.
 unsafe fn read_setup(setup: *const Setup) -> Option<(Setup, u32)> {
     if setup.is_null() {
@@ -631,7 +625,7 @@ impl Sr12 {
             if pass.exposure.is_null() {
                 return false;
             }
-            let desc = unsafe { describe(pass.exposure) };
+            let desc = unsafe { native::describe(pass.exposure) };
             if !unsafe { self.owned(pass.exposure) } || !exposure_accepted(&desc) {
                 return false;
             }
@@ -659,7 +653,7 @@ impl Sr12 {
             if resource.is_null() {
                 return false;
             }
-            let desc = unsafe { describe(resource) };
+            let desc = unsafe { native::describe(resource) };
             let (width, height) = if index == OUTPUT {
                 (self.output_width, self.output_height)
             } else {
@@ -1162,7 +1156,7 @@ impl Sr12 {
         }
         drop(state);
         let scene = pass.color_input;
-        let desc = unsafe { describe(scene) };
+        let desc = unsafe { native::describe(scene) };
         if !unsafe { self.owned(scene) }
             || desc.width != u64::from(record.output_width)
             || desc.height != record.output_height

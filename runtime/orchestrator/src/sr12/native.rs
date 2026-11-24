@@ -89,19 +89,17 @@ pub(super) unsafe extern "C" fn write_exposure_upload(resource: Handle, value: f
     i32::from(!mapped.is_null())
 }
 
-pub(super) unsafe extern "C" fn describe(resource: Handle, out: *mut TextureDesc) {
+pub(super) unsafe fn describe(resource: Handle) -> TextureDesc {
     let desc = unsafe { borrow::<ID3D12Resource>(&resource).GetDesc() };
     let format = desc.Format.0 as u32;
-    unsafe {
-        out.write(TextureDesc {
-            width: desc.Width,
-            height: desc.Height,
-            dimension: desc.Dimension.0 as u32,
-            array_size: u32::from(desc.DepthOrArraySize),
-            samples: desc.SampleDesc.Count,
-            format,
-            srv_format: rsf_d3d11_output_srv_format(format),
-        });
+    TextureDesc {
+        width: desc.Width,
+        height: desc.Height,
+        dimension: desc.Dimension.0 as u32,
+        array_size: u32::from(desc.DepthOrArraySize),
+        samples: desc.SampleDesc.Count,
+        format,
+        srv_format: rsf_d3d11_output_srv_format(format),
     }
 }
 
