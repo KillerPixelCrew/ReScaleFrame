@@ -30,7 +30,7 @@ use crate::{bits, guard, image, load, same_object};
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR,
-    rsf_game_depth_domain, rsf_game_depth_domains, rsf_game_render_pass,
+    rsf_game_depth_domains, rsf_game_render_pass,
 };
 use std::ffi::{CStr, c_char};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -152,108 +152,12 @@ const _: () = {
     assert!(offset_of!(MathFailure, range) == 56);
 };
 
-const NO_IDENTITY: Identity = Identity::ZERO;
-
-const NO_CAMERA: DepthCamera = DepthCamera {
-    view: [0.0; 16],
-    projection: [0.0; 16],
-    view_projection: [0.0; 16],
-    view_projection_unjittered: [0.0; 16],
-    origin: [0.0; 3],
-    port: [0.0; 4],
-};
-
-/// The value-initialized snapshot.
-pub(crate) const EMPTY: Snapshot = Snapshot {
-    identity: NO_IDENTITY,
-    native_frame: 0,
-    renderer_key: 0,
-    context_key: 0,
-    device_context_key: 0,
-    device_key: 0,
-    window_key: 0,
-    chain_key: 0,
-    graph_key: 0,
-    near_camera_key: 0,
-    world_camera_key: 0,
-    cache_key: 0,
-    depth_key: 0,
-    depth_srv_key: 0,
-    width: 0,
-    height: 0,
-    cache_count: 0,
-    depth_slot: 0,
-    taa: 0,
-    disable: 0,
-    mode: 0,
-    intervals: [0.0; 4],
-    jitter: [0.0; 2],
-    ratio: [0.0; 2],
-    near_inverse_transposed: [0.0; 16],
-    near_camera: NO_CAMERA,
-    world_camera: NO_CAMERA,
-    world_unjittered_camera: NO_CAMERA,
-    render_rect: [0; 4],
-    actual_raster: [0.0; 6],
-    shadow_raster: [0.0; 6],
-    normalized_port: [0.0; 4],
-    shadow_dirty: 0,
-    colour_selector: 0,
-    depth_selector: 0,
-    cube_selector: 0,
-    descriptor_width: 0,
-    descriptor_height: 0,
-    descriptor_read: false,
-    cube_key: 0,
-    depth_dsv_key: 0,
-    colour_slot: 0,
-    bound_colour_slot: 0,
-    bound_depth_slot: 0,
-    colour_texture_key: 0,
-    colour_rtv_key: 0,
-    scissor: [0; 4],
-    scissor_enabled: false,
-    default_viewport: 0,
-    dynamic_viewport: 0,
-    valid: false,
-    raster_valid: false,
-    maps: Maps {
-        near_map: [[0.0; 4]; 4],
-        world_map: [[0.0; 4]; 4],
-        projection_map: [[0.0; 4]; 4],
-    },
-};
-
-const NO_FAILURE: MathFailure = MathFailure {
-    index: 0,
-    actual: 0.0,
-    expected: 0.0,
-    relative_error: 0.0,
-    w: [0.0; 4],
-    minimum_w: 0.0,
-    range: 0.0,
-};
-
-const NO_DOMAIN: rsf_game_depth_domain = rsf_game_depth_domain {
-    classify_min: 0.0,
-    classify_max: 0.0,
-    endpoint_flags: 0,
-    reserved: 0,
-    viewport_xywh: [0.0; 4],
-    viewport_min_depth: 0.0,
-    viewport_max_depth: 0.0,
-    source_clip_to_target_clip: [0.0; 16],
-};
-
-const NO_DOMAINS: rsf_game_depth_domains = rsf_game_depth_domains {
-    struct_size: 0,
-    version: 0,
-    domain_count: 0,
-    clear_enabled: 0,
-    clear_value: 0.0,
-    reserved: [0; 3],
-    domains: [NO_DOMAIN; 2],
-};
+// SAFETY (all three): the records hold only integers, floats and arrays of them, so all-zero is
+// their empty value.
+/// The empty snapshot.
+pub(crate) const EMPTY: Snapshot = unsafe { std::mem::zeroed() };
+const NO_FAILURE: MathFailure = unsafe { std::mem::zeroed() };
+const NO_DOMAINS: rsf_game_depth_domains = unsafe { std::mem::zeroed() };
 
 /// Refusal stages; the lease receipt prints the number.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

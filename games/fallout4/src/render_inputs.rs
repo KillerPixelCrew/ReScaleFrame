@@ -154,20 +154,9 @@ const _: () = {
     assert!(offset_of!(FramebufferReceipt, rtv_mip) == 340);
 };
 
-const NO_CAMERA: NativeCamera = NativeCamera {
-    view: [0.0; 16],
-    projection: [0.0; 16],
-    view_projection_unjittered: [0.0; 16],
-    previous_view_projection_unjittered: [0.0; 16],
-    position_adjust: [0.0; 3],
-    previous_position_adjust: [0.0; 3],
-    jitter_ndc: [0.0; 2],
-};
-
-const NO_RASTER: CameraRaster = CameraRaster {
-    xywh: [0.0; 4],
-    crop: [0; 4],
-};
+// SAFETY: both records hold only integers and floats; all-zero is the empty value.
+const NO_CAMERA: NativeCamera = unsafe { std::mem::zeroed() };
+const NO_RASTER: CameraRaster = unsafe { std::mem::zeroed() };
 
 /// Reader refusal stages. The once-per-process receipt mask is indexed by them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -666,27 +655,8 @@ impl Reading {
     fn new() -> Self {
         Self {
             receipt: Receipt {
-                before: State::default(),
-                native: NO_CAMERA,
-                views: [ResourceFacts::default(); 3],
-                rtv: ResourceFacts::default(),
-                swap: SwapFacts::default(),
                 expected_renderer: image().wrapping_add(RENDERER_OBJECT) as u64,
-                selected: 0,
-                last_key: 0,
-                expected: [0; 3],
-                after_frame: 0,
-                scanned: 0,
-                camera_matches: 0,
-                matching_jitter: 0,
-                last_jitter: 0,
-                viewport_count: 0,
-                confirmed_viewport_count: 0,
-                camera_read: 0,
-                resource_match: [0; 3],
-                device_match: [0; 3],
-                viewport: [0.0; 6],
-                confirmed_viewport: [0.0; 6],
+                ..Receipt::default()
             },
             after: State::default(),
             // SAFETY: the SDK record holds only integers, floats and raw pointers.
