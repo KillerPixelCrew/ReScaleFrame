@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
-//! TrueSky plugin patches and call relays of the native renderer: the exact sites, expected
-//! bytes and effect fingerprint, their admission, relay installation and rollback, the full cloud
-//! grid and its refusal, and the retryable retirement.
+//! TrueSky plugin patches and call relays of the native renderer: the expected bytes at the
+//! discovered sites and the effect fingerprint, their admission, relay installation and rollback,
+//! the full cloud grid and its refusal, and the retryable retirement.
 //!
-//! The sites belong to TrueSkyPluginRender_MT.dll (SHA-256 c6c58ea3...1004d0, 1,711,616 bytes)
-//! with mixed_resolution.fxo (45,263 bytes, CRC-32 78881ef3). Every RVA, byte and log text was
-//! moved unchanged from the former native_renderer.cpp. Research: docs/research/ue418-hook-map.md,
+//! The sites belong to TrueSkyPluginRender_MT.dll and are discovered in the loaded module by
+//! signature (rsf_ac7::discovery::truesky; recorded in the shipped 1,711,616-byte build at
+//! +87F6D, +C003F, +BFF0B, +BFC05 and +ABC6B), each checked against the bytes below before it is
+//! patched. The depth route also needs mixed_resolution.fxo (45,263 bytes, CRC-32 78881ef3),
+//! whose x2/x3/x4 permutations the first-party x1 kernel stands in for. Research: docs/research/ue418-hook-map.md,
 //! .agents/skills/truesky-render-integration/references/ac7-depth.md and
 //! docs/research/rust-ac7-truesky-relays.md.
 //!
@@ -15,6 +17,7 @@
 //! and the relay memory.
 use crate::native_renderer::{Renderer, code_matches, sky, write_code};
 use crate::sys::{RSF_AC7_RELAY_BYTES, rsf_ac7_call_relay, rsf_ac7_truesky_patches};
+use rsf_ac7::discovery::{self, TrueSky};
 use rsf_game_sys::{checksum::crc32_ieee, ffi_util::ascii_wide};
 use std::ffi::c_void;
 use std::io::Read;
@@ -35,7 +38,6 @@ pub(crate) const EFFECT_CRC: u32 = 0x7888_1ef3;
 /// RenderInterfaceViewFrame passes q.downscale into the native per-view allocator. Patching this
 /// consumer also covers settings the actor or a sequence writes after startup: the load
 /// `mov eax,[rdi+0x210]` becomes divisor 1, `mov eax,1; nop`.
-pub(crate) const RESOLUTION_RVA: u32 = 0x87f6d;
 pub(crate) const RESOLUTION_EXPECTED: [u8; 16] = [
     0x8b, 0x87, 0x10, 0x02, 0x00, 0x00, 0x89, 0x44, 0x24, 0x38, 0x48, 0x8b, 0x45, 0xd0, 0x0f, 0x29,
 ];
@@ -44,7 +46,6 @@ pub(crate) const FULL_DIVISOR: [u8; 6] = [0xb8, 0x01, 0x00, 0x00, 0x00, 0x90];
 
 /// The depth bounds producer's Dispatch, `call [r10+0x148]`, relayed through its 7 bytes to the
 /// handler that runs the first-party x1 kernel on verified full-grid bindings.
-pub(crate) const DEPTH_CALL_RVA: u32 = 0xc003f;
 pub(crate) const DEPTH_CALL_EXPECTED: [u8; 16] = [
     0x41, 0xff, 0x92, 0x48, 0x01, 0x00, 0x00, 0x48, 0x8b, 0x4b, 0x08, 0x4c, 0x8d, 0x83, 0xb0, 0x01,
 ];
@@ -53,7 +54,6 @@ pub(crate) const DEPTH_CALL_BYTES: usize = 7;
 /// The mixed-resolution pass selector `cmp r12d,2; jne`, compared from its `cmp`. `jne` (75)
 /// becomes `ja` (77): divisors 1 and 2 both enter the native x2 binding, Apply and cleanup, which
 /// divisor 1 otherwise skipped before its unbalanced Dispatch and Unapply; x3/x4 keep their paths.
-pub(crate) const DEPTH_BRANCH_RVA: u32 = 0xbff0b;
 pub(crate) const DEPTH_BRANCH_LEAD: usize = 4;
 pub(crate) const DEPTH_BRANCH_EXPECTED: [u8; 16] = [
     0x41, 0x83, 0xfc, 0x02, 0x75, 0x1d, 0x48, 0x8b, 0x4b, 0x08, 0x4c, 0x8d, 0x43, 0x18, 0x48, 0x8b,
@@ -64,7 +64,6 @@ pub(crate) const SUPPORTED_BRANCH: [u8; 1] = [0x77];
 /// The normalized scene-depth bounds format request. Only its immediate changes, TrueSky format
 /// 22 (R16G16_UNORM) to 5 (R32G32_FLOAT); the native ensure2D owner then rebuilds the texture and
 /// both views together. It belongs to depth bounds production, not cloud colour or scene Z.
-pub(crate) const DEPTH_FORMAT_RVA: u32 = 0xbfc05;
 pub(crate) const DEPTH_FORMAT_IMMEDIATE: usize = 4;
 pub(crate) const DEPTH_FORMAT_EXPECTED: [u8; 16] = [
     0xc7, 0x44, 0x24, 0x20, 0x16, 0x00, 0x00, 0x00, 0xff, 0x50, 0x58, 0x8b, 0x87, 0x94, 0x00, 0x00,
@@ -74,7 +73,6 @@ pub(crate) const PRECISE_DEPTH_FORMAT: [u8; 4] = [0x05, 0x00, 0x00, 0x00];
 
 /// composite_tile reaches the render platform with `call [rax+0x130]` (platform, deviceContext&,
 /// count), relayed through its 6 bytes and compared over the 16 bytes before and from it.
-pub(crate) const MOTION_CALL_RVA: u32 = 0xabc6b;
 pub(crate) const MOTION_BEFORE: [u8; 16] = [
     0x49, 0x8b, 0x8e, 0x28, 0x02, 0x00, 0x00, 0x45, 0x8b, 0xc4, 0x49, 0x8b, 0xd7, 0x48, 0x8b, 0x01,
 ];
@@ -83,17 +81,7 @@ pub(crate) const MOTION_CALL_EXPECTED: [u8; 16] = [
 ];
 pub(crate) const MOTION_CALL_BYTES: usize = 6;
 
-pub(crate) const MOTION_REFUSED: &str =
-    "native TrueSky cloud motion refused: composite_tile draw bytes differ at DLL RVA 0xabc6b";
-pub(crate) const MOTION_INSTALLED: &str =
-    "native TrueSky cloud motion: composite_tile draw relay installed at DLL RVA 0xabc6b";
-pub(crate) const DEPTH_FORMAT_REFUSED: &str = "native TrueSky precise depth allocation refused at DLL RVA 0xbfc09; full cloud grid remains disabled";
-pub(crate) const DEPTH_FORMAT: &str = "native TrueSky: normalized scene-depth bounds use R32G32_FLOAT at DLL RVA 0xbfc09; native owner rebuilds matching texture/views";
-pub(crate) const DEPTH_INSTALLED: &str = "native TrueSky depth: guarded one-to-one pass route installed at DLL RVAs 0xbff0b/0xc003f; waiting for GPU shader preparation";
 pub(crate) const DEPTH_REFUSED: &str = "native TrueSky full-resolution patch refused: depth producer code/effect fingerprint or relay allocation differs";
-pub(crate) const RESOLUTION_REFUSED: &str = "native TrueSky cloud-resolution patch refused: expected bytes differ or code protection failed at DLL RVA 0x87f6d";
-pub(crate) const RESOLUTION: &str =
-    "native TrueSky: cloud/depth producer uses scene resolution, divisor 1 at DLL RVA 0x87f6d";
 pub(crate) const FULL_GRID_RETIRED: &str = "native TrueSky: full-grid depth bindings changed; unsafe dispatch refused, supported cloud grid restored for next native frame";
 pub(crate) const FULL_GRID_RETAINED: &str = "native TrueSky: full-grid depth bindings changed and divisor restore failed; unsafe dispatch refused, renderer retained";
 pub(crate) const RESOLUTION_KEPT: &str =
@@ -211,12 +199,22 @@ fn release_slot(relay: &mut rsf_ac7_call_relay) -> bool {
 /// The composite_tile draw relay supplies cloud motion depth independently of the depth route.
 /// Only a fingerprint mismatch is terminal. Allocation and guarded writes can be retried.
 fn install_motion(state: &mut rsf_ac7_truesky_patches, module: *mut u8, owner: &Renderer) {
-    let call = module.wrapping_add(MOTION_CALL_RVA as usize);
+    let rva = match discovery::truesky(module.addr(), TrueSky::MotionCall) {
+        Ok(rva) => rva,
+        Err(reason) => {
+            state.motion_refused = true;
+            owner.log_text(&format!("native TrueSky cloud motion refused: {reason}"));
+            return;
+        }
+    };
+    let call = module.wrapping_add(rva);
     if !code_matches(call.wrapping_sub(MOTION_BEFORE.len()), &MOTION_BEFORE)
         || !code_matches(call, &MOTION_CALL_EXPECTED)
     {
         state.motion_refused = true;
-        owner.log_text(MOTION_REFUSED);
+        owner.log_text(&format!(
+            "native TrueSky cloud motion refused: composite_tile draw bytes differ at DLL RVA 0x{rva:x}"
+        ));
         return;
     }
     let Some(relay) = prepare_relay(
@@ -230,7 +228,9 @@ fn install_motion(state: &mut rsf_ac7_truesky_patches, module: *mut u8, owner: &
         return;
     }
     state.motion_call = relay;
-    owner.log_text(MOTION_INSTALLED);
+    owner.log_text(&format!(
+        "native TrueSky cloud motion: composite_tile draw relay installed at DLL RVA 0x{rva:x}"
+    ));
 }
 
 /// The guarded one-to-one depth route: code and effect fingerprint, then the pass selector, the
@@ -239,9 +239,24 @@ fn install_depth(state: &mut rsf_ac7_truesky_patches, module: *mut u8, owner: &R
     if !state.depth_call.slot.is_null() {
         return !state.depth_format_site.is_null();
     }
-    let call = module.wrapping_add(DEPTH_CALL_RVA as usize);
-    let branch = module.wrapping_add(DEPTH_BRANCH_RVA as usize);
-    let format = module.wrapping_add(DEPTH_FORMAT_RVA as usize);
+    let sites = [
+        TrueSky::DepthCall,
+        TrueSky::DepthBranch,
+        TrueSky::DepthFormat,
+    ]
+    .map(|site| discovery::truesky(module.addr(), site));
+    let [call_rva, branch_rva, format_rva] = match sites {
+        [Ok(call), Ok(branch), Ok(format)] => [call, branch, format + DEPTH_FORMAT_IMMEDIATE],
+        sites => {
+            if let Some(Err(reason)) = sites.into_iter().find(Result::is_err) {
+                owner.log_text(&format!("native TrueSky depth route refused: {reason}"));
+            }
+            return false;
+        }
+    };
+    let call = module.wrapping_add(call_rva);
+    let branch = module.wrapping_add(branch_rva);
+    let format = module.wrapping_add(format_rva - DEPTH_FORMAT_IMMEDIATE);
     if !code_matches(call, &DEPTH_CALL_EXPECTED)
         || !code_matches(
             branch.wrapping_sub(DEPTH_BRANCH_LEAD),
@@ -275,12 +290,18 @@ fn install_depth(state: &mut rsf_ac7_truesky_patches, module: *mut u8, owner: &R
     state.depth_branch = branch;
     let site = format.wrapping_add(DEPTH_FORMAT_IMMEDIATE);
     if !write_code(site, &NATIVE_DEPTH_FORMAT, &PRECISE_DEPTH_FORMAT) {
-        owner.log_text(DEPTH_FORMAT_REFUSED);
+        owner.log_text(&format!(
+            "native TrueSky precise depth allocation refused at DLL RVA 0x{format_rva:x}; full cloud grid remains disabled"
+        ));
         return false;
     }
     state.depth_format_site = site;
-    owner.log_text(DEPTH_FORMAT);
-    owner.log_text(DEPTH_INSTALLED);
+    owner.log_text(&format!(
+        "native TrueSky: normalized scene-depth bounds use R32G32_FLOAT at DLL RVA 0x{format_rva:x}; native owner rebuilds matching texture/views"
+    ));
+    owner.log_text(&format!(
+        "native TrueSky depth: guarded one-to-one pass route installed at DLL RVAs 0x{branch_rva:x}/0x{call_rva:x}; waiting for GPU shader preparation"
+    ));
     true
 }
 
@@ -311,16 +332,30 @@ pub(crate) fn apply(state: &mut rsf_ac7_truesky_patches, owner: &Renderer) {
     if !sky::depth_ready(owner) {
         return;
     }
-    let site = module.wrapping_add(RESOLUTION_RVA as usize);
+    let rva = match discovery::truesky(module.addr(), TrueSky::Resolution) {
+        Ok(rva) => rva,
+        Err(reason) => {
+            state.resolution_refused = true;
+            owner.log_text(&format!(
+                "native TrueSky cloud-resolution patch refused: {reason}"
+            ));
+            return;
+        }
+    };
+    let site = module.wrapping_add(rva);
     if !code_matches(site, &RESOLUTION_EXPECTED)
         || !write_code(site, &NATIVE_DIVISOR, &FULL_DIVISOR)
     {
         state.resolution_refused = true;
-        owner.log_text(RESOLUTION_REFUSED);
+        owner.log_text(&format!(
+            "native TrueSky cloud-resolution patch refused: expected bytes differ or code protection failed at DLL RVA 0x{rva:x}"
+        ));
         return;
     }
     state.resolution_site = site;
-    owner.log_text(RESOLUTION);
+    owner.log_text(&format!(
+        "native TrueSky: cloud/depth producer uses scene resolution, divisor 1 at DLL RVA 0x{rva:x}"
+    ));
 }
 
 /// Readiness of an earlier frame does not authorize x2 on this frame's x1 targets. Full-grid mode

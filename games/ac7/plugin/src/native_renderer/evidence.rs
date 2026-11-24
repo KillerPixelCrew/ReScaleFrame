@@ -5,6 +5,7 @@ use super::translucency::{TRANSLUCENCY_RENDERER, ui_active};
 use super::{
     Guard, PixelUniformBinding, game_module, hook, hook_rva, installed, key, original, read,
 };
+use rsf_ac7::discovery::Site;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::PoisonError;
@@ -64,7 +65,11 @@ pub(super) unsafe extern "C" fn hooked_rhi_pixel_uniform(
         && owner.active()
     {
         let mut command = 0u64;
-        read(key(game_module().cast()), 0x3c7_8358, &mut command);
+        read(
+            key(game_module().cast()),
+            rsf_ac7::discovery::rva(Site::CurrentCommand.into()),
+            &mut command,
+        );
         let mut bindings = owner
             .pixel_bindings
             .lock()

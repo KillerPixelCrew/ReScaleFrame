@@ -54,7 +54,7 @@ const FIXTURES: &[Fixture] = &[
         sha256: c"c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
         prepare_result: RSF_ERROR_NATIVE_REFUSED,
         strict_lifecycle: false,
-        recognition: Recognition::Fingerprint,
+        recognition: Recognition::Name,
     },
     Fixture {
         id: c"project-wingman",

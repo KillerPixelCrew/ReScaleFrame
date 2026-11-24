@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Exact-build view facts read from the matched AC7 renderer and view layouts.
+//! View facts read at the documented AC7 renderer and view layout offsets (build 9855922).
 use crate::sys::{rsf_ac7_copy_memory, rsf_ac7_render_scope};
 use std::ffi::c_void;
 

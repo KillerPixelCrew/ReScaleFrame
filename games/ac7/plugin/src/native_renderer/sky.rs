@@ -264,9 +264,10 @@ fn allocate_depth_relay(call: *mut u8) -> *mut c_void {
     null_mut()
 }
 
-/// composite_tile reaches TrueSky's render platform at DLL RVA 0xabc6b, `call [rax+0x130]` with
-/// (platform, deviceContext&, count). The relay forwards it, then reads the pass's still-bound
-/// cloud inputs before TrueSky's Unapply and hands the host a device depth for cloud motion.
+/// composite_tile reaches TrueSky's render platform at its discovered call (recorded +ABC6B),
+/// `call [rax+0x130]` with (platform, deviceContext&, count). The relay forwards it, then reads
+/// the pass's still-bound cloud inputs before TrueSky's Unapply and hands the host a device depth
+/// for cloud motion.
 pub(crate) unsafe extern "C" fn native_cloud_composite_draw(
     platform: *mut c_void,
     device_context: *mut c_void,

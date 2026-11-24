@@ -12,6 +12,7 @@ use super::{
 use crate::sys::rsf_ac7_render_scope;
 use crate::sys::rsf_ac7_scope_lease;
 use crate::sys::{RSF_AC7_ROLE_SR, RSF_AC7_ROLE_TONEMAP};
+use rsf_ac7::discovery::Site;
 use rsf_game_sys::ffi_util::{ascii_wide, try_box};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_PRIMARY,
@@ -429,7 +430,7 @@ static SR_TABLE: VTable = VTable([
 
 pub(super) fn wait_for_view_recorders() {
     // Native WaitForOutstandingTasksOnly joins CPU command recording before shared view edits.
-    unsafe { engine::<unsafe extern "C" fn()>(0x121_83c0)() };
+    unsafe { engine::<unsafe extern "C" fn()>(Site::WaitRecorders)() };
 }
 
 pub(super) fn retain_view_uniform(view: *mut u8, offset: usize) -> u64 {
@@ -461,7 +462,7 @@ fn build_postprocess_uniform(plan: &mut GraphPlan, view: *mut u8) {
         *mut c_void,
     );
     unsafe {
-        engine::<Parameters>(0x113_46d0)(
+        engine::<Parameters>(Site::PostprocessParameters)(
             view.cast(),
             plan.scene,
             view.wrapping_add(0xc0).cast(),
@@ -474,7 +475,7 @@ fn build_postprocess_uniform(plan: &mut GraphPlan, view: *mut u8) {
     let (mut dynamic, mut uniform) = (0u64, 0u64);
     copy(
         (&mut dynamic as *mut u64).cast(),
-        engine_address(0x3c7_83d0),
+        engine_address(Site::DynamicRhi),
         8,
     );
     let create = method(dynamic, 0xf0);
@@ -494,7 +495,7 @@ fn build_postprocess_uniform(plan: &mut GraphPlan, view: *mut u8) {
             at(dynamic),
             &mut uniform,
             at(plan.cached_parameters),
-            engine_address(0x3ca_a6c8),
+            engine_address(Site::UniformLayout),
             1,
         )
     };
@@ -546,7 +547,9 @@ pub(super) fn resize_consumers(plan: &mut GraphPlan) {
     }
     // Let the engine rebuild every derived shader value, rather than rewriting a GPU buffer.
     unsafe {
-        engine::<unsafe extern "C" fn(*mut c_void)>(0xff_9af0)(view.wrapping_add(0xc0).cast())
+        engine::<unsafe extern "C" fn(*mut c_void)>(Site::RemoveJitter)(
+            view.wrapping_add(0xc0).cast(),
+        )
     };
     build_postprocess_uniform(plan, view);
     plan.resized = true;
@@ -640,7 +643,7 @@ fn bloom_scene_input(bloom: u64, scene: NativeRef) -> Result<*mut NativeRef, Exh
     let mut seen = Vec::new();
     push(&mut pending, bloom)?;
     let mut result: *mut NativeRef = null_mut();
-    let downsample = key(engine_address(0xfb_7a00));
+    let downsample = key(engine_address(Site::DownsampleDescriptor));
     let half_res: [u16; 18] = ascii_wide(b"SceneColorHalfRes\0");
     while seen.len() < 128
         && let Some(node) = pending.pop()
@@ -811,7 +814,9 @@ pub(super) fn make_plan(
         // Current exposure depends on reconstructed colour too. Use already-owned engine
         // exposure preceding this update, avoiding a cycle back through the new SR node.
         let state = unsafe {
-            engine::<unsafe extern "C" fn(*mut c_void) -> u64>(0x112_6090)(at(p.view_key))
+            engine::<unsafe extern "C" fn(*mut c_void) -> u64>(Site::EffectiveViewState)(at(
+                p.view_key
+            ))
         };
         let mut index = -1i32;
         if read(state, 0xbd8, &mut index) && (0..=1).contains(&index) {
@@ -856,7 +861,10 @@ pub(super) fn make_plan(
     let node = Box::into_raw(node);
     type Register = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
     unsafe {
-        engine::<Register>(0xe9_3670)(context.cast::<u8>().wrapping_add(0x18).cast(), node.cast())
+        engine::<Register>(Site::RegisterNode)(
+            context.cast::<u8>().wrapping_add(0x18).cast(),
+            node.cast(),
+        )
     };
     unsafe {
         (*input).node = key(node.cast());

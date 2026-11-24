@@ -7,6 +7,7 @@ use super::{
     hook, installed, key, native, open, original, read, scope,
 };
 use crate::sys::rsf_ac7_render_scope;
+use rsf_ac7::discovery::Site;
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END,
     RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_SAMPLE,
@@ -62,13 +63,15 @@ pub(super) fn object_is_a(object: u64, expected: u64) -> bool {
         && entry == expected.wrapping_add(0x88)
 }
 
-/// `object_is_a` against the class the engine caches at `cache_rva`.
-fn object_has_class(object: u64, cache_rva: u32) -> bool {
+/// `object_is_a` against the class the engine caches in the discovered `cache`.
+fn object_has_class(object: u64, cache: Site) -> bool {
     let mut expected = 0u64;
     object != 0
         && copy(
             (&mut expected as *mut u64).cast(),
-            game_module().wrapping_add(cache_rva as usize).cast(),
+            game_module()
+                .wrapping_add(rsf_ac7::discovery::rva(cache.into()))
+                .cast(),
             8,
         )
         && object_is_a(object, expected)
@@ -135,17 +138,26 @@ pub(super) fn render_screen(reset: &mut u32, why: &mut u32, view_target: &mut u6
     }
     // UWorld::AuthorityGameMode at +0xf0 (SDK reflection dump). A wrong offset fails the
     // class check and leaves this bit clear; it cannot accept a screen by itself.
-    let hangar_mode = read(world, 0xf0, &mut mode) && object_has_class(mode, 0x3a8_2008);
+    let hangar_mode =
+        read(world, 0xf0, &mut mode) && object_has_class(mode, Site::HangarGameModeClass);
     let bit = |set: bool, value: u32| if set { value } else { 0 };
-    let found = bit(object_has_class(target, 0x3a8_2130), 0x100)
-        | bit(object_has_class(target, 0x3a8_2140), 0x200)
-        | bit(object_has_class(target, 0x3a8_2158), 0x400)
-        | bit(object_has_class(pawn, 0x3a8_2140), 0x800)
+    let found = bit(
+        object_has_class(target, Site::HangarMeshManagerClass),
+        0x100,
+    ) | bit(object_has_class(target, Site::HangarPawnClass), 0x200)
+        | bit(
+            object_has_class(target, Site::HangarPlaneSelectorClass),
+            0x400,
+        )
+        | bit(object_has_class(pawn, Site::HangarPawnClass), 0x800)
         | bit(target == pawn, 0x1000)
-        | bit(object_has_class(pawn, 0x3a8_4660), 0x2000)
+        | bit(object_has_class(pawn, Site::PlayerPlaneClass), 0x2000)
         | bit(hangar_mode, 0x4000)
-        | bit(object_has_class(target, 0x3a7_4730), 0x8000)
-        | bit(object_has_class(target, 0x3cc_0150), 0x10000);
+        | bit(
+            object_has_class(target, Site::AssetViewerManagerClass),
+            0x8000,
+        )
+        | bit(object_has_class(target, Site::CameraActorClass), 0x10000);
     *why = found;
     // The briefing owns a 3D scene. Its focused widget identifies this particular menu;
     // generic menu/video/loading frames remain unknown even when a background view exists.
@@ -153,7 +165,7 @@ pub(super) fn render_screen(reset: &mut u32, why: &mut u32, view_target: &mut u6
         && read(hud, 0x288, &mut ui)
         && read(ui, 0xf00, &mut layer)
         && read(layer, 0x820, &mut focused)
-        && object_has_class(focused, 0x3a7_6c90)
+        && object_has_class(focused, Site::CampaignBriefingWidgetClass)
     {
         return RSF_SCREEN_BRIEFING;
     }
@@ -170,7 +182,7 @@ pub(super) fn render_screen(reset: &mut u32, why: &mut u32, view_target: &mut u6
     }
     *why = found | 6;
     if target != pawn
-        || !object_has_class(pawn, 0x3a8_4660)
+        || !object_has_class(pawn, Site::PlayerPlaneClass)
         || !read(pawn, 0xe12, &mut camera_input)
         || camera_input == 0
         || !read(pawn, 0xb52, &mut vr)
@@ -560,7 +572,9 @@ pub(super) unsafe extern "C" fn hooked_pump_messages(main_loop: u8) {
 
 pub(super) unsafe extern "C" fn hooked_frame_sync(sync: *mut c_void, one_frame_lag: u8) {
     let _lifetime = Guard::outer();
-    let engine_sync = game_module().wrapping_add(0x3a4_a6f8).cast::<c_void>();
+    let engine_sync = game_module()
+        .wrapping_add(rsf_ac7::discovery::rva(Site::FrameEndSync.into()))
+        .cast::<c_void>();
     if sync == engine_sync
         && INSIDE_ENGINE_TICK.get()
         && INPUT_SOURCE_FRAME.get() != 0

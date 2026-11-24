@@ -13,6 +13,7 @@ use super::{
     primary_view, read, release_pass, scene_targets, scope,
 };
 use crate::sys::rsf_ac7_render_scope;
+use rsf_ac7::discovery::Site;
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_PRIMARY,
@@ -157,7 +158,7 @@ fn prepare_ui_producer(
     let extent = [config.output_width as i32, config.output_height as i32];
     let packed_extent = u64::from(extent[0] as u32) | (u64::from(extent[1] as u32) << 32);
     type Allocate = unsafe extern "C" fn(*mut c_void, *mut c_void, u64) -> *mut c_void;
-    unsafe { engine::<Allocate>(0x109_e0d0)(scene, list, packed_extent) };
+    unsafe { engine::<Allocate>(Site::TranslucencyAllocate)(scene, list, packed_extent) };
     let mut scaled_depth = 0u64;
     if !read(key(scene), 0x1b8, &mut scaled_depth) || scaled_depth == 0 {
         return false;
@@ -174,7 +175,7 @@ fn prepare_ui_producer(
     }
     type Depth = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void, f32, u8);
     unsafe {
-        engine::<Depth>(0xee_93f0)(
+        engine::<Depth>(Site::TranslucencyDepth)(
             renderer,
             list,
             at(scaled_depth.wrapping_add(8)),
@@ -432,7 +433,7 @@ pub(super) unsafe extern "C" fn hooked_translucency_render(
             // The stock producer is conditional on the ordinary translucency pass. AC7's
             // unmodified/extra passes can select this slot without taking that branch first.
             type Producer = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void);
-            unsafe { engine::<Producer>(0x116_ea00)(renderer, list, at(view)) };
+            unsafe { engine::<Producer>(Site::TranslucencyProducer)(renderer, list, at(view)) };
             if !read(view, 0x18, &mut scaled_uniform) || scaled_uniform == 0 {
                 owner.log(
                     c"AC7 translucency pass refused: native scaled-view uniform producer returned no buffer",
@@ -772,7 +773,10 @@ pub(super) unsafe extern "C" fn hooked_scene_colour_format(scene: *mut c_void) -
     // Preserve precision where lighting and sky first write colour. Widening an R11 texture
     // after rendering cannot recover its discarded mantissa bits.
     if !PRECISION_REPORTED.swap(true, Ordering::SeqCst) {
-        owner.log(c"native scene colour: PF_FloatRGBA selected at allocation and shader-parameter producer, RVA 0x109f300");
+        owner.log_text(&format!(
+            "native scene colour: PF_FloatRGBA selected at allocation and shader-parameter producer, RVA 0x{:x}",
+            rsf_ac7::discovery::rva(hook::SCENE_COLOUR_FORMAT as usize)
+        ));
     }
     10
 }

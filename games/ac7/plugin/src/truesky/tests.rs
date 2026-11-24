@@ -23,16 +23,6 @@ fn site_bytes_agree_with_their_guards() {
         DEPTH_FORMAT_EXPECTED[DEPTH_FORMAT_IMMEDIATE..DEPTH_FORMAT_IMMEDIATE + 4],
         NATIVE_DEPTH_FORMAT
     );
-    assert_eq!(
-        (RESOLUTION_RVA, DEPTH_CALL_RVA, DEPTH_BRANCH_RVA),
-        (0x87f6d, 0xc003f, 0xbff0b)
-    );
-    assert_eq!(
-        (
-            DEPTH_FORMAT_RVA + DEPTH_FORMAT_IMMEDIATE as u32,
-            MOTION_CALL_RVA
-        ),
-        (0xbfc09, 0xabc6b)
-    );
+    // The sites themselves are discovered; rsf-ac7's discovery tests resolve them.
     assert_eq!((DEPTH_CALL_BYTES, MOTION_CALL_BYTES), (7, 6));
 }

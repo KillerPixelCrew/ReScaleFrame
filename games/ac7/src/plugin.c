@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The exported entry point of ReScaleFrame.Game.AC7.dll. Exact-build identity, the GameSDK table,
+// The exported entry point of ReScaleFrame.Game.AC7.dll. Name recognition, the GameSDK table,
 // the renderer lifecycle and the native renderer are owned by the Rust crate rsf-ac7 (src/lib.rs,
 // src/lifecycle.rs, src/native_renderer.rs); this file binds the native renderer's call table,
 // which only this DLL links, and asks Rust for the table.

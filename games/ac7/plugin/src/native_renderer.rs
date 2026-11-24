@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! The AC7 native renderer, formerly native_renderer.cpp: the renderer object, the detours on the
-//! exact-build engine sites (sites.rs) and their engine relays, the queued pass leases and the
+//! discovered engine sites (rsf_ac7::discovery, admitted by sites.rs) and their engine relays, the queued pass leases and the
 //! TrueSky relay handlers. native_renderer/transaction.rs is the prepare/start/quiesce/stop
 //! transaction.
 //!
@@ -24,6 +24,7 @@ use crate::sys::{
     rsf_ac7_render_scope, rsf_ac7_render_scope_fn, rsf_ac7_view,
 };
 use crate::sys::{rsf_ac7_copy_memory, rsf_ac7_read_memory};
+use rsf_ac7::discovery::{self, Site as EngineSite};
 use rsf_game_sys::ffi_util::try_box;
 use rsf_game_sys::rsf_game_render_config;
 use std::alloc::{Layout, alloc_zeroed};
@@ -241,29 +242,31 @@ fn game_module() -> *mut u8 {
     module
 }
 
-/// The engine code or data at `rva`, which the graph fixture may resolve to its own helper.
-fn engine_address(rva: u32) -> *mut c_void {
+/// The engine code or data of a discovered hook index or [`EngineSite`], which the graph fixture may
+/// resolve to its own helper by the recorded RVA.
+fn engine_address(site: impl Into<usize>) -> *mut c_void {
+    let rva = discovery::rva(site.into());
     #[cfg(feature = "warp-fixture")]
     {
         let resolve = TEST_ENGINE.load(Ordering::Relaxed);
         if !resolve.is_null() {
             let resolve: unsafe extern "C" fn(u32) -> *mut c_void = unsafe { function(resolve) };
-            return unsafe { resolve(rva) };
+            return unsafe { resolve(rva as u32) };
         }
     }
-    game_module().wrapping_add(rva as usize).cast()
+    game_module().wrapping_add(rva).cast()
 }
 
-/// The engine function at `rva` as `F`.
+/// The engine function of a discovered hook index or [`EngineSite`] as `F`.
 ///
 /// # Safety
-/// `F` is the exact-build function type at `rva` (sites.rs admits the build first).
-unsafe fn engine<F: Copy>(rva: u32) -> F {
-    unsafe { function(engine_address(rva)) }
+/// `F` is the function type of the site, which sites.rs admitted and checked at its entry.
+unsafe fn engine<F: Copy>(site: impl Into<usize>) -> F {
+    unsafe { function(engine_address(site)) }
 }
 
 /// Copies live engine bytes under the guarded read. Unreadable memory returns false.
-fn copy(output: *mut c_void, input: *const c_void, size: usize) -> bool {
+pub(crate) fn copy(output: *mut c_void, input: *const c_void, size: usize) -> bool {
     unsafe { rsf_ac7_copy_memory(output, input, size) }
 }
 
@@ -339,7 +342,7 @@ fn game_engine_object() -> u64 {
     let mut object = 0u64;
     copy(
         (&mut object as *mut u64).cast(),
-        engine_address(0x3cb_bc28),
+        engine_address(EngineSite::Engine),
         8,
     );
     object
@@ -387,12 +390,12 @@ fn engine_add_ref(pointer: u64) {
     unsafe { (*count).fetch_add(1, Ordering::SeqCst) };
 }
 
-/// The engine uniform move (RVA 0xde5cf0): releases `destination`'s reference and moves `source`
+/// The engine uniform move: releases `destination`'s reference and moves `source`
 /// into it.
 type MoveUniform = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
 
 fn move_uniform(destination: *mut c_void, source: *mut c_void) {
-    unsafe { engine::<MoveUniform>(0xde_5cf0)(destination, source) };
+    unsafe { engine::<MoveUniform>(EngineSite::MoveUniform)(destination, source) };
 }
 
 /// Releases one engine uniform reference held in `uniform`.
@@ -404,9 +407,9 @@ fn release_uniform(uniform: &mut u64) {
     );
 }
 
-/// FSceneRenderTargets::Get (RVA 0x109dc70).
+/// FSceneRenderTargets::Get.
 fn scene_targets() -> *mut c_void {
-    unsafe { engine::<unsafe extern "C" fn() -> *mut c_void>(0x109_dc70)() }
+    unsafe { engine::<unsafe extern "C" fn() -> *mut c_void>(EngineSite::SceneTargets)() }
 }
 
 /// The view uniform parameters an FViewInfo caches at +0x1418, decoded, or None.

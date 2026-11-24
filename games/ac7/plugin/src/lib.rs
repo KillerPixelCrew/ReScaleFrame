@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! `ReScaleFrame.Game.AC7.dll`'s Rust: the exact recognized build, the GameSDK table and the
+//! `ReScaleFrame.Game.AC7.dll`'s Rust: recognition by executable name, the GameSDK table and the
 //! renderer lifecycle (`lifecycle.rs`), and the native renderer: the scene-precision and temporal
 //! velocity patch transactions (`patches.rs`), the hook body guards (`guards.rs`), the
 //! prepare/start/quiesce/stop transaction with its retirement admission (`native_renderer/transaction.rs`), the
@@ -11,7 +11,7 @@
 //! (native_renderer_platform.c) and the render scopes' C create calls (render_scope_entry.c).
 //! plugin.c binds that call table and keeps the exported rsf_get_game_plugin_api.
 //!
-//! The view reader, the code sites, the carrier policy, the motion capture and the translucent
+//! The view reader, the site discovery, the carrier policy, the motion capture and the translucent
 //! velocity pass are rsf-ac7, which the carriers link without this crate and its hooks.
 
 pub use rsf_ac7::sys;
@@ -44,7 +44,7 @@ use rsf_game_sys::{
 };
 use std::ffi::CStr;
 
-use rsf_ac7::{EXECUTABLE, EXECUTABLE_SHA256};
+use rsf_ac7::EXECUTABLE;
 pub(crate) use rsf_game_sys::{
     RSF_ERROR_BUSY, RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY,
     RSF_OK,
@@ -57,9 +57,17 @@ const STATUS: &CStr =
 
 static LIFECYCLE: Lifecycle = Lifecycle::new();
 
-/// Exact-build identity: the AMD64 executable name and its SHA-256, both ASCII case-insensitive.
+/// Recognized by the AMD64 executable name (ASCII case-insensitive); whether this build is usable
+/// is decided by site discovery at prepare.
 unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> rsf_detection {
-    unsafe { Probe::detect(probe, |probe| probe.matches(EXECUTABLE, EXECUTABLE_SHA256)) }
+    unsafe {
+        Probe::detect(probe, |probe| {
+            probe
+                .executable
+                .to_bytes()
+                .eq_ignore_ascii_case(EXECUTABLE.to_bytes())
+        })
+    }
 }
 
 unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> rsf_result {

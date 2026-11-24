@@ -6,7 +6,7 @@
 //! A ticket is two private commands appended to one of the engine's RHI command lists: begin when
 //! the scope opens and end when it closes. The engine executes them in list order on its RHI
 //! stream, which is where the stack changes and the callbacks run. The list and command layouts
-//! below are the verified ones of Ace7Game.exe build 9855922, moved unchanged from
+//! below are documented structure offsets, verified in Ace7Game.exe build 9855922, moved unchanged from
 //! render_scope.cpp. Research: docs/research/ac7-native-renderer-refactor-20261001.md,
 //! docs/research/ac7-dlss-fg-20261003.md and docs/research/rust-ac7-render-scopes.md.
 //!

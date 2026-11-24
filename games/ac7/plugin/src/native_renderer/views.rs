@@ -3,6 +3,7 @@
 //! jitter selection around visibility.
 use super::frame::bind_renderer;
 use super::{Guard, engine, hook, installed, key, original, primary_view, read, scene_targets};
+use rsf_ac7::discovery::Site;
 use rsf_game_sys::rsf_game_render_config;
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -95,7 +96,7 @@ pub(super) fn prepare_owned_views(renderer: *mut c_void, config: &rsf_game_rende
     });
     if changed {
         unsafe {
-            engine::<unsafe extern "C" fn(*mut c_void)>(0x19b_6fe0)(
+            engine::<unsafe extern "C" fn(*mut c_void)>(Site::FamilySize)(
                 renderer.cast::<u8>().wrapping_add(0x10).cast(),
             )
         };

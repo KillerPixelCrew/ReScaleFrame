@@ -2,7 +2,8 @@
 //! Owned widget raster targets: the game-instance HUD canvases and the widget component render
 //! targets at an integer density of the output size, with logical layout restored around them.
 use super::frame::{INSIDE_ENGINE_TICK, SHARED_REPAINT_TARGETS, object_is_a};
-use super::{Guard, Renderer, engine, hook, hook_rva, installed, key, method, original, read};
+use super::{Guard, Renderer, engine, hook, installed, key, method, original, read};
+use rsf_ac7::discovery::Site;
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr::write_unaligned;
@@ -55,7 +56,7 @@ fn resize_widget_target(target: u64, width: i32, height: i32) -> bool {
     let object = target as usize as *mut c_void;
     let init: TargetInit = unsafe { original(hook::TARGET_INIT) };
     unsafe { init(object, width, height, 2, 1) };
-    unsafe { engine::<TargetUpdate>(0x1ab_7dc0)(object, 0) };
+    unsafe { engine::<TargetUpdate>(Site::TargetUpdate)(object, 0) };
     true
 }
 
@@ -69,7 +70,7 @@ fn shared_widget_target(converter: u64, target: &mut u64) -> bool {
     let world = key(unsafe { get_world(converter as usize as *mut c_void) });
     let mut instance = 0u64;
     let expected_class =
-        key(unsafe { engine::<unsafe extern "C" fn() -> *mut c_void>(0x92_3e60)() });
+        key(unsafe { engine::<unsafe extern "C" fn() -> *mut c_void>(Site::WidgetStaticClass)() });
     if !read(world, 0x140, &mut instance) || !object_is_a(instance, expected_class) {
         return false;
     }
@@ -215,9 +216,9 @@ pub(super) unsafe extern "C" fn hooked_widget_targets(converter: *mut c_void) {
         }
         let object = target as usize as *mut c_void;
         unsafe {
-            engine::<TargetInit>(hook_rva(hook::TARGET_INIT))(object, desired[0], desired[1], 2, 1)
+            engine::<TargetInit>(hook::TARGET_INIT as usize)(object, desired[0], desired[1], 2, 1)
         };
-        unsafe { engine::<TargetUpdate>(0x1ab_7dc0)(object, 0) };
+        unsafe { engine::<TargetUpdate>(Site::TargetUpdate)(object, 0) };
     }
 }
 

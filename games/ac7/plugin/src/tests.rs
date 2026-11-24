@@ -18,16 +18,21 @@ fn probe(machine: u16, executable: &CStr, digest: &CStr) -> rsf_game_probe {
 }
 
 #[test]
-fn detection_needs_the_exact_amd64_build() {
+fn detection_matches_the_amd64_executable_by_name_not_by_build() {
     let digest = c"C7DA97F5F8A807D4F1264ADBB074146FCFFE9BDC2FFA98791B822CD28E558F4F";
     let accepted = probe(AMD64, c"ace7game.EXE", digest);
     assert_eq!(unsafe { detect(&accepted) }, RECOGNIZED);
+    // Another build, or no hash at all, is still recognized: prepare discovers its sites.
+    for other in [c"c7da97f5", c""] {
+        assert_eq!(
+            unsafe { detect(&probe(AMD64, EXECUTABLE, other)) },
+            RECOGNIZED
+        );
+    }
     for refused in [
-        probe(0x14c, EXECUTABLE, EXECUTABLE_SHA256),
-        probe(AMD64, c"Ace7Game.exe.bak", EXECUTABLE_SHA256),
-        probe(AMD64, c"Ace7Game", EXECUTABLE_SHA256),
-        probe(AMD64, EXECUTABLE, c"c7da97f5"),
-        probe(AMD64, EXECUTABLE, c""),
+        probe(0x14c, EXECUTABLE, digest),
+        probe(AMD64, c"Ace7Game.exe.bak", digest),
+        probe(AMD64, c"Ace7Game", digest),
     ] {
         assert_eq!(unsafe { detect(&refused) }, UNKNOWN);
     }

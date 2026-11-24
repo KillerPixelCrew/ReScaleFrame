@@ -21,7 +21,7 @@ use super::{
 use super::{evidence, frame, graph, particles, shaders, sky, slate, translucency, views, widgets};
 use crate::guards;
 use crate::patches;
-use crate::sites::{self, HOOK_SITES};
+use crate::sites;
 use crate::sys::{rsf_ac7_native_renderer, rsf_ac7_native_renderer_options};
 use rsf_minhook_sys::{MH_CreateHook, MH_DisableHook, MH_EnableHook, MH_Initialize, MH_RemoveHook};
 use std::ffi::{OsStr, c_void};
@@ -406,7 +406,7 @@ pub(crate) fn prepare(options: &rsf_ac7_native_renderer_options) -> (Handle, boo
         return refused;
     }
     let base = game_module();
-    // Exact-build admission before anything is allocated or hooked.
+    // Site discovery and admission before anything is allocated or hooked.
     if !sites::admit(base, |message| log_to(options, message)) {
         return refused;
     }
@@ -428,13 +428,13 @@ pub(crate) fn prepare(options: &rsf_ac7_native_renderer_options) -> (Handle, boo
     // The evidence hooks run for every pixel uniform bind. Their sites were verified above, but
     // they are hooked only when the diagnostic is asked for (sites::wanted).
     let diagnostics = pixel_diagnostics();
-    for (hook, site) in HOOK_SITES.iter().enumerate() {
+    for (hook, site) in SITES.iter().enumerate() {
         let target = if sites::wanted(hook as u32, diagnostics) {
-            base.wrapping_add(site.rva as usize)
+            base.wrapping_add(rsf_ac7::discovery::rva(hook))
         } else {
             null_mut()
         };
-        SITES[hook].target.store(target.cast(), Ordering::Relaxed);
+        site.target.store(target.cast(), Ordering::Relaxed);
     }
     INSTALLED.store(renderer, Ordering::SeqCst);
     if !install_hooks() {
