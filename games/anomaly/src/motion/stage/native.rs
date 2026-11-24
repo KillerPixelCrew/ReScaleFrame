@@ -140,7 +140,7 @@ pub(super) unsafe fn draw_state(raw: Raw) -> DrawState {
 pub(super) mod leaf {
     use super::super::abi::{PositionViews, Raw};
     use super::Engine;
-    use std::ffi::{c_char, c_void};
+    use std::ffi::c_void;
 
     unsafe extern "C" {
         #[link_name = "rsf_anomaly_motion_native_copy"]
@@ -204,13 +204,8 @@ pub(super) mod leaf {
         fn bind_read(host: Raw, address: *const c_void, out: Raw, size: usize) -> u32;
         #[link_name = "rsf_anomaly_motion_native_bind_write"]
         fn bind_write(host: Raw, address: Raw, input: *const c_void, size: usize) -> u32;
-        #[link_name = "rsf_anomaly_motion_native_include_open"]
-        fn include_open(table: Raw, name: *const c_char, data: *mut *const c_void, size: *mut u32) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_include_copy"]
-        fn include_copy(out: Raw, input: *const c_void, size: usize) -> bool;
-        #[link_name = "rsf_anomaly_motion_native_include_close"]
-        fn include_close(table: Raw, data: *const c_void);
     }
+
 
     /// The RTV2 binder's engine calls: the leaf's guarded copies and the motion device's target bindings.
     pub(in crate::motion) static BIND: crate::motion_target::Platform = crate::motion_target::Platform {
@@ -220,13 +215,6 @@ pub(super) mod leaf {
         clear_targets: crate::motion_device::rsf_anomaly_motion_clear_targets,
     };
 
-    /// The SEH-guarded engine includer the Runtime's shader patch API calls back.
-    pub(in crate::motion) static INCLUDES: crate::sys::rsf_anomaly_engine_include_ops =
-        crate::sys::rsf_anomaly_engine_include_ops {
-            open: Some(include_open),
-            copy: Some(include_copy),
-            close: Some(include_close),
-        };
 }
 
 #[cfg(test)]
@@ -304,6 +292,5 @@ pub(super) mod leaf {
         set_targets: crate::motion_device::rsf_anomaly_motion_bind_targets,
         clear_targets: crate::motion_device::rsf_anomaly_motion_clear_targets,
     };
-    pub(in crate::motion) static INCLUDES: crate::sys::rsf_anomaly_engine_include_ops =
-        crate::sys::rsf_anomaly_engine_include_ops { open: None, copy: None, close: None };
+
 }

@@ -319,8 +319,7 @@ _Static_assert(sizeof(rsf_anomaly_motion_shader_objects) == 40, "shader objects"
 _Static_assert(sizeof(rsf_anomaly_motion_shader_creation) == 56 &&
     offsetof(rsf_anomaly_motion_shader_creation, return_address) == 32 &&
     offsetof(rsf_anomaly_motion_shader_creation, status) == 48, "shader creation");
-_Static_assert(sizeof(rsf_anomaly_engine_include_ops) == 24 && offsetof(rsf_anomaly_engine_include_ops, close) == 16,
-    "include ops");
+
 _Static_assert(sizeof(rsf_anomaly_motion_engine) == 56 && offsetof(rsf_anomaly_motion_engine, hw_device_rva) == 8 &&
     offsetof(rsf_anomaly_motion_engine, projection_rva) == 48, "motion engine");
 _Static_assert(sizeof(rsf_anomaly_motion_frame_target) == 24 && offsetof(rsf_anomaly_motion_frame_target, written) == 20 &&

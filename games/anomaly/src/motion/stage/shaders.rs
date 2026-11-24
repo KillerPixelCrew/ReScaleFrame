@@ -233,7 +233,7 @@ impl Pack {
         let pack = wide_path(&root.join("motion.rsfpatch"));
         let cache = wide_path(&root.join("cache"));
         unsafe {
-            RuntimePack::open_engine(&pack, &cache, build.image, profile, &leaf::INCLUDES)
+            RuntimePack::open_engine(&pack, &cache, build.image, profile)
         }
         .map(Self)
     }

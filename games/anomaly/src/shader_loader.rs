@@ -11,10 +11,7 @@ mod runtime_pack;
 #[cfg(any(feature = "motion-binder-fixture", feature = "motion-device-fixture"))]
 mod tree;
 
-pub(crate) use crate::sys::{
-    rsf_anomaly_engine_include_ops as EngineIncludeOps,
-    rsf_anomaly_engine_shader_profile as EngineShaderProfile,
-};
+pub(crate) use crate::sys::rsf_anomaly_engine_shader_profile as EngineShaderProfile;
 #[cfg(feature = "motion-binder-fixture")]
 pub(crate) use fixture::SHADER_CONTRACT_CASES;
 #[cfg(feature = "motion-binder-fixture")]

@@ -3,7 +3,7 @@ use super::d3d::Modules;
 use super::manifest::{Manifest, Root, admit_pack};
 use super::reflection::{Snapshot, reflect, rsf_anomaly_shader_compatible};
 use super::{
-    Bytes, Compatibility, EngineIncludeOps, EngineShaderProfile, Outcome, Request,
+    Bytes, Compatibility, EngineShaderProfile, Outcome, Request,
     rsf_anomaly_shader_skin_mode, runtime_refusal,
 };
 use crate::motion_device::ConstantOps;
@@ -38,30 +38,51 @@ pub(crate) struct RuntimePack {
     modules: Modules,
 }
 
-struct Includer {
-    table: *mut c_void,
-    open: IncludeOpen,
-    copy: GuardedCopy,
-    close: IncludeClose,
+// The SEH-guarded engine includer and copy leaves (motion_stage_platform.c). The engine lends its includer as the
+// vtable pointer `table`. Unit tests never open an engine pack, so their stand-ins refuse.
+#[cfg(not(test))]
+mod engine {
+    use std::ffi::{c_char, c_void};
+    unsafe extern "C" {
+        #[link_name = "rsf_anomaly_motion_native_include_open"]
+        pub(super) fn open(
+            table: *mut c_void,
+            name: *const c_char,
+            data: *mut *const c_void,
+            size: *mut u32,
+        ) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_include_copy"]
+        pub(super) fn copy(out: *mut c_void, input: *const c_void, size: usize) -> bool;
+        #[link_name = "rsf_anomaly_motion_native_include_close"]
+        pub(super) fn close(table: *mut c_void, data: *const c_void);
+    }
 }
 
-type IncludeOpen =
-    unsafe extern "C" fn(*mut c_void, *const c_char, *mut *const c_void, *mut u32) -> bool;
-type IncludeClose = unsafe extern "C" fn(*mut c_void, *const c_void);
+#[cfg(test)]
+mod engine {
+    use std::ffi::{c_char, c_void};
+    pub(super) unsafe fn open(_: *mut c_void, _: *const c_char, _: *mut *const c_void, _: *mut u32) -> bool {
+        false
+    }
+    pub(super) unsafe fn copy(_: *mut c_void, _: *const c_void, _: usize) -> bool {
+        false
+    }
+    pub(super) unsafe fn close(_: *mut c_void, _: *const c_void) {}
+}
 
-struct OpenInclude<'a> {
-    reader: &'a Includer,
+struct OpenInclude {
+    table: *mut c_void,
     data: *const c_void,
 }
 
-impl Drop for OpenInclude<'_> {
+impl Drop for OpenInclude {
     fn drop(&mut self) {
-        unsafe { (self.reader.close)(self.reader.table, self.data) };
+        unsafe { engine::close(self.table, self.data) };
     }
 }
 
 struct Includes {
-    reader: Includer,
+    table: *mut c_void,
     bytes: Vec<u8>,
 }
 
@@ -82,20 +103,18 @@ unsafe extern "C" fn resolve_include(
     }
     let mut data = std::ptr::null();
     let mut size = 0;
-    let reader = &includes.reader;
-    if !unsafe { (reader.open)(reader.table, name.as_ptr().cast(), &mut data, &mut size) }
-        || data.is_null()
-    {
+    let table = includes.table;
+    if !unsafe { engine::open(table, name.as_ptr().cast(), &mut data, &mut size) } || data.is_null() {
         return RSF_PATCH_SOURCE;
     }
-    let opened = OpenInclude { reader, data };
+    let opened = OpenInclude { table, data };
     let size = size as usize;
     includes.bytes.clear();
     if includes.bytes.try_reserve(size).is_err() {
         return RSF_PATCH_SOURCE;
     }
     includes.bytes.resize(size, 0);
-    if !unsafe { (reader.copy)(includes.bytes.as_mut_ptr().cast(), opened.data, size) } {
+    if !unsafe { engine::copy(includes.bytes.as_mut_ptr().cast(), opened.data, size) } {
         return RSF_PATCH_SOURCE;
     }
     // The Runtime copies these bytes before the next include callback can reuse the buffer.
@@ -189,7 +208,7 @@ impl RuntimePack {
         pack: *const u16,
         cache: *const u16,
         compiler_name: *const u16,
-        includer: Includer,
+        includer: *mut c_void,
     ) -> Result<Self, String> {
         // Live recompiles use the loaded engine compiler, including its identity in Runtime's cache key.
         let modules = unsafe { Modules::load(compiler_name, false) };
@@ -236,7 +255,7 @@ impl RuntimePack {
             manifest,
             constant_ops,
             includes: Includes {
-                reader: includer,
+                table: includer,
                 bytes: Vec::new(),
             },
             modules,
@@ -244,18 +263,16 @@ impl RuntimePack {
     }
 }
 
-type GuardedCopy = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool;
-
-fn read_bytes<const N: usize>(read: GuardedCopy, address: usize) -> Option<[u8; N]> {
+fn read_bytes<const N: usize>(address: usize) -> Option<[u8; N]> {
     let mut bytes = [0; N];
-    unsafe { read(bytes.as_mut_ptr().cast(), address as *const c_void, N) }.then_some(bytes)
+    unsafe { engine::copy(bytes.as_mut_ptr().cast(), address as *const c_void, N) }.then_some(bytes)
 }
 
-fn includer_table(image: usize, setup_rva: u32, read: GuardedCopy) -> Result<usize, &'static str> {
+fn includer_table(image: usize, setup_rva: u32) -> Result<usize, &'static str> {
     // Standard/AVX share the LEA form and vtable entry prefixes, with distinct profiled RVAs.
     let instruction = || {
         let lea = image.checked_add(setup_rva as usize)?.checked_add(6)?;
-        let [0x48, 0x8d, 0x05, a, b, c, d] = read_bytes::<7>(read, lea)? else {
+        let [0x48, 0x8d, 0x05, a, b, c, d] = read_bytes::<7>(lea)? else {
             return None;
         };
         let displacement = i32::from_le_bytes([a, b, c, d]) as isize;
@@ -263,11 +280,11 @@ fn includer_table(image: usize, setup_rva: u32, read: GuardedCopy) -> Result<usi
     };
     let table = instruction().ok_or("include table instruction")?;
     let entries = || {
-        let open = usize::from_le_bytes(read_bytes(read, table)?);
-        let close = usize::from_le_bytes(read_bytes(read, table.checked_add(size_of::<usize>())?)?);
+        let open = usize::from_le_bytes(read_bytes(table)?);
+        let close = usize::from_le_bytes(read_bytes(table.checked_add(size_of::<usize>())?)?);
         Some(
-            read_bytes::<9>(read, open)? == [0x40, 0x53, 0x48, 0x81, 0xec, 0x40, 0x02, 0x00, 0x00]
-                && read_bytes::<8>(read, close)?
+            read_bytes::<9>(open)? == [0x40, 0x53, 0x48, 0x81, 0xec, 0x40, 0x02, 0x00, 0x00]
+                && read_bytes::<8>(close)?
                     == [0x48, 0x83, 0xec, 0x28, 0x48, 0x85, 0xd2, 0x74],
         )
     };
@@ -285,23 +302,14 @@ impl RuntimePack {
         cache: &[u16],
         image: usize,
         profile: EngineShaderProfile,
-        ops: &EngineIncludeOps,
     ) -> Result<Self, String> {
-        let (Some(open), Some(copy), Some(close)) = (ops.open, ops.copy, ops.close) else {
-            return Err(String::from("engine include operations unavailable"));
-        };
-        let table = includer_table(image, profile.setup_rva, copy)?;
+        let table = includer_table(image, profile.setup_rva)?;
         unsafe {
             Self::open(
                 pack.as_ptr(),
                 cache.as_ptr(),
                 profile.compiler_name,
-                Includer {
-                    table: table as *mut c_void,
-                    open,
-                    copy,
-                    close,
-                },
+                table as *mut c_void,
             )
         }
     }
