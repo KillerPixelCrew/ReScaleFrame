@@ -41,6 +41,7 @@ const _: () = assert!(PROVIDER_SHA256.len() == 64);
 // RsfXessBridgeCaptureSource result when the source cannot be bound.
 const SOURCE_FAILED: i32 = -7012;
 
+use rsf_game_sys::ffi_util::{checked, lock_or_recover};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
 };
@@ -195,7 +196,7 @@ impl Capture {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock_or_recover(&self.state)
     }
 
     fn failure(&self, reason: &str) {
@@ -626,10 +627,9 @@ unsafe extern "C" fn rsf_core_xess_capture_source(
 ) -> i32 {
     use super::bridge_abi::{RSF_XESS_BRIDGE_ABI_MISMATCH, RSF_XESS_BRIDGE_INVALID_ARGUMENT};
 
-    if record.is_null() || (unsafe { record.cast::<u32>().read() } as usize) < size_of::<Record>() {
+    let Some(record) = (unsafe { checked(record) }) else {
         return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
-    }
-    let record = unsafe { &*record };
+    };
     if (record.camera.struct_size as usize) < size_of_val(&record.camera)
         || record.frame_id == 0
         || record.frame_id > u64::from(u32::MAX)

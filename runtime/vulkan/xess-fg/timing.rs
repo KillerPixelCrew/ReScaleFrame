@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Opt-in XeSS timing for both the Runtime and standalone bridge.
-use std::sync::{Mutex, PoisonError};
+use rsf_game_sys::ffi_util::lock_or_recover;
+use std::sync::Mutex;
 
 const PHASES: usize = 6;
 const SEQUENCE: usize = 24;
@@ -149,17 +150,11 @@ pub struct Accumulator(Mutex<Batch>);
 
 impl Accumulator {
     pub(super) fn cpu_sample(&self, phase: u32, start: i64, end: i64, frequency: i64) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .cpu_sample(phase, start, end, frequency);
+        lock_or_recover(&self.0).cpu_sample(phase, start, end, frequency);
     }
 
     pub(super) fn end_present(&self) -> Option<Report> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .end_present()
+        lock_or_recover(&self.0).end_present()
     }
 }
 
@@ -180,11 +175,7 @@ pub extern "C" fn rsf_core_xess_timing_gpu(
     sample: &GpuSample,
     cpu_frequency: i64,
 ) {
-    timing
-        .0
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .gpu_sample(sample, cpu_frequency);
+    lock_or_recover(&timing.0).gpu_sample(sample, cpu_frequency);
 }
 
 #[cfg(test)]

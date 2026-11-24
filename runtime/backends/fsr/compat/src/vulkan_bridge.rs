@@ -8,7 +8,7 @@
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use core::ffi::{CStr, c_void};
 use core::ptr;
-use rsf_game_sys::ffi_util::try_box;
+use rsf_game_sys::ffi_util::{has_capacity, try_box};
 use rsf_game_sys::windows_path::absolute_wide_path;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT,
@@ -190,17 +190,16 @@ fn provider_path(directory: *const u16) -> Option<Vec<u16>> {
 }
 
 /// Checks a size-checked call structure. `abi_version` is read only after
-/// `struct_size` proves the caller allocated at least `required` bytes.
+/// `struct_size` proves the caller allocated the whole record.
 ///
 /// # Safety
-/// `header` must point to a readable `struct_size`, and the structure must be
+/// `record` must point to a readable `struct_size`, and the structure must be
 /// readable for the size it states.
-unsafe fn check_header(header: *const u32, required: usize) -> i32 {
-    let size = unsafe { header.read() };
-    if (size as usize) < required {
+unsafe fn check_header<T>(record: *const T) -> i32 {
+    if !unsafe { has_capacity(record) } {
         return INVALID_ARGUMENT;
     }
-    let version = unsafe { header.add(1).read() };
+    let version = unsafe { record.cast::<u32>().add(1).read() };
     if version == BRIDGE_ABI_VERSION {
         0
     } else {
@@ -588,7 +587,7 @@ pub unsafe fn create_public(setup: *const BridgeCreate, output: *mut *mut Sessio
     if setup.is_null() {
         return INVALID_ARGUMENT;
     }
-    let check = unsafe { check_header(setup.cast(), size_of::<BridgeCreate>()) };
+    let check = unsafe { check_header(setup) };
     if check != 0 {
         return check;
     }
@@ -632,7 +631,7 @@ pub unsafe fn info(session: *const Session, info: *mut BridgeInfo) -> i32 {
     if info.is_null() {
         return INVALID_ARGUMENT;
     }
-    let check = unsafe { check_header(info.cast(), size_of::<BridgeInfo>()) };
+    let check = unsafe { check_header(info.cast_const()) };
     if check != 0 {
         return check;
     }
@@ -774,7 +773,7 @@ pub unsafe fn evaluate(session: *mut Session, frame: *const BridgeFrame) -> i32 
     if frame.is_null() {
         return INVALID_ARGUMENT;
     }
-    let check = unsafe { check_header(frame.cast(), size_of::<BridgeFrame>()) };
+    let check = unsafe { check_header(frame) };
     if check != 0 {
         return check;
     }
@@ -877,12 +876,10 @@ mod tests {
     #[test]
     fn reads_the_abi_version_only_after_the_size_admits_it() {
         // Only struct_size is allocated: a short size must not read past it.
-        let short = [7_u32];
-        assert_eq!(unsafe { check_header(short.as_ptr(), 8) }, INVALID_ARGUMENT);
-        let mismatch = [8_u32, 2];
-        assert_eq!(unsafe { check_header(mismatch.as_ptr(), 8) }, ABI_MISMATCH);
-        let current = [8_u32, BRIDGE_ABI_VERSION];
-        assert_eq!(unsafe { check_header(current.as_ptr(), 8) }, 0);
+        let check = |words: &[u32]| unsafe { check_header(words.as_ptr().cast::<[u32; 2]>()) };
+        assert_eq!(check(&[7]), INVALID_ARGUMENT);
+        assert_eq!(check(&[8, 2]), ABI_MISMATCH);
+        assert_eq!(check(&[8, BRIDGE_ABI_VERSION]), 0);
     }
 
     #[test]

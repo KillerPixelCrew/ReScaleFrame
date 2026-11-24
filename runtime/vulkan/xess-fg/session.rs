@@ -34,6 +34,7 @@ use bridge_abi::{
     rsf_xess_bridge_present_status as IntegratedStatus, rsf_xess_bridge_start as IntegratedStart,
 };
 use capture::{Capture, Footprint};
+use rsf_game_sys::ffi_util::has_capacity;
 use session_records_abi::{
     RSF_XESS_BRIDGE_ALLOCATOR_COUNT as ALLOCATOR_COUNT, rsf_xess_bridge_modules as Modules,
     rsf_xess_bridge_resource_desc as PresentResourceDesc, rsf_xess_capture_desc as Desc,
@@ -281,14 +282,12 @@ enum Phase {
     Prepared,
 }
 
-// The caller guarantees the size word. The version is readable only after the
-// declared size covers the whole record.
+// The version is readable only after the declared size covers the whole record.
 unsafe fn check_bridge_abi<T>(record: *const T) -> Result<(), i32> {
-    let header = record.cast::<u32>();
-    if (unsafe { header.read() } as usize) < size_of::<T>() {
+    if !unsafe { has_capacity(record) } {
         return Err(INVALID_ARGUMENT);
     }
-    if unsafe { header.add(1).read() } != BRIDGE_ABI_VERSION {
+    if unsafe { record.cast::<u32>().add(1).read() } != BRIDGE_ABI_VERSION {
         return Err(ABI_MISMATCH);
     }
     Ok(())

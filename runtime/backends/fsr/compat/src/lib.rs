@@ -216,7 +216,7 @@ fn acquire(
     }
     let device_address = device.as_ptr().addr();
 
-    let mut owner = OWNER.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut owner = rsf_game_sys::ffi_util::lock_or_recover(&OWNER);
     let same_module = owner
         .as_ref()
         .is_some_and(|resident| resident.module_address == module.addr());
