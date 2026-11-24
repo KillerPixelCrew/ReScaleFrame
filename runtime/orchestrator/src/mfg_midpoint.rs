@@ -7,6 +7,7 @@
 use super::gate::protection_matches;
 use super::{Handle, provider, retain_module};
 use crate::sync::lock;
+use rsf_game_sys::pe32_plus::Mapped;
 use rsf_game_sys::win32::read_bytes;
 use std::ffi::c_void;
 use std::mem::forget;
@@ -22,8 +23,8 @@ use windows_sys::Win32::{
     },
     System::{
         Diagnostics::Debug::{
-            IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SCN_MEM_EXECUTE,
-            IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE, IMAGE_SECTION_HEADER, WriteProcessMemory,
+            IMAGE_NT_HEADERS64, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE,
+            IMAGE_SECTION_HEADER, WriteProcessMemory,
         },
         LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
         Memory::{
@@ -31,7 +32,6 @@ use windows_sys::Win32::{
             PAGE_EXECUTE_READ, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, VirtualAlloc,
             VirtualFree, VirtualProtect, VirtualQuery,
         },
-        SystemServices::{IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_NT_SIGNATURE},
         Threading::GetCurrentProcess,
     },
 };
@@ -336,11 +336,13 @@ fn read_usize(address: usize) -> Option<usize> {
     read_bytes(address, &mut value).then(|| usize::from_le_bytes(value))
 }
 
-fn read_record<T: Default>(address: usize) -> Option<T> {
-    let mut record = T::default();
-    let bytes =
-        unsafe { std::slice::from_raw_parts_mut((&raw mut record).cast::<u8>(), size_of::<T>()) };
-    read_bytes(address, bytes).then_some(record)
+// Guarded reads at image offsets from `base`, for the PE header records.
+fn image_reader(base: usize) -> impl FnMut(usize, *mut u8, usize) -> bool {
+    move |offset, out, size| {
+        base.checked_add(offset).is_some_and(|address| {
+            read_bytes(address, unsafe { std::slice::from_raw_parts_mut(out, size) })
+        })
+    }
 }
 
 // Copies of the read-only sections serve the table scan, so each probe does
@@ -466,19 +468,8 @@ fn table_matches(image: &Image, table: usize, profile: &Profile) -> bool {
     })
 }
 
-fn image_headers(base: usize) -> Option<(IMAGE_DOS_HEADER, IMAGE_NT_HEADERS64)> {
-    let dos: IMAGE_DOS_HEADER = read_record(base)?;
-    if dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 {
-        return None;
-    }
-    let nt: IMAGE_NT_HEADERS64 = read_record(base.checked_add(dos.e_lfanew as usize)?)?;
-    (nt.Signature == IMAGE_NT_SIGNATURE && nt.OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
-        .then_some((dos, nt))
-}
-
 fn image_size(base: usize) -> Option<usize> {
-    let (_, nt) = image_headers(base)?;
-    let size = nt.OptionalHeader.SizeOfImage as usize;
+    let size = Mapped::read(&mut image_reader(base))?.image_size();
     (size >= size_of::<IMAGE_NT_HEADERS64>()).then_some(size)
 }
 
@@ -489,20 +480,17 @@ fn find_descriptor_entry(base: usize, size: usize, profile: &Profile) -> Option<
         return None;
     }
     let end = base.checked_add(size)?;
-    let (dos, nt) = image_headers(base)?;
-    let section_offset = dos.e_lfanew as usize
-        + std::mem::offset_of!(IMAGE_NT_HEADERS64, OptionalHeader)
-        + usize::from(nt.FileHeader.SizeOfOptionalHeader);
-    if section_offset > size
-        || usize::from(nt.FileHeader.NumberOfSections)
-            > (size - section_offset) / size_of::<IMAGE_SECTION_HEADER>()
+    let mut read = image_reader(base);
+    let headers = Mapped::read(&mut read)?;
+    let count = headers.section_count();
+    if headers.sections_offset > size
+        || count > (size - headers.sections_offset) / size_of::<IMAGE_SECTION_HEADER>()
     {
         return None;
     }
     let mut ranges = Vec::new();
-    for index in 0..usize::from(nt.FileHeader.NumberOfSections) {
-        let section: IMAGE_SECTION_HEADER =
-            read_record(base + section_offset + index * size_of::<IMAGE_SECTION_HEADER>())?;
+    for index in 0..count {
+        let section = headers.section(&mut read, index)?;
         let rva = section.VirtualAddress as usize;
         if section.Characteristics & IMAGE_SCN_MEM_READ == 0
             || section.Characteristics & (IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE) != 0
