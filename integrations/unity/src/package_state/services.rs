@@ -16,17 +16,17 @@
 //! dispatches while it is being hooked cannot wait on the hook.
 use super::{Leaves, PACKAGE, Package, loaded, raw};
 use crate::bridge_state::{
-    rsf_unity_frames_active, rsf_unity_frames_callback_enter, rsf_unity_frames_callback_leave,
+    build_cpu_event, rsf_unity_frames_active, rsf_unity_frames_callback_enter,
+    rsf_unity_frames_callback_leave,
 };
 use crate::runtime_config::{PATH_CAPACITY, terminated};
 use crate::sys::rsf_unity_native_api;
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
-    RSF_GAME_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN,
-    RSF_GAME_CPU_FRAME_END, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
-    RSF_GAME_CPU_INPUT_UNFRAMED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_INPUT_CONTROLLER,
-    RSF_GAME_INPUT_KEYBOARD, RSF_GAME_INPUT_MOUSE, backend_result, rsf_game_cpu_event,
-    rsf_game_host_services,
+    RSF_GAME_ABI_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END,
+    RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_UNFRAMED,
+    RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_INPUT_CONTROLLER, RSF_GAME_INPUT_KEYBOARD,
+    RSF_GAME_INPUT_MOUSE, backend_result, rsf_game_cpu_event, rsf_game_host_services,
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::null_mut;
@@ -126,24 +126,20 @@ impl Services {
     fn received(
         &self,
         source: u64,
-        (now, frequency): (u64, u64),
+        now: (u64, u64),
         kind: u32,
         message: u32,
         flags: u32,
     ) -> rsf_game_cpu_event {
-        rsf_game_cpu_event {
-            struct_size: size_of::<rsf_game_cpu_event>() as u32,
-            stage: RSF_GAME_CPU_INPUT_EVENT,
-            session_id: self.session(),
-            source_frame_id: source,
-            timestamp_qpc: now,
-            qpc_frequency: frequency,
-            render_expected: 0,
-            input_kind: kind,
-            message_id: message,
-            event_version: RSF_GAME_CPU_EVENT_VERSION,
+        build_cpu_event(
+            self.session(),
+            RSF_GAME_CPU_INPUT_EVENT,
+            source,
+            now,
+            kind,
+            message,
             flags,
-        }
+        )
     }
 }
 

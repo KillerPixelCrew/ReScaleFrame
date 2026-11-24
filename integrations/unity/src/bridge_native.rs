@@ -192,7 +192,6 @@ unsafe extern "system" fn received_message(
         let message = unsafe { &*(argument as *const MSG) };
         let kind = rsf_windows::rsf_win32_input_kind(message.message, message.lParam);
         let source = INPUT_SOURCE.load(SeqCst);
-        let (now, frequency) = timestamp();
         let mut flags = RSF_GAME_CPU_INPUT_KEYED;
         if message.message != 0 {
             flags |= RSF_GAME_CPU_WINDOW_MESSAGE;
@@ -200,19 +199,15 @@ unsafe extern "system" fn received_message(
         if source == 0 && kind != 0 {
             flags |= RSF_GAME_CPU_INPUT_UNFRAMED;
         }
-        let fact = rsf_game_cpu_event {
-            struct_size: size_of::<rsf_game_cpu_event>() as u32,
-            stage: RSF_GAME_CPU_INPUT_EVENT,
-            session_id: host.session_id,
-            source_frame_id: source,
-            timestamp_qpc: now,
-            qpc_frequency: frequency,
-            render_expected: 0,
-            input_kind: kind,
-            message_id: message.message,
-            event_version: RSF_GAME_CPU_EVENT_VERSION,
+        let fact = build_cpu_event(
+            host.session_id,
+            RSF_GAME_CPU_INPUT_EVENT,
+            source,
+            timestamp(),
+            kind,
+            message.message,
             flags,
-        };
+        );
         unsafe { deliver(host.user, &fact) };
     }
     unsafe { CallNextHookEx(null_mut(), code, removed, argument) }
@@ -275,13 +270,13 @@ unsafe extern "C" fn cpu_event(stage: u32, frame_id: u64) {
     if !rsf_unity_frames_active() || frame_id == 0 || host.cpu_event.is_none() {
         return;
     }
-    let (now, frequency) = timestamp();
+    let now = timestamp();
     let d3d12 = matches!(route(), Route::D3d12);
     if d3d12 && stage == RSF_GAME_CPU_FRAME_BEGIN {
         INPUT_SOURCE.store(frame_id, SeqCst);
         open_message_hook();
     }
-    rsf_unity_frames_cpu_stage(&host, stage, frame_id, now, frequency);
+    rsf_unity_frames_cpu_stage(&host, stage, frame_id, now);
     if d3d12 && stage == RSF_GAME_CPU_FRAME_END {
         INPUT_SOURCE.store(0, SeqCst);
     }

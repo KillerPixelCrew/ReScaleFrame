@@ -579,30 +579,44 @@ pub(crate) fn rsf_unity_frames_take_packet(
     Some((slot as u32, packet))
 }
 
+/// A CPU event of `session_id` for `source`, stamped `(timestamp_qpc, qpc_frequency)`. The input
+/// kind and message are zero for a stage and set for received input.
+pub(crate) fn build_cpu_event(
+    session_id: u64,
+    stage: u32,
+    source: u64,
+    (timestamp_qpc, qpc_frequency): (u64, u64),
+    input_kind: u32,
+    message_id: u32,
+    flags: u32,
+) -> rsf_game_cpu_event {
+    rsf_game_cpu_event {
+        struct_size: size_of::<rsf_game_cpu_event>() as u32,
+        stage,
+        session_id,
+        source_frame_id: source,
+        timestamp_qpc,
+        qpc_frequency,
+        render_expected: 0,
+        input_kind,
+        message_id,
+        event_version: RSF_GAME_CPU_EVENT_VERSION,
+        flags,
+    }
+}
+
 pub(crate) fn rsf_unity_frames_cpu_stage(
     services: &rsf_game_host_services,
     stage: u32,
     source: u64,
-    timestamp_qpc: u64,
-    qpc_frequency: u64,
+    time: (u64, u64),
 ) {
     if source == 0 || !ACTIVE.load(Ordering::SeqCst) {
         return;
     }
     if let Some(deliver) = services.cpu_event {
-        let event = rsf_game_cpu_event {
-            struct_size: size_of::<rsf_game_cpu_event>() as u32,
-            stage,
-            session_id: services.session_id,
-            source_frame_id: source,
-            timestamp_qpc,
-            qpc_frequency,
-            render_expected: 0,
-            input_kind: 0,
-            message_id: 0,
-            event_version: RSF_GAME_CPU_EVENT_VERSION,
-            flags: RSF_GAME_CPU_INPUT_KEYED,
-        };
+        let flags = RSF_GAME_CPU_INPUT_KEYED;
+        let event = build_cpu_event(services.session_id, stage, source, time, 0, 0, flags);
         unsafe { deliver(services.user, &event) };
     }
 }
