@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
-/* Unity SDK registration. The Rust package (package_state.rs) binds the Runtime and its own calls\n   directly and exports the managed rsfu_* entry points (bridge.def); this file keeps the Unity SDK calls\n   and the header-only dlss_preset.h. */
+/* Unity SDK registration. The Rust package (package_state.rs) binds the Runtime and its own calls
+   directly and exports the managed rsfu_* entry points (bridge.def); this file keeps the Unity SDK calls. */
 #include "package_state.h"
-#include <rescaleframe/dlss_preset.h>
 #include <rescaleframe/frame_generation.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/native_sr_d3d12.h>
@@ -46,8 +46,6 @@ uint32_t rsf_unity_package_renderer_vulkan(void* pointer)
     IUnityGraphics* graphics = (IUnityGraphics*)pointer;
     return graphics && graphics->GetRenderer() == kUnityGfxRendererVulkan ? 1u : 0u;
 }
-
-uint32_t rsf_unity_package_dlss_preset_valid(uint32_t preset) { return rsf_dlss_preset_valid(preset) ? 1u : 0u; }
 
 void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API UnityPluginLoad(IUnityInterfaces* interfaces)
 {

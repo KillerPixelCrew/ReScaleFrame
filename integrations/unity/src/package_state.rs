@@ -24,14 +24,14 @@ use self::services::Services;
 use crate::package_views::{Recording, SLOTS, View, Views};
 use crate::sys::rsf_unity_native_api;
 use crate::sys::{
-    RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
-    RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_SPATIAL,
-};
-use crate::sys::{
-    RSF_FG_STAT_TOTAL_PRESENTED, RSF_SR_NONE, RSF_UNITY_SETTINGS_ABI_VERSION,
+    RSF_DLSS_PRESET_MASK, RSF_FG_STAT_TOTAL_PRESENTED, RSF_SR_NONE, RSF_UNITY_SETTINGS_ABI_VERSION,
     rsf_native_fg_options, rsf_native_fg_status, rsf_native_latency_status, rsf_sharpening_options,
     rsf_sr12, rsf_unity_frame_counters, rsf_unity_package_settings, rsf_unity_package_status,
     rsf_unity_package_view_setup,
+};
+use crate::sys::{
+    RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
+    RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_SPATIAL,
 };
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
@@ -61,6 +61,8 @@ const LATENCY_STATUS_VERSION: u32 = 1;
 const ULTRA_QUALITY: u32 = 5;
 const MAX_LATENCY_MODE: u32 = 2;
 const MAX_GENERATED_FRAMES: u32 = 15;
+/// The highest preset dlss_preset.h's mask names.
+const MAX_DLSS_PRESET: u32 = 13;
 const FG_BACKENDS: [u32; 5] = [
     RSF_FG_BACKEND_DLSS,
     RSF_FG_BACKEND_FSR3,
@@ -303,14 +305,15 @@ pub(crate) fn rsf_unity_package_sr_ring_retired(epoch: u64) {
     }
 }
 
-/// The settings range checks, in order: the sharpening and preset leaves are only called once
-/// the fields before them passed.
+/// The settings range checks, in order: the sharpening leaf is only called once the fields
+/// before it passed.
 fn acceptable(input: &rsf_unity_package_settings) -> bool {
     input.abi_version == RSF_UNITY_SETTINGS_ABI_VERSION
         && input.sr_backend <= RSF_SR_AUTO
         && (input.sharpening.struct_size == 0 || raw::sharpening_valid(&input.sharpening))
         && input.quality <= ULTRA_QUALITY
-        && unsafe { raw::dlss_preset_valid(input.dlss_preset) } != 0
+        && input.dlss_preset <= MAX_DLSS_PRESET
+        && RSF_DLSS_PRESET_MASK & (1 << input.dlss_preset) != 0
         && input.fg_mode <= RSF_FG_FIXED
         && input.latency_mode <= MAX_LATENCY_MODE
         && (1..=MAX_GENERATED_FRAMES).contains(&input.generated_frames)
@@ -792,7 +795,7 @@ mod tests {
     #[derive(Clone, Copy)]
     struct Fake {
         sharpening_valid: bool,
-        preset_valid: bool,
+
         drained: bool,
         close_held: bool,
         ended: bool,
@@ -845,7 +848,7 @@ mod tests {
 
     const READY: Fake = Fake {
         sharpening_valid: true,
-        preset_valid: true,
+
         drained: true,
         close_held: false,
         ended: true,
@@ -906,10 +909,7 @@ mod tests {
         call("sharpening".into());
         fake().sharpening_valid
     }
-    pub(super) unsafe fn dlss_preset_valid(_: u32) -> u32 {
-        call("preset".into());
-        fake().preset_valid.into()
-    }
+
     pub(super) fn set_engine_spatial(spatial: u32, quality: u32) -> c_int {
         call(format!("spatial {spatial} {quality}"));
         1
@@ -1351,10 +1351,9 @@ mod tests {
         assert!(!package.configure(&input));
         assert_eq!(calls(), ["sharpening"]);
         set(|f| f.sharpening_valid = true);
-        set(|f| f.preset_valid = false);
+        input.dlss_preset = MAX_DLSS_PRESET + 1;
         assert!(!package.configure(&input));
-        assert_eq!(calls(), ["sharpening", "preset"]);
-        set(|f| f.preset_valid = true);
+        assert_eq!(calls(), ["sharpening"]);
         // Nothing was stored by the refusals.
         assert_eq!(package.lock().settings.quality, 1);
         for backend in FG_BACKENDS {
@@ -1391,7 +1390,7 @@ mod tests {
         input.latency_mode = 2;
         input.frame_limit_us = 16_666;
         assert!(package.configure(&input));
-        assert_eq!(calls(), ["preset", "options 24 1 3 2 16666 0"]);
+        assert_eq!(calls(), ["options 24 1 3 2 16666 0"]);
         assert!(package.temporal_ready.load(SeqCst));
         assert!(!package.lock().pending);
         assert_eq!(package.lock().status.requested_sr, RSF_SR_AUTO);
@@ -1399,10 +1398,7 @@ mod tests {
         input.sr_backend = RSF_SR_SPATIAL;
         input.quality = 3;
         assert!(package.configure(&input));
-        assert_eq!(
-            calls(),
-            ["preset", "spatial 1 3", "options 24 1 3 2 16666 0"]
-        );
+        assert_eq!(calls(), ["spatial 1 3", "options 24 1 3 2 16666 0"]);
         assert!(!package.temporal_ready.load(SeqCst));
         {
             let state = package.lock();
@@ -1415,10 +1411,7 @@ mod tests {
         input.dlss_preset = 10;
         input.sr_backend = RSF_SR_DLSS;
         assert!(package.configure(&input));
-        assert_eq!(
-            calls(),
-            ["preset", "spatial 0 3", "options 24 1 3 2 16666 0"]
-        );
+        assert_eq!(calls(), ["spatial 0 3", "options 24 1 3 2 16666 0"]);
         package.lock().status.active_sr = 3;
         package.reconfigured();
         assert!(!package.lock().pending);

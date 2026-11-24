@@ -23,13 +23,12 @@ use windows::Win32::Graphics::{
 use windows::core::Interface;
 
 unsafe extern "C" {
-    // package.c: the pinned dlss_preset.h model mask, and the Unity SDK calls.
-    pub(super) fn rsf_unity_package_dlss_preset_valid(preset: u32) -> u32;
+    // package.c: the Unity SDK renderer query.
     pub(super) fn rsf_unity_package_renderer_vulkan(graphics: *mut c_void) -> u32;
 }
 
 /// The leaves' production binding (package_state's `raw`): the Runtime's exports, this crate's
-/// bridges and Win32 calls, and package.c's two C leaves. The tests bind fakes instead.
+/// bridges and Win32 calls, and package.c's renderer query. The tests bind fakes instead.
 pub(super) mod raw {
     pub(in crate::package_state) use super::super::windows::{
         rsf_unity_package_create_directory as create_directory,
@@ -43,7 +42,6 @@ pub(super) mod raw {
     pub(in crate::package_state) use super::{
         rsf_unity_package_create_view as sr_create,
         rsf_unity_package_default_fg as fg_default_backend,
-        rsf_unity_package_dlss_preset_valid as dlss_preset_valid,
         rsf_unity_package_prepare_preview as preview_prepare,
         rsf_unity_package_renderer_vulkan as renderer_vulkan,
         rsf_unity_package_texture_desc as texture_desc, sharpening_defaults, sharpening_valid,
