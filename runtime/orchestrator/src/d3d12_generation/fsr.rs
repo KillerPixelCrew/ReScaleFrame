@@ -6,6 +6,13 @@ pub(crate) use native::{rsf_generation_fsr, rsf_generation_fsr4_supported};
 
 use super::*;
 use crate::com_ref;
+use crate::d3d12_sr::ffx_abi::{
+    FFX_API_RESOURCE_STATE_COMMON, FFX_API_RESOURCE_STATE_COMPUTE_READ,
+    FFX_API_RESOURCE_STATE_COPY_DEST, FFX_API_RESOURCE_STATE_COPY_SRC,
+    FFX_API_RESOURCE_STATE_DEPTH_ATTACHMENT, FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT,
+    FFX_API_RESOURCE_STATE_PIXEL_READ, FFX_API_RESOURCE_STATE_PRESENT,
+    FFX_API_RESOURCE_STATE_RENDER_TARGET, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS,
+};
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::frame_capture12::Owner as Capture;
 use crate::sdk_module::FFX_CONTEXT_EXPORTS;
@@ -22,12 +29,13 @@ const CAPTURE_SLOTS: usize = 64;
 const NON_PIXEL_READ: u32 = 0x40; // D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
 const VENDOR_PARAMETER_ERROR: u32 = 6;
 const MODULE: &str = "amd_fidelityfx_framegeneration_dx12.dll";
-// FFX_FRAMEGENERATION_ENABLE_* values; fsr_generation.cpp asserts them.
-const CREATE_DISPLAY_RESOLUTION_MOTION: u32 = 1 << 1;
-const CREATE_JITTER_CANCELLATION: u32 = 1 << 2;
-const CREATE_DEPTH_INVERTED: u32 = 1 << 3;
-const CREATE_DEPTH_INFINITE: u32 = 1 << 4;
-const CREATE_HDR: u32 = 1 << 5;
+const CREATE_DISPLAY_RESOLUTION_MOTION: u32 =
+    fsr_abi::FFX_FRAMEGENERATION_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS as u32;
+const CREATE_JITTER_CANCELLATION: u32 =
+    fsr_abi::FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION as u32;
+const CREATE_DEPTH_INVERTED: u32 = fsr_abi::FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED as u32;
+const CREATE_DEPTH_INFINITE: u32 = fsr_abi::FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE as u32;
+const CREATE_HDR: u32 = fsr_abi::FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE as u32;
 type QueryVersions =
     unsafe extern "C" fn(Raw, &Setup, &mut [Version; MAX_VERSIONS], &mut u64) -> i32;
 
@@ -139,30 +147,30 @@ fn resolve_entries(module: &SdkModule) -> Option<[Entry; ENTRY_NAMES.len()]> {
     entries.iter().all(Option::is_some).then_some(entries)
 }
 
-// FFX_API_RESOURCE_STATE_* bits and the D3D12 state each adds; fsr_generation.cpp
-// asserts both sides. COMMON and PRESENT are D3D12 state 0.
-const STATE_COMMON: u32 = 1;
-const STATE_PRESENT: u32 = 1 << 7;
-const STATE_MAP: [(u32, u32); 8] = [
-    (1 << 1, 0x8),   // UNORDERED_ACCESS
-    (1 << 2, 0x40),  // COMPUTE_READ: NON_PIXEL_SHADER_RESOURCE
-    (1 << 3, 0x80),  // PIXEL_READ: PIXEL_SHADER_RESOURCE
-    (1 << 4, 0x800), // COPY_SRC: COPY_SOURCE
-    (1 << 5, 0x400), // COPY_DEST
-    (1 << 6, 0x200), // INDIRECT_ARGUMENT
-    (1 << 8, 0x4),   // RENDER_TARGET
-    (1 << 9, 0x10),  // DEPTH_ATTACHMENT: DEPTH_WRITE
+// FFX_API_RESOURCE_STATE_* bits and the D3D12 state each adds. COMMON and PRESENT are D3D12
+// state 0.
+const STATE_COMMON: u32 = FFX_API_RESOURCE_STATE_COMMON as u32;
+const STATE_PRESENT: u32 = FFX_API_RESOURCE_STATE_PRESENT as u32;
+const STATE_MAP: [(i32, u32); 8] = [
+    (FFX_API_RESOURCE_STATE_UNORDERED_ACCESS, 0x8),
+    (FFX_API_RESOURCE_STATE_COMPUTE_READ, 0x40), // NON_PIXEL_SHADER_RESOURCE
+    (FFX_API_RESOURCE_STATE_PIXEL_READ, 0x80),   // PIXEL_SHADER_RESOURCE
+    (FFX_API_RESOURCE_STATE_COPY_SRC, 0x800),    // COPY_SOURCE
+    (FFX_API_RESOURCE_STATE_COPY_DEST, 0x400),
+    (FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT, 0x200),
+    (FFX_API_RESOURCE_STATE_RENDER_TARGET, 0x4),
+    (FFX_API_RESOURCE_STATE_DEPTH_ATTACHMENT, 0x10), // DEPTH_WRITE
 ];
 
 /// D3D12 state for an FFX resource state, or None for bits this owner does not know.
 fn d3d12_state(ffx: u32) -> Option<u32> {
     let known = STATE_MAP
         .iter()
-        .fold(STATE_COMMON | STATE_PRESENT, |known, &(bit, _)| known | bit);
+        .fold(STATE_COMMON | STATE_PRESENT, |known, &(bit, _)| known | bit as u32);
     (ffx & !known == 0).then(|| {
         STATE_MAP
             .iter()
-            .filter(|&&(bit, _)| ffx & bit != 0)
+            .filter(|&&(bit, _)| ffx & bit as u32 != 0)
             .fold(0, |state, &(_, d3d12)| state | d3d12)
     })
 }
