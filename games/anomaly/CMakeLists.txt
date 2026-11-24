@@ -31,7 +31,7 @@ target_compile_options(rsf_anomaly_native_leaves INTERFACE
 # The CInput detour calls the native-entry bootstrap, so it is the plugin's own.
 add_library(rsf_game_anomaly SHARED src/plugin.def src/bootstrap_platform.c)
 rsf_add_rust_static(rsf_anomaly_plugin_rust rsf_rust_anomaly_plugin rsf-anomaly rsf_anomaly
-    --features native-entry)
+    --features native-entry CARRIES rsf_graphics_rust)
 # Binaries that carry rsf-anomaly bind Common Controls 6 (comctl6.manifest); the DLL's own manifest
 # governs its imports whatever the host process declares.
 if(MSVC)

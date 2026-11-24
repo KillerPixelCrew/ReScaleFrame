@@ -77,12 +77,14 @@ foreach(rsf_vendor "FFX;ffx" "FFX_FG;ffx-fg" "XESS;xess" "XESS_FG;xess-fg")
         list(APPEND rsf_orchestrator_features --features ${rsf_vendor_feature})
     endif()
 endforeach()
+# The archive carries rsf-runtime-common and rsf-graphics, so the Runtime DLL and the tests that link it drop
+# their archives (cmake/rust_static.cmake). The fixture archives below stand in for this one, by property.
 rsf_add_rust_static(rsf_orchestrator_rust rsf_rust_core rsf-orchestrator rsf_orchestrator ${rsf_orchestrator_env}
-    ${rsf_orchestrator_features})
-# A binary whose one Rust archive embeds rsf-orchestrator as an rlib (the Minecraft adapter, fixtures that
-# carry the Runtime beside their own code) lists rsf_orchestrator_rust and rsf_common_rust, whose crate the
-# Runtime carries, in RSF_EMBEDDED_ARCHIVES (cmake/rust_static.cmake): it keeps the C leaves and system libraries below but not this archive. Such an
-# archive builds with RSF_RUNTIME_EMBED_ARGS, the Runtime archive's features and environment.
+    ${rsf_orchestrator_features} CARRIES "rsf_common_rust;rsf_graphics_rust")
+# An archive that embeds rsf-orchestrator as an rlib (the Minecraft adapter, fixtures that carry the Runtime beside
+# their own code) declares CARRIES rsf_orchestrator_rust: binaries that link it keep the C leaves and system
+# libraries below but not this archive, and it builds with RSF_RUNTIME_EMBED_ARGS, the Runtime archive's features
+# and environment (cmake/rust_static.cmake).
 set(rsf_runtime_embed_args ${rsf_orchestrator_env})
 foreach(rsf_feature IN LISTS rsf_orchestrator_features)
     if(rsf_feature STREQUAL "--features")

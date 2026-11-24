@@ -18,6 +18,9 @@ mod host;
 mod hotkey;
 mod native12;
 
+// The Runtime this archive carries (Cargo.toml).
+use rsf_orchestrator as _;
+
 use rsf_test_support::Window;
 use std::ffi::c_void;
 use windows::{

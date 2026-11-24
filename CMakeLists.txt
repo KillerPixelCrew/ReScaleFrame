@@ -97,3 +97,5 @@ add_subdirectory(games/minecraft)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+# Last, once every target exists: each binary drops the Rust archives another archive it links carries.
+rsf_resolve_embedded_archives()

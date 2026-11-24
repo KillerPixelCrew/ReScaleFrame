@@ -19,6 +19,9 @@ mod sys {
 mod ngx;
 mod renderdoc;
 
+// The Runtime this archive carries (Cargo.toml).
+use rsf_orchestrator as _;
+
 use crate::sys::{
     RSF_DLSS_ABI_VERSION, RSF_TEXTURE_DUMP_ABI_VERSION, rsf_dlss_evaluate, rsf_dlss_frame as Frame,
     rsf_dlss_load, rsf_dlss_set_device, rsf_dlss_setup, rsf_dlss_shutdown, rsf_dump_texture_bytes,

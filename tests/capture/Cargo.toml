@@ -11,6 +11,10 @@ crate-type = ["staticlib"]
 
 [target.'cfg(windows)'.dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
+# The Runtime the capture paths call, carried in their archives; the texture path takes only the
+# graphics leaves.
+rsf-graphics = { path = "../../runtime/graphics/rust", optional = true }
+rsf-orchestrator = { path = "../../runtime/orchestrator", optional = true }
 rsf-test-support = { path = "../support" }
 ash = { workspace = true, optional = true }
 windows = { workspace = true, optional = true, features = [
@@ -34,12 +38,14 @@ windows-sys = { workspace = true, features = [
 ] }
 
 [features]
-metadata = []
-d3d12 = ["dep:windows"]
-d3d11 = ["dep:windows"]
-vulkan = ["dep:ash", "dep:windows"]
+metadata = ["dep:rsf-orchestrator"]
+d3d12 = ["dep:rsf-orchestrator", "dep:windows"]
+d3d11 = ["dep:rsf-orchestrator", "dep:windows"]
+vulkan = ["dep:ash", "dep:rsf-orchestrator", "dep:windows"]
+# The launcher that imports the Runtime DLL; vulkan-cpu-linked is the one linked with the Runtime.
 vulkan-cpu = ["dep:ash", "dep:windows"]
-texture = ["dep:windows"]
+vulkan-cpu-linked = ["dep:rsf-orchestrator", "vulkan-cpu"]
+texture = ["dep:rsf-graphics", "dep:windows"]
 
 [build-dependencies]
 rsf-bindgen = { path = "../../tools/bindgen" }

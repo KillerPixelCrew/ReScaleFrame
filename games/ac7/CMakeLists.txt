@@ -1,9 +1,9 @@
 # The carriers' Rust (rsf-ac7: view reader, carrier policy, motion capture, velocity pass). It holds
 # no reference to the renderer's MinHook, render scopes or engine relays. The carrier feature adds the
 # Runtime (with the Runtime archive's features) and the loader the carrier proxy embeds, so the proxy
-# links this one archive (RSF_EMBEDDED_ARCHIVES in loader/proxy).
-get_property(rsf_runtime_embed_args GLOBAL PROPERTY RSF_RUNTIME_EMBED_ARGS)
-rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7 --features carrier ${rsf_runtime_embed_args})
+# links this one archive.
+rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7 --features carrier
+    CARRIES "rsf_orchestrator_rust;rsf_common_rust;rsf_graphics_rust;rsf_loader_rust")
 # The crate's C leaves (rsf_ac7_leaves below), so every consumer of an archive that carries rsf-ac7
 # links them. The D3D11 leaves it calls come from the archive that carries it: the embedded Runtime
 # in the carrier archive, rsf-graphics in the adapter and view fixture archives.
@@ -23,7 +23,7 @@ add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_rust)
 # render_scope_entry.c (src/ac7_scope_owner.h). Every target that calls that header links this
 # archive (or one that carries the crate) after rsf_ac7_render_scope, which links none: this DLL
 # and the render scope, D3D11 present bridge and native graph fixtures.
-rsf_add_rust_static(rsf_ac7_plugin_rust rsf_rust_ac7_plugin rsf-ac7-plugin rsf_ac7_plugin)
+rsf_add_rust_static(rsf_ac7_plugin_rust rsf_rust_ac7_plugin rsf-ac7-plugin rsf_ac7_plugin CARRIES rsf_graphics_rust)
 target_link_libraries(rsf_ac7_plugin_rust INTERFACE rsf_ac7_leaves ReScaleFrame::Graphics minhook bcrypt)
 target_include_directories(rsf_ac7_plugin_rust INTERFACE include)
 add_library(rsf_game_ac7 SHARED src/plugin.c)

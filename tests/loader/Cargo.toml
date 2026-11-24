@@ -18,6 +18,8 @@ vendor-dll-fixtures = []
 rsf-game-sys = { path = "../../sdk/game" }
 
 [target.'cfg(windows)'.dependencies]
+# The loader the census and module dump fixtures call, carried in this archive.
+rsf-loader = { path = "../../loader" }
 rsf-test-support = { path = "../support" }
 windows-sys = { workspace = true, features = [
   "Win32_Foundation",

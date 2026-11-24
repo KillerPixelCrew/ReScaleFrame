@@ -1,7 +1,7 @@
 # Include from tests/CMakeLists.txt after add_subdirectory(loader/proxy).
 include_guard(GLOBAL)
 rsf_add_rust_static(rsf_loader_fixtures_rust rsf_rust_loader_fixtures
-    rsf-loader-fixtures rsf_loader_fixtures)
+    rsf-loader-fixtures rsf_loader_fixtures CARRIES rsf_loader_rust)
 target_link_libraries(rsf_loader_fixtures_rust INTERFACE minhook)
 
 function(rsf_add_loader_test target entry)

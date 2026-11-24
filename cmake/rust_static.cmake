@@ -24,12 +24,23 @@ endfunction()
 # arguments go to cargo build.
 #
 # A binary links one Rust archive: two would each carry rsf-game-sys and the other shared crates, and
-# their exports collide once both copies are pulled in. When a binary's archive embeds the crate of
-# another archive target as an rlib, the binary lists that target in its RSF_EMBEDDED_ARCHIVES
-# property; it then keeps the target's C leaves and system libraries but not its archive. The raw
-# archive path is the target's RSF_ARCHIVE property.
+# their exports collide once Cargo has built the copies with different hashes and both are pulled in.
+# `CARRIES "<archive targets>"` names the archive targets whose crates this archive embeds as rlibs.
+# rsf_resolve_embedded_archives (run once at the end of the top-level CMakeLists.txt) lists, for each
+# binary, every archive in its link closure that another archive in it carries in the binary's
+# RSF_EMBEDDED_ARCHIVES; such an archive keeps its C leaves and system libraries there but not its
+# archive file. An archive that carries rsf_orchestrator_rust builds with the Runtime archive's
+# features and environment (RSF_RUNTIME_EMBED_ARGS). The archive path is the target's RSF_ARCHIVE.
 function(rsf_add_rust_static target build_target package archive)
-    cmake_parse_arguments(PARSE_ARGV 4 rsf "" "ENV" "")
+    cmake_parse_arguments(PARSE_ARGV 4 rsf "" "ENV;CARRIES" "")
+    if("rsf_orchestrator_rust" IN_LIST rsf_CARRIES)
+        get_property(rsf_embed GLOBAL PROPERTY RSF_RUNTIME_EMBED_ARGS)
+        cmake_parse_arguments(rsf_embed "" "ENV" "" ${rsf_embed})
+        list(APPEND rsf_UNPARSED_ARGUMENTS ${rsf_embed_UNPARSED_ARGUMENTS})
+        if(rsf_embed_ENV)
+            set(rsf_ENV "${rsf_embed_ENV}")
+        endif()
+    endif()
     set(rust_archive "${RSF_CARGO_ARTIFACTS}/archives/${CMAKE_STATIC_LIBRARY_PREFIX}${target}${CMAKE_STATIC_LIBRARY_SUFFIX}")
     add_custom_target(${build_target}
         COMMAND "${CMAKE_COMMAND}" -E env ${rsf_ENV} "${RSF_CARGO}" build --locked -p ${package} ${rsf_UNPARSED_ARGUMENTS}
@@ -43,7 +54,7 @@ function(rsf_add_rust_static target build_target package archive)
     rsf_serialize_rust_build(${build_target} ${package})
     add_library(${target} INTERFACE)
     add_dependencies(${target} ${build_target})
-    set_target_properties(${target} PROPERTIES RSF_ARCHIVE "${rust_archive}")
+    set_target_properties(${target} PROPERTIES RSF_ARCHIVE "${rust_archive}" RSF_CARRIES "${rsf_CARRIES}")
     target_link_libraries(${target} INTERFACE
         "$<$<NOT:$<IN_LIST:${target},$<TARGET_PROPERTY:RSF_EMBEDDED_ARCHIVES>>>:${rust_archive}>"
         ntdll userenv ws2_32 dbghelp)
@@ -86,4 +97,73 @@ function(rsf_add_rust_artifacts build_target package directory)
         BYPRODUCTS ${outputs}
         COMMAND_EXPAND_LISTS VERBATIM)
     rsf_serialize_rust_build(${build_target} ${package})
+endfunction()
+
+# The targets that CMake files under <directory> define, recursively.
+function(rsf_directory_targets directory out)
+    get_property(targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
+    get_property(subdirectories DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+    foreach(subdirectory IN LISTS subdirectories)
+        rsf_directory_targets("${subdirectory}" more)
+        list(APPEND targets ${more})
+    endforeach()
+    set(${out} ${targets} PARENT_SCOPE)
+endfunction()
+
+# The targets named in link items, inside generator expressions too (LINK_ONLY, LINK_LIBRARY and
+# conditions), with aliases resolved. It errs on the side of including a conditional item.
+function(rsf_link_item_targets items out)
+    set(found)
+    foreach(item IN LISTS items)
+        string(REGEX MATCHALL "[A-Za-z0-9_.+-]+(::[A-Za-z0-9_.+-]+)?" names "${item}")
+        foreach(name IN LISTS names)
+            if(TARGET "${name}")
+                get_target_property(aliased "${name}" ALIASED_TARGET)
+                if(aliased)
+                    set(name "${aliased}")
+                endif()
+                list(APPEND found "${name}")
+            endif()
+        endforeach()
+    endforeach()
+    set(${out} ${found} PARENT_SCOPE)
+endfunction()
+
+# See rsf_add_rust_static: drops, from every binary, the archives another archive it links carries.
+function(rsf_resolve_embedded_archives)
+    rsf_directory_targets("${PROJECT_SOURCE_DIR}" targets)
+    foreach(head IN LISTS targets)
+        get_target_property(type ${head} TYPE)
+        if(NOT type MATCHES "^(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)$")
+            continue()
+        endif()
+        get_target_property(items ${head} LINK_LIBRARIES)
+        rsf_link_item_targets("${items}" queue)
+        set(closure)
+        while(queue)
+            list(POP_FRONT queue dependency)
+            if(dependency IN_LIST closure)
+                continue()
+            endif()
+            list(APPEND closure ${dependency})
+            get_target_property(items ${dependency} INTERFACE_LINK_LIBRARIES)
+            if(items)
+                rsf_link_item_targets("${items}" more)
+                list(APPEND queue ${more})
+            endif()
+        endwhile()
+        set(embedded)
+        foreach(dependency IN LISTS closure)
+            get_target_property(carried ${dependency} RSF_CARRIES)
+            foreach(archive IN LISTS carried)
+                if(archive IN_LIST closure)
+                    list(APPEND embedded ${archive})
+                endif()
+            endforeach()
+        endforeach()
+        if(embedded)
+            list(REMOVE_DUPLICATES embedded)
+            set_property(TARGET ${head} APPEND PROPERTY RSF_EMBEDDED_ARCHIVES ${embedded})
+        endif()
+    endforeach()
 endfunction()

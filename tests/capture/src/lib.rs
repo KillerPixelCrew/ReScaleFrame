@@ -12,6 +12,20 @@ mod sys {
     pub use rsf_game_sys::*;
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
+// The Runtime (or, for the texture path, the graphics leaves) this archive carries (Cargo.toml).
+#[cfg(all(windows, feature = "texture"))]
+use rsf_graphics as _;
+#[cfg(all(
+    windows,
+    any(
+        feature = "metadata",
+        feature = "d3d12",
+        feature = "d3d11",
+        feature = "vulkan",
+        feature = "vulkan-cpu-linked"
+    )
+))]
+use rsf_orchestrator as _;
 #[cfg(all(
     windows,
     any(

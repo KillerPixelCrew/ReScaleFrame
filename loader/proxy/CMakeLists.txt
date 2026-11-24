@@ -19,9 +19,6 @@ set_target_properties(rsf_proxy_ac7 PROPERTIES OUTPUT_NAME "dinput8" PREFIX ""
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ac7/lib/$<CONFIG>"
     PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ac7/bin/$<CONFIG>")
 add_dependencies(rsf_proxy_ac7 rsf_game_ac7)
-# The AC7 carrier archive (ReScaleFrame::AC7View) carries the Runtime (with rsf-runtime-common) and the loader code the module
-# dumps call, so the proxy takes their C leaves without their archives.
-set_target_properties(rsf_proxy_ac7 PROPERTIES RSF_EMBEDDED_ARCHIVES "rsf_orchestrator_rust;rsf_common_rust;rsf_loader_rust")
 if(MSVC)
     target_sources(rsf_proxy_ac7 PRIVATE src/ac7_exports.def)
     # Optimized builds need exact private-function addresses for capture crash analysis.

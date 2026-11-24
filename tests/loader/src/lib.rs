@@ -12,5 +12,8 @@ mod sys {
     pub use rsf_game_sys::*;
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
+// The loader this archive carries (Cargo.toml).
+#[cfg(windows)]
+use rsf_loader as _;
 #[cfg(windows)]
 mod windows;

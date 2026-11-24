@@ -19,6 +19,8 @@ workspace = true
 rsf-game-sys = { path = "../../sdk/game" }
 
 [target."cfg(windows)".dependencies]
+# The Runtime the probe drives, carried in this archive.
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
 rsf-minhook-sys = { path = "../../third_party/minhook" }
 rsf-test-support = { path = "../../tests/support" }
 windows = { workspace = true, features = [

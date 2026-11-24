@@ -6,17 +6,22 @@ add_library(rsf_sdk_c_header OBJECT sdk_c_header.c)
 # modules, though, so crates whose features reach C leaves that only some executables link build an
 # archive per feature, all in the one Cargo target directory.
 # rsf-presentation-fixtures: the GL fixture calls the Minecraft observer, which only the GL archive carries.
+# Each archive carries the Runtime crate (CARRIES, cmake/rust_static.cmake), so its executables drop the
+# Runtime, common and graphics archives.
+set(rsf_runtime_carried "rsf_orchestrator_rust;rsf_common_rust;rsf_graphics_rust")
 rsf_add_rust_static(rsf_presentation_fixtures_rust rsf_rust_presentation_fixtures
-    rsf-presentation-fixtures rsf_presentation_fixtures)
-get_property(rsf_runtime_embed_args GLOBAL PROPERTY RSF_RUNTIME_EMBED_ARGS)
+    rsf-presentation-fixtures rsf_presentation_fixtures CARRIES "${rsf_runtime_carried}")
 rsf_add_rust_static(rsf_presentation_gl_rust rsf_rust_presentation_gl
-    rsf-presentation-fixtures rsf_presentation_fixtures --features gl-device-fixture ${rsf_runtime_embed_args})
+    rsf-presentation-fixtures rsf_presentation_fixtures --features gl-device-fixture
+    CARRIES "${rsf_runtime_carried};rsf_minecraft_rust")
 rsf_add_rust_static(rsf_presentation_d3d11_host_device_rust rsf_rust_presentation_d3d11_host_device
-    rsf-presentation-fixtures rsf_presentation_fixtures --features d3d11-host-device-fixtures)
+    rsf-presentation-fixtures rsf_presentation_fixtures --features d3d11-host-device-fixtures
+    CARRIES "${rsf_runtime_carried}")
 # With rsf-ac7-plugin (warp-fixture) for the present bridge launcher, which needs both and could not link
 # two Rust archives that each carry rsf-ac7's exports.
 rsf_add_rust_static(rsf_presentation_ac7_rust rsf_rust_presentation_ac7
-    rsf-presentation-fixtures rsf_presentation_fixtures --features ac7-render-scope)
+    rsf-presentation-fixtures rsf_presentation_fixtures --features ac7-render-scope
+    CARRIES "${rsf_runtime_carried};rsf_ac7_plugin_rust")
 # The crate links rsf-ac7, whose C leaves are rsf_ac7_leaves.
 foreach(archive rsf_presentation_fixtures_rust rsf_presentation_gl_rust rsf_presentation_d3d11_host_device_rust
         rsf_presentation_ac7_rust)
@@ -25,20 +30,23 @@ endforeach()
 # rsf-game-sdk-fixtures reaches the Runtime, Unity and Anomaly crates; one archive with every feature
 # gave each executable Unity and Runtime leaves it does not link, and the Unity SR fixture's main.
 # rsf_game_sdk_fixtures_rust is the crate without features: the plugin, Anomaly and domain contracts.
-rsf_add_rust_static(rsf_game_sdk_fixtures_rust rsf_rust_game_sdk_fixtures
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures)
-rsf_add_rust_static(rsf_game_sdk_render_host_rust rsf_rust_game_sdk_render_host
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features render-host-fixtures)
-rsf_add_rust_static(rsf_game_sdk_cpu_rust rsf_rust_game_sdk_cpu
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features cpu-fixtures)
-rsf_add_rust_static(rsf_game_sdk_vk_latency_rust rsf_rust_game_sdk_vk_latency
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features vk-latency-fixtures)
-rsf_add_rust_static(rsf_game_sdk_unity_sr_d3d12_rust rsf_rust_game_sdk_unity_sr_d3d12
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features unity-sr-d3d12-fixture)
-rsf_add_rust_static(rsf_game_sdk_d3d11_host_rust rsf_rust_game_sdk_d3d11_host
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features d3d11-host-fixture)
-rsf_add_rust_static(rsf_game_sdk_anomaly_sr_rust rsf_rust_game_sdk_anomaly_sr
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features anomaly-sr-device-fixture ${rsf_runtime_embed_args})
+# anomaly-sr-device-fixture adds the Anomaly SR temporal device fixture, which calls the Runtime's motion passes.
+foreach(variant "fixtures" "render_host;render-host-fixtures" "cpu;cpu-fixtures"
+        "vk_latency;vk-latency-fixtures" "unity_sr_d3d12;unity-sr-d3d12-fixture" "d3d11_host;d3d11-host-fixture"
+        "anomaly_sr;anomaly-sr-device-fixture")
+    list(GET variant 0 name)
+    set(features)
+    set(carried "${rsf_runtime_carried}")
+    if(variant MATCHES ";")
+        list(GET variant 1 feature)
+        set(features --features ${feature})
+    endif()
+    if(name STREQUAL "unity_sr_d3d12")
+        list(APPEND carried rsf_rdr2_rust rsf_loader_rust)
+    endif()
+    rsf_add_rust_static(rsf_game_sdk_${name}_rust rsf_rust_game_sdk_${name}
+        rsf-game-sdk-fixtures rsf_game_sdk_fixtures ${features} CARRIES "${carried}")
+endforeach()
 # The archives carry the Rust Runtime, so they take the C leaves and MinHook rsf_orchestrator_rust takes,
 # and rsf-anomaly, so the adapter's C leaves its Rust names and the Common Controls 6 manifest its window
 # leaves need. The D3D11 state leaves those C leaves call come from the Runtime the archives embed.
@@ -55,25 +63,38 @@ endforeach()
 foreach(feature xess-sr xess-input-range xess-device)
     string(MAKE_C_IDENTIFIER "${feature}" name)
     rsf_add_rust_static(rsf_vulkan_fg_${name}_rust rsf_rust_vulkan_fg_${name}
-        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features ${feature})
+        rsf-vulkan-fg-fixtures rsf_vulkan_fg_fixtures --features ${feature} CARRIES "${rsf_runtime_carried}")
     # The crate links the Rust Runtime, so its archives take what rsf_orchestrator_rust takes.
     target_link_libraries(rsf_vulkan_fg_${name}_rust INTERFACE rsf_runtime_leaves minhook)
 endforeach()
 # rsf-capture-fixtures: each capture path calls the Runtime's dump entries for its API, which only its
-# own executable links.
-foreach(feature metadata d3d11 d3d12 vulkan vulkan-cpu texture)
+# own executable links. The archives that executables link beside the Runtime archive carry the Runtime;
+# vulkan-cpu serves a launcher that imports the Runtime DLL instead (vulkan-cpu-linked is the linked one), and
+# texture links only the graphics leaves.
+foreach(variant "metadata;runtime" "d3d11;runtime" "d3d12;runtime" "vulkan;runtime" "vulkan-cpu;none"
+        "vulkan-cpu-linked;runtime" "texture;graphics")
+    list(GET variant 0 feature)
+    list(GET variant 1 carries)
     string(MAKE_C_IDENTIFIER "${feature}" name)
+    set(carried)
+    if(carries STREQUAL "runtime")
+        set(carried "${rsf_runtime_carried}")
+    elseif(carries STREQUAL "graphics")
+        set(carried rsf_graphics_rust)
+    endif()
     rsf_add_rust_static(rsf_capture_${name}_rust rsf_rust_capture_${name}
-        rsf-capture-fixtures rsf_capture_fixtures --features ${feature})
+        rsf-capture-fixtures rsf_capture_fixtures --features ${feature} CARRIES "${carried}")
 endforeach()
 # rsf-ac7-plugin with the engine-address overrides the WARP fixtures need. It replaces the shipping
 # rsf_ac7_plugin_rust archive in those executables, after rsf_ac7_render_scope, which does not link either.
-rsf_add_rust_static(rsf_ac7_fixture_rust rsf_rust_ac7_fixture rsf-ac7-plugin rsf_ac7_plugin --features warp-fixture)
+rsf_add_rust_static(rsf_ac7_fixture_rust rsf_rust_ac7_fixture rsf-ac7-plugin rsf_ac7_plugin --features warp-fixture
+    CARRIES rsf_graphics_rust)
 target_link_libraries(rsf_ac7_fixture_rust INTERFACE rsf_ac7_leaves ReScaleFrame::Graphics minhook bcrypt)
 target_include_directories(rsf_ac7_fixture_rust INTERFACE "${PROJECT_SOURCE_DIR}/games/ac7/include")
 rsf_add_rust_static(rsf_anomaly_fixtures_rust rsf_rust_anomaly_fixtures
     rsf-anomaly rsf_anomaly
-    --features fg-fixture,input-hook-fixture,overlay-device-fixture,motion-hooks-fixture,motion-binder-fixture,motion-device-fixture,native-hook-fixture,sr-fixtures)
+    --features fg-fixture,input-hook-fixture,overlay-device-fixture,motion-hooks-fixture,motion-binder-fixture,motion-device-fixture,native-hook-fixture,sr-fixtures
+    CARRIES rsf_graphics_rust)
 # rsf-minhook-sys leaves MinHook to the CMake link; native_memory.h includes the GameSDK headers. The archive names the
 # adapter's C leaves directly, so every executable that links it compiles them in (games/anomaly/CMakeLists.txt).
 # The archive carries the D3D11 state leaves those call (rsf-graphics).
@@ -188,7 +209,7 @@ rsf_add_fixture_test(rsf_gpu_policy_test NAME gpu_sr_policy ENTRY rsf_test_gpu_p
     LIBS rsf_generation_fixtures_rust rsf_orchestrator)
 
 rsf_add_rust_static(rsf_plugin_session_fixture_rust rsf_rust_plugin_session_fixture
-    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features plugin-session-fixture)
+    rsf-game-sdk-fixtures rsf_game_sdk_fixtures --features plugin-session-fixture CARRIES "${rsf_runtime_carried}")
 target_link_libraries(rsf_plugin_session_fixture_rust INTERFACE rsf_runtime_leaves minhook)
 if(MSVC)
     target_sources(rsf_plugin_session_fixture_rust INTERFACE "${rsf_anomaly_comctl6}")
@@ -249,7 +270,7 @@ set_tests_properties(input_dump_d3d12 PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77
 
 if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
     rsf_add_capture_fixture(rsf_input_dump_vulkan_cpu rsf_fixture_input_dump_vulkan_cpu
-        capture_vulkan_fixture_main.c vulkan-cpu)
+        capture_vulkan_fixture_main.c vulkan-cpu-linked)
     target_link_libraries(rsf_input_dump_vulkan_cpu PRIVATE ReScaleFrame::NativeVulkan rsf_build_options)
     add_test(NAME input_dump_vulkan_cpu_linked COMMAND rsf_input_dump_vulkan_cpu "${CMAKE_CURRENT_BINARY_DIR}")
 
@@ -287,7 +308,7 @@ add_test(NAME ac7_velocity_shader COMMAND rsf_ac7_velocity_shader_test)
 set_tests_properties(ac7_velocity_shader PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 rsf_add_rust_static(rsf_ac7_capture_fixture_rust rsf_rust_ac7_capture_fixture
-    rsf-ac7-capture-fixture rsf_ac7_capture_fixture ${rsf_runtime_embed_args})
+    rsf-ac7-capture-fixture rsf_ac7_capture_fixture CARRIES "${rsf_runtime_carried}")
 # The fixture installs the Runtime's D3D11 observer; its archive carries rsf-ac7 and the Runtime, which
 # also supplies the D3D11 leaves, so the executable takes the Runtime's C leaves without its archive.
 target_link_libraries(rsf_ac7_capture_fixture_rust INTERFACE rsf_ac7_leaves)
@@ -295,11 +316,11 @@ target_include_directories(rsf_ac7_capture_fixture_rust INTERFACE "${PROJECT_SOU
 rsf_add_fixture_test(rsf_ac7_capture_io NAME ac7_capture_io ENTRY rsf_test_ac7_capture_io
     LIBS rsf_ac7_capture_fixture_rust rsf_orchestrator_rust ReScaleFrame::Graphics ReScaleFrame::GameSDK d3dcompiler
     TIMEOUT 120 SKIP77)
-set_target_properties(rsf_ac7_capture_io PROPERTIES RSF_EMBEDDED_ARCHIVES "rsf_orchestrator_rust;rsf_common_rust")
 
 # rsf-ac7 with the view probe and session launchers' Rust halves; it replaces the shipping
 # ReScaleFrame::AC7View archive in those executables.
-rsf_add_rust_static(rsf_ac7_view_fixture_rust rsf_rust_ac7_view_fixture rsf-ac7 rsf_ac7 --features view-fixtures)
+rsf_add_rust_static(rsf_ac7_view_fixture_rust rsf_rust_ac7_view_fixture rsf-ac7 rsf_ac7 --features view-fixtures
+    CARRIES rsf_graphics_rust)
 # As rsf_ac7_rust: the crate's C leaves and public headers. The probe reads its captures through the
 # C leaf ac7_view_capture.c, which the session launcher's archive carries the probe code for as well.
 target_link_libraries(rsf_ac7_view_fixture_rust INTERFACE rsf_ac7_leaves ReScaleFrame::Graphics)
@@ -392,7 +413,7 @@ set(overlay_fixture_dll "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_overlay_panel
 rsf_add_rust_artifacts(rsf_overlay_panel_fixture rsf-overlay-panel-fixture "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
     FILES rsf_overlay_panel_fixture.dll)
 rsf_add_rust_static(rsf_overlay_fixtures_rust rsf_rust_overlay_fixtures
-    rsf-overlay-fixtures rsf_overlay_fixtures)
+    rsf-overlay-fixtures rsf_overlay_fixtures CARRIES "${rsf_runtime_carried}")
 rsf_add_fixture_test(rsf_overlay_host ENTRY rsf_test_overlay_host
     LIBS rsf_overlay_fixtures_rust rsf_orchestrator_rust ReScaleFrame::Graphics)
 
@@ -584,7 +605,8 @@ add_test(NAME ac7_render_scope COMMAND rsf_ac7_render_scope_test)
 set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)
 
 # Explicit hardware experiment, never run by routine CTest verification.
-rsf_add_rust_static(rsf_exposure_probe_rust rsf_exposure_probe_rust_build rsf-exposure-probe rsf_exposure_probe)
+rsf_add_rust_static(rsf_exposure_probe_rust rsf_exposure_probe_rust_build rsf-exposure-probe rsf_exposure_probe
+    CARRIES "${rsf_runtime_carried}")
 # The probe archive supplies the C main symbol. Keep the platform console CRT startup.
 add_executable(rsf_exposure_probe EXCLUDE_FROM_ALL ../tools/exposure_probe/renderdoc.c)
 if(MSVC)
@@ -616,9 +638,8 @@ set_tests_properties(ac7_native_graph PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77
 add_executable(rsf_gl_shared_surface_test presentation/gl_shared_surface_main.c)
 set_target_properties(rsf_gl_shared_surface_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON
     LINKER_LANGUAGE CXX)
-# The GL archive carries the Minecraft observer and the Runtime (RSF_EMBEDDED_ARCHIVES).
+# The GL archive carries the Minecraft observer and the Runtime.
 target_link_libraries(rsf_gl_shared_surface_test PRIVATE rsf_presentation_gl_rust ReScaleFrame::OrchestratorCore rsf_build_options opengl32)
-set_target_properties(rsf_gl_shared_surface_test PROPERTIES RSF_EMBEDDED_ARCHIVES "rsf_orchestrator_rust;rsf_common_rust")
 add_test(NAME gl_shared_surface COMMAND rsf_gl_shared_surface_test)
 set_tests_properties(gl_shared_surface PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
@@ -708,7 +729,7 @@ set_tests_properties(module_dump_v2 PROPERTIES TIMEOUT 120)
 if(TARGET rsf_vendor_census)
     # The fake DLLs' exports have the vendor names the census test imports, so they get an archive of their own.
     rsf_add_rust_static(rsf_loader_vendor_dll_fixtures_rust rsf_rust_loader_vendor_dll_fixtures
-        rsf-loader-fixtures rsf_loader_fixtures --features vendor-dll-fixtures)
+        rsf-loader-fixtures rsf_loader_fixtures --features vendor-dll-fixtures CARRIES rsf_loader_rust)
     target_link_libraries(rsf_loader_vendor_dll_fixtures_rust INTERFACE minhook)
     function(rsf_census_fixture target define output)
         string(TOLOWER "${define}" fixture)
@@ -749,7 +770,7 @@ if(TARGET rsf_vendor_census)
 
     if(TARGET rsf_asi_rdr2)
         rsf_add_rust_static(rsf_rdr2_fixtures_rust rsf_rust_rdr2_fixtures rsf-rdr2 rsf_rdr2
-            --features camera-fixture,capture-fixture)
+            --features camera-fixture,capture-fixture CARRIES rsf_loader_rust)
         rsf_add_fixture_test(rsf_rdr2_camera NAME rdr2_camera ENTRY rsf_rdr2_camera_fixture
             LIBS rsf_rdr2_fixtures_rust minhook user32
             ARGS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/rdr2-camera-v1.bin")
@@ -758,8 +779,6 @@ if(TARGET rsf_vendor_census)
         target_link_libraries(rsf_rdr2_capture PRIVATE rsf_rdr2_fixtures_rust ReScaleFrame::GameSDK ReScaleFrame::VendorCensus minhook
             d3d12 dxgi d3dcompiler user32 rsf_build_options)
         add_dependencies(rsf_rdr2_capture rsf_census_fx_ngx)
-        # The census calls rsf-loader, which the RDR2 fixture archive carries.
-        set_target_properties(rsf_rdr2_capture PROPERTIES RSF_EMBEDDED_ARCHIVES rsf_loader_rust)
         add_test(NAME rdr2_capture COMMAND rsf_rdr2_capture "${CMAKE_CURRENT_BINARY_DIR}/rdr2-capture")
         add_test(NAME rdr2_capture_rgb10 COMMAND rsf_rdr2_capture "${CMAKE_CURRENT_BINARY_DIR}/rdr2-capture-rgb10" rgb10)
         set_tests_properties(rdr2_capture rdr2_capture_rgb10 PROPERTIES TIMEOUT 60)

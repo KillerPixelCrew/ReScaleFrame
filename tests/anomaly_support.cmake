@@ -123,8 +123,6 @@ add_executable(rsf_anomaly_sr_temporal_device_test "${CMAKE_CURRENT_LIST_DIR}/an
 # One archive carries the fixture and the Runtime (tests/game-sdk, anomaly-sr-device-fixture).
 target_link_libraries(rsf_anomaly_sr_temporal_device_test PRIVATE rsf_game_sdk_anomaly_sr_rust
     ReScaleFrame::Graphics d3d11 dxgi)
-set_target_properties(rsf_anomaly_sr_temporal_device_test PROPERTIES
-    RSF_EMBEDDED_ARCHIVES "rsf_orchestrator_rust;rsf_common_rust")
 foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_device_test)
     target_include_directories(${rsf_sr5_client} PRIVATE "${RSF_ANOMALY_SR_SRC}"
         "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"

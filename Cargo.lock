@@ -633,6 +633,8 @@ dependencies = [
  "ash",
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-graphics",
+ "rsf-orchestrator",
  "rsf-test-support",
  "windows",
  "windows-sys",
@@ -645,6 +647,7 @@ dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
  "rsf-minhook-sys",
+ "rsf-orchestrator",
  "rsf-test-support",
  "windows",
 ]
@@ -752,6 +755,7 @@ version = "0.1.2"
 dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
+ "rsf-loader",
  "rsf-test-support",
  "serde_json",
  "windows",
@@ -806,6 +810,7 @@ dependencies = [
  "rsf-bindgen",
  "rsf-game-sys",
  "rsf-minhook-sys",
+ "rsf-orchestrator",
  "rsf-test-support",
  "windows",
 ]
