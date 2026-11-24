@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::{Constants, Handle, RESOURCE_FAILED, SHADER_FAILED, Setup};
-use crate::com_ref;
 use crate::d3d11_output::SavedBindings;
 use crate::graphics_d3d11::{
     constant_buffer, depth_state, pixel_shader, rasterizer, rsf_call_native_log,
@@ -105,19 +104,17 @@ pub(super) unsafe fn make(device: Handle, setup: &Setup) -> Result<[IUnknown; 9]
         )?;
         let raster = rasterizer(device)?;
         let constants = constant_buffer(device, size_of::<Constants>() as u32, true)?;
-        unsafe {
-            com_ref::adopt_all([
-                vs.into_raw(),
-                ps.into_raw(),
-                point.into_raw(),
-                linear.into_raw(),
-                opaque.into_raw(),
-                premultiplied.into_raw(),
-                depth.into_raw(),
-                raster.into_raw(),
-                constants.into_raw(),
-            ])
-        }
+        Some([
+            vs.into(),
+            ps.into(),
+            point.into(),
+            linear.into(),
+            opaque.into(),
+            premultiplied.into(),
+            depth.into(),
+            raster.into(),
+            constants.into(),
+        ])
     };
     make().ok_or_else(|| {
         unsafe {

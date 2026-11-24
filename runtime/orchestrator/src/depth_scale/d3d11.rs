@@ -78,25 +78,23 @@ pub(super) fn make_pipeline(device: &ID3D11Device, setup: &Setup) -> Option<[IUn
     let raster = rasterizer(device)?;
     let buffer = constant_buffer(device, size_of::<Constants>() as u32, false)?;
     let [s0, s1, s2, s3, s4, s5, s6, s7] =
-        stencil.map(|state| state.expect("all stencil states created").into_raw());
-    unsafe {
-        com_ref::adopt_all([
-            vs.into_raw(),
-            depth_shader.into_raw(),
-            stencil_shader.into_raw(),
-            depth.into_raw(),
-            s0,
-            s1,
-            s2,
-            s3,
-            s4,
-            s5,
-            s6,
-            s7,
-            raster.into_raw(),
-            buffer.into_raw(),
-        ])
-    }
+        stencil.map(|state| state.expect("all stencil states created").into());
+    Some([
+        vs.into(),
+        depth_shader.into(),
+        stencil_shader.into(),
+        depth.into(),
+        s0,
+        s1,
+        s2,
+        s3,
+        s4,
+        s5,
+        s6,
+        s7,
+        raster.into(),
+        buffer.into(),
+    ])
 }
 
 pub(super) unsafe fn describe(device: &ID3D11Device, texture: Handle) -> Option<[u32; 2]> {
@@ -140,11 +138,11 @@ pub(super) unsafe fn make_surfaces(device: &ID3D11Device, source: Handle) -> Opt
     let mut target = None;
     unsafe { device.CreateDepthStencilView(&output, Some(&dsv), Some(&mut target)) }.ok()?;
     Some([
-        unsafe { com_ref::owned(snapshot.into_raw()) }?,
-        unsafe { com_ref::owned(output.into_raw()) }?,
+        snapshot.into(),
+        output.into(),
         depth,
         stencil,
-        unsafe { com_ref::owned(target?.into_raw()) }?,
+        target?.into(),
     ])
 }
 

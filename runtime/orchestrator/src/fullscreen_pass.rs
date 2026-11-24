@@ -109,7 +109,12 @@ impl Pass {
     }
 }
 
-unsafe fn create(device: Handle, setup: *const Setup, out: *mut *mut Pass) -> i32 {
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_fullscreen_pass_create(
+    device: Handle,
+    setup: *const Setup,
+    out: *mut *mut Pass,
+) -> i32 {
     if device.is_null() || out.is_null() || !unsafe { has_capacity(setup) } {
         return INVALID;
     }
@@ -138,15 +143,6 @@ unsafe fn create(device: Handle, setup: *const Setup, out: *mut *mut Pass) -> i3
     }
     unsafe { out.write(pass) };
     OK
-}
-
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_fullscreen_pass_create(
-    device: Handle,
-    setup: *const Setup,
-    out: *mut *mut Pass,
-) -> i32 {
-    unsafe { create(device, setup, out) }
 }
 
 #[unsafe(no_mangle)]
