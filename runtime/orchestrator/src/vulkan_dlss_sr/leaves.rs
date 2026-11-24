@@ -402,11 +402,11 @@ pub(super) static NATIVE: super::Platform = super::Platform {
     options: rsf_core_vkdlss_sdk_options,
     tag: rsf_core_vkdlss_sdk_tag,
     evaluate: rsf_core_vkdlss_sdk_evaluate,
-    capture_parameters: capture_parameters,
+    capture_parameters,
     capture_record: rsf_core_vkdlss_sdk_capture_record,
     sharpen: rsf_core_vkdlss_sdk_sharpen,
     release: Some(rsf_core_vkdlss_sdk_release),
     flush: rsf_core_vkdlss_sdk_flush,
     retire: rsf_core_vkdlss_sdk_retire,
-    preset_valid: preset_valid,
+    preset_valid,
 };
