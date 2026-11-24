@@ -131,7 +131,7 @@ unsafe extern "C" fn capture(user: *mut c_void) -> u32 {
 
 fn gate(bits: &Cell<u32>) -> Gate {
     Gate {
-        capture: Some(capture),
+        capture,
         user: ptr::from_ref(bits).expose_provenance(),
         devices: Mutex::default(),
     }

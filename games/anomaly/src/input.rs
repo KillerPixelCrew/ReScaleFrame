@@ -45,13 +45,13 @@ pub(crate) fn rsf_anomaly_input_install(
     exchange: Exchange,
     reason: Option<&mut *const std::ffi::c_char>,
 ) -> bool {
-    let Some(profile) = profile::for_build(build) else {
-        if let Some(reason) = reason {
-            *reason = c"unknown CInput build".as_ptr();
-        }
-        return false;
-    };
-    install(image, &profile, counter_rva, replacement, exchange, reason)
+    let installed = profile::for_build(build)
+        .ok_or(c"unknown CInput build".as_ptr())
+        .and_then(|profile| install(image, &profile, counter_rva, replacement, exchange));
+    if let (Err(refusal), Some(reason)) = (installed, reason) {
+        *reason = refusal;
+    }
+    installed.is_ok()
 }
 
 #[cfg(windows)]
@@ -61,22 +61,14 @@ fn install(
     counter_rva: u32,
     replacement: *mut c_void,
     exchange: Exchange,
-    reason: Option<&mut *const std::ffi::c_char>,
-) -> bool {
-    for site in &profile.sites {
-        if !image.matches(site) {
-            if let Some(reason) = reason {
-                *reason = site.name;
-            }
-            return false;
-        }
+) -> Result<(), *const std::ffi::c_char> {
+    // A refusal names the static site or guard that failed.
+    if let Some(site) = profile.sites.iter().find(|site| !image.matches(site)) {
+        return Err(site.name);
     }
     let frame = &profile.sites[0];
     if !unsafe { image.matches_hex_guard(frame.rva, profile.frame_code) } {
-        if let Some(reason) = reason {
-            *reason = c"CInput OnFrame complete body/vtable guard".as_ptr();
-        }
-        return false;
+        return Err(c"CInput OnFrame complete body/vtable guard".as_ptr());
     }
     if !slot_install(
         INPUT as u32,
@@ -87,12 +79,9 @@ fn install(
         replacement,
         exchange,
     ) {
-        if let Some(reason) = reason {
-            *reason = c"CInput primary slot 0".as_ptr();
-        }
-        return false;
+        return Err(c"CInput primary slot 0".as_ptr());
     }
-    true
+    Ok(())
 }
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);

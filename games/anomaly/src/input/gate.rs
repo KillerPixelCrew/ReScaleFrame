@@ -24,10 +24,7 @@ const OBJECT_SIZE: u32 = 24;
 const DX3_OBJECT_SIZE: u32 = 16;
 
 #[cfg(windows)]
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetTickCount() -> u32;
-}
+use windows_sys::Win32::System::SystemInformation::GetTickCount;
 
 type Capture = unsafe extern "C" fn(*mut c_void) -> u32;
 
@@ -72,7 +69,7 @@ struct Entry {
 }
 
 pub(crate) struct Gate {
-    capture: Option<Capture>,
+    capture: Capture,
     user: usize,
     devices: Mutex<BTreeMap<usize, Entry>>,
 }
@@ -103,7 +100,7 @@ impl Gate {
     #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn new(capture: Capture) -> Self {
         Self {
-            capture: Some(capture),
+            capture,
             user: 0,
             devices: Mutex::new(BTreeMap::new()),
         }
@@ -119,10 +116,7 @@ impl Gate {
     /// # Safety
     /// As for `flush`.
     unsafe fn update(&self, entry: &mut Entry, device: *mut c_void, calls: &DeviceCalls) -> bool {
-        let bits = match self.capture {
-            Some(capture) => unsafe { capture(std::ptr::with_exposed_provenance_mut(self.user)) },
-            None => 0,
-        };
+        let bits = unsafe { (self.capture)(std::ptr::with_exposed_provenance_mut(self.user)) };
         let wanted = if entry.kind == MOUSE {
             CAPTURE_MOUSE
         } else {

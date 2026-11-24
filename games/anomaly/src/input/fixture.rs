@@ -104,14 +104,13 @@ fn contract(
     let frame = &profile.sites[0];
     let slot = unsafe { base.add(profile.slot_rva as usize).cast::<*mut u8>() };
     let original = unsafe { base.add(frame.rva as usize) };
-    let install = |reason: Option<&mut *const c_char>| {
+    let install = || {
         super::install(
             &image,
             profile,
             counter_rva,
             replacement as *mut c_void,
             exchange,
-            reason,
         )
     };
 
@@ -133,10 +132,7 @@ fn contract(
             slot.write(original);
         }
         let rejects = |expected: &CStr| {
-            let mut reason = std::ptr::null();
-            !install(Some(&mut reason))
-                && !reason.is_null()
-                && unsafe { CStr::from_ptr(reason) } == expected
+            install().is_err_and(|reason| unsafe { CStr::from_ptr(reason) } == expected)
         };
         for site in &profile.sites {
             let byte = unsafe { base.add(site.rva as usize) };
@@ -164,15 +160,10 @@ fn contract(
             return Err("changed primary slot reached installation".into());
         }
     }
-    let mut reason = std::ptr::null();
-    if !install(Some(&mut reason)) {
-        let message = if reason.is_null() {
-            "unknown installation failure".into()
-        } else {
-            unsafe { CStr::from_ptr(reason) }
-                .to_string_lossy()
-                .into_owned()
-        };
+    if let Err(reason) = install() {
+        let message = unsafe { CStr::from_ptr(reason) }
+            .to_string_lossy()
+            .into_owned();
         if !rsf_anomaly_slot_set(INPUT as u32, false) {
             std::mem::forget(mapped);
             std::mem::forget(synthetic);
