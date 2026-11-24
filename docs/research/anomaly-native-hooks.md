@@ -6,7 +6,7 @@ Can a DLL carrier enter before graphics creation and observe the shipped rendere
 ordinary UI, physical-PDA copy and scope copy without replacing the executable?
 The implementation currently observes these boundaries. It does not yet change
 render dimensions, replace shader bytecode, produce motion or dispatch SR/FG.
-Recognition of the AVX binary does not authorize the standard binary's RVAs.
+Recognition of the AVX binary does not authorize the standard binary's RVAs. Since 24 November 2026 no build is admitted by\nits hash or name: every site is discovered (see [Signature discovery](#signature-discovery-24-november-2026)).
 
 ## Build identity and discovery
 
@@ -38,8 +38,8 @@ factory and was rejected; verified slot 60 performs the backbuffer-to-UI/scope c
 | CRender::reset_end | `0x83a1c0` | Target reallocation and reset completion |
 
 The exact 16-byte guards are in `games/anomaly/src/native_profile.h`. The adapter
-checks the running filename, file SHA-256, image size and all instruction guards
-before preparation. HookSet revalidates the module mapping and every site before
+checked the running filename, file SHA-256, image size and all instruction guards
+before preparation; discovery now replaces the filename and hash checks (below). HookSet revalidates the module mapping and every site before
 creating any detour. A mismatch refuses rather than patching a nearby candidate.
 
 The unary hooks are native `void(this*)` boundaries. SetCacheXform takes this,
@@ -84,7 +84,7 @@ reading, evidence and the coverage counters are in `docs/research/anomaly-geomet
 
 ## Verification boundaries
 
-- Exact-build detection and foreign-process refusal are native DLL tests.
+- Exact-build detection and foreign-process refusal were native DLL tests; since 24 November 2026 detection is site\n  discovery (discovery::tests).
 - Native HookSet tests execute an independently authored x64 fixture detour,
   its original trampoline and instruction restoration; malformed guards and
   out-of-image sites refuse without modifying the first site.
@@ -97,3 +97,66 @@ reading, evidence and the coverage counters are in `docs/research/anomaly-geomet
 - In-game hook activation, camera capture, PDA/scope events and visual stability
   remain pending until backed by process logs/capture. SR and FG remain unimplemented
   by this observation layer.
+
+## Signature discovery, 24 November 2026
+
+**Question.** AGENTS.md Rule 4 requires that the adapter finds what it hooks in the executable that is running.
+Until now it admitted only the two files whose SHA-256 it listed and read about 260 addresses from one table per
+build. Can one description find every site in both 1.5.3 DX11 builds, so a rebuilt or updated executable is either
+found or refused by name, without a hash gate?
+
+**Approach.** The shared scanner (`rsf_game_sys::signature`: wildcard patterns, unique-or-refuse, RIP-relative
+decoding), as the Skyrim and RDR2 adapters use it, over the live executable sections. Patterns were derived with
+`tools/derive-site-patterns.py`, extended with `--also IMAGE` so a pattern must resolve uniquely to its recorded RVA
+in every image given: instruction-by-instruction growth from the site in both builds, bytes that differ between them
+wildcarded, growth stopped where an instruction's length differs (SSE against VEX). The recorded long guards
+(D3DCompile setup, tessellation prologues and wrappers, GetCBuffer, the binder registration and reflected size,
+OnFrame) were masked with capstone and merged the same way; all but two merged to one pattern. Read-only inputs:
+`D:\Anomaly 1.5.3\bin\AnomalyDX11.exe` (SHA-256 `c857b6f4...2fb4e`, SizeOfImage `0xfca000`) and
+`AnomalyDX11AVX.exe` (`2032acfc...92f12`, `0xfb8000`). No game run, no Ghidra or IDA job.
+
+**How each site is found** (`games/anomaly/src/discovery.rs`, 122 sites):
+
+| Group | Sites | How |
+| --- | --- | --- |
+| Native observer | 8 detours, `Device.dwWidth/dwHeight/dwFrame` | entry patterns; globals from the `mov` that reads them |
+| Engine, shared | CRender vtable, `r_dsgraph_render_hud/sorted/emissive` | vtable from the constructor's `lea`; hud through its only distinctive call, entry checked |
+| | `rmNear`, `rmFar`, `rmNormal` | CRender vtable slots 55, 56, 57; common entry `40 53 48 83 EC ?? 48 8B 01` checked |
+| Geometry | 11 own detours, 7 layout sites, phase, second viewport, `RCache.xforms`, 4 hierarchy vtables | patterns; the last_lod load is `call; mov r9d,[rbx+108h]` plus 5 |
+| | `CSkeletonX_PM::Render` | slot 7 of the vtable its constructor stores (SSE and AVX entries differ in length) |
+| | `m_aVertexConstants` | the flush's `lea rbx` (second stage table) minus `0x70` |
+| | phase compare, `IsSVPFrame` | must also read the discovered phase and `Device.dwFrame` |
+| SR | 14 function sites, 6 calls, `r_dsgraph_render_hud_ui`, GetCBuffer, binder registration, reflected size, 21 globals | patterns; `phase_blur` and `set_viewport` through their call, checked against one encoding per codegen |
+| | position binder vtable and `cl_pos_decompress_params::setup` | registration `lea r8,[binder]`, the binder's statically initialised vptr, slot 0; the full body is checked, one encoding per codegen |
+| | six first-person pairs | in each function, the first `call set_P` followed within `0x120` bytes by `call [rax+1B8h]` or `call rmNear` |
+| | SSAO static viewport and guard | the `cmp [guard]; jg; mov rax,[rbx]; lea r8,[viewport]` pattern |
+| Motion | 3 detours, 2 `create_shader` calls, shader_compile prologue, D3DCompile setup, tess dispatch, wrappers | the recorded guards merged across builds are the patterns; `pSourceName` is that setup's `lea r8` |
+| | `create_shader<SHS/SDS>` | through their dispatch call; the 66-byte prologue through the object store is checked |
+| Input | OnFrame, KeyUpdate, MouseUpdate, CInput vtable | OnFrame by its complete merged body; vtable from the constructor's `lea` |
+
+Every site's expected code is matched at the found address; a detour's first 16 bytes are copied at discovery and
+compared again by the hook preflight. A missing, ambiguous or mismatched site refuses its feature only (native,
+geometry, SR, motion, input; SR and motion share the SR globals) and the refusal names the site in the adapter log
+and the session log. The executable's SHA-256 is logged as evidence; detection recognizes a process whose native
+sites are found. Structure offsets no instruction reveals remain documented constants in the profile files; the
+shader_compile caller frame (`0x14f0`..`0x1510`, defines `0x250`) is fixed by bytes of the discovered prologue and
+setup patterns.
+
+**Failed approaches.** The 22-byte merged binder registration guard matches several registrations once its
+displacements are wildcards; the longer derived pattern covering all four registrations is unique.
+`CSkeletonX_PM::Render`, `rmNear/rmFar`, the position binder setup and the first-person calls in
+`CParticleEffect::Render` and `accum_point` have no common unique pattern (VEX moves change instruction lengths
+next to them), hence slots and decoded calls. `phase_blur`'s entries differ from the first instruction, so its check
+carries both encodings.
+
+**Evidence.** `discovery::tests::every_site_resolves_in_the_installed_executables` resolves every pattern in both
+installed executables with no refusal and checks that the records built from the found sites equal the recorded
+ones field by field (sites, expected bytes, globals, first-person pairs, guards, caller frame). The evidence scripts
+resolve `discovery.rs` the same way (`tools/anomaly_discovery.py`) and require every recorded value to be the
+discovered site; `tools/anomaly_profile_evidence.py` passes 74 checks, including 12 altered patterns and checks in a
+copy of `discovery.rs`, each refused with the site's name.
+
+**Uncertainty.** Discovery has not run inside the game yet: the live scan, its start-up cost and the logged
+refusals need a game run on each build. The patterns are proven unique only in these two builds; another build
+either resolves or refuses by name. The recorded per-build records stay as fixture data (`RECORDED`, feature
+`recorded-profiles`).

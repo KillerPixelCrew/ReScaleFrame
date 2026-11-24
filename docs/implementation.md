@@ -14,9 +14,22 @@ not here.
 | Red Dead Redemption 2 | Common-SR adapter, scene and pacing markers, shared FG presentation, forced-DX12 ASI | Camera and capture fixtures | Four SR providers and DLSS and XeSS FG intervals accepted; shared overlay and runtime presets confirmed | Non-NVIDIA hardware unproven | [RDR2 scaffold](#red-dead-redemption-2-scaffold-25-october-2026), [FSR2 input route](#rdr2-on-intel-fsr2-input-route-orchestrator-auto-sr-and-fidelityfx-240-30-october-2026) |
 | Fallout 4 AE | Native render callbacks without F4SE or ENB | Camera and host ABI fixtures | DLSS SR and FG accepted in the tested moving scene; XeSS FG interval correction accepted | NVIDIA only | [Fallout 4 AE native render callbacks](#fallout-4-ae-native-render-callbacks-16-november-2026) |
 | Skyrim SE | Experimental no-SKSE pre-HDR path | Camera and host ABI fixtures | Bounded vanilla runs evaluated DLSS at native resolution; reduced-resolution SR and FG incomplete | Vendor telemetry only, no physical scanout or latency | [Skyrim SE reduced-resolution SR](#skyrim-se-experimental-reduced-resolution-sr-15-november-2026) |
-| Anomaly | SR stages 1 to 5, foliage motion, shader patching | DLSS, FSR3, FSR4 and XeSS 24/24 frames on RTX 4070 | Stage 2 motion run recorded; later stages not game-tested | RTX 4070 | [Anomaly SR Stages 3-5](#anomaly-sr-stages-3-5-and-foliage-motion-12-november-2026) |
+| Anomaly | SR stages 1 to 5, foliage motion, shader patching | DLSS, FSR3, FSR4 and XeSS 24/24 frames on RTX 4070 | Stage 2 motion run recorded; later stages not game-tested; signature discovery not yet game-run | RTX 4070 | [Anomaly SR Stages 3-5](#anomaly-sr-stages-3-5-and-foliage-motion-12-november-2026), [Anomaly signature discovery](#anomaly-signature-discovery-24-november-2026) |
 | Godot | Standard and .NET engines, Vulkan SR and FG provider fixtures | Controller and export fixtures | Not a shipped game path | Generated-image comparisons against independent midpoints; some FSR2/FSR3 object-motion cases fail | [Godot developer integration](#godot-developer-integration-in-progress-25-october-2026) |
 | Minecraft (OpenGL) | Java mod with SR and FG and motion producers | Java and offscreen OpenGL checks | World geometry confirmed in the 1.1.8-dev correction; shader-pack acceptance open | None recorded | [Minecraft OpenGL SR and FG](#minecraft-opengl-sr-and-fg-17-october-2026) |
+
+## Anomaly signature discovery, 24 November 2026
+
+Built and synthetic-tested, not game-tested. The adapter no longer admits an executable by its SHA-256 or name or
+reads per-build address tables: `games/anomaly/src/discovery.rs` resolves all 122 sites from the running executable
+(104 patterns that each resolve uniquely in both 1.5.3 DX11 builds, vtable slots, the position binder object and
+decoded first-person calls), matches each site's expected code at the found address and builds the profile records
+from the found sites. A missing site refuses only its feature and is named in the logs; the hash is logged. The
+per-build records are fixture data behind `recorded-profiles`. Checks: `cargo test -p rsf-anomaly` (171, including
+the installed-executable proof for both builds), clippy with the shipping and all fixture features, the four
+evidence scripts on both builds and `tools/anomaly_profile_evidence.py` (74 checks). Native CTest fixtures, a full
+`eng/verify.ps1` and a game run on each build are pending. Research:
+[anomaly-native-hooks.md](research/anomaly-native-hooks.md#signature-discovery-24-november-2026).
 
 ## Fallout 4 AE native render callbacks, 16 November 2026
 

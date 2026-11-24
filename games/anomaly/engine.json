@@ -4,13 +4,23 @@
   "source_revision": "028ccf5f5189b393396480076b11e40852ba3ecd",
   "api": "D3D11",
   "rendering_ready": false,
+  "site_discovery": {
+    "owner": "src/discovery.rs",
+    "evidence": "../../docs/research/anomaly-native-hooks.md#signature-discovery-24-november-2026",
+    "method": "122 sites from the running executable's live code at start-up: 104 patterns unique in the executable sections of both 1.5.3 DX11 builds (rel32, RIP displacements and SSE/AVX-differing bytes wildcarded); rmNear/rmFar/rmNormal from CRender vtable slots 55-57, CSkeletonX_PM::Render from slot 7 of its vtable, the position binder setup from slot 0 of its statically initialised object's vtable, six first-person set_P/rmNear call pairs decoded from their functions",
+    "verification": "every site's expected code matched at the found address (one encoding per codegen where SSE and AVX differ in length); detour heads copied at discovery and compared again before hooking",
+    "refusal": "a missing, ambiguous or mismatched site refuses only its feature (native, geometry, SR, motion, input) and names itself in the adapter and session logs",
+    "identity": "file SHA-256 logged as evidence only; detection admits a process whose native sites are discovered, whatever its name or hash",
+    "validation": "every pattern resolves uniquely to the recorded RVA in AnomalyDX11.exe and AnomalyDX11AVX.exe (discovery::tests, tools/anomaly_profile_evidence.py); not yet game-run",
+    "derivation": "tools/derive-site-patterns.py IMAGE SPEC --also IMAGE"
+  },
   "shader_patching": {
     "pack": "patches/motion.rsfpatch",
     "rules": "patches/motion/rules.json",
     "source_provider": "engine ID3DInclude through guarded shader_compile setup",
     "validation": "built; synthetic/WARP-tested; corpus parity; source provider not game-tested",
     "evidence": "../../docs/research/runtime-shader-patching.md",
-    "executables": {
+    "validated_executables": {
       "AnomalyDX11.exe": "c857b6f49d32c62245611b26106862a773185533856e8b858a7d7e849ed2fb4e",
       "AnomalyDX11AVX.exe": "2032acfc041e215508692ef4079ef504c7bbabf1793d5668084099f734b92f12"
     }
@@ -18,7 +28,7 @@
   "deferred_position_reconstruction": {
     "evidence": "../../docs/research/anomaly-sr-seam.md#jittered-deferred-position-reconstruction-13-november-2026",
     "validation": "user game-accepted after guarded vtable-slot fix 43619d9 (corrected=4505 refused=0); both exact-build evidence retained",
-    "binder_rvas": {
+    "binder_rvas_discovered": {
       "AnomalyDX11.exe": "0x834f70",
       "AnomalyDX11AVX.exe": "0x82c1c0"
     },
@@ -27,7 +37,7 @@
   "input_keyed_latency": {
     "evidence": "../../docs/research/anomaly-fg.md#frame-timeline-pacing-and-latency-markers",
     "validation": "both native maps and actual-image slot-swap probes verified; 62 evidence checks; 115 native tests passed and 5 skipped; explicit D3D11 bridge and Reflex/PCL fixtures passed; no game or AMD hardware acceptance",
-    "frame_rvas": {
+    "frame_rvas_discovered": {
       "AnomalyDX11.exe": "0x67810",
       "AnomalyDX11AVX.exe": "0x66540"
     },
