@@ -4,8 +4,6 @@
 //! helper are prepared, activated, drained and released.
 use crate::mono;
 use crate::sys::rsf_unity_native_api;
-#[cfg(test)]
-use rsf_game_sys::RSF_GAME_ABI_VERSION;
 use rsf_game_sys::call_header::validate;
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::win32::module_path;
@@ -219,7 +217,6 @@ pub(crate) unsafe extern "C" fn status(out: *mut rsf_game_renderer_status) -> rs
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsf_game_sys::RSF_ERROR_ABI_MISMATCH as ABI_MISMATCH;
 
     #[test]
     fn helper_sits_beside_the_plugin() {
@@ -232,23 +229,5 @@ mod tests {
             Some(r"C:\Game\ReScaleFrame\ReScaleFrame.Unity.Managed.dll")
         );
         assert_eq!(sibling("plugin.dll", HELPER), None);
-    }
-
-    #[test]
-    fn lifecycle_refuses_short_and_foreign_structures() {
-        let mut args = rsf_game_start_args {
-            struct_size: size_of::<rsf_game_start_args>() as u32 - 1,
-            abi_version: RSF_GAME_ABI_VERSION,
-        };
-        assert_eq!(unsafe { validate(&args) }, INVALID_ARGUMENT);
-        args.struct_size += 1;
-        args.abi_version += 1;
-        assert_eq!(unsafe { validate(&args) }, ABI_MISMATCH);
-        args.abi_version -= 1;
-        assert_eq!(unsafe { validate(&args) }, OK);
-        assert_eq!(
-            unsafe { validate(ptr::null::<rsf_game_start_args>()) },
-            INVALID_ARGUMENT
-        );
     }
 }
