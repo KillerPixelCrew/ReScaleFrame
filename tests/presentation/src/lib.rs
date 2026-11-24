@@ -19,14 +19,13 @@ mod sys {
 use rsf_ac7_plugin as _;
 use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT};
 
-mod d3d11_bridge_sr;
+// The AC7 fixture's render scope calls come with ac7-render-scope; its helpers are dead code without it.
+#[cfg_attr(not(feature = "ac7-render-scope"), allow(dead_code))]
 mod d3d11_device_checks;
-mod d3d11_fixture_loop;
-mod d3d11_fixture_startup;
+#[cfg(feature = "ac7-render-scope")]
+mod d3d11_fixture;
 #[cfg(feature = "d3d11-host-device-fixtures")]
 mod d3d11_host_device;
-mod d3d11_marker;
-mod d3d11_scope_fixture;
 mod fg_fixture;
 mod fg_fixture_focus;
 mod fsr4_fg_bridge;
@@ -34,7 +33,9 @@ mod fsr4_fg_bridge;
 mod gl_fixture;
 #[cfg(feature = "gl-device-fixture")]
 mod gl_pipeline_fixture;
+#[cfg_attr(not(feature = "ac7-render-scope"), allow(dead_code))]
 mod present_fixture_startup;
+#[cfg_attr(not(feature = "ac7-render-scope"), allow(dead_code))]
 mod present_fixture_time;
 
 use crate::sys::*;

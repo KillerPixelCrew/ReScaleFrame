@@ -2,16 +2,11 @@
 /// Binds the presentation fixtures' own headers. The Runtime and AC7 records they build on come
 /// from those crates.
 fn bindings() {
-    let headers = [
-        "tests/presentation/d3d11_marker_bridge.h",
-        "tests/presentation/d3d11_scope_fixture.h",
-        "tests/presentation/present_fixture_loops.h",
-        "tests/d3d11_host_device_fixture.h",
-    ];
+    let headers = ["tests/d3d11_host_device_fixture.h"];
     let builder = rsf_bindgen::owner(
         &headers,
         &["games/ac7/include"],
-        &["tests/presentation", "tests/d3d11_host_device_fixture.h"],
+        &headers,
         &[
             "runtime/orchestrator/src",
             "runtime/graphics/src",

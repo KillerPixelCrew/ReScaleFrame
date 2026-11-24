@@ -465,20 +465,16 @@ add_library(rsf_fg_c_header OBJECT fg_c_header.c)
 target_include_directories(rsf_fg_c_header PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_fg_c_header PRIVATE ReScaleFrame::DLSS rsf_build_options)
 
-add_executable(rsf_d3d11_present_bridge_test d3d11_present_bridge.c)
 rsf_add_fixture_test(rsf_fg_present_bridge_test NAME shared_fg_present_bridge ENTRY rsf_fg_fixture_main ARGV CXX
     LIBS rsf_presentation_fixtures_rust rsf_orchestrator_core TIMEOUT 120 SKIP77)
-set_target_properties(rsf_fg_present_bridge_test PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/fg/$<CONFIG>")
-target_compile_definitions(rsf_d3d11_present_bridge_test PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # The render scope calls other than create are exported by rsf-ac7-plugin (render_scope.rs), which the
-# fixture archive carries with ac7-render-scope.
-target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_presentation_ac7_rust rsf_orchestrator_core ReScaleFrame::AC7RenderScope minhook rsf_build_options d3d11 dxgi dxguid)
+# fixture archive carries with ac7-render-scope; the create call is ReScaleFrame::AC7RenderScope's.
+rsf_add_fixture_test(rsf_d3d11_present_bridge_test NAME d3d11_present_bridge ENTRY rsf_d3d11_fixture_main ARGV CXX
+    LIBS rsf_presentation_ac7_rust rsf_orchestrator_core ReScaleFrame::AC7RenderScope minhook d3d11 dxgi
+    TIMEOUT 120 SKIP77)
 # Graphics fixtures must not load game-facing proxy DLLs from the shared artifact directory.
-set_target_properties(rsf_d3d11_present_bridge_test PROPERTIES LINKER_LANGUAGE CXX
+set_target_properties(rsf_fg_present_bridge_test rsf_d3d11_present_bridge_test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/fg/$<CONFIG>")
-add_test(NAME d3d11_present_bridge COMMAND rsf_d3d11_present_bridge_test)
-set_tests_properties(d3d11_present_bridge PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 add_dependencies(rsf_d3d11_present_bridge_test rsf_proxy_ac7)
 add_test(NAME ac7_proxy_startup COMMAND rsf_d3d11_present_bridge_test
     --proxy-smoke $<TARGET_FILE:rsf_proxy_ac7>)
