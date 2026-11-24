@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::sr_d3d11::{
-    Extent, fixture_created, fixture_platform, fixture_references, fixture_source,
-};
+use crate::sr_d3d11::{Extent, d3d, fixture_created, fixture_references, fixture_source, lease};
 use std::cell::RefCell;
 use std::ptr::{null_mut, without_provenance_mut};
 
-// The stage leaves the burst readback calls. Each test thread records its own calls in order.
+// The stage leaves the burst readback calls (`sr_stage::leaves` under test). Each test thread records its own calls in
+// order; they answer as absent leaves until a staging test enables them.
 struct Leaves {
+    enabled: bool,
     calls: Vec<String>,
     immediate: bool,
     device: bool,
@@ -17,6 +17,7 @@ struct Leaves {
 impl Default for Leaves {
     fn default() -> Self {
         Self {
+            enabled: false,
             calls: vec![],
             immediate: true,
             device: true,
@@ -50,46 +51,55 @@ fn context() -> *mut c_void {
     without_provenance_mut(CONTEXT)
 }
 
-fn d3d() -> &'static D3d11Platform {
-    unsafe { &*fixture_platform().cast::<D3d11Platform>() }
+fn enabled() -> bool {
+    leaves(|state| state.enabled)
 }
 
-extern "C" fn temporal_platform() -> *const c_void {
-    fixture_platform()
-}
-extern "C" fn immediate_context(context: *mut c_void) -> bool {
+pub(crate) extern "C" fn immediate_context(context: *mut c_void) -> bool {
+    if !enabled() {
+        return false;
+    }
     assert_eq!(context.addr(), CONTEXT);
     record("GetType".into());
     leaves(|state| state.immediate)
 }
-extern "C" fn context_device(_: *mut c_void) -> *mut c_void {
+pub(crate) extern "C" fn context_device(_: *mut c_void) -> *mut c_void {
+    if !enabled() {
+        return null_mut();
+    }
     record("GetDevice".into());
     if !leaves(|state| state.device) {
         return null_mut();
     }
     // An owned reference to the fixture device, the one its textures report.
-    unsafe { (d3d().texture_device)(null_mut()) }
+    unsafe { d3d::texture_device(null_mut()) }
 }
-extern "C" fn copy_subresource(
+pub(crate) extern "C" fn copy_subresource(
     _: *mut c_void,
     destination: *mut c_void,
     destination_subresource: u32,
     source: *mut c_void,
     source_subresource: u32,
 ) {
+    if !enabled() {
+        return;
+    }
     record(format!(
         "copy {:#x}:{destination_subresource} <- {:#x}:{source_subresource}",
         destination.addr(),
         source.addr()
     ));
 }
-extern "C" fn map_read(
+pub(crate) extern "C" fn map_read(
     _: *mut c_void,
     texture: *mut c_void,
     subresource: u32,
     data: *mut *const c_void,
     row_pitch: *mut u32,
 ) -> bool {
+    if !enabled() {
+        return false;
+    }
     record(format!("map {:#x}:{subresource}", texture.addr()));
     if !leaves(|state| state.map) {
         return false;
@@ -100,25 +110,24 @@ extern "C" fn map_read(
     }
     true
 }
-extern "C" fn unmap(_: *mut c_void, texture: *mut c_void, subresource: u32) {
+pub(crate) extern "C" fn unmap(_: *mut c_void, texture: *mut c_void, subresource: u32) {
+    if !enabled() {
+        return;
+    }
     record(format!("unmap {:#x}:{subresource}", texture.addr()));
 }
-extern "C" fn pixel_bytes(format: u32) -> u32 {
+pub(crate) extern "C" fn pixel_bytes(format: u32) -> u32 {
+    if !enabled() {
+        return 0;
+    }
     record(format!("pixel {format}"));
     if format == 10 { 8 } else { 0 }
 }
 
+/// A bound stage token, with the burst readback fakes answering for this test thread.
 fn platform() -> Platform {
-    Platform {
-        temporal_platform: Some(temporal_platform),
-        immediate_context: Some(immediate_context),
-        context_device: Some(context_device),
-        copy_subresource: Some(copy_subresource),
-        map_read: Some(map_read),
-        unmap: Some(unmap),
-        pixel_bytes: Some(pixel_bytes),
-        ..Default::default()
-    }
+    leaves(|state| state.enabled = true);
+    Platform { bound: true }
 }
 
 // A world twin: three mips, two layers, bound as SRV and RTV, with a misc flag the copy must not keep.
@@ -198,13 +207,6 @@ fn copy_refuses_before_creating_or_copying() {
     assert_eq!(calls(), ["GetType", "GetDevice"]);
     leaves(|state| state.device = true);
 
-    let missing = Platform {
-        copy_subresource: None,
-        ..platform()
-    };
-    assert!(copy(&missing, context(), source).is_none());
-    assert!(calls().is_empty());
-
     assert!(fixture_created().is_empty());
     assert_eq!(fixture_references(), 0);
 }
@@ -282,7 +284,7 @@ fn map_refusals_keep_the_size_and_format_and_never_unmap() {
             ..twin(1)
         },
     );
-    let unknown = GpuLease(d3d().lease(unsafe { (d3d().as_texture)(unknown) }).unwrap());
+    let unknown = GpuLease(lease(unsafe { d3d::as_texture(unknown) }).unwrap());
     let (layout, mapping) = map(&p, context(), &unknown);
     assert!(mapping.is_none());
     drop(mapping);

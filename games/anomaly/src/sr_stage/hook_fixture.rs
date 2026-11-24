@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! SR hook admission against synthetic images of the two production profiles. The C11 launcher lends the production
 //! leaf table and a real x64 target for the shared rmNear detour; the profile records are sr_profile.rs.
-use super::native::{BUILDS, Build, Native, rsf_anomaly_sr_stage_configure_native};
+use super::native::{BUILDS, Build, rsf_anomaly_sr_stage_configure_native};
 use super::{STAGE, rsf_anomaly_sr_stage_frame_end, rsf_anomaly_sr_stage_report};
 use crate::engine_guards::{NativeSite, UniqueGuard};
 use crate::sr_profile::{FirstPersonSite, PROFILES as SR};
@@ -110,7 +110,6 @@ struct Fixture<'a> {
     first_person: &'a [FirstPersonSite; 6],
     reconstruction: &'a [UniqueGuard; 4],
     ssao: (u32, Vec<u8>),
-    native: &'static Native,
     build: usize,
 }
 
@@ -162,7 +161,6 @@ impl Fixture<'_> {
         assert_eq!(
             unsafe {
                 rsf_anomaly_sr_stage_configure_native(
-                    self.native,
                     ini.path().as_ptr(),
                     true,
                     Some(collect),
@@ -313,7 +311,6 @@ impl Fixture<'_> {
 unsafe extern "C" fn rsf_test_anomaly_sr_hooks(
     argc: i32,
     argv: *const *const c_char,
-    native: &'static Native,
     exercise_near: extern "C" fn(usize, usize) -> i32,
 ) -> i32 {
     let result = std::panic::catch_unwind(|| {
@@ -334,14 +331,14 @@ unsafe extern "C" fn rsf_test_anomaly_sr_hooks(
             geometry[near].expected,
             SR[build].function_sites[NEAR].expected
         );
-        let failures = exercise_near(build, near) + guard_refusals(build, native);
+        let failures = exercise_near(build, near) + guard_refusals(build);
         println!("{failures} failure(s)");
         i32::from(failures != 0)
     });
     result.unwrap_or(1)
 }
 
-fn guard_refusals(build: usize, native: &'static Native) -> i32 {
+fn guard_refusals(build: usize) -> i32 {
     let result = std::panic::catch_unwind(|| {
         let profile = &SR[build];
         let image_size = crate::native_profile::PROFILES[build].image_size;
@@ -356,7 +353,6 @@ fn guard_refusals(build: usize, native: &'static Native) -> i32 {
                 profile.ssao_set_viewport_rva,
                 bytes(profile.ssao_set_viewport_code),
             ),
-            native,
             build,
         };
         fixture.exercise(image_size);

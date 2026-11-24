@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Exercises the actual SR passes and resource creators on hardware or WARP.
 use super::targets::{Device as Targets, Error, Target, TargetView, TwinInput};
-use super::{DrawViews, Extent, Pass, Platform, ROUND_TRIP, UPSCALE};
+use super::{DrawViews, Extent, Pass, ROUND_TRIP, UPSCALE};
 use crate::sr_fixture_device::Device;
 use crate::sr_fixture_readback::rsf_anomaly_sr_fixture_readback;
 use crate::sr_tonemap::roundtrip_fixture::{
@@ -222,9 +222,8 @@ fn state_preserved(d: &Device, pass: &Pass) {
     unsafe { d.context.ClearState() };
 }
 
-fn target_device<'a>(d: &Device, platform: &'a Platform) -> Targets<'a> {
+fn target_device(d: &Device) -> Targets {
     Targets {
-        platform,
         handle: d.device.as_raw(),
     }
 }
@@ -243,8 +242,8 @@ fn target_input(texture: Option<&ID3D11Texture2D>, with_uav: bool) -> TwinInput 
     }
 }
 
-fn twins(d: &Device, platform: &Platform) {
-    let target = || target_device(d, platform);
+fn twins(d: &Device) {
+    let target = || target_device(d);
     let engine = d.texture([320, 200], UNORM, COLOUR).unwrap();
     let (_twin, desc, format) = target().twin(&target_input(Some(&engine), false)).unwrap();
     let view = _twin.view(desc, format);
@@ -433,7 +432,6 @@ struct Rig {
 impl Rig {
     fn new(
         d: &Device,
-        platform: &Platform,
         input: [u32; 2],
         output: [u32; 2],
         colour: Option<&[u16]>,
@@ -475,7 +473,7 @@ impl Rig {
         });
         let targets = std::array::from_fn(|i| d.rtv(&output_textures[i], None).unwrap());
         let depth_target = d.dsv(&output_textures[3], None).unwrap();
-        let (depth, depth_desc) = target_device(d, platform)
+        let (depth, depth_desc) = target_device(d)
             .depth(depth_target.as_raw(), extent(output), extent(input))
             .unwrap();
         let raw = depth.view(depth_desc, 0).dsv;
@@ -531,8 +529,8 @@ impl Rig {
     }
 }
 
-fn check_upscale(d: &Device, platform: &Platform, pass: &Pass, input: [u32; 2], output: [u32; 2]) {
-    let rig = Rig::new(d, platform, input, output, None);
+fn check_upscale(d: &Device, pass: &Pass, input: [u32; 2], output: [u32; 2]) {
+    let rig = Rig::new(d, input, output, None);
     let [colour, position, distort, depth, twin_depth] = rig.run(d, pass);
     let record = UpscaleReadback {
         input,
@@ -549,10 +547,10 @@ fn check_upscale(d: &Device, platform: &Platform, pass: &Pass, input: [u32; 2], 
     assert_eq!(unsafe { rsf_anomaly_sr_upscale_numerics(&record) }, 0);
 }
 
-fn identity(d: &Device, platform: &Platform, upscale: &Pass, roundtrip: &Pass) {
+fn identity(d: &Device, upscale: &Pass, roundtrip: &Pass) {
     let size = [256, 256];
     let halves: Vec<_> = (0..=u16::MAX).flat_map(|value| [value; 4]).collect();
-    let rig = Rig::new(d, platform, size, size, Some(&halves));
+    let rig = Rig::new(d, size, size, Some(&halves));
     let [colour, position, distort, depth, twin_depth] = rig.run(d, upscale);
     assert_eq!(colour, run_pass(d, roundtrip, &halves, size, size).unwrap());
     assert_eq!(distort, rig.distort);
@@ -570,9 +568,9 @@ fn identity(d: &Device, platform: &Platform, upscale: &Pass, roundtrip: &Pass) {
     );
 }
 
-fn upscale_state_and_refusals(d: &Device, platform: &Platform, pass: &Pass) {
+fn upscale_state_and_refusals(d: &Device, pass: &Pass) {
     let (input, output) = ([32, 18], [48, 27]);
-    let rig = Rig::new(d, platform, input, output, None);
+    let rig = Rig::new(d, input, output, None);
     let bound = d.rtv(&d.texture(input, UNORM, RTV).unwrap(), None).unwrap();
     let depth = rig.depth().dsv;
     let dsv = unsafe { ID3D11DepthStencilView::from_raw_borrowed(&depth) }.unwrap();
@@ -617,10 +615,10 @@ fn upscale_state_and_refusals(d: &Device, platform: &Platform, pass: &Pass) {
     ));
 }
 
-fn world_twins(d: &Device, platform: &Platform) {
+fn world_twins(d: &Device) {
     let input = [96, 54];
     let render = [64, 36];
-    let targets = || target_device(d, platform);
+    let targets = || target_device(d);
     let ssao = d
         .texture(input, DXGI_FORMAT_R16_FLOAT, COLOUR | UAV)
         .unwrap();
@@ -725,13 +723,13 @@ fn world_twins(d: &Device, platform: &Platform) {
     assert_eq!(targets().twin(&albedo).err(), Some(Error::Shape));
 }
 
-fn depth_twins(d: &Device, platform: &Platform) {
+fn depth_twins(d: &Device) {
     let (output, render) = ([96, 54], [64, 36]);
     let dsv = d
         .dsv(&d.texture(output, DEPTH, DSV).unwrap(), None)
         .unwrap();
     let depth =
-        |source, output| target_device(d, platform).depth(source, extent(output), extent(render));
+        |source, output| target_device(d).depth(source, extent(output), extent(render));
     let (twin, desc) = depth(dsv.as_raw(), output).unwrap();
     let view = twin.view(desc, 0);
     assert_eq!(
@@ -771,13 +769,13 @@ fn depth_twins(d: &Device, platform: &Platform) {
     assert_eq!(depth(null_mut(), output).err(), Some(Error::NotTexture));
 }
 
-fn debug_layer_stage2(d: &Device, platform: &Platform, pass: &Pass) {
+fn debug_layer_stage2(d: &Device, pass: &Pass) {
     if d.info.is_none() {
         println!("Stage 2 debug-layer checks skipped: D3D11 SDK layers are not installed");
         return;
     }
     d.debug_errors();
-    let rig = Rig::new(d, platform, [64, 36], [96, 54], None);
+    let rig = Rig::new(d, [64, 36], [96, 54], None);
     assert!(pass.run(d.context.as_raw(), UPSCALE, &rig.views()));
     assert_eq!(d.debug_errors(), 0, "mixed seam MRT with SV_Depth");
     let depth = rig.depth().dsv;
@@ -791,7 +789,7 @@ fn debug_layer_stage2(d: &Device, platform: &Platform, pass: &Pass) {
         1,
         "output-size RTV with render-size DSV requires a stand-in"
     );
-    let scratch = |source| target_device(d, platform).scratch(source, extent(rig.input));
+    let scratch = |source| target_device(d).scratch(source, extent(rig.input));
     let (target, desc) = scratch(rig.targets[0].as_raw()).unwrap();
     assert_eq!(
         (desc.size, desc.format),
@@ -811,12 +809,12 @@ fn debug_layer_stage2(d: &Device, platform: &Platform, pass: &Pass) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_roundtrip_device_fixture(platform: &'static Platform) -> i32 {
+extern "C" fn rsf_anomaly_sr_roundtrip_device_fixture() -> i32 {
     let Some(d) = Device::hardware_or_warp(true) else {
         println!("SKIP: no D3D11 hardware or WARP device");
         return 77;
     };
-    let make_pass = |kind| Pass::new(platform, d.device.as_raw(), kind, Some(log), null_mut());
+    let make_pass = |kind| Pass::new(d.device.as_raw(), kind, Some(log), null_mut());
     let (Some(roundtrip), Some(upscale)) = (make_pass(ROUND_TRIP), make_pass(UPSCALE)) else {
         eprintln!("FAIL: SR pass creation");
         return 1;
@@ -837,10 +835,10 @@ extern "C" fn rsf_anomaly_sr_roundtrip_device_fixture(platform: &'static Platfor
         unsafe { d.context.ClearState() };
     };
     case("round-trip state", &|| state_preserved(&d, &roundtrip));
-    case("round-trip twins", &|| twins(&d, platform));
+    case("round-trip twins", &|| twins(&d));
     case("round-trip debug layer", &|| debug_layer(&d, &roundtrip));
     case("scale 1 identity", &|| {
-        identity(&d, platform, &upscale, &roundtrip)
+        identity(&d, &upscale, &roundtrip)
     });
     for (input, output) in [
         ([64, 36], [128, 72]),
@@ -848,16 +846,16 @@ extern "C" fn rsf_anomaly_sr_roundtrip_device_fixture(platform: &'static Platfor
         ([65, 41], [97, 61]),
     ] {
         case("upscale numerics", &|| {
-            check_upscale(&d, platform, &upscale, input, output)
+            check_upscale(&d, &upscale, input, output)
         });
     }
     case("upscale state and refusals", &|| {
-        upscale_state_and_refusals(&d, platform, &upscale)
+        upscale_state_and_refusals(&d, &upscale)
     });
-    case("world twins", &|| world_twins(&d, platform));
-    case("depth twins", &|| depth_twins(&d, platform));
+    case("world twins", &|| world_twins(&d));
+    case("depth twins", &|| depth_twins(&d));
     case("upscale debug layer", &|| {
-        debug_layer_stage2(&d, platform, &upscale)
+        debug_layer_stage2(&d, &upscale)
     });
     println!("{failures} failure(s)");
     i32::from(failures != 0)

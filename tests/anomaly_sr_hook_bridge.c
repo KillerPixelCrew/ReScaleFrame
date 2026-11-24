@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
-/* Launcher for the Rust SR hook fixture (sr_stage/hook_fixture.rs). It lends the production C11 leaf table, and the
-   rmNear case owns a real MinHook detour on a target in this executable called through the engine's Windows ABI. */
+/* Launcher for the Rust SR hook fixture (sr_stage/hook_fixture.rs), which calls the production C11 leaves linked in
+   here. The rmNear case owns a real MinHook detour on a target in this executable called through the engine's Windows ABI. */
 #include "native_geometry.h"
 #include "native_geometry_platform.h"
 #include "native_hooks.h"
@@ -51,7 +51,7 @@ static void counts(int* near_count, int* callbacks, void** seen)
 }
 
 int32_t rsf_anomaly_sr_hook_near(const near_calls_table*, void*);
-int32_t rsf_test_anomaly_sr_hooks(int, const char* const*, const rsf_anomaly_sr_native*, int (*)(size_t, size_t));
+int32_t rsf_test_anomaly_sr_hooks(int, const char* const*, int (*)(size_t, size_t));
 
 /* Redirects the selected build's geometry rmNear site onto near_fixture. */
 static int exercise_near_slot(size_t build, size_t rm_near)
@@ -80,6 +80,5 @@ static int exercise_near_slot(size_t build, size_t rm_near)
 
 int main(int argc, char** argv)
 {
-    return rsf_test_anomaly_sr_hooks(argc, (const char* const*)argv, rsf_anomaly_sr_native_leaves(),
-        exercise_near_slot);
+    return rsf_test_anomaly_sr_hooks(argc, (const char* const*)argv, exercise_near_slot);
 }

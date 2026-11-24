@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use super::leaves;
 use super::{Platform, Refused};
 use crate::lease::Lease;
 use crate::sys::rsf_anomaly_sr_timer as Stats;
@@ -32,13 +33,13 @@ struct Ring {
 
 impl Ring {
     fn new(platform: &Platform, device: Handle) -> Option<Self> {
-        let release = platform.release?;
-        let retain = platform.timer_retain_device?;
-        let create_query = platform.timer_create_query?;
-        let device = Lease::new(unsafe { retain(device) }, release)?;
+        if !platform.bound {
+            return None;
+        }
+        let device = Lease::new(leaf!(platform, timer_retain_device(device)), leaves::release)?;
         let create = |clock| {
-            let query = unsafe { create_query(device.as_ptr(), clock) };
-            Lease::new(query, release)
+            let query = leaf!(platform, timer_create_query(device.as_ptr(), clock));
+            Lease::new(query, leaves::release)
         };
         let mut slots = Vec::with_capacity(SLOTS);
         for _ in 0..SLOTS {
@@ -68,9 +69,11 @@ impl Ring {
             };
             let mut frequency = 0;
             let mut disjoint = false;
-            let clock = platform.timer_clock.map_or(-1, |query| unsafe {
-                query(context, slot.clock.as_ptr(), &mut frequency, &mut disjoint)
-            });
+            let clock = if platform.bound {
+                leaf!(platform, timer_clock(context, slot.clock.as_ptr(), &mut frequency, &mut disjoint))
+            } else {
+                -1
+            };
             if clock == PENDING {
                 continue;
             }
@@ -87,9 +90,11 @@ impl Ring {
             let mut ticks = [0; 3];
             let status = [&slot.begin, &slot.seam, &slot.end].map(|query| query.as_ptr());
             let status = std::array::from_fn::<_, 3, _>(|i| {
-                platform.timer_timestamp.map_or(-1, |query| unsafe {
-                    query(context, status[i], &mut ticks[i])
-                })
+                if platform.bound {
+                    leaf!(platform, timer_timestamp(context, status[i], &mut ticks[i]))
+                } else {
+                    -1
+                }
             });
             if status
                 .iter()

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::sr_d3d11::tests::{Call, DEVICE, PLATFORM, SOURCE, calls, extent, fake, ptr};
+use crate::sr_d3d11::tests::{Call, DEVICE, SOURCE, calls, extent, fake, ptr};
 use std::ptr::null_mut;
 
 fn twin_input() -> TwinInput {
@@ -23,9 +23,8 @@ fn twin_input() -> TwinInput {
     }
 }
 
-fn device() -> Device<'static> {
+fn device() -> Device {
     Device {
-        platform: &PLATFORM,
         handle: ptr(DEVICE),
     }
 }
@@ -179,7 +178,7 @@ fn temporal_targets_are_keyed_by_device_both_extents_and_output_format() {
     let render = extent(12, 8);
     let output = extent(24, 16);
     let format = 26;
-    let targets = TemporalTargets::new(&PLATFORM, ptr(DEVICE), render, output, format)
+    let targets = TemporalTargets::new(ptr(DEVICE), render, output, format)
         .ok()
         .unwrap();
     let colour = Texture::target(render, RGBA16F, COLOUR_BINDINGS);
@@ -223,7 +222,7 @@ fn temporal_empty_motion_rejects_an_overflowing_row_pitch_before_allocation() {
     let render = extent(u32::MAX / 8 + 1, 1);
     assert_eq!(render.width.wrapping_mul(8), 0);
     assert_eq!(
-        TemporalTargets::new(&PLATFORM, ptr(DEVICE), render, render, RGBA16F).err(),
+        TemporalTargets::new(ptr(DEVICE), render, render, RGBA16F).err(),
         Some(Error::Create)
     );
     assert!(calls().is_empty());

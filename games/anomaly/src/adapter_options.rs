@@ -11,9 +11,12 @@ use windows_sys::core::PCWSTR;
 #[cfg(feature = "native-entry")]
 pub(crate) use panel::register;
 
-// The bootstrap supplies a validated, NUL-terminated path once per process.
+// The bootstrap supplies a validated, NUL-terminated path once per process. The persistence below is the SR stage's
+// production leaf; under test the stage persists through fakes.
+#[cfg_attr(test, allow(dead_code))]
 static PATH: OnceLock<Vec<u16>> = OnceLock::new();
 
+#[cfg_attr(test, allow(dead_code))]
 fn write(key: PCWSTR, value: i32) -> bool {
     PATH.get()
         .is_some_and(|path| unsafe { ini::write_int(path.as_ptr(), key, value) })
@@ -41,11 +44,13 @@ pub(crate) unsafe fn register_option(
     unsafe { overlay::rsf_anomaly_overlay_option_add(&option) };
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_anomaly_sr_persist_int(key: *const c_char, value: i32) -> bool {
     let key = unsafe { ini::widen(key) };
     write(key.as_ptr(), value)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) unsafe extern "C" fn rsf_anomaly_sr_persist_text(
     key: *const c_char,
     value: *const c_char,

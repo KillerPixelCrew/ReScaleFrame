@@ -41,6 +41,11 @@ struct Fake {
     passes: Vec<rsf_anomaly_sr_pass>,
     logs: Vec<String>,
     offered: u32,
+    /// The stage drives the stale-window closer and the GPU timer leaves; otherwise they refuse.
+    close_stale: bool,
+    timers: bool,
+    /// The INI leaves read the file through the production Win32 reader.
+    production_ini: bool,
 }
 
 thread_local! {
@@ -66,11 +71,11 @@ fn position(calls: &[String], name: &str) -> usize {
 
 const CONTEXT: *mut c_void = 0x1000 as *mut c_void;
 
-extern "C" fn render_target() -> *mut c_void {
+pub(crate) extern "C" fn render_target() -> *mut c_void {
     std::ptr::without_provenance_mut(fake(|f| f.render_target))
 }
 
-unsafe extern "C" fn frame_facts(
+pub(crate) unsafe extern "C" fn frame_facts(
     world: bool,
     temporal: bool,
     out: *mut rsf_anomaly_sr_frame_reads,
@@ -93,13 +98,13 @@ unsafe extern "C" fn frame_facts(
     record(format!("facts world={world} temporal={temporal}"));
 }
 
-unsafe extern "C" fn loading_registered(out: *mut u8) -> bool {
+pub(crate) unsafe extern "C" fn loading_registered(out: *mut u8) -> bool {
     let (readable, registered) = fake(|f| (!f.unreadable_loading, f.registered));
     unsafe { out.write(registered) };
     readable
 }
 
-unsafe extern "C" fn precache_frame(out: *mut u32) -> bool {
+pub(crate) unsafe extern "C" fn precache_frame(out: *mut u32) -> bool {
     let (readable, frame) = fake(|f| {
         f.precache_reads += 1;
         (!f.unreadable_precache, f.precache)
@@ -107,7 +112,7 @@ unsafe extern "C" fn precache_frame(out: *mut u32) -> bool {
     unsafe { out.write(frame) };
     readable
 }
-unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
+pub(crate) unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
     let (open, jittered, refused) = fake(|f| (f.window_open, f.jittered, f.refused));
     unsafe {
         out.write(rsf_anomaly_sr_controller {
@@ -127,7 +132,7 @@ unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
         })
     };
 }
-unsafe extern "C" fn prepare(
+pub(crate) unsafe extern "C" fn prepare(
     facts: *const rsf_anomaly_sr_frame_facts,
     _: rsf_anomaly_sr_log,
     _: *mut c_void,
@@ -144,10 +149,10 @@ unsafe extern "C" fn prepare(
     });
     open
 }
-extern "C" fn geometry_active() -> bool {
+pub(crate) extern "C" fn geometry_active() -> bool {
     true
 }
-unsafe extern "C" fn read_camera(out: *mut rsf_anomaly_sr_camera) -> bool {
+pub(crate) unsafe extern "C" fn read_camera(out: *mut rsf_anomaly_sr_camera) -> bool {
     let camera = unsafe { &mut *out };
     let x = fake(|f| f.eye_x);
     camera.view = [
@@ -159,7 +164,7 @@ unsafe extern "C" fn read_camera(out: *mut rsf_anomaly_sr_camera) -> bool {
     record("camera");
     true
 }
-unsafe extern "C" fn now(counter: *mut i64, frequency: *mut i64) {
+pub(crate) unsafe extern "C" fn now(counter: *mut i64, frequency: *mut i64) {
     unsafe {
         counter.write(1000);
         frequency.write(10_000);
@@ -214,31 +219,28 @@ fn seam(run: &mut dyn FnMut(crate::sr_swap::SeamPass<'_>) -> bool) {
     };
     run(crate::sr_swap::SeamPass::Upscale(&input));
 }
-extern "C" fn context() -> *mut c_void {
+pub(crate) extern "C" fn context() -> *mut c_void {
     CONTEXT
 }
-extern "C" fn device() -> *mut c_void {
+pub(crate) extern "C" fn device() -> *mut c_void {
     crate::sr_d3d11::fixture_device()
 }
-extern "C" fn temporal_ready() -> bool {
+pub(crate) extern "C" fn temporal_ready() -> bool {
     fake(|f| f.temporal_ready)
 }
-extern "C" fn temporal_platform() -> *const c_void {
-    crate::sr_d3d11::fixture_platform()
-}
-unsafe extern "C" fn motion_target(out: *mut rsf_anomaly_sr_motion_target) -> bool {
+pub(crate) unsafe extern "C" fn motion_target(out: *mut rsf_anomaly_sr_motion_target) -> bool {
     let target = fake(|f| f.motion);
     unsafe { out.write(target) };
     !target.texture.is_null()
 }
-extern "C" fn create_motion_view(_: *mut c_void, texture: *mut c_void) -> *mut c_void {
+pub(crate) extern "C" fn create_motion_view(_: *mut c_void, texture: *mut c_void) -> *mut c_void {
     texture
 }
-extern "C" fn release_view(_: *mut c_void) {}
-extern "C" fn engine_frame() -> u32 {
+pub(crate) extern "C" fn release_view(_: *mut c_void) {}
+pub(crate) extern "C" fn engine_frame() -> u32 {
     fake(|f| f.engine_frame)
 }
-unsafe extern "C" fn draw_pass(kind: u32, views: *const DrawViews) -> bool {
+pub(crate) unsafe extern "C" fn draw_pass(kind: u32, views: *const DrawViews) -> bool {
     let views = unsafe { &*views };
     match kind {
         PREPARE => {
@@ -275,10 +277,10 @@ unsafe extern "C" fn draw_pass(kind: u32, views: *const DrawViews) -> bool {
         _ => unreachable!(),
     }
 }
-extern "C" fn driver_enabled() -> bool {
+pub(crate) extern "C" fn driver_enabled() -> bool {
     fake(|f| f.driver_enabled)
 }
-extern "C" fn driver_fallback(reason: u8, drawn: bool) {
+pub(crate) extern "C" fn driver_fallback(reason: u8, drawn: bool) {
     if reason <= REFUSAL_REINSERT {
         record(format!("refused {reason}"));
     }
@@ -288,10 +290,10 @@ extern "C" fn driver_fallback(reason: u8, drawn: bool) {
         "bilinear failed"
     });
 }
-extern "C" fn driver_count_prepared(missing: bool) {
+pub(crate) extern "C" fn driver_count_prepared(missing: bool) {
     record(format!("prepared missing={missing}"));
 }
-unsafe extern "C" fn driver_evaluate(
+pub(crate) unsafe extern "C" fn driver_evaluate(
     pass: *mut rsf_anomaly_sr_pass_inputs,
     _: *mut rsf_camera_frame,
     _: *mut u32,
@@ -303,61 +305,61 @@ unsafe extern "C" fn driver_evaluate(
         f.evaluate
     })
 }
-extern "C" fn controller_frame_end() {
+pub(crate) extern "C" fn controller_frame_end() {
     record("controller frame_end");
 }
-unsafe extern "C" fn device_size(width: *mut u32, height: *mut u32) {
+pub(crate) unsafe extern "C" fn device_size(width: *mut u32, height: *mut u32) {
     unsafe {
         width.write(1920);
         height.write(1080);
     }
 }
-extern "C" fn driver_boundary(width: u32, height: u32) {
+pub(crate) extern "C" fn driver_boundary(width: u32, height: u32) {
     record(format!("boundary {width}x{height}"));
 }
-extern "C" fn set_swap_enabled(enabled: bool) {
+pub(crate) extern "C" fn set_swap_enabled(enabled: bool) {
     record(format!("swap {enabled}"));
 }
-extern "C" fn hooks_created() -> bool {
+pub(crate) extern "C" fn hooks_created() -> bool {
     fake(|f| f.hooks_created)
 }
-extern "C" fn install_hooks() -> bool {
+pub(crate) extern "C" fn install_hooks() -> bool {
     record("install hooks");
     fake(|f| f.hooks_created = true);
     true
 }
-extern "C" fn install_position_slot() -> bool {
+pub(crate) extern "C" fn install_position_slot() -> bool {
     true
 }
-extern "C" fn set_rm_near(on: bool) {
+pub(crate) extern "C" fn set_rm_near(on: bool) {
     record(format!("rm_near {on}"));
 }
-extern "C" fn remove_hooks() -> bool {
+pub(crate) extern "C" fn remove_hooks() -> bool {
     record("remove hooks");
     !fake(|f| f.refuse_remove_hooks)
 }
-extern "C" fn close_stale() {
+pub(crate) extern "C" fn close_stale() {
     record("close stale");
     fake(|f| f.window_open = false);
 }
-extern "C" fn shutdown() -> bool {
+pub(crate) extern "C" fn shutdown() -> bool {
     record("controller shutdown");
     !fake(|f| f.refuse_shutdown)
 }
-extern "C" fn driver_stop() {
+pub(crate) extern "C" fn driver_stop() {
     record("driver stop");
 }
-extern "C" fn host_reset() {
+pub(crate) extern "C" fn host_reset() {
     record("host reset");
 }
-extern "C" fn driver_bind() -> bool {
+pub(crate) extern "C" fn driver_bind() -> bool {
     record("driver bind");
     true
 }
-unsafe extern "C" fn set_engine(_: *mut c_void, _: *const c_void, temporal: bool) {
+pub(crate) unsafe extern "C" fn set_engine(_: *mut c_void, _: *const c_void, temporal: bool) {
     record(format!("set engine temporal={temporal}"));
 }
-unsafe extern "C" fn ini_int(_: *const c_void, key: *const c_char, fallback: i32) -> i32 {
+pub(crate) unsafe extern "C" fn ini_int(_: *const c_void, key: *const c_char, fallback: i32) -> i32 {
     let key = unsafe { CStr::from_ptr(key) }.to_str().unwrap();
     fake(|f| {
         f.ini
@@ -366,7 +368,7 @@ unsafe extern "C" fn ini_int(_: *const c_void, key: *const c_char, fallback: i32
             .map_or(fallback, |(_, v)| v.parse().unwrap_or(0))
     })
 }
-unsafe extern "C" fn ini_text(
+pub(crate) unsafe extern "C" fn ini_text(
     _: *const c_void,
     key: *const c_char,
     fallback: *const c_char,
@@ -391,14 +393,14 @@ unsafe extern "C" fn ini_text(
     }
     wide.len() as u32
 }
-unsafe extern "C" fn persist_int(key: *const c_char, value: i32) -> bool {
+pub(crate) unsafe extern "C" fn persist_int(key: *const c_char, value: i32) -> bool {
     record(format!(
         "save {}={value}",
         unsafe { CStr::from_ptr(key) }.to_string_lossy()
     ));
     fake(|f| !f.refuse_persist)
 }
-unsafe extern "C" fn persist_text(key: *const c_char, value: *const c_char) -> bool {
+pub(crate) unsafe extern "C" fn persist_text(key: *const c_char, value: *const c_char) -> bool {
     let (key, value) = unsafe { (CStr::from_ptr(key), CStr::from_ptr(value)) };
     record(format!(
         "save {}={}",
@@ -407,7 +409,7 @@ unsafe extern "C" fn persist_text(key: *const c_char, value: *const c_char) -> b
     ));
     fake(|f| !f.refuse_persist)
 }
-extern "C" fn apply_colour_transport(transport: bool) {
+pub(crate) extern "C" fn apply_colour_transport(transport: bool) {
     record(format!("transport {transport}"));
 }
 unsafe extern "C" fn admit_backend(input: *mut rsf_game_sys::rsf_d3d11_sr_admission) -> i32 {
@@ -422,7 +424,7 @@ unsafe extern "C" fn admit_backend(input: *mut rsf_game_sys::rsf_d3d11_sr_admiss
     };
     0
 }
-unsafe extern "C" fn configured(
+pub(crate) unsafe extern "C" fn configured(
     _: rsf_anomaly_sr_log,
     _: *mut c_void,
     driver: *const rsf_anomaly_sr_driver_config,
@@ -454,7 +456,7 @@ unsafe extern "C" fn log(_: *mut c_void, text: *const c_char) {
     fake(|f| f.logs.push(text));
 }
 
-unsafe extern "C" fn verify_guards(
+pub(crate) unsafe extern "C" fn verify_guards(
     _: *mut c_void,
     _: u32,
     _: *const c_void,
@@ -464,60 +466,12 @@ unsafe extern "C" fn verify_guards(
     std::ptr::null()
 }
 
-fn platform() -> Box<Platform> {
-    Box::new(Platform {
-        render_target: Some(render_target),
-        frame_facts: Some(frame_facts),
-        loading_registered: Some(loading_registered),
-        precache_frame: Some(precache_frame),
-        engine_frame: Some(engine_frame),
-        device_size: Some(device_size),
-        read_camera: Some(read_camera),
-        context: Some(context),
-        device: Some(device),
-        now: Some(now),
-        geometry_active: Some(geometry_active),
-        prepare: Some(prepare),
-        frame_end: Some(controller_frame_end),
-        shutdown: Some(shutdown),
-        set_swap_enabled: Some(set_swap_enabled),
-        controller: Some(controller),
-        draw_pass: Some(draw_pass),
-        temporal_ready: Some(temporal_ready),
-        temporal_platform: Some(temporal_platform),
-        depth_texture: Some(context),
-        motion_target: Some(motion_target),
-        create_motion_view: Some(create_motion_view),
-        release: Some(release_view),
-        driver_bind: Some(driver_bind),
-        driver_enabled: Some(driver_enabled),
-        driver_boundary: Some(driver_boundary),
-        driver_evaluate: Some(driver_evaluate),
-        driver_fallback: Some(driver_fallback),
-        driver_count_prepared: Some(driver_count_prepared),
-        driver_stop: Some(driver_stop),
-        driver_report: Some(crate::sr_temporal::report_fixture),
-        hooks_created: Some(hooks_created),
-        verify_guards: Some(verify_guards),
-        set_engine: Some(set_engine),
-        install_hooks: Some(install_hooks),
-        install_position_slot: Some(install_position_slot),
-        set_rm_near: Some(set_rm_near),
-        remove_hooks: Some(remove_hooks),
-        host_reset: Some(host_reset),
-        ini_int: Some(ini_int),
-        ini_text: Some(ini_text),
-        persist_int: Some(persist_int),
-        persist_text: Some(persist_text),
-        apply_colour_transport: Some(apply_colour_transport),
-        configured: Some(configured),
-        ..Default::default()
-    })
-}
+/// A bound stage's leaf token, for the owners the tests drive without a stage.
+const BOUND: Platform = Platform { bound: true };
 
-fn installed(stage: u32, table: &Platform) -> Stage {
+fn installed(stage: u32) -> Stage {
     let driver = Stage::new();
-    driver.register(table);
+    driver.bind();
     // Each instance stands for a fresh process: no trampolines exist yet.
     fake(|f| f.hooks_created = false);
     let config = Config {
@@ -537,9 +491,8 @@ fn installed(stage: u32, table: &Platform) -> Stage {
 
 #[test]
 fn frame_facts_require_the_current_target_and_readable_world_options() {
-    let table = platform();
     let driver = Stage::new();
-    driver.register(&*table);
+    driver.bind();
     let mut state = State::default();
     let target = std::ptr::without_provenance_mut(0x20);
     fake(|f| f.render_target = 0x20);
@@ -566,9 +519,8 @@ fn frame_facts_require_the_current_target_and_readable_world_options() {
 
 #[test]
 fn loading_gate_preserves_precache_read_order_and_refuses_unknown_facts() {
-    let table = platform();
     let driver = Stage::new();
-    driver.register(&*table);
+    driver.bind();
     assert!(!driver.loading());
     fake(|f| {
         f.precache_reads = 0;
@@ -597,8 +549,7 @@ fn loading_gate_preserves_precache_read_order_and_refuses_unknown_facts() {
 
 #[test]
 fn fg_borrows_stock_depth_only_after_the_matching_unswapped_sr_off_prepare() {
-    let table = platform();
-    let driver = installed(5, &table);
+    let driver = installed(5);
     fake(|f| {
         f.suppress_swap = true;
         f.engine_frame = 7;
@@ -647,9 +598,8 @@ fn wcstod_converts_the_longest_decimal_prefix() {
 
 #[test]
 fn options_parse_like_the_native_reader() {
-    let table = platform();
     let driver = Stage::new();
-    driver.register(&*table);
+    driver.bind();
     fake(|f| {
         f.ini = vec![
             ("SRStage", "3"),
@@ -683,9 +633,8 @@ fn options_parse_like_the_native_reader() {
 
 #[test]
 fn quiesce_releases_hooks_before_state_and_the_pipeline_before_resources() {
-    let mut table = platform();
-    table.close_stale = Some(close_stale);
-    let driver = installed(5, &table);
+    fake(|f| f.close_stale = true);
+    let driver = installed(5);
     driver.prepare(null_mut());
     assert!(fake(|f| f.window_open));
     calls();
@@ -721,8 +670,7 @@ fn quiesce_releases_hooks_before_state_and_the_pipeline_before_resources() {
 
 #[test]
 fn install_refuses_a_different_build_after_the_trampolines_exist() {
-    let table = platform();
-    let driver = installed(2, &table);
+    let driver = installed(2);
     assert!(driver.quiesce());
     assert!(!driver.install(0x10000 as *mut c_void, 64, 64, 0x30 as *const c_void));
     assert!(fake(|f| f
@@ -735,8 +683,7 @@ fn install_refuses_a_different_build_after_the_trampolines_exist() {
 
 #[test]
 fn scope_frames_neither_jitter_nor_read_the_main_camera() {
-    let table = platform();
-    let driver = installed(5, &table);
+    let driver = installed(5);
     fake(|f| f.scope = true);
     driver.prepare(null_mut());
     let order = calls();
@@ -774,8 +721,7 @@ fn scope_frames_neither_jitter_nor_read_the_main_camera() {
 
 #[test]
 fn h1_detects_a_cut_from_the_previous_main_camera() {
-    let table = platform();
-    let driver = installed(5, &table);
+    let driver = installed(5);
     let cut = || driver.lock().frame_cut;
     driver.prepare(null_mut());
     assert!(!cut());
@@ -795,8 +741,7 @@ fn h1_detects_a_cut_from_the_previous_main_camera() {
 
 #[test]
 fn live_jitter_off_skips_the_sample() {
-    let table = platform();
-    let driver = installed(4, &table);
+    let driver = installed(4);
     driver.set_option(RSF_ANOMALY_SR_OPTION_JITTER, 0);
     assert_eq!(calls(), ["save SRJitter=0"]);
     driver.prepare(null_mut());
@@ -806,8 +751,7 @@ fn live_jitter_off_skips_the_sample() {
 
 #[test]
 fn temporal_seam_counts_each_refusal_once_and_always_draws_a_world_image() {
-    let table = platform();
-    let driver = installed(5, &table);
+    let driver = installed(5);
     // Not ready: one Prepare refusal, then the bilinear pass.
     driver.prepare(null_mut());
     calls();
@@ -926,8 +870,7 @@ fn temporal_seam_counts_each_refusal_once_and_always_draws_a_world_image() {
 
 #[test]
 fn frame_end_applies_the_drained_boundary_after_the_controller() {
-    let table = platform();
-    let driver = installed(5, &table);
+    let driver = installed(5);
     fake(|f| f.driver_enabled = true);
     driver.frame_end();
     assert_eq!(
@@ -939,15 +882,14 @@ fn frame_end_applies_the_drained_boundary_after_the_controller() {
     driver.frame_end();
     assert_eq!(calls(), ["controller frame_end", "boundary 1920x1080"]);
     // Stage 2 has no pipeline boundary.
-    let stage2 = installed(2, &table);
+    let stage2 = installed(2);
     stage2.frame_end();
     assert_eq!(calls(), ["controller frame_end"]);
 }
 
 #[test]
 fn live_options_apply_and_persist_through_the_adapter_path() {
-    let table = platform();
-    let driver = installed(5, &table);
+    let driver = installed(5);
     driver.set_option(RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT, 0);
     assert_eq!(calls(), ["save SRColourTransport=1", "transport true"]);
     assert_eq!(driver.option(RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT), 0);
@@ -978,8 +920,7 @@ fn live_options_apply_and_persist_through_the_adapter_path() {
 
 #[test]
 fn stage_options_save_before_changing_configuration_or_capture_schedule() {
-    let table = platform();
-    let driver = installed(5, &table);
+    let driver = installed(5);
     let options = [
         (
             OPTION_SCALE,
@@ -1070,9 +1011,8 @@ fn stage_options_save_before_changing_configuration_or_capture_schedule() {
 
 #[test]
 fn refused_stage_three_capture_edits_keep_the_current_burst() {
-    let table = platform();
     let driver = Stage::new();
-    driver.register(table.as_ref());
+    driver.bind();
     driver.active.store(true, Ordering::Release);
     driver.with(|s| {
         s.config.stage = 3;
@@ -1106,8 +1046,7 @@ fn refused_stage_three_capture_edits_keep_the_current_burst() {
 #[test]
 fn overlay_uses_the_runtime_mask_and_auto_default() {
     const XESS: u32 = 5;
-    let table = platform();
-    let driver = installed(5, &table);
+    let driver = installed(5);
     driver.with(|state| state.config.settings.backend = BACKEND_DLSS);
     fake(|f| f.offered = (1 << BACKEND_AUTO) | (1 << XESS));
     let choices = driver.choices_with(Some(admit_backend));
@@ -1120,15 +1059,14 @@ fn overlay_uses_the_runtime_mask_and_auto_default() {
         XESS
     );
     assert_eq!(driver.choices_with(None).backends, 0);
-    let stage4 = installed(4, &table);
+    let stage4 = installed(4);
     assert_eq!(stage4.choices_with(Some(admit_backend)).backends, 0);
     assert!(!stage4.overlay_report(std::ptr::dangling_mut::<c_void>()));
 }
 
 #[test]
 fn sun_camera_recovery_runs_spatial_seam_without_temporal_evaluation() {
-    let table = platform();
-    let driver = installed(5, &table);
+    let driver = installed(5);
     fake(|f| {
         f.spatial_recovery = true;
         f.temporal_ready = true;
@@ -1142,8 +1080,7 @@ fn sun_camera_recovery_runs_spatial_seam_without_temporal_evaluation() {
 
 #[test]
 fn report_uses_live_exposure_and_first_person_options() {
-    let table = platform();
-    let driver = installed(5, &table);
+    let driver = installed(5);
     let pipeline_report = || {
         let mut result = String::new();
         driver.report(&mut |line| {
@@ -1162,15 +1099,14 @@ fn report_uses_live_exposure_and_first_person_options() {
     assert!(pipeline_report().contains("exposure=auto first_person_zero=0"));
 }
 
-extern "C" fn retain_timer(device: *mut c_void) -> *mut c_void {
+pub(crate) extern "C" fn retain_timer(device: *mut c_void) -> *mut c_void {
     device
 }
-extern "C" fn create_timer_query(device: *mut c_void, _: bool) -> *mut c_void {
+pub(crate) extern "C" fn create_timer_query(device: *mut c_void, _: bool) -> *mut c_void {
     device
 }
-extern "C" fn issue_timer_query(_: *mut c_void, _: *mut c_void, _: bool) {}
-extern "C" fn release_timer(_: *mut c_void) {}
-unsafe extern "C" fn timer_clock(
+pub(crate) extern "C" fn issue_timer_query(_: *mut c_void, _: *mut c_void, _: bool) {}
+pub(crate) unsafe extern "C" fn timer_clock(
     _: *mut c_void,
     _: *mut c_void,
     hz: *mut u64,
@@ -1182,7 +1118,7 @@ unsafe extern "C" fn timer_clock(
     };
     fake(|f| f.timer_result)
 }
-unsafe extern "C" fn timer_timestamp(_: *mut c_void, _: *mut c_void, ticks: *mut u64) -> i32 {
+pub(crate) unsafe extern "C" fn timer_timestamp(_: *mut c_void, _: *mut c_void, ticks: *mut u64) -> i32 {
     let tick = fake(|f| {
         f.timer_tick += 2;
         f.timer_tick
@@ -1193,14 +1129,9 @@ unsafe extern "C" fn timer_timestamp(_: *mut c_void, _: *mut c_void, ticks: *mut
 
 #[test]
 fn report_emits_deltas_and_survives_a_timer_reset() {
-    let mut table = platform();
-    table.release = Some(release_timer);
-    table.timer_retain_device = Some(retain_timer);
-    table.timer_create_query = Some(create_timer_query);
-    table.timer_issue = Some(issue_timer_query);
-    table.timer_clock = Some(timer_clock);
-    table.timer_timestamp = Some(timer_timestamp);
-    let driver = installed(3, &table);
+    fake(|f| f.timers = true);
+    let table = BOUND;
+    let driver = installed(3);
     driver.frame_end();
     let current = device();
     driver.with(|state| {
@@ -1226,37 +1157,9 @@ fn report_emits_deltas_and_survives_a_timer_reset() {
 }
 
 #[test]
-fn missing_native_guard_refuses_before_hook_installation() {
-    let mut table = platform();
-    table.verify_guards = None;
-    let driver = Stage::new();
-    driver.register(&*table);
-    let config = Config {
-        stage: 3,
-        ..default_config()
-    };
-    assert!(driver.configure(&config, Paths::default(), Some(log), null_mut()));
-    calls();
-    assert!(!driver.install(0x10000 as *mut c_void, 64, 64, 0x20 as *const c_void));
-    assert!(!driver.active());
-    assert!(calls().is_empty());
-    assert!(fake(|f| f
-        .logs
-        .iter()
-        .any(|line| line.contains("guard verification unavailable"))));
-}
-
-#[test]
 fn timer_retires_failed_queries_and_keeps_pending_samples() {
-    let table = Platform {
-        release: Some(release_timer),
-        timer_retain_device: Some(retain_timer),
-        timer_create_query: Some(create_timer_query),
-        timer_issue: Some(issue_timer_query),
-        timer_clock: Some(timer_clock),
-        timer_timestamp: Some(timer_timestamp),
-        ..Default::default()
-    };
+    fake(|f| f.timers = true);
+    let table = BOUND;
     let mut timer = gpu_timer::Timer::default();
     let device = device();
     let issue = |timer: &mut gpu_timer::Timer| {
@@ -1283,9 +1186,8 @@ fn timer_retires_failed_queries_and_keeps_pending_samples() {
 #[cfg(windows)]
 #[test]
 fn the_cold_entry_keeps_only_a_selected_configuration() {
-    let table = platform();
     let driver = Stage::new();
-    driver.register(&*table);
+    driver.bind();
     calls();
     let ini = units(Path::new(r"D:\Anomaly\bin\rsf.ini"));
     assert!(!unsafe {
@@ -1308,9 +1210,8 @@ fn the_cold_entry_keeps_only_a_selected_configuration() {
 #[cfg(windows)]
 #[test]
 fn vendor_directories_default_beside_the_ini_and_follow_overrides() {
-    let table = platform();
     let driver = Stage::new();
-    driver.register(&*table);
+    driver.bind();
     calls();
     fake(|f| {
         f.ini = vec![("SRStage", "5"), ("SRBackend", "5"), ("SRExposure", "auto")];
@@ -1341,9 +1242,8 @@ fn vendor_directories_default_beside_the_ini_and_follow_overrides() {
 
 #[test]
 fn a_device_reset_rereads_srscale_from_the_kept_ini() {
-    let table = platform();
     let driver = Stage::new();
-    driver.register(&*table);
+    driver.bind();
     fake(|f| {
         f.hooks_created = false;
         f.generation = 1;
@@ -1362,7 +1262,7 @@ fn a_device_reset_rereads_srscale_from_the_kept_ini() {
     let reread = "Anomaly SR stage 2: SRScale 0.500 -> 0.750 after a device reset.";
     assert!(fake(|f| f.logs.iter().any(|l| l == reread)));
     // A stage configured without an INI keeps its scale.
-    let other = installed(2, &table);
+    let other = installed(2);
     fake(|f| {
         f.logs.clear();
         f.generation = 3;
@@ -1444,9 +1344,8 @@ fn live_options_keep_their_panel_labels_and_ranges() {
     // Each getter reads its own live value of the process stage (the INI defaults until configured).
     let values = options.map(|o| unsafe { o.get.unwrap()() });
     assert_eq!(values, [1, 0, 1, 1, 1, 0, 67, 600, 3, 300, 40, 450, 0]);
-    let table = platform();
     let driver = Stage::new();
-    driver.register(&*table);
+    driver.bind();
     let mip = &options[5];
     for value in [mip.minimum, 5, mip.maximum] {
         driver.set_option(RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET, value);
@@ -1458,7 +1357,6 @@ fn live_options_keep_their_panel_labels_and_ranges() {
 #[cfg(windows)]
 mod win32 {
     use super::*;
-    use crate::ini::{rsf_anomaly_sr_ini_int as ini_int, rsf_anomaly_sr_ini_text as ini_text};
     #[test]
     fn scalar_options_through_the_production_win32_reader() {
         use windows_sys::core::w;
@@ -1469,13 +1367,9 @@ mod win32 {
         std::fs::write(&path, "[Anomaly]\r\n").unwrap();
         let units = units(&path);
         let terminated: Vec<u16> = units.iter().copied().chain([0]).collect();
-        let table = Platform {
-            ini_int: Some(ini_int),
-            ini_text: Some(ini_text),
-            ..Default::default()
-        };
         let stage = Stage::new();
-        stage.register(&table);
+        stage.bind();
+        fake(|f| f.production_ini = true);
         let set = |key, value| {
             assert!(unsafe { crate::ini::write_text(terminated.as_ptr(), key, value) });
         };
@@ -1631,13 +1525,9 @@ mod win32 {
         std::fs::create_dir_all(&package).unwrap();
         let ini = root.join("rsf.ini");
         std::fs::write(&ini, "[Anomaly]\r\nSRStage=5\r\n").unwrap();
-        let table = Platform {
-            ini_int: Some(ini_int),
-            ini_text: Some(ini_text),
-            ..Default::default()
-        };
         let driver = Stage::new();
-        driver.register(&table);
+        driver.bind();
+        fake(|f| f.production_ini = true);
         let path = units(&ini);
         assert!(driver.configure_ini(&path, true, None, null_mut()));
         driver.with(|state| {
@@ -1659,4 +1549,111 @@ mod win32 {
         });
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+/// The stage's leaves under test (`sr_stage::leaves`): the recording fakes above, the burst readback fakes of the
+/// staging tests, and refusals for the leaves no test drives.
+pub(crate) mod leaves {
+    use super::*;
+    pub(crate) use super::{
+        apply_colour_transport, configured, context, context as depth_texture, controller,
+        controller_frame_end as frame_end, create_motion_view, device, device_size, draw_pass,
+        driver_bind, driver_boundary, driver_count_prepared, driver_enabled, driver_evaluate,
+        driver_fallback, driver_stop, engine_frame, frame_facts, geometry_active, hooks_created,
+        host_reset, install_hooks, install_position_slot, loading_registered,
+        motion_target, now, persist_int, persist_text, precache_frame, prepare, read_camera,
+        release_view as release, remove_hooks, render_target, set_engine, set_rm_near,
+        set_swap_enabled, shutdown, temporal_ready, verify_guards,
+    };
+    pub(crate) use crate::sr_stage::staging::tests::{
+        context_device, copy_subresource, immediate_context, map_read, pixel_bytes, unmap,
+    };
+    pub(crate) use crate::sr_temporal::report_fixture as driver_report;
+    use std::ptr::null;
+
+    /// The INI reads: the fake map, or the production Win32 reader for the tests that set `production_ini`.
+    pub(crate) unsafe extern "C" fn ini_int(ini: *const c_void, key: *const c_char, fallback: i32) -> i32 {
+        if fake(|f| f.production_ini) {
+            unsafe { crate::ini::rsf_anomaly_sr_ini_int(ini, key, fallback) }
+        } else {
+            unsafe { super::ini_int(ini, key, fallback) }
+        }
+    }
+    pub(crate) unsafe extern "C" fn ini_text(
+        ini: *const c_void,
+        key: *const c_char,
+        fallback: *const c_char,
+        out: *mut u16,
+        capacity: u32,
+    ) -> u32 {
+        if fake(|f| f.production_ini) {
+            unsafe { crate::ini::rsf_anomaly_sr_ini_text(ini, key, fallback, out, capacity) }
+        } else {
+            unsafe { super::ini_text(ini, key, fallback, out, capacity) }
+        }
+    }
+
+    pub(crate) fn close_stale() {
+        if fake(|f| f.close_stale) {
+            super::close_stale();
+        }
+    }
+    pub(crate) fn timer_retain_device(device: *mut c_void) -> *mut c_void {
+        if fake(|f| f.timers) { retain_timer(device) } else { null_mut() }
+    }
+    pub(crate) fn timer_create_query(device: *mut c_void, disjoint: bool) -> *mut c_void {
+        if fake(|f| f.timers) { create_timer_query(device, disjoint) } else { null_mut() }
+    }
+    pub(crate) fn timer_issue(context: *mut c_void, query: *mut c_void, begin: bool) {
+        if fake(|f| f.timers) {
+            issue_timer_query(context, query, begin);
+        }
+    }
+    pub(crate) unsafe fn timer_clock(
+        context: *mut c_void,
+        query: *mut c_void,
+        frequency: *mut u64,
+        disjoint: *mut bool,
+    ) -> i32 {
+        if fake(|f| f.timers) { unsafe { super::timer_clock(context, query, frequency, disjoint) } } else { -1 }
+    }
+    pub(crate) unsafe fn timer_timestamp(context: *mut c_void, query: *mut c_void, ticks: *mut u64) -> i32 {
+        if fake(|f| f.timers) { unsafe { super::timer_timestamp(context, query, ticks) } } else { -1 }
+    }
+
+    // No test drives these; they answer as an absent leaf did.
+    pub(crate) fn back_buffer() -> *mut c_void {
+        null_mut()
+    }
+    pub(crate) fn build_sha256() -> *const c_char {
+        null()
+    }
+    pub(crate) fn seam_surface(_: *mut c_void) -> *mut c_void {
+        null_mut()
+    }
+    pub(crate) fn prepared() {}
+    pub(crate) fn swap_handle() -> *mut c_void {
+        null_mut()
+    }
+    pub(crate) fn combine_end() {}
+    pub(crate) fn rm_near() {}
+    pub(crate) fn sun_begin() -> bool {
+        false
+    }
+    pub(crate) fn sun_end(_: bool) {}
+    pub(crate) fn position_setup(_: *mut c_void) {}
+    pub(crate) fn swap_counters(_: *mut rsf_anomaly_sr_swap_counters) {}
+    pub(crate) fn host_stats(_: *mut u64, _: *mut u64) {}
+    pub(crate) fn disable_hooks() {}
+    pub(crate) fn driver_output_format() -> u32 {
+        0
+    }
+    pub(crate) fn driver_planned(_: u32, _: u32, _: *mut u32, _: *mut u32) -> bool {
+        false
+    }
+    pub(crate) fn driver_request_dump(_: *const c_char) -> bool {
+        false
+    }
+    pub(crate) fn driver_overlay_report(_: *mut c_void) {}
+    pub(crate) fn driver_request(_: *const rsf_anomaly_sr_settings) {}
 }

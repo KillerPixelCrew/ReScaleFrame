@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{Draw, Extent, Log, PREPARE, Platform, Ptr, REINSERT, ROUND_TRIP, UPSCALE};
+use super::{Draw, Extent, Log, PREPARE, Ptr, REINSERT, ROUND_TRIP, UPSCALE, d3d, lease};
 use crate::lease::Lease;
 use std::ffi::CStr;
 use std::ptr::{NonNull, null_mut};
@@ -50,12 +50,11 @@ struct States {
 }
 
 impl States {
-    fn new(platform: &Platform, device: Ptr, write_depth: bool) -> Option<Self> {
+    fn new(device: Ptr, write_depth: bool) -> Option<Self> {
         Some(Self {
-            raster: platform.lease(unsafe { (platform.raster_state)(device) })?,
-            blend: platform.lease(unsafe { (platform.blend_state)(device) })?,
-            depth: platform
-                .lease(unsafe { (platform.depth_state)(device, u32::from(write_depth)) })?,
+            raster: lease(unsafe { d3d::raster_state(device) })?,
+            blend: lease(unsafe { d3d::blend_state(device) })?,
+            depth: lease(unsafe { d3d::depth_state(device, u32::from(write_depth)) })?,
         })
     }
 }
@@ -68,21 +67,20 @@ struct TemporalPass {
 }
 
 #[derive(Clone, Copy)]
-struct Compiler<'a> {
-    platform: &'a Platform,
+struct Compiler {
     device: Ptr,
     source: u32,
     log: Log,
     user: Ptr,
 }
 
-impl Compiler<'_> {
+impl Compiler {
     // A normal compile failure disables the optional temporal passes. A native
     // exception has always made the entire pass creation fail.
     fn shader(self, vertex: bool, entry: &CStr) -> Result<Option<Lease>, ()> {
         let mut shader = null_mut();
         let result = unsafe {
-            (self.platform.shader)(
+            d3d::shader(
                 self.device,
                 self.source,
                 u32::from(vertex),
@@ -92,7 +90,7 @@ impl Compiler<'_> {
                 &mut shader,
             )
         };
-        let lease = self.platform.lease(shader);
+        let lease = lease(shader);
         match result {
             1 => Ok(lease),
             0 => Ok(None),
@@ -101,8 +99,7 @@ impl Compiler<'_> {
     }
 
     fn constants(self) -> Option<Lease> {
-        self.platform
-            .lease(unsafe { (self.platform.constant_buffer)(self.device) })
+        lease(unsafe { d3d::constant_buffer(self.device) })
     }
 
     fn temporal(self) -> Result<Option<TemporalPass>, ()> {
@@ -115,9 +112,7 @@ impl Compiler<'_> {
         let Some(constants) = self.constants() else {
             return Ok(None);
         };
-        let Some(no_depth) = self
-            .platform
-            .lease(unsafe { (self.platform.depth_state)(self.device, 0) })
+        let Some(no_depth) = lease(unsafe { d3d::depth_state(self.device, 0) })
         else {
             return Ok(None);
         };
@@ -131,7 +126,6 @@ impl Compiler<'_> {
 }
 
 pub(crate) struct Pass {
-    platform: &'static Platform,
     pub(super) kind: u32,
     vertex: Lease,
     pixel: Lease,
@@ -143,42 +137,40 @@ pub(crate) struct Pass {
 
 // The draw is synchronous. The COM context is borrowed from the calling render
 // thread until the last touched binding and predicate have been restored.
-struct SavedState<'a> {
-    platform: &'a Platform,
+struct SavedState {
     context: Ptr,
     snapshot: NonNull<std::ffi::c_void>,
 }
 
-impl<'a> SavedState<'a> {
-    fn new(platform: &'a Platform, context: Ptr) -> Option<Self> {
-        let snapshot = unsafe { (platform.save_state)(context) };
+impl SavedState {
+    fn new(context: Ptr) -> Option<Self> {
+        let snapshot = unsafe { d3d::save_state(context) };
         Some(Self {
-            platform,
             context,
             snapshot: NonNull::new(snapshot)?,
         })
     }
 
     fn constants(&self, buffer: &Lease, values: [u32; 4]) {
-        unsafe { (self.platform.update_constants)(self.context, buffer.as_ptr(), values.as_ptr()) };
+        unsafe { d3d::update_constants(self.context, buffer.as_ptr(), values.as_ptr()) };
     }
 
     fn targets(&self, targets: &[Ptr], depth: Ptr) {
         unsafe {
-            (self.platform.targets)(self.context, targets.len() as u32, targets.as_ptr(), depth)
+            d3d::targets(self.context, targets.len() as u32, targets.as_ptr(), depth)
         };
     }
 
     fn resources(&self, slot: u32, inputs: &[Ptr]) {
         unsafe {
-            (self.platform.ps_resources)(self.context, slot, inputs.len() as u32, inputs.as_ptr())
+            d3d::ps_resources(self.context, slot, inputs.len() as u32, inputs.as_ptr())
         };
     }
 }
 
-impl Drop for SavedState<'_> {
+impl Drop for SavedState {
     fn drop(&mut self) {
-        unsafe { (self.platform.restore_state)(self.context, self.snapshot.as_ptr()) };
+        unsafe { d3d::restore_state(self.context, self.snapshot.as_ptr()) };
     }
 }
 
@@ -189,7 +181,6 @@ impl Pass {
     }
 
     pub(super) fn new(
-        platform: &'static Platform,
         device: Ptr,
         kind: u32,
         log: Log,
@@ -204,7 +195,6 @@ impl Pass {
             _ => return None,
         };
         let compiler = Compiler {
-            platform,
             device,
             source: kind,
             log,
@@ -213,22 +203,21 @@ impl Pass {
         let vertex = compiler.shader(true, vs).ok()??;
         let pixel = compiler.shader(false, ps).ok()??;
         let constants = compiler.constants()?;
-        let states = States::new(platform, device, kind == UPSCALE)?;
+        let states = States::new(device, kind == UPSCALE)?;
         let temporal = if kind == UPSCALE {
             compiler.temporal().ok()?
         } else {
             None
         };
-        unsafe { (platform.retain)(device) };
+        unsafe { d3d::retain(device) };
         Some(Self {
-            platform,
             kind,
             vertex,
             pixel,
             constants,
             states,
             temporal,
-            device: platform.lease(device)?,
+            device: lease(device)?,
         })
     }
 
@@ -238,9 +227,9 @@ impl Pass {
         size: Extent,
         pixel: &Lease,
         depth: &Lease,
-        bind: impl FnOnce(&SavedState<'_>),
+        bind: impl FnOnce(&SavedState),
     ) -> bool {
-        let Some(state) = SavedState::new(self.platform, context) else {
+        let Some(state) = SavedState::new(context) else {
             return false;
         };
         state.resources(0, &[null_mut(); 4]);
@@ -254,7 +243,7 @@ impl Pass {
             depth: depth.as_ptr(),
             size,
         };
-        unsafe { (self.platform.draw)(context, &draw) };
+        unsafe { d3d::draw(context, &draw) };
         true
     }
 
@@ -299,7 +288,7 @@ impl Pass {
             &temporal.no_depth,
             |state| {
                 state.constants(&temporal.constants, values);
-                unsafe { (self.platform.ps_constant)(context, 1, temporal.constants.as_ptr()) };
+                unsafe { d3d::ps_constant(context, 1, temporal.constants.as_ptr()) };
                 state.targets(&views.targets[..2], null_mut());
                 state.resources(0, &[null_mut(); 6]);
                 state.resources(0, &views.inputs[0..1]);
@@ -332,7 +321,7 @@ impl Pass {
         self.draw(context, views.output, pixel, &self.states.depth, |state| {
             state.constants(&self.constants, views.sizes());
             // The world stencil is internal to the reduced render window.
-            unsafe { (self.platform.clear_stencil)(context, views.depth) };
+            unsafe { d3d::clear_stencil(context, views.depth) };
             state.targets(&views.targets, views.depth);
             state.resources(0, inputs);
         })

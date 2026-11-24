@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{DEPTH_SRV, DSV, Extent, Platform, Ptr, RTV, SRV, Texture, UAV, View, pointer};
+use super::{DEPTH_SRV, DSV, Extent, Ptr, RTV, SRV, Texture, UAV, View, d3d, lease, pointer};
 use crate::lease::Lease;
 use crate::sys::{
     RSF_ANOMALY_SWAP_MAKE_DEPTH, RSF_ANOMALY_SWAP_MAKE_FAILED, RSF_ANOMALY_SWAP_MAKE_REFUSED,
@@ -151,32 +151,31 @@ impl Texture {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Device<'a> {
-    pub(super) platform: &'a Platform,
+pub(super) struct Device {
     pub(super) handle: Ptr,
 }
 
-impl Device<'_> {
+impl Device {
     fn texture(self, desc: &Texture, data: *const c_void, pitch: u32) -> Result<Lease, Error> {
-        let reference = unsafe { (self.platform.texture)(self.handle, desc, data, pitch) };
-        self.platform.lease(reference).ok_or(Error::Create)
+        let reference = unsafe { d3d::texture(self.handle, desc, data, pitch) };
+        lease(reference).ok_or(Error::Create)
     }
 
     fn view(self, texture: &Lease, kind: u32, template: Option<&View>) -> Result<Lease, Error> {
         let reference =
-            unsafe { (self.platform.view)(self.handle, texture.as_ptr(), kind, template) };
-        self.platform.lease(reference).ok_or(Error::Create)
+            unsafe { d3d::view(self.handle, texture.as_ptr(), kind, template) };
+        lease(reference).ok_or(Error::Create)
     }
 
     fn describe(self, texture: &Lease) -> Texture {
         let mut desc = Texture::default();
-        unsafe { (self.platform.describe_texture)(texture.as_ptr(), &mut desc) };
+        unsafe { d3d::describe_texture(texture.as_ptr(), &mut desc) };
         desc
     }
 
     fn view_info(self, view: Ptr, kind: u32) -> View {
         let mut desc = View::default();
-        unsafe { (self.platform.describe_view)(view, kind, &mut desc) };
+        unsafe { d3d::describe_view(view, kind, &mut desc) };
         desc
     }
 
@@ -184,8 +183,7 @@ impl Device<'_> {
         if resource.is_null() {
             return None;
         }
-        self.platform
-            .lease(unsafe { (self.platform.as_texture)(resource) })
+        lease(unsafe { d3d::as_texture(resource) })
     }
 
     pub(super) fn twin(self, input: &TwinInput) -> Result<(Target, Texture, u32), Error> {
@@ -212,7 +210,7 @@ impl Device<'_> {
             if !UNORM8.contains(&desc.format) {
                 return Err(Error::Format);
             }
-            let support = unsafe { (self.platform.format_support)(self.handle, RGBA16F) };
+            let support = unsafe { d3d::format_support(self.handle, RGBA16F) };
             let needed = PROMOTED_SUPPORT | if with_uav { SUPPORT_UAV } else { 0 };
             if support & needed != needed {
                 return Err(Error::Support);
@@ -267,9 +265,7 @@ impl Device<'_> {
         if view.format != D24_UNORM_S8_UINT || view.texture2d == 0 || view.flags != 0 {
             return Err(Error::Depth);
         }
-        let resource = self
-            .platform
-            .lease(unsafe { (self.platform.view_resource)(engine) })
+        let resource = lease(unsafe { d3d::view_resource(engine) })
             .ok_or(Error::Depth)?;
         let texture = self.query_texture(resource.as_ptr()).ok_or(Error::Depth)?;
         let desc = self.describe(&texture);
@@ -344,13 +340,12 @@ fn bytes_of(description: Texture) -> u64 {
 }
 
 pub(super) fn allocate_twins(
-    platform: &Platform,
     handle: Ptr,
     request: &Request,
     out: &mut Twins,
     info: &mut TwinBatchInfo,
 ) -> Result<TwinBatch, u32> {
-    let device = Device { platform, handle };
+    let device = Device { handle };
     let mut batch = TwinBatch {
         slots: [const { None }; TWIN_SLOTS],
         depth: None,
@@ -513,7 +508,6 @@ fn zero_layout(render: Extent) -> Result<(u32, usize), Error> {
 
 impl TemporalTargets {
     pub(crate) fn new(
-        platform: &'static Platform,
         handle: Ptr,
         render: Extent,
         output_size: Extent,
@@ -523,7 +517,7 @@ impl TemporalTargets {
             return Err(Error::Shape);
         }
         let (pitch, words) = zero_layout(render)?;
-        let device = Device { platform, handle };
+        let device = Device { handle };
         let mut desc = Texture::target(render, RGBA16F, COLOUR_BINDINGS);
         let colour = device.texture(&desc, null(), 0)?;
         let motion = device.texture(&desc, null(), 0)?;

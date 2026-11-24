@@ -262,7 +262,7 @@ fn compare(d: &Device, outputs: &Outputs, targets: &TemporalTargets) -> (f64, f6
     (sum / f64::from(samples), worst)
 }
 
-pub(super) fn run(platform: &'static Platform, root: &OsStr) -> bool {
+pub(super) fn run(root: &OsStr) -> bool {
     let Some(d) = Device::hardware(0x10de, false) else {
         println!("SKIP provider: no NVIDIA D3D11 adapter for the DLSS-first fixture");
         return false;
@@ -289,7 +289,7 @@ pub(super) fn run(platform: &'static Platform, root: &OsStr) -> bool {
     let context = d.context.as_raw();
     driver.boundary(device, OUTPUT);
     assert!(driver.running().0);
-    let pass = make_pass(&d, platform);
+    let pass = make_pass(&d);
     let outputs = Outputs::new(&d, OUTPUT);
     let proj = projection(OUTPUT[0] as f32 / OUTPUT[1] as f32);
     let camera = camera(view_at(0.), proj);
@@ -320,9 +320,7 @@ pub(super) fn run(platform: &'static Platform, root: &OsStr) -> bool {
             continue;
         }
         let size = driver.plan(OUTPUT).unwrap();
-        let targets = TemporalTargets::new(
-            platform,
-            device,
+        let targets = TemporalTargets::new(device,
             extent(size),
             extent(OUTPUT),
             driver.output_format(),

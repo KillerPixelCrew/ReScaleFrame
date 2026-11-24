@@ -5,8 +5,8 @@
 // (staging.rs), the configuration (the [Anomaly] keys,
 // the INI path, the vendor directories, the live panel options), GPU query retirement and the
 // status text.
-// sr_stage/native.rs builds the production leaf table over the Rust profile records and the C11 leaf
-// (sr_stage_platform.c): guarded engine reads, the trampolines and the game-owned resource callbacks.
+// The leaves are sr_stage/native.rs over the Rust profile records, the C11 leaf (sr_stage_platform.c: guarded engine
+// reads, the trampolines and the game-owned resource callbacks) and the Rust temporal driver; the fakes under test.
 #[cfg(all(windows, feature = "sr-fixtures"))]
 mod jitter_device;
 pub(crate) mod math;
@@ -23,8 +23,7 @@ use crate::frame_dump::{DumpApi, anomaly_directory};
 use crate::lease::Lease;
 use crate::native_geometry_abi::SCOPE;
 use crate::sr_d3d11::{
-    DrawViews, Extent, PREPARE, Platform as D3d11Platform, REINSERT, ROUND_TRIP, TemporalTargets,
-    UPSCALE,
+    DrawViews, Extent, PREPARE, REINSERT, ROUND_TRIP, TemporalTargets, UPSCALE,
 };
 #[cfg(any(windows, test))]
 use crate::sr_temporal::Admit;
@@ -43,7 +42,7 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 const PHASE_RENDER_SUBMIT: u32 = 2;
@@ -82,7 +81,17 @@ const OPTION_CUT_DISTANCE: u32 = 10;
 const OPTION_CUT_ANGLE: u32 = 11;
 const OPTION_REQUIRE_SIGNATURE: u32 = 12;
 
-type Platform = rsf_anomaly_sr_stage_platform;
+// The stage's leaves: sr_stage/native.rs in production, the recording fakes under test.
+#[cfg(not(test))]
+pub(crate) use self::native::leaves;
+#[cfg(test)]
+pub(crate) use self::tests::leaves;
+
+/// Whether a stage's leaves are bound. The native configure and install entries bind the production stage (a test
+/// binds its own); until then every leaf answers with a refusal.
+struct Platform {
+    bound: bool,
+}
 type Config = rsf_anomaly_sr_stage_config;
 type JitterState = rsf_anomaly_sr_jitter_state;
 
@@ -94,7 +103,7 @@ pub(crate) struct OverlayChoices {
     pub defaults: rsf_anomaly_sr_settings,
 }
 
-// A missing native leaf answers with a refusal: null, zero or false.
+// A leaf of an unbound stage answers with a refusal: null, zero or false.
 trait Refused {
     fn refused() -> Self;
 }
@@ -107,10 +116,13 @@ refused!(() => (), bool => false, u32 => 0, i32 => 0, u64 => 0, f32 => 0.0,
 
 macro_rules! leaf {
     ($p:expr, $name:ident($($arg:expr),* $(,)?)) => {
-        match $p.$name {
+        if $p.bound {
             // The native leaves are noexcept functions with exactly these C signatures.
-            Some(call) => unsafe { call($($arg),*) },
-            None => Refused::refused(),
+            #[allow(unused_unsafe)]
+            let value = unsafe { $crate::sr_stage::leaves::$name($($arg),*) };
+            value
+        } else {
+            Refused::refused()
         }
     };
 }
@@ -585,7 +597,7 @@ struct Live {
 }
 
 pub(crate) struct Stage {
-    platform: AtomicPtr<Platform>,
+    bound: AtomicBool,
     state: LazyLock<Mutex<State>>,
     active: AtomicBool,
     // The configured stage and SRStageCapture, read without the stage lock by the overlay's report and request paths,
@@ -697,7 +709,7 @@ fn on(value: bool) -> &'static str {
 impl Stage {
     pub(crate) const fn new() -> Self {
         Self {
-            platform: AtomicPtr::new(null_mut()),
+            bound: AtomicBool::new(false),
             state: LazyLock::new(|| Mutex::new(State::default())),
             active: AtomicBool::new(false),
             stage: AtomicU32::new(0),
@@ -719,19 +731,18 @@ impl Stage {
         }
     }
 
-    fn platform(&self) -> &Platform {
-        static NONE: Platform = unsafe { std::mem::zeroed() };
-        let table = self.platform.load(Ordering::Acquire);
-        // The registered table is a static native table that lives for the process.
-        if table.is_null() {
-            &NONE
+    fn platform(&self) -> &'static Platform {
+        static BOUND: Platform = Platform { bound: true };
+        static UNBOUND: Platform = Platform { bound: false };
+        if self.bound.load(Ordering::Acquire) {
+            &BOUND
         } else {
-            unsafe { &*table }
+            &UNBOUND
         }
     }
 
-    pub(crate) fn register(&self, table: *const Platform) {
-        self.platform.store(table.cast_mut(), Ordering::Release);
+    pub(crate) fn bind(&self) {
+        self.bound.store(true, Ordering::Release);
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -1142,22 +1153,17 @@ impl Stage {
         }
         // A re-start after quiesce finds our own detours in place of the guarded bytes; the first install verified them.
         if !created {
-            let Some(verify) = p.verify_guards else {
+            if !p.bound {
                 self.say(
                     state,
                     "Anomaly SR stage refused: guard verification unavailable.",
                 );
                 return false;
-            };
-            let failed = unsafe {
-                verify(
-                    module,
-                    image_size,
-                    build,
-                    world_window(stage),
-                    temporal(stage),
-                )
-            };
+            }
+            let failed = leaf!(
+                p,
+                verify_guards(module, image_size, build, world_window(stage), temporal(stage))
+            );
             if !failed.is_null() {
                 // The leaf returns an immutable site name from the profile tables.
                 let name = unsafe { CStr::from_ptr(failed) }.to_string_lossy();
@@ -1928,8 +1934,10 @@ impl Stage {
     }
 
     fn own(&self, handle: *mut c_void) -> Option<GpuLease> {
-        let release = self.platform().release?;
-        Lease::new(handle, release).map(GpuLease)
+        if !self.platform().bound {
+            return None;
+        }
+        Lease::new(handle, leaves::release).map(GpuLease)
     }
 
     fn motion_view(
@@ -1946,11 +1954,11 @@ impl Stage {
         }
         state.motion_view = None;
         let p = self.platform();
-        let Some(release) = p.release else {
+        if !p.bound {
             return null_mut();
-        };
+        }
         let handle = leaf!(p, create_motion_view(device, texture));
-        if let Some(view) = Lease::new(handle, release) {
+        if let Some(view) = Lease::new(handle, leaves::release) {
             state.motion_view = Some(MotionView {
                 device: Raw(device),
                 texture: Raw(texture),
@@ -2007,11 +2015,10 @@ impl Stage {
         {
             // The old targets are only valid for their old shape. Free them before allocating replacements.
             state.temporal_targets = None;
-            let platform = leaf!(p, temporal_platform()).cast::<D3d11Platform>();
-            // This leaf returns the process-lifetime table registered by sr_d3d11_platform.c.
-            state.temporal_targets = unsafe { platform.as_ref() }.and_then(|platform| {
-                TemporalTargets::new(platform, device, render, output, format).ok()
-            });
+            state.temporal_targets = p
+                .bound
+                .then(|| TemporalTargets::new(device, render, output, format).ok())
+                .flatten();
             let text = format!(
                 "Anomaly SR stage {stage}: SR input targets {} at render {rw}x{rh}, output {ow}x{oh} (format {format}).",
                 if state.temporal_targets.is_some() {

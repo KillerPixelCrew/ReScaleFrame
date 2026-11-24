@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 /* Private x64 ABI between the Rust SR owners and the D3D11 leaves. Rust (sr_d3d11.rs and sr_d3d11/native.rs) owns
-   twin creation, the passes and the typed COM calls; sr_d3d11_platform.c supplies the four foreign leaves below and
+   twin creation, the passes and the typed COM calls; sr_d3d11_platform.c supplies the pipeline-state snapshot and
    checks the descriptor layouts against the Windows SDK. */
 #include <stdbool.h>
 #include <stdint.h>
@@ -38,43 +38,9 @@ typedef struct rsf_sr_draw {
     void *vertex, *pixel, *constants, *raster, *blend, *depth;
     rsf_sr_extent size;
 } rsf_sr_draw;
-/* A non-null COM result transfers one reference. The draw callbacks borrow
-   the context, bindings and constants for the duration of the call. */
-typedef struct rsf_sr_d3d11 {
-    void (*retain)(void*);
-    void (*release)(void*);
-    void* (*as_texture)(void*);
-    void* (*view_resource)(void*);
-    void* (*texture_device)(void*);
-    void (*describe_texture)(void*, rsf_sr_texture*);
-    void (*describe_view)(void*, uint32_t, rsf_sr_view*);
-    uint32_t (*format_support)(void*, uint32_t);
-    void* (*texture)(void*, const rsf_sr_texture*, const void*, uint32_t);
-    void* (*view)(void*, void*, uint32_t, const rsf_sr_view*);
-    /* Shader compilation returns 1 on success, 0 on refusal, and -1 on exception. */
-    int32_t (*shader)(void*, uint32_t, uint32_t, const char*, rsf_sr_log, void*, void**);
-    void* (*constant_buffer)(void*);
-    void* (*raster_state)(void*);
-    void* (*blend_state)(void*);
-    void* (*depth_state)(void*, uint32_t);
-    void* (*save_state)(void*);
-    void (*restore_state)(void*, void*);
-    void (*update_constants)(void*, void*, const uint32_t*);
-    void (*ps_constant)(void*, uint32_t, void*);
-    void (*targets)(void*, uint32_t, void* const*, void*);
-    void (*ps_resources)(void*, uint32_t, uint32_t, void* const*);
-    void (*clear_stencil)(void*, void*);
-    void (*draw)(void*, const rsf_sr_draw*);
-} rsf_sr_d3d11;
-
-/* The native leaves of the table. `default_view` creates a default shader view (an owned reference or null).
-   `save_state` returns an owned snapshot of the immediate-context pipeline or null; `restore_state` restores and
-   frees it. */
-typedef struct rsf_sr_d3d11_foreign {
-    void* (*default_view)(void* device, void* texture);
-    void* (*save_state)(void* context);
-    void (*restore_state)(void* context, void* snapshot);
-} rsf_sr_d3d11_foreign;
+/* An owned snapshot of the immediate-context pipeline or null; the restore frees it. */
+void* rsf_anomaly_sr_save_state(void* context) RSF_SR_D3D11_NOEXCEPT;
+void rsf_anomaly_sr_restore_state(void* context, void* snapshot) RSF_SR_D3D11_NOEXCEPT;
 
 typedef struct rsf_sr_twin_input {
     void *texture, *rtv, *srv, *uav;
@@ -107,12 +73,10 @@ typedef struct rsf_sr_draw_views {
 
 RSF_SR_D3D11_ASSERT(sizeof(rsf_sr_extent) == 8 && sizeof(rsf_sr_texture) == 44 && sizeof(rsf_sr_view) == 36,
     "SR D3D11 descriptor layout");
-RSF_SR_D3D11_ASSERT(sizeof(rsf_sr_draw) == 56 && sizeof(rsf_sr_d3d11) == 184 && sizeof(rsf_sr_draw_views) == 96,
-    "SR D3D11 table layout");
+RSF_SR_D3D11_ASSERT(sizeof(rsf_sr_draw) == 56 && sizeof(rsf_sr_draw_views) == 96, "SR D3D11 draw layout");
 RSF_SR_D3D11_ASSERT(sizeof(rsf_sr_twin_input) == 56 && sizeof(rsf_sr_target_view) == 96 &&
     sizeof(rsf_sr_temporal_view) == 88, "SR D3D11 target layout");
-RSF_SR_D3D11_ASSERT(sizeof(rsf_sr_twin_batch_info) == 24 && sizeof(rsf_sr_d3d11_foreign) == 24,
-    "SR D3D11 batch and foreign layout");
+RSF_SR_D3D11_ASSERT(sizeof(rsf_sr_twin_batch_info) == 24, "SR D3D11 batch layout");
 
 /* View kinds and pass kinds (sr_d3d11.rs). */
 #define RSF_SR_RTV 0u
@@ -125,14 +89,10 @@ RSF_SR_D3D11_ASSERT(sizeof(rsf_sr_twin_batch_info) == 24 && sizeof(rsf_sr_d3d11_
 #define RSF_SR_PREPARE 2u
 #define RSF_SR_REINSERT 3u
 
-/* The process-lifetime table. The first registration's foreign leaves are kept. */
-const rsf_sr_d3d11* rsf_anomaly_sr_d3d11_register(const rsf_sr_d3d11_foreign*) RSF_SR_D3D11_NOEXCEPT;
-/* The production table with the native leaves of sr_d3d11_platform.c. */
-const rsf_sr_d3d11* rsf_anomaly_sr_d3d11_platform(void) RSF_SR_D3D11_NOEXCEPT;
 /* The short name of a twin refusal cause (rsf_sr_twin_batch_info::cause). */
 const char* rsf_anomaly_sr_twin_error_name(uint8_t) RSF_SR_D3D11_NOEXCEPT;
 
-/* Typed Rust leaves used by the table. */
+/* Typed Rust leaves. */
 void rsf_anomaly_sr_retain(void*) RSF_SR_D3D11_NOEXCEPT;
 void rsf_anomaly_sr_release(void*) RSF_SR_D3D11_NOEXCEPT;
 void* rsf_anomaly_sr_as_texture(void*) RSF_SR_D3D11_NOEXCEPT;
@@ -172,7 +132,7 @@ void rsf_anomaly_sr_unmap(void*, void*, uint32_t) RSF_SR_D3D11_NOEXCEPT;
 uint32_t rsf_anomaly_sr_twin_refs(void*) RSF_SR_D3D11_NOEXCEPT;
 
 /* The swap host serializes access. Pass and depth pointers borrow the current resources. */
-uint32_t rsf_anomaly_sr_stage_make_twins(struct rsf_sr_stage_resources**, const rsf_sr_d3d11*, void*,
+uint32_t rsf_anomaly_sr_stage_make_twins(struct rsf_sr_stage_resources**, void*,
     const struct rsf_anomaly_swap_request*, struct rsf_anomaly_swap_twins*, rsf_sr_twin_batch_info*, rsf_sr_log,
     void*) RSF_SR_D3D11_NOEXCEPT;
 void rsf_anomaly_sr_stage_retire_twins(struct rsf_sr_stage_resources*, uint32_t (*refs)(void*)) RSF_SR_D3D11_NOEXCEPT;

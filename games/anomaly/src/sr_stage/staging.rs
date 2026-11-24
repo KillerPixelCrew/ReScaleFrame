@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 // Stage 3 burst readback: the staging copies of the seam twin and the back buffer, and their one-time map at the end.
 // Rust admits the context, source and device, writes the staging descriptor and names each subresource. The D3D11
-// facts come from the existing rsf_sr_d3d11 table (QueryInterface, GetDesc, GetDevice, CreateTexture2D); the stage
+// facts come from the typed D3D11 calls (sr_d3d11::d3d: QueryInterface, GetDesc, GetDevice, CreateTexture2D); the stage
 // leaves keep GetType, the context's GetDevice, the predicated CopySubresourceRegion, Map, Unmap and the DXGI size
 // table. The call order is that of the former sr_stage.cpp staging_copy and map_staging.
-use super::{GpuLease, Platform, Refused};
+use super::{GpuLease, Platform, Refused, leaves};
 use crate::lease::Lease;
-use crate::sr_d3d11::{Platform as D3d11Platform, Texture};
+use crate::sr_d3d11::{Texture, d3d, lease};
 use std::ffi::c_void;
 use std::ptr::null;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 // D3D11_USAGE_STAGING and D3D11_CPU_ACCESS_READ, checked against the SDK in sr_stage.cpp.
 const USAGE_STAGING: u32 = 3;
@@ -20,15 +20,9 @@ const CPU_ACCESS_READ: u32 = 0x2_0000;
 // the source, and the copy has one mip and one layer.
 const SUBRESOURCE: u32 = 0;
 
-fn d3d11(platform: &Platform) -> Option<&'static D3d11Platform> {
-    let table = leaf!(platform, temporal_platform()).cast::<D3d11Platform>();
-    // This leaf returns the process-lifetime table registered by sr_d3d11_platform.c.
-    unsafe { table.as_ref() }
-}
-
 // rsf::same_device: the texture's GetDevice result is the context's device.
-fn same_device(d3d: &D3d11Platform, texture: *mut c_void, device: &Lease) -> bool {
-    d3d.lease(unsafe { (d3d.texture_device)(texture) })
+fn same_device(texture: *mut c_void, device: &Lease) -> bool {
+    lease(unsafe { d3d::texture_device(texture) })
         .is_some_and(|owner| owner.as_ptr() == device.as_ptr())
 }
 
@@ -54,30 +48,22 @@ pub(super) fn copy(
     context: *mut c_void,
     source: *mut c_void,
 ) -> Option<GpuLease> {
-    let (Some(d3d), Some(copy_subresource)) = (d3d11(platform), platform.copy_subresource) else {
+    if !platform.bound {
         return None;
-    };
+    }
     if context.is_null() || source.is_null() || !leaf!(platform, immediate_context(context)) {
         return None;
     }
-    let texture = d3d.lease(unsafe { (d3d.as_texture)(source) })?;
+    let texture = lease(unsafe { d3d::as_texture(source) })?;
     let mut description = Texture::default();
-    unsafe { (d3d.describe_texture)(texture.as_ptr(), &mut description) };
+    unsafe { d3d::describe_texture(texture.as_ptr(), &mut description) };
     let description = readback(&description)?;
-    let device = d3d.lease(leaf!(platform, context_device(context)))?;
-    if !same_device(d3d, texture.as_ptr(), &device) {
+    let device = lease(leaf!(platform, context_device(context)))?;
+    if !same_device(texture.as_ptr(), &device) {
         return None;
     }
-    let copy = d3d.lease(unsafe { (d3d.texture)(device.as_ptr(), &description, null(), 0) })?;
-    unsafe {
-        copy_subresource(
-            context,
-            copy.as_ptr(),
-            SUBRESOURCE,
-            texture.as_ptr(),
-            SUBRESOURCE,
-        )
-    };
+    let copy = lease(unsafe { d3d::texture(device.as_ptr(), &description, null(), 0) })?;
+    leaf!(platform, copy_subresource(context, copy.as_ptr(), SUBRESOURCE, texture.as_ptr(), SUBRESOURCE));
     // The device and then the source reference drop here, as the former ComPtr locals did.
     Some(GpuLease(copy))
 }
@@ -95,7 +81,6 @@ pub(super) struct Layout {
 pub(super) struct Mapping<'a> {
     context: *mut c_void,
     texture: &'a GpuLease,
-    unmap: unsafe extern "C" fn(*mut c_void, *mut c_void, u32),
     pub(super) layout: Layout,
     data: *const c_void,
     row_pitch: u32,
@@ -122,7 +107,11 @@ impl Mapping<'_> {
 
 impl Drop for Mapping<'_> {
     fn drop(&mut self) {
-        unsafe { (self.unmap)(self.context, self.texture.0.as_ptr(), SUBRESOURCE) };
+        // A mapping exists only on a bound stage.
+        #[allow(unused_unsafe)]
+        unsafe {
+            leaves::unmap(self.context, self.texture.0.as_ptr(), SUBRESOURCE)
+        };
     }
 }
 
@@ -139,35 +128,32 @@ pub(super) fn map<'a>(
         format: 0,
         pixel_bytes: 0,
     };
-    let (Some(d3d), Some(map_read), Some(unmap)) =
-        (d3d11(platform), platform.map_read, platform.unmap)
-    else {
+    if !platform.bound {
         return (layout, None);
-    };
+    }
     let handle = texture.0.as_ptr();
     let mut description = Texture::default();
-    unsafe { (d3d.describe_texture)(handle, &mut description) };
+    unsafe { d3d::describe_texture(handle, &mut description) };
     layout.width = description.size.width;
     layout.height = description.size.height;
     layout.format = description.format;
     layout.pixel_bytes = leaf!(platform, pixel_bytes(description.format));
-    let device = d3d.lease(leaf!(platform, context_device(context)));
+    let device = lease(leaf!(platform, context_device(context)));
     if layout.pixel_bytes == 0
         || !leaf!(platform, immediate_context(context))
         || !device
             .as_ref()
-            .is_some_and(|device| same_device(d3d, handle, device))
+            .is_some_and(|device| same_device(handle, device))
     {
         return (layout, None);
     }
     let (mut data, mut row_pitch) = (null(), 0);
-    if !unsafe { map_read(context, handle, SUBRESOURCE, &mut data, &mut row_pitch) } {
+    if !leaf!(platform, map_read(context, handle, SUBRESOURCE, &mut data, &mut row_pitch)) {
         return (layout, None);
     }
     let mapping = Mapping {
         context,
         texture,
-        unmap,
         layout,
         data,
         row_pitch,

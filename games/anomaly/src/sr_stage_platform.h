@@ -186,134 +186,32 @@ typedef struct rsf_anomaly_sr_driver_config {
     const char* xess;
 } rsf_anomaly_sr_driver_config;
 
-typedef struct rsf_anomaly_sr_stage_platform {
-    // Guarded engine reads and engine identity.
-    void* (*render_target)(void);
-    void (*frame_facts)(bool world_window, bool temporal, rsf_anomaly_sr_frame_reads* out);
-    bool (*loading_registered)(uint8_t* registered);
-    bool (*precache_frame)(uint32_t* frame);
-    uint32_t (*engine_frame)(void);
-    void (*device_size)(uint32_t* width, uint32_t* height);
-    bool (*read_camera)(rsf_anomaly_sr_camera* out);
-    void* (*seam_surface)(void* target);
-    void* (*back_buffer)(void);   // an owned reference released through `release`
-    void* (*context)(void);
-    void* (*device)(void);
-    void (*now)(int64_t* counter, int64_t* frequency);
-    bool (*geometry_active)(void);
-    const char* (*build_sha256)(void);
-    // Scoped production swap owner (sr_swap.rs).
-    void (*close_stale)(void);
-    bool (*prepare)(const rsf_anomaly_sr_frame_facts*, rsf_anomaly_sr_log, void* log_user);
-    void (*prepared)(void);
-    void* (*swap_handle)(void);
-    void (*combine_end)(void);
-    void (*frame_end)(void);
-    void (*rm_near)(void);
-    bool (*sun_begin)(void);
-    void (*sun_end)(bool suspended);
-    void (*position_setup)(void* constant);
-    bool (*shutdown)(void);
-    void (*set_swap_enabled)(bool);
-    void (*controller)(rsf_anomaly_sr_controller*);
-    void (*swap_counters)(rsf_anomaly_sr_swap_counters*);
-    // GPU timestamp leaves. Device and query creation return owned references.
-    void* (*timer_retain_device)(void* device);
-    void* (*timer_create_query)(void* device, bool disjoint);
-    void (*timer_issue)(void* context, void* query, bool begin);
-    int32_t (*timer_clock)(void* context, void* query, uint64_t* frequency, bool* disjoint);
-    int32_t (*timer_timestamp)(void* context, void* query, uint64_t* ticks);
-    // D3D11 host. The seam calls act on the seam the controller is closing.
-    void (*host_stats)(uint64_t* twin_bytes, uint64_t* drop_refs);
-    void (*host_reset)(void);
-    // Stage 3 burst readback. Rust admits the context, source and device, describes the staging texture through the
-    // rsf_sr_d3d11 table and names each subresource; these leaves keep the typed context calls. `copy_subresource`
-    // clears predication around CopySubresourceRegion(destination, subresource, 0, 0, 0, source, subresource, null)
-    // and restores it. `map_read` is Map(D3D11_MAP_READ, no flags) and `pixel_bytes` the shared DXGI size table.
-    bool (*immediate_context)(void* context);
-    void* (*context_device)(void* context);   // an owned reference or null
-    void (*copy_subresource)(void* context, void* destination, uint32_t destination_subresource, void* source,
-        uint32_t source_subresource);
-    void (*release)(void*);
-    bool (*map_read)(void* context, void* texture, uint32_t subresource, const void** data, uint32_t* row_pitch);
-    void (*unmap)(void* context, void* texture, uint32_t subresource);
-    uint32_t (*pixel_bytes)(uint32_t format);
-    bool (*draw_pass)(uint32_t kind, const struct rsf_sr_draw_views*);
-    bool (*temporal_ready)(void);
-    const void* (*temporal_platform)(void);   // the static rsf_sr_d3d11 table
-    bool (*motion_target)(rsf_anomaly_sr_motion_target*);
-    void* (*create_motion_view)(void* device, void* texture);   // an owned reference or null
-    void* (*depth_texture)(void);   // borrowed by the seam
-    // Rust temporal owner. The production registration fills these slots and synthetic fixtures can supply fakes.
-    bool (*driver_bind)(void);
-    bool (*driver_enabled)(void);
-    uint32_t (*driver_output_format)(void);
-    bool (*driver_planned)(uint32_t output_width, uint32_t output_height, uint32_t* render_width, uint32_t* render_height);
-    void (*driver_boundary)(uint32_t output_width, uint32_t output_height);
-    bool (*driver_evaluate)(rsf_anomaly_sr_pass_inputs*, struct rsf_camera_frame*, uint32_t*);
-    bool (*driver_request_dump)(const char* prefix_utf8);
-    void (*driver_fallback)(uint8_t reason, bool drawn);
-    void (*driver_count_prepared)(bool motion_missing);
-    void (*driver_stop)(void);
-    void (*driver_report)(bool exposure_auto, bool first_person_zero, rsf_anomaly_sr_log, void*);
-    void (*driver_overlay_report)(void* report);
-    void (*driver_request)(const rsf_anomaly_sr_settings*);
-    // Install and quiesce.
-    const char* (*verify_guards)(void* module, uint32_t image_size, const void* build, bool world_window, bool temporal);
-    bool (*hooks_created)(void);
-    void (*set_engine)(void* module, const void* build, bool temporal);
-    bool (*install_hooks)(void);
-    bool (*install_position_slot)(void);
-    void (*disable_hooks)(void);
-    void (*set_rm_near)(bool);
-    bool (*remove_hooks)(void);
-    // Options: [Anomaly] INI reads (`ini` is a NUL-terminated UTF-16 path), persistence through the adapter option
-    // path, the Runtime's colour transport and a file probe for the vendor runtimes (a UTF-16 path).
-    int32_t (*ini_int)(const void* ini, const char* key, int32_t fallback);
-    uint32_t (*ini_text)(const void* ini, const char* key, const char* fallback, uint16_t* out, uint32_t capacity);
-    bool (*persist_int)(const char* key, int32_t value);
-    bool (*persist_text)(const char* key, const char* value);
-    void (*apply_colour_transport)(bool);
-    // An accepted configuration: the log the D3D11 host reports through and, for Stages 4 and 5, the TemporalDriver
-    // options (null otherwise).
-    void (*configured)(rsf_anomaly_sr_log log, void* user, const rsf_anomaly_sr_driver_config* driver);
-} rsf_anomaly_sr_stage_platform;
-
-/* The operations of the C11 leaf (sr_stage_platform.c) that Rust cannot express. sr_stage/native.rs builds the
-   production stage table from them and reads every engine address from the selected build's profile records
-   (sr_profile.rs, native_profile.rs). The trampolines call back into the Rust stage. */
+/* The C11 leaf (sr_stage_platform.c) keeps what Rust cannot express; sr_stage/native.rs calls these by name and reads
+   every engine address from the selected build's profile records (sr_profile.rs, native_profile.rs). The trampolines
+   call back into the Rust stage. */
 struct rsf_anomaly_hook_site;
 #define RSF_ANOMALY_SR_DETOUR_COUNT 5   /* phase_scene_prepare, phase_combine, phase_sunshafts, phase_blur, sun cascades */
-typedef struct rsf_anomaly_sr_native {
-    // Guarded engine-memory copy.
-    bool (*copy)(void* output, const void* input, size_t size);
-    // R_xforms::set_P(this, rdx = matrix), dx10SamplerStateCache::SetMipLODBias(this, xmm1 = bias) and
-    // R_constants::GetCBuffer(this, constant, stage) at `function`, each under SEH (false or 0 on a fault).
-    bool (*set_projection)(void* function, void* xforms, const void* matrix);
-    bool (*set_mip_bias)(void* function, void* cache, float bias);
-    uintptr_t (*constant_buffer)(void* function, void* constants, uintptr_t constant, uint32_t stage);
-    // Fills each lent site's replacement and trampoline slot in detour order, then installs the batch.
-    bool (*install_hooks)(void* image, uint32_t size, struct rsf_anomaly_hook_site* sites, size_t count);
-    bool (*hooks_created)(void);
-    bool (*enable_hooks)(void);
-    bool (*disable_hooks)(void);
-    void* position_setup;   // the cl_pos_decompress_params::setup vtable replacement
-    bool (*compare_slot)(void* address, void* expected, void* value, void** previous);
-    uint8_t (*current_view)(const void* module, size_t build);
-    uint32_t (*pixel_bytes)(uint32_t format);
-    void* (*create_view)(void* device, void* texture);   // an owned reference or null
-    const void* (*d3d11)(void);                           // the process-lifetime rsf_sr_d3d11 table
-} rsf_anomaly_sr_native;
 #ifdef __cplusplus
-static_assert(sizeof(rsf_anomaly_sr_native) == 112, "SR native leaf table");
 extern "C" {
-#else
-_Static_assert(sizeof(rsf_anomaly_sr_native) == 112, "SR native leaf table");
 #endif
+// Guarded engine-memory copy.
+bool rsf_anomaly_sr_native_copy(void* output, const void* input, size_t size);
+// R_xforms::set_P(this, rdx = matrix), dx10SamplerStateCache::SetMipLODBias(this, xmm1 = bias) and
+// R_constants::GetCBuffer(this, constant, stage) at `function`, each under SEH (false or 0 on a fault).
+bool rsf_anomaly_sr_native_set_projection(void* function, void* xforms, const void* matrix);
+bool rsf_anomaly_sr_native_set_mip_bias(void* function, void* cache, float bias);
+uintptr_t rsf_anomaly_sr_native_constant_buffer(void* function, void* constants, uintptr_t constant, uint32_t stage);
+// Fills each lent site's replacement and trampoline slot in detour order, then installs the batch.
+bool rsf_anomaly_sr_native_install_hooks(void* image, uint32_t size, struct rsf_anomaly_hook_site* sites, size_t count);
+bool rsf_anomaly_sr_native_hooks_created(void);
+bool rsf_anomaly_sr_native_enable_hooks(void);
+bool rsf_anomaly_sr_native_disable_hooks(void);
+// The cl_pos_decompress_params::setup vtable replacement (x64, so the engine's __fastcall is the C convention).
+void rsf_anomaly_sr_position_setup_detour(void* self, void* constant);
+
 // Rust entries of the leaf. `ini` is a NUL-terminated UTF-16 path; `build` the native_profile.rs index.
-bool rsf_anomaly_sr_stage_configure_native(const rsf_anomaly_sr_native*, const uint16_t* ini, bool apply,
-    rsf_anomaly_sr_log log, void* user);
-bool rsf_anomaly_sr_stage_install_build(const rsf_anomaly_sr_native*, void* image, size_t build);
+bool rsf_anomaly_sr_stage_configure_native(const uint16_t* ini, bool apply, rsf_anomaly_sr_log log, void* user);
+bool rsf_anomaly_sr_stage_install_build(void* image, size_t build);
 void rsf_anomaly_sr_stage_prepare(void* target);
 void rsf_anomaly_sr_stage_prepared(void);
 void rsf_anomaly_sr_stage_seam(void* target);
@@ -321,8 +219,6 @@ void rsf_anomaly_sr_stage_combine_end(void);
 bool rsf_anomaly_sr_stage_sun_begin(void);
 void rsf_anomaly_sr_stage_sun_end(bool suspended);
 void rsf_anomaly_sr_stage_position_setup(void* constant);
-// The leaf's table, for the hook fixture.
-const rsf_anomaly_sr_native* rsf_anomaly_sr_native_leaves(void);
 #ifdef __cplusplus
 }
 #endif

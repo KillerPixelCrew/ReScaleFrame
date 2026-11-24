@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: MIT
-//! The production SR leaf table. The C11 leaf (sr_stage_platform.c) lends what Rust cannot express: the guarded copy,
+//! The production SR leaves. The C11 leaf (sr_stage_platform.c) lends what Rust cannot express: the guarded copy,
 //! the SEH engine calls, the five trampolines, the position-binder replacement and the hook set. This module reads
 //! every engine address from the selected build's records (sr_profile.rs, native_profile.rs), hosts the swap owner
 //! and answers every other leaf the stage driver calls. The callbacks run under the Rust stage lock, as the former C++
-//! leaf did; only the trampolines run outside it.
-use super::{Platform, STAGE, rsf_anomaly_sr_stage_configure_ini};
-use crate::adapter_options::rsf_anomaly_sr_persist_int;
-use crate::adapter_options::rsf_anomaly_sr_persist_text;
+//! leaf did; only the trampolines run outside it. Under test the stage calls fakes, so this module is compiled but
+//! unused.
+#![cfg_attr(test, allow(dead_code))]
+use super::{STAGE, rsf_anomaly_sr_stage_configure_ini};
 use crate::engine_guards::{Image, sr_guard_failure};
 use crate::engine_slots::rsf_anomaly_slot_install;
 use crate::engine_slots::rsf_anomaly_slot_set;
 use crate::host_log::Log;
-use crate::ini::rsf_anomaly_sr_ini_int;
-use crate::ini::rsf_anomaly_sr_ini_text;
 use crate::native_geometry::rsf_anomaly_geometry_active;
 use crate::native_geometry::rsf_anomaly_geometry_set_near;
 use crate::native_geometry::{CONSTANT_BUFFER_DATA, CONSTANT_BUFFER_SIZE, CONSTANT_BUFFER_SLOTS};
@@ -20,19 +18,8 @@ use crate::native_hooks::Site as HookSite;
 use crate::native_observer::rsf_anomaly_observation;
 use crate::native_profile::{PROFILES as NATIVE, Profile as NativeProfile};
 use crate::runtime_module::rsf_anomaly_runtime_set_colour_transport;
-use crate::sr_d3d11::native::rsf_anomaly_sr_context_device;
-use crate::sr_d3d11::native::rsf_anomaly_sr_copy_subresource;
-use crate::sr_d3d11::native::rsf_anomaly_sr_immediate_context;
-use crate::sr_d3d11::native::rsf_anomaly_sr_map_read;
-use crate::sr_d3d11::native::rsf_anomaly_sr_release;
 use crate::sr_d3d11::native::rsf_anomaly_sr_set_full_viewport;
-use crate::sr_d3d11::native::rsf_anomaly_sr_timer_clock;
-use crate::sr_d3d11::native::rsf_anomaly_sr_timer_create_query;
-use crate::sr_d3d11::native::rsf_anomaly_sr_timer_issue;
-use crate::sr_d3d11::native::rsf_anomaly_sr_timer_retain_device;
-use crate::sr_d3d11::native::rsf_anomaly_sr_timer_timestamp;
 use crate::sr_d3d11::native::rsf_anomaly_sr_twin_refs;
-use crate::sr_d3d11::native::rsf_anomaly_sr_unmap;
 use crate::sr_d3d11::native::rsf_anomaly_sr_view_resource;
 use crate::sr_d3d11::passes::rsf_anomaly_sr_run_pass;
 use crate::sr_d3d11::passes::rsf_anomaly_sr_temporal_ready;
@@ -74,8 +61,91 @@ use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerf
 
 type Ptr = *mut c_void;
 
-/// The C leaf table (sr_stage_platform.h).
-pub(crate) use crate::sys::rsf_anomaly_sr_native as Native;
+// The C leaves: sr_stage_platform.c (guarded copy, SEH engine calls, the stage hook set and the position-binder
+// replacement), engine_slots.c, native_geometry_platform.c and the Graphics leaves. Unit tests never reach this
+// production module, so they link stand-ins.
+#[cfg(not(test))]
+mod c {
+    use super::Ptr;
+    use std::ffi::c_void;
+
+    unsafe extern "C" {
+        #[link_name = "rsf_anomaly_sr_native_copy"]
+        pub(super) fn copy(output: Ptr, input: *const c_void, size: usize) -> bool;
+        #[link_name = "rsf_anomaly_sr_native_set_projection"]
+        pub(super) fn set_projection(function: Ptr, xforms: Ptr, matrix: *const c_void) -> bool;
+        #[link_name = "rsf_anomaly_sr_native_set_mip_bias"]
+        pub(super) fn set_mip_bias(function: Ptr, cache: Ptr, bias: f32) -> bool;
+        #[link_name = "rsf_anomaly_sr_native_constant_buffer"]
+        pub(super) fn constant_buffer(function: Ptr, constants: Ptr, constant: usize, stage: u32) -> usize;
+        #[link_name = "rsf_anomaly_sr_native_install_hooks"]
+        pub(super) fn install_hooks(image: Ptr, size: u32, sites: Ptr, count: usize) -> bool;
+        #[link_name = "rsf_anomaly_sr_native_hooks_created"]
+        pub(super) fn hooks_created() -> bool;
+        #[link_name = "rsf_anomaly_sr_native_enable_hooks"]
+        pub(super) fn enable_hooks() -> bool;
+        #[link_name = "rsf_anomaly_sr_native_disable_hooks"]
+        pub(super) fn disable_hooks() -> bool;
+        /// The cl_pos_decompress_params::setup vtable replacement; only its address is taken.
+        #[link_name = "rsf_anomaly_sr_position_setup_detour"]
+        pub(super) fn position_setup(this: Ptr, constant: Ptr);
+        #[link_name = "rsf_anomaly_compare_slot"]
+        pub(super) fn compare_slot(address: Ptr, expected: Ptr, value: Ptr, previous: *mut Ptr) -> bool;
+        #[link_name = "rsf_anomaly_geometry_current_view"]
+        pub(super) fn current_view(module: *const c_void, build: usize) -> u8;
+        #[link_name = "rsf_texture_pixel_bytes"]
+        pub(super) fn pixel_bytes(format: u32) -> u32;
+        /// An owned default shader view, or null.
+        #[link_name = "rsf_d3d11_create_shader_view"]
+        pub(super) fn create_view(device: Ptr, texture: Ptr) -> Ptr;
+    }
+}
+
+#[cfg(test)]
+mod c {
+    use super::Ptr;
+    use std::ffi::c_void;
+
+    pub(super) unsafe extern "C" fn copy(_: Ptr, _: *const c_void, _: usize) -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn set_projection(_: Ptr, _: Ptr, _: *const c_void) -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn set_mip_bias(_: Ptr, _: Ptr, _: f32) -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn constant_buffer(_: Ptr, _: Ptr, _: usize, _: u32) -> usize {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn install_hooks(_: Ptr, _: u32, _: Ptr, _: usize) -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn hooks_created() -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn enable_hooks() -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn disable_hooks() -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe extern "C" fn position_setup(_: Ptr, _: Ptr) {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe extern "C" fn compare_slot(_: Ptr, _: Ptr, _: Ptr, _: *mut Ptr) -> bool {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn current_view(_: *const c_void, _: usize) -> u8 {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn pixel_bytes(_: u32) -> u32 {
+        unreachable!("C leaf in a unit test")
+    }
+    pub(super) unsafe fn create_view(_: Ptr, _: Ptr) -> Ptr {
+        unreachable!("C leaf in a unit test")
+    }
+}
 
 const _: () = {
     // The seam reads the generic0 CRT the world window swaps.
@@ -104,7 +174,6 @@ pub(crate) static BUILDS: [Build; 2] = [
 ];
 
 // ---- engine state --------------------------------------------------------------------------------------------------
-static NATIVE_LEAVES: AtomicPtr<Native> = AtomicPtr::new(null_mut());
 // The exact build set_engine was given, with its image. Until then every read fails on the null image.
 static IMAGE: AtomicUsize = AtomicUsize::new(0);
 static BUILD: AtomicPtr<Build> = AtomicPtr::new(null_mut());
@@ -117,11 +186,6 @@ static RESOURCES: AtomicPtr<StageResources> = AtomicPtr::new(null_mut());
 static TWIN_LOG: AtomicPtr<Log> = AtomicPtr::new(null_mut());
 static SWAP: OnceLock<usize> = OnceLock::new();
 
-
-fn native() -> &'static Native {
-    // Set by bind before the stage table is registered; the table is a static of the C leaf.
-    unsafe { &*NATIVE_LEAVES.load(Ordering::Acquire) }
-}
 
 fn engine() -> Option<(usize, &'static Build)> {
     let image = IMAGE.load(Ordering::Acquire);
@@ -138,7 +202,7 @@ fn read<T: Copy>(rva: u32) -> Option<T> {
     let (image, _) = engine()?;
     let mut value = MaybeUninit::<T>::uninit();
     unsafe {
-        (native().copy.unwrap())(
+        c::copy(
             value.as_mut_ptr().cast(),
             (image + rva as usize) as *const c_void,
             size_of::<T>(),
@@ -197,11 +261,11 @@ fn context() -> Ptr {
 // ---- the swap owner's host -----------------------------------------------------------------------------------------
 
 unsafe extern "C" fn swap_read(_: Ptr, address: *const c_void, output: Ptr, size: usize) -> bool {
-    unsafe { (native().copy.unwrap())(output, address, size) }
+    unsafe { c::copy(output, address, size) }
 }
 
 unsafe extern "C" fn swap_write(_: Ptr, address: Ptr, input: *const c_void, size: usize) -> bool {
-    unsafe { (native().copy.unwrap())(address, input, size) }
+    unsafe { c::copy(address, input, size) }
 }
 
 unsafe extern "C" fn make_twins(
@@ -222,7 +286,6 @@ unsafe extern "C" fn make_twins(
     let mut handle = resources();
     let result = rsf_anomaly_sr_stage_make_twins(
         &mut handle,
-        unsafe { &*(native().d3d11.unwrap())().cast() },
         d3d,
         request,
         unsafe { &mut *out },
@@ -305,7 +368,7 @@ unsafe extern "C" fn upload_projection(_: Ptr, matrix: *const c_void) -> bool {
         return false;
     };
     unsafe {
-        (native().set_projection.unwrap())(
+        c::set_projection(
             function as Ptr,
             address(sr.backend_rva + BACKEND_XFORMS_OFFSET),
             matrix,
@@ -319,7 +382,7 @@ unsafe extern "C" fn set_mip_bias(_: Ptr, value: f32) -> bool {
         return false;
     };
     unsafe {
-        (native().set_mip_bias.unwrap())(function as Ptr, address(sr.sampler_cache_rva), value)
+        c::set_mip_bias(function as Ptr, address(sr.sampler_cache_rva), value)
     }
 }
 
@@ -344,11 +407,11 @@ pub(crate) mod position {
     const BACKEND_CONSTANTS_OFFSET: u32 = 0x5c0;
 
     pub(crate) unsafe fn read(address: usize, out: Ptr, size: usize) -> bool {
-        unsafe { (native().copy.unwrap())(out, address as *const c_void, size) }
+        unsafe { c::copy(out, address as *const c_void, size) }
     }
 
     pub(crate) unsafe fn write(address: usize, input: *const c_void, size: usize) -> bool {
-        unsafe { (native().copy.unwrap())(address as Ptr, input, size) }
+        unsafe { c::copy(address as Ptr, input, size) }
     }
 
     pub(crate) unsafe fn buffer(constant: usize, stage: u32) -> usize {
@@ -357,7 +420,7 @@ pub(crate) mod position {
             return 0;
         };
         unsafe {
-            (native().constant_buffer.unwrap())(
+            c::constant_buffer(
                 function as Ptr,
                 address(sr.backend_rva + BACKEND_CONSTANTS_OFFSET),
                 constant,
@@ -372,12 +435,12 @@ unsafe extern "C" fn correct_position_constant(_: Ptr, constant: Ptr, x: f32, y:
 }
 
 // ---- the stage leaves ----------------------------------------------------------------------------------------------
-unsafe extern "C" fn render_target() -> Ptr {
+pub(crate) unsafe extern "C" fn render_target() -> Ptr {
     sr().and_then(|sr| read::<usize>(sr.render_implementation_rva + RENDER_TARGET_OFFSET))
         .map_or(null_mut(), |target| target as Ptr)
 }
 
-unsafe extern "C" fn frame_facts(
+pub(crate) unsafe extern "C" fn frame_facts(
     world_window: bool,
     temporal: bool,
     reads: *mut rsf_anomaly_sr_frame_reads,
@@ -403,7 +466,7 @@ unsafe extern "C" fn frame_facts(
     read_into(native_profile.device_width_rva, &mut out.device_width);
     read_into(native_profile.device_height_rva, &mut out.device_height);
     const UNSET: u8 = 0xff;
-    let view = unsafe { (native().current_view.unwrap())(image as *const c_void, build.index) };
+    let view = unsafe { c::current_view(image as *const c_void, build.index) };
     reads.view_read = view != UNSET;
     if view != UNSET {
         reads.render_view = u32::from(view);
@@ -425,28 +488,28 @@ unsafe extern "C" fn frame_facts(
     }
 }
 
-unsafe extern "C" fn loading_registered(registered: *mut u8) -> bool {
+pub(crate) unsafe extern "C" fn loading_registered(registered: *mut u8) -> bool {
     sr().is_some_and(|sr| read_into(sr.load_screen_registered_rva, registered))
 }
 
-unsafe extern "C" fn precache_frame(frame: *mut u32) -> bool {
+pub(crate) unsafe extern "C" fn precache_frame(frame: *mut u32) -> bool {
     sr().is_some_and(|sr| read_into(sr.device_precache_frame_rva, frame))
 }
 
-unsafe extern "C" fn engine_frame() -> u32 {
+pub(crate) unsafe extern "C" fn engine_frame() -> u32 {
     engine()
         .and_then(|(_, build)| read::<u32>(build.native.device_frame_rva))
         .unwrap_or(0)
 }
 
-unsafe extern "C" fn device_size(width: *mut u32, height: *mut u32) {
+pub(crate) unsafe extern "C" fn device_size(width: *mut u32, height: *mut u32) {
     if let Some((_, build)) = engine() {
         read_into(build.native.device_width_rva, width);
         read_into(build.native.device_height_rva, height);
     }
 }
 
-unsafe extern "C" fn read_camera(out: *mut rsf_anomaly_sr_camera) -> bool {
+pub(crate) unsafe extern "C" fn read_camera(out: *mut rsf_anomaly_sr_camera) -> bool {
     let out = unsafe { &mut *out };
     sr().is_some_and(|sr| {
         read_into(sr.device_view_rva, &mut out.view)
@@ -454,8 +517,8 @@ unsafe extern "C" fn read_camera(out: *mut rsf_anomaly_sr_camera) -> bool {
     })
 }
 
-unsafe extern "C" fn seam_surface(target: Ptr) -> Ptr {
-    let copy = native().copy.unwrap();
+pub(crate) unsafe extern "C" fn seam_surface(target: Ptr) -> Ptr {
+    let copy = c::copy;
     let mut crt = 0usize;
     let mut surface = 0usize;
     let crt_field = (target as usize).wrapping_add(WORLD_TARGETS[0].offset as usize);
@@ -479,7 +542,7 @@ unsafe extern "C" fn seam_surface(target: Ptr) -> Ptr {
     null_mut()
 }
 
-unsafe extern "C" fn back_buffer() -> Ptr {
+pub(crate) unsafe extern "C" fn back_buffer() -> Ptr {
     let base = sr()
         .and_then(|sr| read::<usize>(sr.hw_base_rt_rva))
         .unwrap_or(0);
@@ -489,15 +552,15 @@ unsafe extern "C" fn back_buffer() -> Ptr {
     unsafe { rsf_anomaly_sr_view_resource(base as Ptr) }
 }
 
-unsafe extern "C" fn stage_context() -> Ptr {
+pub(crate) unsafe extern "C" fn stage_context() -> Ptr {
     context()
 }
 
-unsafe extern "C" fn stage_device() -> Ptr {
+pub(crate) unsafe extern "C" fn stage_device() -> Ptr {
     device()
 }
 
-unsafe extern "C" fn now(counter: *mut i64, frequency: *mut i64) {
+pub(crate) unsafe extern "C" fn now(counter: *mut i64, frequency: *mut i64) {
     let (mut value, mut rate) = (0i64, 0i64);
     unsafe {
         QueryPerformanceCounter(&mut value);
@@ -507,19 +570,19 @@ unsafe extern "C" fn now(counter: *mut i64, frequency: *mut i64) {
     }
 }
 
-unsafe extern "C" fn geometry_active() -> bool {
+pub(crate) unsafe extern "C" fn geometry_active() -> bool {
     rsf_anomaly_geometry_active()
 }
 
-unsafe extern "C" fn build_sha256() -> *const c_char {
+pub(crate) unsafe extern "C" fn build_sha256() -> *const c_char {
     engine().map_or(c"".as_ptr(), |(_, build)| build.native.sha256.as_ptr())
 }
 
-unsafe extern "C" fn close_stale() {
+pub(crate) unsafe extern "C" fn close_stale() {
     swap_owner::close_stale(swap());
 }
 
-unsafe extern "C" fn prepare(
+pub(crate) unsafe extern "C" fn prepare(
     facts: *const rsf_anomaly_sr_frame_facts,
     log: rsf_anomaly_sr_log,
     user: Ptr,
@@ -534,47 +597,47 @@ unsafe extern "C" fn prepare(
     prepared
 }
 
-unsafe extern "C" fn prepared() {
+pub(crate) unsafe extern "C" fn prepared() {
     swap_owner::prepared(swap());
 }
 
-unsafe extern "C" fn swap_handle() -> Ptr {
+pub(crate) unsafe extern "C" fn swap_handle() -> Ptr {
     swap().cast()
 }
 
-unsafe extern "C" fn combine_end() {
+pub(crate) unsafe extern "C" fn combine_end() {
     swap_owner::combine_end(swap());
 }
 
-unsafe extern "C" fn frame_end() {
+pub(crate) unsafe extern "C" fn frame_end() {
     swap_owner::frame_end(swap());
 }
 
-unsafe extern "C" fn rm_near() {
+pub(crate) unsafe extern "C" fn rm_near() {
     swap_owner::rm_near(swap());
 }
 
-unsafe extern "C" fn sun_begin() -> bool {
+pub(crate) unsafe extern "C" fn sun_begin() -> bool {
     swap_owner::sun_begin(swap())
 }
 
-unsafe extern "C" fn sun_end(suspended: bool) {
+pub(crate) unsafe extern "C" fn sun_end(suspended: bool) {
     swap_owner::sun_end(swap(), suspended);
 }
 
-unsafe extern "C" fn position_setup(constant: Ptr) {
+pub(crate) unsafe extern "C" fn position_setup(constant: Ptr) {
     swap_owner::position_constant(swap(), constant);
 }
 
-unsafe extern "C" fn shutdown() -> bool {
+pub(crate) unsafe extern "C" fn shutdown() -> bool {
     swap_owner::shutdown(swap())
 }
 
-unsafe extern "C" fn set_swap_enabled(enabled: bool) {
+pub(crate) unsafe extern "C" fn set_swap_enabled(enabled: bool) {
     swap_owner::set_enabled(swap(), enabled);
 }
 
-unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
+pub(crate) unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
     let handle = swap();
     let view = if handle.is_null() {
         rsf_anomaly_swap_view {
@@ -601,7 +664,7 @@ unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
     };
 }
 
-unsafe extern "C" fn swap_counters(out: *mut rsf_anomaly_sr_swap_counters) {
+pub(crate) unsafe extern "C" fn swap_counters(out: *mut rsf_anomaly_sr_swap_counters) {
     let handle = swap();
     let counters = if handle.is_null() {
         rsf_anomaly_swap_counters::default()
@@ -611,7 +674,7 @@ unsafe extern "C" fn swap_counters(out: *mut rsf_anomaly_sr_swap_counters) {
     unsafe { out.write(counters) };
 }
 
-unsafe extern "C" fn host_stats(bytes: *mut u64, refs: *mut u64) {
+pub(crate) unsafe extern "C" fn host_stats(bytes: *mut u64, refs: *mut u64) {
     rsf_anomaly_sr_stage_resource_stats(
         unsafe { resources().as_ref() },
         unsafe { &mut *bytes },
@@ -619,33 +682,29 @@ unsafe extern "C" fn host_stats(bytes: *mut u64, refs: *mut u64) {
     );
 }
 
-unsafe extern "C" fn host_reset() {
+pub(crate) unsafe extern "C" fn host_reset() {
     rsf_anomaly_sr_stage_reset_pass(unsafe { resources().as_mut() });
 }
 
-unsafe extern "C" fn pixel_bytes(format: u32) -> u32 {
-    unsafe { (native().pixel_bytes.unwrap())(format) }
+pub(crate) unsafe extern "C" fn pixel_bytes(format: u32) -> u32 {
+    unsafe { c::pixel_bytes(format) }
 }
 
-unsafe extern "C" fn draw_pass(kind: u32, views: *const crate::sr_d3d11::DrawViews) -> bool {
+pub(crate) unsafe extern "C" fn draw_pass(kind: u32, views: *const crate::sr_d3d11::DrawViews) -> bool {
     let pass = rsf_anomaly_sr_stage_pass(unsafe { resources().as_ref() });
     rsf_anomaly_sr_run_pass(unsafe { pass.as_ref() }, context(), kind, unsafe {
         &*views
     }) != 0
 }
 
-unsafe extern "C" fn temporal_ready() -> bool {
+pub(crate) unsafe extern "C" fn temporal_ready() -> bool {
     let resources = unsafe { resources().as_ref() };
     let pass = rsf_anomaly_sr_stage_pass(resources);
     rsf_anomaly_sr_temporal_ready(unsafe { pass.as_ref() }) != 0
         && !rsf_anomaly_sr_stage_depth(resources).is_null()
 }
 
-unsafe extern "C" fn temporal_platform() -> *const c_void {
-    unsafe { (native().d3d11.unwrap())() }
-}
-
-unsafe extern "C" fn motion_target(out: *mut rsf_anomaly_sr_motion_target) -> bool {
+pub(crate) unsafe extern "C" fn motion_target(out: *mut rsf_anomaly_sr_motion_target) -> bool {
     let target = crate::motion::stage::frame_target();
     unsafe {
         out.write(rsf_anomaly_sr_motion_target {
@@ -660,15 +719,15 @@ unsafe extern "C" fn motion_target(out: *mut rsf_anomaly_sr_motion_target) -> bo
     !target.texture.is_null()
 }
 
-unsafe extern "C" fn create_motion_view(device: Ptr, texture: Ptr) -> Ptr {
-    unsafe { (native().create_view.unwrap())(device, texture) }
+pub(crate) unsafe extern "C" fn create_motion_view(device: Ptr, texture: Ptr) -> Ptr {
+    unsafe { c::create_view(device, texture) }
 }
 
-unsafe extern "C" fn depth_texture() -> Ptr {
+pub(crate) unsafe extern "C" fn depth_texture() -> Ptr {
     rsf_anomaly_sr_stage_depth(unsafe { resources().as_ref() })
 }
 
-unsafe extern "C" fn verify_guards(
+pub(crate) unsafe extern "C" fn verify_guards(
     module: Ptr,
     image_size: u32,
     build: *const c_void,
@@ -680,16 +739,16 @@ unsafe extern "C" fn verify_guards(
     let image = Image::new(
         module.cast_const().cast(),
         image_size,
-        native().copy.unwrap(),
+        c::copy,
     );
     sr_guard_failure(&image, build.sr, world_window, temporal)
 }
 
-unsafe extern "C" fn hooks_created() -> bool {
-    unsafe { (native().hooks_created.unwrap())() }
+pub(crate) unsafe extern "C" fn hooks_created() -> bool {
+    unsafe { c::hooks_created() }
 }
 
-unsafe extern "C" fn set_engine(module: Ptr, build: *const c_void, temporal: bool) {
+pub(crate) unsafe extern "C" fn set_engine(module: Ptr, build: *const c_void, temporal: bool) {
     let image = module as usize;
     BUILD.store(build.cast_mut().cast(), Ordering::Release);
     IMAGE.store(image, Ordering::Release);
@@ -716,10 +775,9 @@ const DETOURS: [usize; crate::sys::RSF_ANOMALY_SR_DETOUR_COUNT as usize] = [
     SITE_SUN_CASCADES,
 ];
 
-unsafe extern "C" fn install_hooks() -> bool {
-    let leaves = native();
-    if unsafe { (leaves.hooks_created.unwrap())() } {
-        return unsafe { (leaves.enable_hooks.unwrap())() };
+pub(crate) unsafe extern "C" fn install_hooks() -> bool {
+    if unsafe { c::hooks_created() } {
+        return unsafe { c::enable_hooks() };
     }
     let Some((image, build)) = engine() else {
         return false;
@@ -736,7 +794,7 @@ unsafe extern "C" fn install_hooks() -> bool {
         }
     });
     unsafe {
-        (leaves.install_hooks.unwrap())(
+        c::install_hooks(
             image as Ptr,
             build.native.image_size,
             // The header only forward-declares rsf_anomaly_hook_site; native_hooks::Site is its layout (48 bytes, checked
@@ -749,16 +807,15 @@ unsafe extern "C" fn install_hooks() -> bool {
 
 const POSITION_SLOT: u32 = 1; // RSF_ANOMALY_POSITION_SLOT (engine_slots.h)
 
-unsafe extern "C" fn install_position_slot() -> bool {
+pub(crate) unsafe extern "C" fn install_position_slot() -> bool {
     let Some((image, build)) = engine() else {
         return false;
     };
-    let leaves = native();
     let site = &build.sr.function_sites[SITE_POSITION_SETUP];
     let checked = Image::new(
         image as *const u8,
         build.native.image_size,
-        leaves.copy.unwrap(),
+        c::copy,
     );
     // The slot must hold the profiled function, and the function its guard.
     checked.matches(site) && {
@@ -768,16 +825,16 @@ unsafe extern "C" fn install_position_slot() -> bool {
             build.sr.position_setup_vtable_rva,
             site.rva,
             0,
-            leaves.position_setup,
-            leaves.compare_slot.unwrap(),
+            c::position_setup as unsafe extern "C" fn(Ptr, Ptr) as Ptr,
+            c::compare_slot,
         )
     }
 }
 
-unsafe extern "C" fn disable_hooks() {
+pub(crate) unsafe extern "C" fn disable_hooks() {
     unsafe {
         let _ = rsf_anomaly_slot_set(POSITION_SLOT, false);
-        let _ = (native().disable_hooks.unwrap())();
+        let _ = c::disable_hooks();
     }
 }
 
@@ -785,136 +842,81 @@ unsafe extern "C" fn rm_near_callback(_: Ptr) {
     STAGE.rm_near();
 }
 
-unsafe extern "C" fn set_rm_near(on: bool) {
+pub(crate) unsafe extern "C" fn set_rm_near(on: bool) {
     rsf_anomaly_geometry_set_near(on.then_some(rm_near_callback as unsafe extern "C" fn(Ptr)));
 }
 
-unsafe extern "C" fn remove_hooks() -> bool {
+pub(crate) unsafe extern "C" fn remove_hooks() -> bool {
     unsafe {
         rsf_anomaly_geometry_set_near(None);
         let restored = rsf_anomaly_slot_set(POSITION_SLOT, false);
-        let disabled = (native().disable_hooks.unwrap())();
+        let disabled = c::disable_hooks();
         restored && disabled
     }
 }
 
-unsafe extern "C" fn apply_colour_transport(enabled: bool) {
+pub(crate) unsafe extern "C" fn apply_colour_transport(enabled: bool) {
     rsf_anomaly_runtime_set_colour_transport(enabled);
 }
 
-fn leaves() -> Platform {
-    Platform {
-        render_target: Some(render_target),
-        frame_facts: Some(frame_facts),
-        loading_registered: Some(loading_registered),
-        precache_frame: Some(precache_frame),
-        engine_frame: Some(engine_frame),
-        device_size: Some(device_size),
-        read_camera: Some(read_camera),
-        seam_surface: Some(seam_surface),
-        back_buffer: Some(back_buffer),
-        context: Some(stage_context),
-        device: Some(stage_device),
-        now: Some(now),
-        geometry_active: Some(geometry_active),
-        build_sha256: Some(build_sha256),
-        close_stale: Some(close_stale),
-        prepare: Some(prepare),
-        prepared: Some(prepared),
-        swap_handle: Some(swap_handle),
-        combine_end: Some(combine_end),
-        frame_end: Some(frame_end),
-        rm_near: Some(rm_near),
-        sun_begin: Some(sun_begin),
-        sun_end: Some(sun_end),
-        position_setup: Some(position_setup),
-        shutdown: Some(shutdown),
-        set_swap_enabled: Some(set_swap_enabled),
-        controller: Some(controller),
-        swap_counters: Some(swap_counters),
-        timer_retain_device: Some(rsf_anomaly_sr_timer_retain_device),
-        timer_create_query: Some(rsf_anomaly_sr_timer_create_query),
-        timer_issue: Some(rsf_anomaly_sr_timer_issue),
-        timer_clock: Some(rsf_anomaly_sr_timer_clock),
-        timer_timestamp: Some(rsf_anomaly_sr_timer_timestamp),
-        host_stats: Some(host_stats),
-        host_reset: Some(host_reset),
-        immediate_context: Some(rsf_anomaly_sr_immediate_context),
-        context_device: Some(rsf_anomaly_sr_context_device),
-        copy_subresource: Some(rsf_anomaly_sr_copy_subresource),
-        release: Some(rsf_anomaly_sr_release),
-        map_read: Some(rsf_anomaly_sr_map_read),
-        unmap: Some(rsf_anomaly_sr_unmap),
-        pixel_bytes: Some(pixel_bytes),
-        draw_pass: Some(draw_pass),
-        temporal_ready: Some(temporal_ready),
-        temporal_platform: Some(temporal_platform),
-        motion_target: Some(motion_target),
-        create_motion_view: Some(create_motion_view),
-        depth_texture: Some(depth_texture),
-        // stage_bridge::production connects these to the Rust temporal driver.
-        driver_bind: None,
-        driver_enabled: None,
-        driver_output_format: None,
-        driver_planned: None,
-        driver_boundary: None,
-        driver_evaluate: None,
-        driver_request_dump: None,
-        driver_fallback: None,
-        driver_count_prepared: None,
-        driver_stop: None,
-        driver_report: None,
-        driver_overlay_report: None,
-        driver_request: None,
-        verify_guards: Some(verify_guards),
-        hooks_created: Some(hooks_created),
-        set_engine: Some(set_engine),
-        install_hooks: Some(install_hooks),
-        install_position_slot: Some(install_position_slot),
-        disable_hooks: Some(disable_hooks),
-        set_rm_near: Some(set_rm_near),
-        remove_hooks: Some(remove_hooks),
-        ini_int: Some(rsf_anomaly_sr_ini_int),
-        ini_text: Some(rsf_anomaly_sr_ini_text),
-        persist_int: Some(rsf_anomaly_sr_persist_int),
-        persist_text: Some(rsf_anomaly_sr_persist_text),
-        apply_colour_transport: Some(apply_colour_transport),
-        configured: None,
-    }
-}
-
-/// Adopts the leaf table and registers the production stage table built over it.
-fn bind(leaves_table: &'static Native) {
-    NATIVE_LEAVES.store(from_ref(leaves_table).cast_mut(), Ordering::Release);
-    STAGE.register(crate::sr_temporal::stage_bridge::production(leaves()));
+/// The stage's leaves in production (`sr_stage::leaves`): these functions, the D3D11 host's typed context calls, the
+/// adapter's INI and option persistence and the Rust temporal driver (sr_temporal/stage_bridge.rs).
+#[cfg(not(test))]
+pub(crate) mod leaves {
+    pub(crate) use super::{
+        apply_colour_transport, back_buffer, build_sha256, close_stale, combine_end, controller,
+        create_motion_view, depth_texture, device_size, disable_hooks, draw_pass, engine_frame,
+        frame_end, frame_facts, geometry_active, host_reset, host_stats, hooks_created,
+        install_hooks, install_position_slot, loading_registered, motion_target, now,
+        pixel_bytes, position_setup, precache_frame, prepare, prepared, read_camera,
+        remove_hooks, render_target, rm_near, seam_surface, set_engine, set_rm_near,
+        set_swap_enabled, shutdown, stage_context as context, stage_device as device,
+        sun_begin, sun_end, swap_counters, swap_handle, temporal_ready, verify_guards,
+    };
+    pub(crate) use crate::adapter_options::{
+        rsf_anomaly_sr_persist_int as persist_int, rsf_anomaly_sr_persist_text as persist_text,
+    };
+    pub(crate) use crate::ini::{rsf_anomaly_sr_ini_int as ini_int, rsf_anomaly_sr_ini_text as ini_text};
+    pub(crate) use crate::sr_d3d11::native::{
+        rsf_anomaly_sr_context_device as context_device,
+        rsf_anomaly_sr_copy_subresource as copy_subresource,
+        rsf_anomaly_sr_immediate_context as immediate_context, rsf_anomaly_sr_map_read as map_read,
+        rsf_anomaly_sr_release as release, rsf_anomaly_sr_timer_clock as timer_clock,
+        rsf_anomaly_sr_timer_create_query as timer_create_query,
+        rsf_anomaly_sr_timer_issue as timer_issue,
+        rsf_anomaly_sr_timer_retain_device as timer_retain_device,
+        rsf_anomaly_sr_timer_timestamp as timer_timestamp, rsf_anomaly_sr_unmap as unmap,
+    };
+    pub(crate) use crate::sr_temporal::stage_bridge::{
+        bind as driver_bind, boundary as driver_boundary, configure as configured,
+        count_prepared as driver_count_prepared, enabled as driver_enabled,
+        evaluate as driver_evaluate, fallback as driver_fallback,
+        output_format as driver_output_format, overlay_report as driver_overlay_report,
+        plan as driver_planned, report as driver_report, request as driver_request,
+        request_dump as driver_request_dump, stop as driver_stop,
+    };
 }
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_anomaly_sr_stage_configure_native(
-    leaves_table: &'static Native,
     ini: *const u16,
     apply: bool,
     log: rsf_anomaly_sr_log,
     user: Ptr,
 ) -> bool {
-    bind(leaves_table);
+    STAGE.bind();
     unsafe { rsf_anomaly_sr_stage_configure_ini(ini, apply, log, user) }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_install_build(
-    leaves_table: &'static Native,
-    image: Ptr,
-    build: usize,
-) -> bool {
+extern "C" fn rsf_anomaly_sr_stage_install_build(image: Ptr, build: usize) -> bool {
     let Some(selected) = BUILDS.get(build) else {
         return false;
     };
     let size = selected.native.image_size;
-    bind(leaves_table);
+    STAGE.bind();
     STAGE.install(image, size, size, from_ref(selected).cast())
 }
-
 #[cfg(feature = "native-entry")]
 pub(crate) fn rsf_anomaly_sr_depth_rva(build: usize) -> u32 {
     SR.get(build).map_or(0, |profile| profile.hw_base_zb_rva)

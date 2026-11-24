@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
-/* Native leaves of the SR D3D11 table. Rust owns the table and every typed COM call; this file keeps the shared
-   default-view and pipeline-state helpers and the descriptor layout checks against the Windows SDK. */
+/* Native leaves of the SR D3D11 calls. Rust owns every typed COM call; this file keeps the pipeline-state snapshot
+   (sr_d3d11/native.rs calls it) and the descriptor layout checks against the Windows SDK. */
 #include "native_memory.h"
 #include "sr_d3d11_platform.h"
 #include "sr_swap_platform.h"
@@ -31,12 +31,7 @@ _Static_assert((D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_SHADER_LOA
     D3D11_FORMAT_SUPPORT_RENDER_TARGET | D3D11_FORMAT_SUPPORT_BLENDABLE) == 0xc320 &&
     D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW == 0x02000000, "D3D11 format support bits");
 
-static void* default_view(void* device, void* texture)
-{
-    return rsf_d3d11_create_shader_view(device, texture);
-}
-
-static void* save_state(void* context)
+void* rsf_anomaly_sr_save_state(void* context)
 {
     rsf_d3d11_state* state = (rsf_d3d11_state*)calloc(1, sizeof(*state));
     if (!state) return NULL;
@@ -47,15 +42,8 @@ static void* save_state(void* context)
     return state;
 }
 
-static void restore_state(void* context, void* snapshot)
+void rsf_anomaly_sr_restore_state(void* context, void* snapshot)
 {
     rsf_d3d11_state_restore(context, (rsf_d3d11_state*)snapshot);
     free(snapshot);
-}
-
-static const rsf_sr_d3d11_foreign foreign = {default_view, save_state, restore_state};
-
-const rsf_sr_d3d11* rsf_anomaly_sr_d3d11_platform(void)
-{
-    return rsf_anomaly_sr_d3d11_register(&foreign);
 }

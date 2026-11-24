@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::sr_d3d11::tests::{CONTEXT, Call, DEVICE, PLATFORM, calls, extent, fake, ptr};
+use crate::sr_d3d11::tests::{CONTEXT, Call, DEVICE, calls, extent, fake, ptr};
 
 fn pass(kind: u32) -> Option<Pass> {
-    Pass::new(&PLATFORM, ptr(DEVICE), kind, None, null_mut())
+    Pass::new(ptr(DEVICE), kind, None, null_mut())
 }
 
 fn views() -> DrawViews {

@@ -3,7 +3,7 @@
 mod decode;
 mod provider;
 
-use super::{DrawViews, Extent, PREPARE, Pass, Platform, REINSERT, TemporalTargets, UPSCALE};
+use super::{DrawViews, Extent, PREPARE, Pass, REINSERT, TemporalTargets, UPSCALE};
 use crate::sr_fixture_device::Device;
 use crate::sr_fixture_readback::rsf_anomaly_sr_fixture_readback;
 use crate::sr_pass::PassInputs;
@@ -238,8 +238,8 @@ fn frame_inputs(
     input
 }
 
-fn make_pass(d: &Device, platform: &'static Platform) -> Pass {
-    let pass = Pass::new(platform, d.device.as_raw(), UPSCALE, Some(log), null_mut()).unwrap();
+fn make_pass(d: &Device) -> Pass {
+    let pass = Pass::new(d.device.as_raw(), UPSCALE, Some(log), null_mut()).unwrap();
     assert!(pass.temporal_ready());
     pass
 }
@@ -265,14 +265,14 @@ fn prepare(
     assert!(pass.run(d.context.as_raw(), PREPARE, &views));
 }
 
-fn prepare_case(d: &Device, platform: &'static Platform) {
+fn prepare_case(d: &Device) {
     let (size, output) = ([16, 8], [24, 12]);
     let [w, h] = size;
-    let pass = make_pass(d, platform);
+    let pass = make_pass(d);
     let device = d.device.as_raw();
     let format = HDR.0 as u32;
     let targets =
-        TemporalTargets::new(platform, device, extent(size), extent(output), format).unwrap();
+        TemporalTargets::new(device, extent(size), extent(output), format).unwrap();
     assert!(targets.matches(device, extent(size), extent(output), format));
     assert!(!targets.matches(device, extent([w + 1, h]), extent(output), format));
     let mut depths = Vec::new();
@@ -405,7 +405,6 @@ fn prepare_case(d: &Device, platform: &'static Platform) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_temporal_device_fixture(
-    platform: &'static Platform,
     graphics: &Graphics,
     argc: i32,
     argv: *const *const c_char,
@@ -428,7 +427,7 @@ unsafe extern "C" fn rsf_anomaly_sr_temporal_device_fixture(
         let cases: [(&[u8], &dyn Fn()); 3] = [
             (b"decode", &|| decode::decode_case(&d, graphics)),
             (b"thin", &|| decode::thin_case(&d, graphics)),
-            (b"prepare", &|| prepare_case(&d, platform)),
+            (b"prepare", &|| prepare_case(&d)),
         ];
         for (name, case) in cases {
             if selected.is_empty() || selected == name {
@@ -443,7 +442,7 @@ unsafe extern "C" fn rsf_anomaly_sr_temporal_device_fixture(
     }
     if matches!(selected, b"" | b"provider") {
         if let Some(root) = root.filter(|path| !path.is_empty()) {
-            match catch_unwind(AssertUnwindSafe(|| provider::run(platform, &root))) {
+            match catch_unwind(AssertUnwindSafe(|| provider::run(&root))) {
                 Ok(true) => ran += 1,
                 Ok(false) => skipped += 1,
                 Err(_) => {

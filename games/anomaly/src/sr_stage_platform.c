@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* Native leaves of the SR stage driver. sr_stage.rs owns the lifecycle, admission, ordering, configuration and
-   status; sr_stage/native.rs builds the production leaf table over the Rust profile records. This file keeps what Rust
+   status; sr_stage/native.rs calls these leaves by name over the Rust profile records. This file keeps what Rust
    cannot express: the five stage trampolines and the position-binder slot replacement, the SEH calls into the engine,
    the guarded memory copy, the hook set and the C entries. */
 #include "sr_stage.h"
@@ -79,13 +79,13 @@ static void __fastcall sun_cascades_hook(void* self)
 
 /* cl_pos_decompress_params::setup is reached only through the binder's vtable (R_constant_setup::setup, slot 0). The
    AVX body has a VEX instruction seven bytes in, which MinHook cannot relocate, so both builds swap the slot. */
-static void __fastcall position_setup_hook(void* self, void* constant)
+void rsf_anomaly_sr_position_setup_detour(void* self, void* constant)
 {
     ((setup_fn)rsf_anomaly_slot_original(RSF_ANOMALY_POSITION_SLOT))(self, constant);
     if (rsf_anomaly_position_slot_active()) rsf_anomaly_sr_stage_position_setup(constant);
 }
 
-static bool install_hooks(void* image, uint32_t size, rsf_anomaly_hook_site* sites, size_t count)
+bool rsf_anomaly_sr_native_install_hooks(void* image, uint32_t size, rsf_anomaly_hook_site* sites, size_t count)
 {
     static void* const detours[RSF_ANOMALY_SR_DETOUR_COUNT] = {
         (void*)&prepare_hook, (void*)&combine_hook, (void*)&sunshafts_hook, (void*)&blur_hook,
@@ -98,16 +98,16 @@ static bool install_hooks(void* image, uint32_t size, rsf_anomaly_hook_site* sit
     }
     return rsf_anomaly_hooks_install(&hooks, image, size, sites, count);
 }
-static bool hooks_created(void) { return rsf_anomaly_hooks_created(&hooks); }
-static bool enable_hooks(void) { return rsf_anomaly_hooks_enable(&hooks); }
-static bool disable_hooks(void) { return rsf_anomaly_hooks_disable(&hooks); }
+bool rsf_anomaly_sr_native_hooks_created(void) { return rsf_anomaly_hooks_created(&hooks); }
+bool rsf_anomaly_sr_native_enable_hooks(void) { return rsf_anomaly_hooks_enable(&hooks); }
+bool rsf_anomaly_sr_native_disable_hooks(void) { return rsf_anomaly_hooks_disable(&hooks); }
 
 /* ---- guarded engine calls (byte-guarded at install, x64 __fastcall) ------------------------------------------- */
 typedef void (__fastcall *set_projection_fn)(void* xforms, const void* matrix);
 typedef void (__fastcall *set_mip_bias_fn)(void* cache, float bias);
 typedef unsigned char* (__fastcall *constant_buffer_fn)(void* constants, void* constant, uint32_t stage);
 
-static bool set_projection(void* function, void* xforms, const void* matrix)
+bool rsf_anomaly_sr_native_set_projection(void* function, void* xforms, const void* matrix)
 {
 #ifdef _MSC_VER
     RSF_FOREIGN_TRY {
@@ -122,7 +122,7 @@ static bool set_projection(void* function, void* xforms, const void* matrix)
 #endif
 }
 
-static bool set_mip_bias(void* function, void* cache, float bias)
+bool rsf_anomaly_sr_native_set_mip_bias(void* function, void* cache, float bias)
 {
 #ifdef _MSC_VER
     RSF_FOREIGN_TRY {
@@ -137,7 +137,7 @@ static bool set_mip_bias(void* function, void* cache, float bias)
 #endif
 }
 
-static uintptr_t constant_buffer(void* function, void* constants, uintptr_t constant, uint32_t stage)
+uintptr_t rsf_anomaly_sr_native_constant_buffer(void* function, void* constants, uintptr_t constant, uint32_t stage)
 {
 #ifdef _MSC_VER
     RSF_FOREIGN_TRY {
@@ -150,39 +150,18 @@ static uintptr_t constant_buffer(void* function, void* constants, uintptr_t cons
 #endif
 }
 
-/* ---- memory and helpers ------------------------------------------------------------------------------------------ */
-static bool copy(void* output, const void* input, size_t size) { return guarded_copy(output, input, size); }
-
-static const void* d3d11(void) { return rsf_anomaly_sr_d3d11_platform(); }
-
-static const rsf_anomaly_sr_native native = {
-    copy,
-    set_projection,
-    set_mip_bias,
-    constant_buffer,
-    install_hooks,
-    hooks_created,
-    enable_hooks,
-    disable_hooks,
-    (void*)&position_setup_hook,
-    rsf_anomaly_compare_slot,
-    rsf_anomaly_geometry_current_view,
-    rsf_texture_pixel_bytes,
-    rsf_d3d11_create_shader_view,
-    d3d11,
-};
-
-const rsf_anomaly_sr_native* rsf_anomaly_sr_native_leaves(void) { return &native; }
+/* ---- memory ---------------------------------------------------------------------------------------------------- */
+bool rsf_anomaly_sr_native_copy(void* output, const void* input, size_t size) { return guarded_copy(output, input, size); }
 
 /* ---- C entries for the bootstrap and observer leaves (stage_entries.h) ---------------------------------------- */
 _Static_assert(sizeof(wchar_t) == sizeof(uint16_t), "UTF-16 INI path");
 
 bool rsf_anomaly_sr_configure_native(const wchar_t* ini, bool apply, rsf_game_log_fn log)
 {
-    return rsf_anomaly_sr_stage_configure_native(&native, (const uint16_t*)ini, apply, log, NULL);
+    return rsf_anomaly_sr_stage_configure_native((const uint16_t*)ini, apply, log, NULL);
 }
 
 bool rsf_anomaly_sr_install_native(void* image, size_t build)
 {
-    return rsf_anomaly_sr_stage_install_build(&native, image, build);
+    return rsf_anomaly_sr_stage_install_build(image, build);
 }

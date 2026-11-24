@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
-//! Typed D3D11 calls for the SR owners and their native fixtures.
+//! Typed D3D11 calls for the SR owners and their native fixtures. Under test the owners call the recording fakes, so
+//! these are compiled but unused.
+#![cfg_attr(test, allow(dead_code))]
 use super::{
-    DEPTH_SRV, DSV, Draw, Extent, Log, Platform, Ptr, ROUND_TRIP, RTV, SRV, Texture, UAV, View,
+    DEPTH_SRV, DSV, Draw, Extent, Log, Ptr, ROUND_TRIP, RTV, SRV, Texture, UAV, View,
 };
 use rsf_shader_compiler::{Compiler, Request, compile};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{copy_nonoverlapping, null_mut};
 use std::slice;
-use std::sync::OnceLock;
 use windows::Win32::Graphics::Direct3D::{
     D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D11_SRV_DIMENSION_TEXTURE2D,
 };
@@ -19,57 +20,46 @@ fn owned<T: Interface>(value: Option<T>) -> Ptr {
     value.map_or(null_mut(), Interface::into_raw)
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Foreign {
-    default_view: unsafe extern "C" fn(Ptr, Ptr) -> Ptr,
-    save_state: unsafe extern "C" fn(Ptr) -> Ptr,
-    restore_state: unsafe extern "C" fn(Ptr, Ptr),
-}
-const _: () = assert!(size_of::<Foreign>() == 24);
+/// The typed calls the SR owners make (`sr_d3d11::d3d`): these functions, the default shader view of the Graphics
+/// leaves and the pipeline-state snapshot of sr_d3d11_platform.c.
+#[cfg(not(test))]
+pub(crate) mod calls {
+    pub(crate) use super::{
+        compile_with_guarded_log as shader, rsf_anomaly_sr_as_texture as as_texture,
+        rsf_anomaly_sr_blend_state as blend_state, rsf_anomaly_sr_clear_stencil as clear_stencil,
+        rsf_anomaly_sr_constant_buffer as constant_buffer, rsf_anomaly_sr_depth_state as depth_state,
+        rsf_anomaly_sr_describe_texture as describe_texture,
+        rsf_anomaly_sr_describe_view as describe_view, rsf_anomaly_sr_draw as draw,
+        rsf_anomaly_sr_format_support as format_support, rsf_anomaly_sr_ps_constant as ps_constant,
+        rsf_anomaly_sr_ps_resources as ps_resources, rsf_anomaly_sr_raster_state as raster_state,
+        rsf_anomaly_sr_release as release, rsf_anomaly_sr_retain as retain,
+        rsf_anomaly_sr_targets as targets, rsf_anomaly_sr_texture as texture,
+        rsf_anomaly_sr_texture_device as texture_device,
+        rsf_anomaly_sr_update_constants as update_constants,
+        rsf_anomaly_sr_view_resource as view_resource, view_with_default_srv as view,
+    };
+    use super::Ptr;
 
-static FOREIGN: OnceLock<Foreign> = OnceLock::new();
-static PLATFORM: OnceLock<Platform> = OnceLock::new();
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_d3d11_register(foreign: &Foreign) -> &'static Platform {
-    let foreign = FOREIGN.get_or_init(|| *foreign);
-    PLATFORM.get_or_init(|| Platform {
-        retain: rsf_anomaly_sr_retain,
-        release: rsf_anomaly_sr_release,
-        as_texture: rsf_anomaly_sr_as_texture,
-        view_resource: rsf_anomaly_sr_view_resource,
-        texture_device: rsf_anomaly_sr_texture_device,
-        describe_texture: rsf_anomaly_sr_describe_texture,
-        describe_view: rsf_anomaly_sr_describe_view,
-        format_support: rsf_anomaly_sr_format_support,
-        texture: rsf_anomaly_sr_texture,
-        view: view_with_default_srv,
-        shader: compile_with_guarded_log,
-        constant_buffer: rsf_anomaly_sr_constant_buffer,
-        raster_state: rsf_anomaly_sr_raster_state,
-        blend_state: rsf_anomaly_sr_blend_state,
-        depth_state: rsf_anomaly_sr_depth_state,
-        save_state: foreign.save_state,
-        restore_state: foreign.restore_state,
-        update_constants: rsf_anomaly_sr_update_constants,
-        ps_constant: rsf_anomaly_sr_ps_constant,
-        targets: rsf_anomaly_sr_targets,
-        ps_resources: rsf_anomaly_sr_ps_resources,
-        clear_stencil: rsf_anomaly_sr_clear_stencil,
-        draw: rsf_anomaly_sr_draw,
-    })
+    unsafe extern "C" {
+        /// An owned snapshot of the immediate-context pipeline, or null.
+        #[link_name = "rsf_anomaly_sr_save_state"]
+        pub(crate) fn save_state(context: Ptr) -> Ptr;
+        /// Restores the snapshot and frees it.
+        #[link_name = "rsf_anomaly_sr_restore_state"]
+        pub(crate) fn restore_state(context: Ptr, snapshot: Ptr);
+        pub(super) fn rsf_d3d11_create_shader_view(device: Ptr, texture: Ptr) -> Ptr;
+    }
 }
 
-unsafe extern "C" fn view_with_default_srv(
+#[cfg(not(test))]
+pub(crate) unsafe fn view_with_default_srv(
     device: Ptr,
     texture: Ptr,
     kind: u32,
     source: Option<&View>,
 ) -> Ptr {
     if kind == SRV && source.is_none() {
-        let foreign = FOREIGN.get().expect("registered D3D11 platform");
-        return unsafe { (foreign.default_view)(device, texture) };
+        return unsafe { calls::rsf_d3d11_create_shader_view(device, texture) };
     }
     unsafe { rsf_anomaly_sr_view(device, texture, kind, source) }
 }
@@ -84,7 +74,7 @@ unsafe extern "C" fn shader_log(sink: Ptr, text: *const c_char) -> bool {
     unsafe { rsf_game_sys::rsf_game_log_guarded(sink.callback, sink.user, text) }
 }
 
-unsafe extern "C" fn compile_with_guarded_log(
+pub(crate) unsafe fn compile_with_guarded_log(
     device: Ptr,
     kind: u32,
     vertex: u32,
@@ -213,7 +203,7 @@ unsafe extern "C" fn rsf_anomaly_sr_compile_shader(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_retain(raw: Ptr) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_retain(raw: Ptr) {
     let object = unsafe { IUnknown::from_raw_borrowed(&raw) }.unwrap();
     unsafe { (object.vtable().AddRef)(raw) };
 }
@@ -226,7 +216,7 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_sr_release(raw: Ptr) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_as_texture(raw: Ptr) -> Ptr {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_as_texture(raw: Ptr) -> Ptr {
     let resource = unsafe { ID3D11Resource::from_raw_borrowed(&raw) }.unwrap();
     owned(resource.cast::<ID3D11Texture2D>().ok())
 }
@@ -238,7 +228,7 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_sr_view_resource(raw: Ptr) -> Ptr {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_texture_device(raw: Ptr) -> Ptr {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_texture_device(raw: Ptr) -> Ptr {
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.unwrap();
     owned(unsafe { texture.GetDevice() }.ok())
 }
@@ -253,7 +243,7 @@ pub(crate) unsafe fn texture_format(raw: Ptr) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_describe_texture(raw: Ptr, out: &mut Texture) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_describe_texture(raw: Ptr, out: &mut Texture) {
     let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.unwrap();
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { texture.GetDesc(&mut desc) };
@@ -278,7 +268,7 @@ fn write_descriptor<D>(out: &mut View, desc: &D) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_describe_view(raw: Ptr, kind: u32, out: &mut View) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_describe_view(raw: Ptr, kind: u32, out: &mut View) {
     macro_rules! describe {
         ($interface:ident, $desc:ident, $dimension:ident) => {{
             let view = unsafe { $interface::from_raw_borrowed(&raw) }.unwrap();
@@ -324,13 +314,13 @@ unsafe extern "C" fn rsf_anomaly_sr_describe_view(raw: Ptr, kind: u32, out: &mut
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_format_support(raw: Ptr, format: u32) -> u32 {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_format_support(raw: Ptr, format: u32) -> u32 {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     unsafe { device.CheckFormatSupport(DXGI_FORMAT(format as i32)) }.unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_texture(
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_texture(
     raw: Ptr,
     input: &Texture,
     initial: *const c_void,
@@ -414,7 +404,7 @@ unsafe extern "C" fn rsf_anomaly_sr_view(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_constant_buffer(raw: Ptr) -> Ptr {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_constant_buffer(raw: Ptr) -> Ptr {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: 16,
@@ -430,7 +420,7 @@ unsafe extern "C" fn rsf_anomaly_sr_constant_buffer(raw: Ptr) -> Ptr {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_raster_state(raw: Ptr) -> Ptr {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_raster_state(raw: Ptr) -> Ptr {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let desc = D3D11_RASTERIZER_DESC {
         FillMode: D3D11_FILL_SOLID,
@@ -446,7 +436,7 @@ unsafe extern "C" fn rsf_anomaly_sr_raster_state(raw: Ptr) -> Ptr {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_blend_state(raw: Ptr) -> Ptr {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_blend_state(raw: Ptr) -> Ptr {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let desc = {
         let mut desc = D3D11_BLEND_DESC::default();
@@ -461,7 +451,7 @@ unsafe extern "C" fn rsf_anomaly_sr_blend_state(raw: Ptr) -> Ptr {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_depth_state(raw: Ptr, write_depth: u32) -> Ptr {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_depth_state(raw: Ptr, write_depth: u32) -> Ptr {
     let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
     let desc = D3D11_DEPTH_STENCIL_DESC {
         DepthEnable: (write_depth != 0).into(),
@@ -481,14 +471,14 @@ unsafe extern "C" fn rsf_anomaly_sr_depth_state(raw: Ptr, write_depth: u32) -> P
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_update_constants(raw: Ptr, buffer: Ptr, data: *const u32) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_update_constants(raw: Ptr, buffer: Ptr, data: *const u32) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let buffer = unsafe { ID3D11Buffer::from_raw_borrowed(&buffer) }.unwrap();
     unsafe { context.UpdateSubresource(buffer, 0, None, data.cast(), 0, 0) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_ps_constant(raw: Ptr, slot: u32, buffer: Ptr) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_ps_constant(raw: Ptr, slot: u32, buffer: Ptr) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     // The interface option has the same ABI as this nullable COM pointer.
     unsafe {
@@ -500,7 +490,7 @@ unsafe extern "C" fn rsf_anomaly_sr_ps_constant(raw: Ptr, slot: u32, buffer: Ptr
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_targets(raw: Ptr, count: u32, targets: *const Ptr, depth: Ptr) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_targets(raw: Ptr, count: u32, targets: *const Ptr, depth: Ptr) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let depth = unsafe { ID3D11DepthStencilView::from_raw_borrowed(&depth) };
     // The pass always supplies a non-null pointer to its nullable RTV array.
@@ -511,7 +501,7 @@ unsafe extern "C" fn rsf_anomaly_sr_targets(raw: Ptr, count: u32, targets: *cons
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_ps_resources(
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_ps_resources(
     raw: Ptr,
     slot: u32,
     count: u32,
@@ -523,7 +513,7 @@ unsafe extern "C" fn rsf_anomaly_sr_ps_resources(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_clear_stencil(raw: Ptr, depth: Ptr) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_clear_stencil(raw: Ptr, depth: Ptr) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let depth = unsafe { ID3D11DepthStencilView::from_raw_borrowed(&depth) }.unwrap();
     unsafe { context.ClearDepthStencilView(depth, D3D11_CLEAR_STENCIL.0, 1.0, 0) };
@@ -566,7 +556,7 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_sr_set_full_viewport(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_draw(raw: Ptr, draw: &Draw) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_sr_draw(raw: Ptr, draw: &Draw) {
     let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
     let vertex = unsafe { ID3D11VertexShader::from_raw_borrowed(&draw.vertex) };
     let pixel = unsafe { ID3D11PixelShader::from_raw_borrowed(&draw.pixel) };
