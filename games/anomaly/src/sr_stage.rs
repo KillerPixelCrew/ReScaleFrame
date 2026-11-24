@@ -2815,7 +2815,7 @@ fn live_options() -> [crate::overlay::rsf_anomaly_overlay_option; 13] {
     ]
 }
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_quiesce() -> bool {
+pub(crate) extern "C" fn rsf_anomaly_sr_stage_quiesce() -> bool {
     STAGE.quiesce()
 }
 #[cfg(windows)]
@@ -2851,7 +2851,7 @@ extern "C" fn rsf_anomaly_sr_stage_position_setup(constant: *mut c_void) {
     STAGE.position_setup(constant);
 }
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_frame_end() {
+pub(crate) extern "C" fn rsf_anomaly_sr_stage_frame_end() {
     STAGE.frame_end();
 }
 #[unsafe(no_mangle)]

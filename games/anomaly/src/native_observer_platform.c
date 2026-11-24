@@ -11,7 +11,7 @@
 // native_observer.rs.
 const char* rsf_anomaly_observer_identify(rsf_anomaly_observer_engine*, const rsf_anomaly_image_headers*,
     rsf_anomaly_guard_read_fn);
-bool rsf_anomaly_observer_before(const rsf_anomaly_observer_platform*, uint32_t boundary);
+bool rsf_anomaly_observer_before(uint32_t boundary);
 void rsf_anomaly_observer_after(const rsf_anomaly_observer_platform*, uint32_t boundary,
     const float* view, const float* projection, uint32_t target);
 void rsf_anomaly_observer_leave(void);
@@ -63,22 +63,11 @@ static const rsf_anomaly_observer_platform platform = {
     .install_geometry = install_geometry,
     .disable_geometry = rsf_anomaly_geometry_disable_native,
     .install_sr = install_sr,
-    .quiesce_sr = rsf_anomaly_sr_stage_quiesce,
     .install_motion = install_motion,
-    .quiesce_motion = rsf_anomaly_motion_stage_quiesce,
     .enable_input = enable_input,
     .disable_input = disable_input,
-    .input_idle = rsf_anomaly_input_idle,
     .read_frame = read_frame,
     .guarded_copy = guarded_copy,
-    .render_begin = rsf_anomaly_fg_stage_render_begin,
-    .sr_frame_end = rsf_anomaly_sr_stage_frame_end,
-    .end_before = rsf_anomaly_fg_stage_end_before,
-    .end_after = rsf_anomaly_fg_stage_end_after,
-    .camera = rsf_anomaly_fg_stage_camera,
-    .ui_boundary = rsf_anomaly_fg_stage_ui_boundary,
-    .scope_frame = rsf_anomaly_fg_stage_scope,
-    .device_reset = rsf_anomaly_fg_stage_device_reset,
 };
 
 static void call_original(const invocation* call)
@@ -119,7 +108,7 @@ static void run(const invocation* call, bool completes)
 #ifdef _MSC_VER
 static void observe(const invocation* call)
 {
-    const bool completes = rsf_anomaly_observer_before(&platform, call->boundary);
+    const bool completes = rsf_anomaly_observer_before(call->boundary);
     RSF_FOREIGN_TRY {
         run(call, completes);
     } RSF_FOREIGN_FINALLY {
@@ -131,7 +120,7 @@ static void leave_invocation(const bool* entered) { (void)entered; rsf_anomaly_o
 static void observe(const invocation* call)
 {
     const bool completes __attribute__((cleanup(leave_invocation))) =
-        rsf_anomaly_observer_before(&platform, call->boundary);
+        rsf_anomaly_observer_before(call->boundary);
     run(call, completes);
 }
 #endif

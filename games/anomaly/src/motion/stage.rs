@@ -694,7 +694,7 @@ unsafe extern "C" fn rsf_anomaly_motion_stage_install(
     stage.install(selected, native.sha256.as_ptr())
 }
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_stage_quiesce() -> bool {
+pub(crate) extern "C" fn rsf_anomaly_motion_stage_quiesce() -> bool {
     STAGE.get().is_none_or(Stage::quiesce)
 }
 

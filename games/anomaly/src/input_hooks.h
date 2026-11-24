@@ -21,7 +21,6 @@ bool rsf_anomaly_input_install(const struct rsf_anomaly_guard_image*, size_t bui
     uint32_t, void*, rsf_anomaly_input_exchange, const char**) RSF_INPUT_NOEXCEPT;
 uint32_t rsf_anomaly_input_frame_begin(rsf_anomaly_input_read, void (*)(uint32_t) RSF_INPUT_NOEXCEPT) RSF_INPUT_NOEXCEPT;
 void rsf_anomaly_input_frame_exit(uint32_t) RSF_INPUT_NOEXCEPT;
-bool rsf_anomaly_input_idle(void) RSF_INPUT_NOEXCEPT;
 void rsf_anomaly_input_received(uint8_t, void (*)(uint32_t, uint32_t) RSF_INPUT_NOEXCEPT) RSF_INPUT_NOEXCEPT;
 void rsf_anomaly_overlay_set_input_observer(void (*)(uint8_t) RSF_INPUT_NOEXCEPT) RSF_INPUT_NOEXCEPT;
 

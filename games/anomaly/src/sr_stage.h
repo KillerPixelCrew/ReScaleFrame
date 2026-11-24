@@ -44,11 +44,7 @@ extern "C" {
    (rsf_anomaly_sr_configure_native, rsf_anomaly_sr_install_native), which bind the leaf table first. Install verifies
    every guard of the selected stage on the verified image and installs the hooks, or refuses and leaves the game stock;
    it returns true when nothing is selected. */
-/* Rust (sr_stage.rs). Quiesce disables the hooks, restores an open window and drops the twins. Frame end runs
-   immediately before the original IRenderDeviceRender::End (before Present). Report emits two log lines with the
-   per-window deltas and the totals, nothing when inactive. */
-bool rsf_anomaly_sr_stage_quiesce(void) RSF_ANOMALY_SR_NOEXCEPT;
-void rsf_anomaly_sr_stage_frame_end(void) RSF_ANOMALY_SR_NOEXCEPT;
+/* Rust (sr_stage.rs). Report emits two log lines with the per-window deltas and the totals, nothing when inactive. */
 void rsf_anomaly_sr_stage_report(rsf_anomaly_sr_log, void*) RSF_ANOMALY_SR_NOEXCEPT;
 
 #ifdef __cplusplus

@@ -5,6 +5,26 @@ mod report;
 #[cfg(test)]
 mod tests;
 
+// The Rust stages the native boundaries drive, called directly (the tests' fakes under test). The C
+// table (native_observer_platform.c) keeps only the C leaves: trampolines, hooks and guarded reads.
+#[cfg(not(test))]
+mod stages {
+    pub(super) use crate::fg_stage::{
+        rsf_anomaly_fg_stage_camera as camera, rsf_anomaly_fg_stage_device_reset as device_reset,
+        rsf_anomaly_fg_stage_end_after as end_after, rsf_anomaly_fg_stage_end_before as end_before,
+        rsf_anomaly_fg_stage_render_begin as render_begin,
+        rsf_anomaly_fg_stage_scope as scope_frame,
+        rsf_anomaly_fg_stage_ui_boundary as ui_boundary,
+    };
+    pub(super) use crate::input::rsf_anomaly_input_idle as input_idle;
+    pub(super) use crate::motion::stage::rsf_anomaly_motion_stage_quiesce as quiesce_motion;
+    pub(super) use crate::sr_stage::{
+        rsf_anomaly_sr_stage_frame_end as sr_frame_end, rsf_anomaly_sr_stage_quiesce as quiesce_sr,
+    };
+}
+#[cfg(test)]
+use tests::stages;
+
 use crate::engine_guards::{Image, Read};
 use crate::executable::observer_build;
 use crate::native_hooks::{ImageHeaders, Site};
@@ -373,17 +393,17 @@ impl Observer {
         // End and reset can still use stage resources after observation closes.
         // The inactive detours continue to supply the native geometry scope
         // until SR and motion have finished teardown.
-        if !self.idle(platform) || (self.fg_frame_open)() {
+        if !self.idle() || (self.fg_frame_open)() {
             return BUSY;
         }
         if control.retirement == Retirement::Sr {
-            if !unsafe { (platform.quiesce_sr.unwrap())() } {
+            if !stages::quiesce_sr() {
                 return NATIVE_REFUSED;
             }
             control.retirement = Retirement::Motion;
         }
         if control.retirement == Retirement::Motion {
-            if !unsafe { (platform.quiesce_motion.unwrap())() } {
+            if !stages::quiesce_motion() {
                 return NATIVE_REFUSED;
             }
             control.retirement = Retirement::ObserverHooks;
@@ -401,15 +421,15 @@ impl Observer {
             control.geometry_installed = false;
             control.retirement = Retirement::Callbacks;
         }
-        if !self.idle(platform) || !(self.fg_retire_inputs)() {
+        if !self.idle() || !(self.fg_retire_inputs)() {
             return BUSY;
         }
         control.retirement = Retirement::Inactive;
         OK
     }
 
-    fn idle(&self, platform: &Platform) -> bool {
-        self.activity.load(Ordering::Acquire) == 0 && unsafe { (platform.input_idle.unwrap())() }
+    fn idle(&self) -> bool {
+        self.activity.load(Ordering::Acquire) == 0 && stages::input_idle()
     }
 
     fn control(&self, platform: &Platform, stop: bool) -> rsf_result {
@@ -418,7 +438,7 @@ impl Observer {
         };
         let result = self.quiesce_locked(&mut control, platform);
         if result == OK && stop {
-            if !self.idle(platform) {
+            if !self.idle() {
                 control.retirement = Retirement::Callbacks;
                 return BUSY;
             }
@@ -465,25 +485,23 @@ impl Observer {
             o.height = sample.height;
         }
         if read {
-            unsafe { (platform.render_begin.unwrap())(frame.id, frame.width, frame.height) };
+            stages::render_begin(frame.id, frame.width, frame.height);
         }
     }
 
-    fn end_before(&self, platform: &Platform, observing: bool) -> bool {
+    fn end_before(&self, observing: bool) -> bool {
         // A frame can remain open between callbacks after quiesce has closed
         // admission. Its actual End still owns the matching Runtime scope.
         if !observing && !(self.fg_frame_open)() {
             return false;
         }
-        unsafe {
-            (platform.sr_frame_end.unwrap())();
-            (platform.end_before.unwrap())();
-        }
+        stages::sr_frame_end();
+        stages::end_before();
         true
     }
 
-    fn end_after(&self, platform: &Platform) {
-        unsafe { (platform.end_after.unwrap())() };
+    fn end_after(&self) {
+        stages::end_after();
         let o = self.observation();
         if o.render_frames != 1 && !o.render_frames.is_multiple_of(120) {
             return;
@@ -544,7 +562,7 @@ impl Observer {
             }
         }
         if read {
-            unsafe { (platform.camera.unwrap())(sample.view.as_ptr(), sample.projection.as_ptr()) };
+            unsafe { stages::camera(sample.view.as_ptr(), sample.projection.as_ptr()) };
         }
     }
 
@@ -645,11 +663,11 @@ pub(crate) unsafe extern "C" fn rsf_anomaly_observation(out: *mut Observation) -
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_before(platform: &Platform, boundary: u32) -> bool {
+extern "C" fn rsf_anomaly_observer_before(boundary: u32) -> bool {
     let observing = OBSERVER.enter();
     if boundary == RSF_ANOMALY_OBSERVER_END {
         // A frame opened before quiesce can still own the matching End.
-        return OBSERVER.end_before(platform, observing);
+        return OBSERVER.end_before(observing);
     }
     if !observing || boundary == RSF_ANOMALY_OBSERVER_RESET_END {
         return false;
@@ -663,7 +681,7 @@ extern "C" fn rsf_anomaly_observer_before(platform: &Platform, boundary: u32) ->
         }
         RSF_ANOMALY_OBSERVER_UI => {
             OBSERVER.update(|o| o.hud_passes = o.hud_passes.wrapping_add(1));
-            unsafe { (platform.ui_boundary.unwrap())() };
+            stages::ui_boundary();
         }
         RSF_ANOMALY_OBSERVER_RESET_BEGIN => {
             OBSERVER.update(|o| {
@@ -671,7 +689,7 @@ extern "C" fn rsf_anomaly_observer_before(platform: &Platform, boundary: u32) ->
                 o.generation = o.generation.wrapping_add(1);
                 o.camera_finite = 0;
             });
-            unsafe { (platform.device_reset.unwrap())() };
+            stages::device_reset();
         }
         _ => {}
     }
@@ -688,13 +706,13 @@ extern "C" fn rsf_anomaly_observer_after(
 ) {
     match boundary {
         RSF_ANOMALY_OBSERVER_BEGIN => OBSERVER.render_begin(platform),
-        RSF_ANOMALY_OBSERVER_END => OBSERVER.end_after(platform),
+        RSF_ANOMALY_OBSERVER_END => OBSERVER.end_after(),
         RSF_ANOMALY_OBSERVER_CAMERA => OBSERVER.camera(platform, view, projection),
         RSF_ANOMALY_OBSERVER_TARGET_COPY => match target {
             1 => OBSERVER.update(|o| o.pda_copies = o.pda_copies.wrapping_add(1)),
             2 => {
                 OBSERVER.update(|o| o.scope_copies = o.scope_copies.wrapping_add(1));
-                unsafe { (platform.scope_frame.unwrap())() };
+                stages::scope_frame();
             }
             _ => {}
         },

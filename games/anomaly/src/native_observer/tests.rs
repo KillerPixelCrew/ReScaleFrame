@@ -18,14 +18,12 @@ unsafe extern "C" fn sample_copy(out: *mut c_void, source: *const c_void, size: 
     true
 }
 
-unsafe extern "C" fn accept_sample(_: *const f32, _: *const f32) {}
 
 #[test]
 fn camera_copy_refusal_keeps_the_last_complete_sample() {
     let observer = Observer::new(|| false, || true);
     let platform = Platform {
         guarded_copy: Some(sample_copy),
-        camera: Some(accept_sample),
         ..Platform::default()
     };
     let view = [1.0; 16];
@@ -84,24 +82,9 @@ unsafe extern "C" fn disable_hooks() -> bool {
     lock(&TEARDOWN).push("hooks");
     true
 }
-unsafe extern "C" fn input_idle() -> bool {
-    INPUT_IDLE.load(Ordering::Relaxed)
-}
-unsafe extern "C" fn quiesce_sr() -> bool {
-    lock(&TEARDOWN).push("SR");
-    true
-}
-unsafe extern "C" fn quiesce_motion() -> bool {
-    lock(&TEARDOWN).push("motion");
-    !MOTION_REFUSED.load(Ordering::Relaxed)
-}
 unsafe extern "C" fn disable_geometry() -> bool {
     lock(&TEARDOWN).push("geometry");
     true
-}
-unsafe extern "C" fn sr_frame_end() {}
-unsafe extern "C" fn fg_end_before() {
-    FG_ENDS.fetch_add(1, Ordering::Relaxed);
 }
 fn retire_fg_inputs() -> bool {
     if !FG_RETIRE_READY.load(Ordering::Relaxed) {
@@ -160,12 +143,7 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
     let platform = Platform {
         disable_input: Some(disable_input),
         disable_hooks: Some(disable_hooks),
-        input_idle: Some(input_idle),
-        quiesce_sr: Some(quiesce_sr),
-        quiesce_motion: Some(quiesce_motion),
         disable_geometry: Some(disable_geometry),
-        sr_frame_end: Some(sr_frame_end),
-        end_before: Some(fg_end_before),
         ..Platform::default()
     };
 
@@ -185,10 +163,10 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
     assert_eq!(observer.control(&platform, true), BUSY);
     assert_eq!(*lock(&TEARDOWN), ["input"]);
     assert!(!observer.enter());
-    assert!(observer.end_before(&platform, false));
+    assert!(observer.end_before(false));
     FG_FRAME_OPEN.store(false, Ordering::Relaxed);
     observer.leave();
-    assert!(!observer.end_before(&platform, false));
+    assert!(!observer.end_before(false));
     assert_eq!(FG_ENDS.load(Ordering::Relaxed), 1);
 
     MOTION_REFUSED.store(true, Ordering::Relaxed);
@@ -231,9 +209,6 @@ unsafe extern "C" fn read_frame(_: *const Engine, out: *mut Frame) -> bool {
     }
     reads == 0
 }
-unsafe extern "C" fn fg_render_begin(id: u32, width: u32, height: u32) {
-    *lock(&FG_SAMPLE) = Some((id, width, height));
-}
 
 #[test]
 fn observation_and_fg_share_one_guarded_source_frame_sample() {
@@ -245,7 +220,6 @@ fn observation_and_fg_share_one_guarded_source_frame_sample() {
     });
     let platform = Platform {
         read_frame: Some(read_frame),
-        render_begin: Some(fg_render_begin),
         ..Platform::default()
     };
 
@@ -266,4 +240,34 @@ fn observation_and_fg_share_one_guarded_source_frame_sample() {
         (0, 0, 0)
     );
     assert!(lock(&FG_SAMPLE).is_none());
+}
+
+/// The Rust stages: the teardown order and FG end count of the stop test, the frame sample of
+/// the shared-source test, and no-op boundaries.
+pub(super) mod stages {
+    use super::*;
+
+    pub(crate) fn quiesce_sr() -> bool {
+        lock(&TEARDOWN).push("SR");
+        true
+    }
+    pub(crate) fn quiesce_motion() -> bool {
+        lock(&TEARDOWN).push("motion");
+        !MOTION_REFUSED.load(Ordering::Relaxed)
+    }
+    pub(crate) fn input_idle() -> bool {
+        INPUT_IDLE.load(Ordering::Relaxed)
+    }
+    pub(crate) fn sr_frame_end() {}
+    pub(crate) fn end_before() {
+        FG_ENDS.fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn end_after() {}
+    pub(crate) fn render_begin(id: u32, width: u32, height: u32) {
+        *lock(&FG_SAMPLE) = Some((id, width, height));
+    }
+    pub(crate) unsafe fn camera(_: *const f32, _: *const f32) {}
+    pub(crate) fn ui_boundary() {}
+    pub(crate) fn scope_frame() {}
+    pub(crate) fn device_reset() {}
 }

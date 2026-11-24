@@ -17,15 +17,10 @@ extern "C" {
 // sr_stage_platform.c.
 bool rsf_anomaly_sr_configure_native(const wchar_t* ini, bool apply, rsf_game_log_fn) RSF_STAGE_NOEXCEPT;
 bool rsf_anomaly_sr_install_native(void* image, size_t build) RSF_STAGE_NOEXCEPT;
-// sr_stage.rs.
-bool rsf_anomaly_sr_stage_quiesce(void) RSF_STAGE_NOEXCEPT;
-void rsf_anomaly_sr_stage_frame_end(void) RSF_STAGE_NOEXCEPT;
 
 // motion_stage.cpp.
 void rsf_anomaly_motion_configure_native(const wchar_t* ini, rsf_game_log_fn) RSF_STAGE_NOEXCEPT;
 bool rsf_anomaly_motion_install_native(void* image, size_t build) RSF_STAGE_NOEXCEPT;
-// motion/stage.rs.
-bool rsf_anomaly_motion_stage_quiesce(void) RSF_STAGE_NOEXCEPT;
 
 // native_geometry_platform.c (declared with its other entries in native_geometry.h).
 bool rsf_anomaly_geometry_install_native(void* image, size_t build) RSF_STAGE_NOEXCEPT;

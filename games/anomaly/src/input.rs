@@ -158,7 +158,7 @@ pub(crate) extern "C" fn rsf_anomaly_input_activate(active: bool) {
 
 /// No `OnFrame` call is executing, so a retired hook can be left behind.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_idle() -> bool {
+pub(crate) extern "C" fn rsf_anomaly_input_idle() -> bool {
     IN_FLIGHT.load(Ordering::Acquire) == 0
 }
 
