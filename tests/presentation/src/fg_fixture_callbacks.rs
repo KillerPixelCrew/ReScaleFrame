@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: MIT
 //! Real provider preparation, latency and retirement receipts for the shared FG fixture.
-use crate::fg_bridge::*;
+use crate::fg_bridge::{Inputs, capture_flip, frame, hudless, record_inputs, source_id};
+use crate::present_fixture_startup::Raw;
 use crate::present_fixture_time::stamp;
-use crate::sys::rsf_fg_fixture_inputs;
 use crate::sys::*;
-use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};
+use rsf_game_sys::rsf_game_render_pass;
+use rsf_test_support::borrow;
+use rsf_test_support::d3d12::transition;
 use std::cell::{Cell, RefCell};
-use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
-
-type Raw = *mut c_void;
 
 const PHASE_UI_COMPLETE: u32 = 5;
 const RENDER_SUBMIT_END: u32 = 3;
@@ -25,7 +24,7 @@ pub(super) struct State {
     pub(super) accepted: Cell<bool>,
     pub(super) samples: Cell<u64>,
     pub(super) captured_frame: Cell<u64>,
-    pub(super) readback: Cell<Raw>,
+    pub(super) readback: RefCell<Option<ID3D12Resource>>,
     service: bool,
     hot: bool,
     flip: bool,
@@ -33,79 +32,33 @@ pub(super) struct State {
     inputs: RefCell<Option<Inputs>>,
 }
 
-struct Inputs {
-    depth: ID3D12Resource,
-    motion: ID3D12Resource,
-    cpu_heap: ID3D12DescriptorHeap,
-    gpu_heap: ID3D12DescriptorHeap,
-    color_heap: Option<ID3D12DescriptorHeap>,
-    stride: u32,
-}
-
-impl Drop for State {
-    fn drop(&mut self) {
-        let readback = self.readback.get();
-        if !readback.is_null() {
-            drop(unsafe { ID3D12Resource::from_raw(readback) });
+impl State {
+    pub(super) fn new(service: bool, hot: bool, flip: bool, mfg: bool) -> Self {
+        Self {
+            frame: Cell::new(0),
+            accepted: Cell::new(true),
+            samples: Cell::new(0),
+            captured_frame: Cell::new(0),
+            readback: RefCell::new(None),
+            service,
+            hot,
+            flip,
+            mfg,
+            inputs: RefCell::new(None),
         }
     }
-}
 
-impl State {
+    pub(super) fn set_inputs(&self, inputs: Inputs) {
+        *self.inputs.borrow_mut() = Some(inputs);
+    }
+
     fn check(&self, accepted: bool) {
         self.accepted.set(self.accepted.get() && accepted);
     }
+
     fn source(&self) -> u64 {
-        rsf_fg_bridge_fixture_source(self.frame.get(), u32::from(self.hot))
+        source_id(self.frame.get(), self.hot)
     }
-}
-
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_fg_fixture_state_create(
-    service: u32,
-    hot: u32,
-    flip: u32,
-    mfg: u32,
-) -> Raw {
-    Box::into_raw(Box::new(State {
-        frame: Cell::new(0),
-        accepted: Cell::new(true),
-        samples: Cell::new(0),
-        captured_frame: Cell::new(0),
-        readback: Cell::new(null_mut()),
-        service: service != 0,
-        hot: hot != 0,
-        flip: flip != 0,
-        mfg: mfg != 0,
-        inputs: RefCell::new(None),
-    }))
-    .cast()
-}
-
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_fg_fixture_state_destroy(state: Raw) {
-    if !state.is_null() {
-        drop(unsafe { Box::from_raw(state.cast::<State>()) });
-    }
-}
-
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_fg_fixture_state_inputs(
-    state: Raw,
-    inputs: &rsf_fg_fixture_inputs,
-) {
-    let state = unsafe { &*state.cast::<State>() };
-    *state.inputs.borrow_mut() = Some(unsafe {
-        Inputs {
-            depth: ID3D12Resource::from_raw(inputs.depth),
-            motion: ID3D12Resource::from_raw(inputs.motion),
-            cpu_heap: ID3D12DescriptorHeap::from_raw(inputs.cpu_heap),
-            gpu_heap: ID3D12DescriptorHeap::from_raw(inputs.gpu_heap),
-            color_heap: (!inputs.color_heap.is_null())
-                .then(|| ID3D12DescriptorHeap::from_raw(inputs.color_heap)),
-            stride: inputs.stride,
-        }
-    });
 }
 
 pub(super) fn provider() -> Option<&'static rsf_generation_provider> {
@@ -126,14 +79,14 @@ pub(super) unsafe fn provider_status(
 }
 
 fn resource(
-    raw: Raw,
+    resource: &ID3D12Resource,
     width: u32,
     height: u32,
     state: D3D12_RESOURCE_STATES,
 ) -> rsf_backend_resource {
     rsf_backend_resource {
         struct_size: size_of::<rsf_backend_resource>() as u32,
-        resource: raw,
+        resource: resource.as_raw(),
         generation: 1,
         width,
         height,
@@ -142,23 +95,17 @@ fn resource(
     }
 }
 
-unsafe fn transition(
-    commands: Raw,
-    texture: Raw,
-    from: D3D12_RESOURCE_STATES,
-    to: D3D12_RESOURCE_STATES,
+/// Records the frame's inputs on `commands` and hands them to the provider, or captures them for
+/// the service loop.
+pub(super) fn prepare_input(
+    state: &State,
+    commands: &ID3D12GraphicsCommandList,
+    back: &ID3D12Resource,
+    session: Raw,
 ) {
-    unsafe { rsf_fg_bridge_fixture_barrier(commands, texture, from.0 as u32, to.0 as u32) };
-}
-
-pub(super) unsafe extern "C" fn prepare_input(user: Raw, commands: Raw, back: Raw, session: Raw) {
-    let state = unsafe { &*user.cast::<State>() };
     if state.flip {
         state.captured_frame.set(state.frame.get());
-        let mut readback = state.readback.get();
-        let captured = unsafe { rsf_fg_bridge_fixture_capture_flip(commands, back, &mut readback) };
-        state.readback.set(readback);
-        if captured == 0 {
+        if !capture_flip(commands, back, &mut state.readback.borrow_mut()) {
             state.check(false);
             return;
         }
@@ -186,30 +133,15 @@ pub(super) unsafe extern "C" fn prepare_input(user: Raw, commands: Raw, back: Ra
                 .is_some_and(|configure| unsafe { configure(session, &options) } == 0),
         );
     }
-    let depth = inputs.depth.as_raw();
-    let motion = inputs.motion.as_raw();
-    unsafe {
-        rsf_fg_bridge_fixture_inputs(
-            commands,
-            depth,
-            motion,
-            inputs.cpu_heap.as_raw(),
-            inputs.gpu_heap.as_raw(),
-            inputs.stride,
-        )
-    };
-    let mut record: rsf_frame_record = unsafe { std::mem::zeroed() };
-    unsafe {
-        rsf_fg_bridge_fixture_frame(
-            back,
-            depth,
-            state.source(),
-            stamp(),
-            PHASE_UI_COMPLETE,
-            &mut record,
-        )
-    };
-    let frame = rsf_fg_frame {
+    record_inputs(commands, inputs);
+    let record = frame(
+        back,
+        &inputs.depth,
+        state.source(),
+        stamp(),
+        PHASE_UI_COMPLETE,
+    );
+    let provider_frame = rsf_fg_frame {
         struct_size: size_of::<rsf_fg_frame>() as u32,
         record: &record,
         interpolate: 1,
@@ -222,13 +154,13 @@ pub(super) unsafe extern "C" fn prepare_input(user: Raw, commands: Raw, back: Ra
             D3D12_RESOURCE_STATE_PRESENT,
         ),
         depth: resource(
-            depth,
+            &inputs.depth,
             record.render_width,
             record.render_height,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
         ),
         motion: resource(
-            motion,
+            &inputs.motion,
             record.render_width,
             record.render_height,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -236,41 +168,42 @@ pub(super) unsafe extern "C" fn prepare_input(user: Raw, commands: Raw, back: Ra
         ..Default::default()
     };
     if state.service {
-        unsafe { rsf_fg12_capture(commands, &record, depth, motion) };
-    }
-    let ready = if state.hot {
-        let heap = inputs.color_heap.as_ref().unwrap();
-        let ready = unsafe {
-            rsf_fg_bridge_fixture_hudless(
-                commands,
-                back,
-                heap.as_raw(),
-                state.frame.get(),
-                u32::from(state.mfg),
-                record.output_width,
-                record.output_height,
+        unsafe {
+            rsf_fg12_capture(
+                commands.as_raw(),
+                &record,
+                inputs.depth.as_raw(),
+                inputs.motion.as_raw(),
             )
-        } != 0;
+        };
+    }
+    let ready = !state.hot || {
+        let heap = inputs.color_heap.as_ref().unwrap();
+        let ready = hudless(
+            commands,
+            back,
+            heap,
+            state.frame.get(),
+            state.mfg,
+            record.output_width,
+            record.output_height,
+        );
         if ready {
             let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
             pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
             pass.session_id = 1;
             pass.source_frame_id = record.frame_id;
             pass.view_key = 1;
-            pass.color_input = back;
-            unsafe {
-                rsf_fg12_hudless(commands, &pass);
-                transition(
-                    commands,
-                    back,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    D3D12_RESOURCE_STATE_PRESENT,
-                );
-            }
+            pass.color_input = back.as_raw();
+            unsafe { rsf_fg12_hudless(commands.as_raw(), &pass) };
+            transition(
+                commands,
+                back,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PRESENT,
+            );
         }
         ready
-    } else {
-        true
     };
     if !ready {
         state.check(false);
@@ -278,27 +211,27 @@ pub(super) unsafe extern "C" fn prepare_input(user: Raw, commands: Raw, back: Ra
     if ready && !state.service {
         let result = api
             .and_then(|api| api.prepare)
-            .map_or(-1, |prepare| unsafe { prepare(session, commands, &frame) });
+            .map_or(-1, |prepare| unsafe {
+                prepare(session, commands.as_raw(), &provider_frame)
+            });
         if result != 0 {
             println!("prepare frame={} refused={result}", state.frame.get());
         }
         state.check(result == 0);
     }
-    for texture in [depth, motion] {
-        unsafe {
-            transition(
-                commands,
-                texture,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_COMMON,
-            )
-        };
+    for texture in [&inputs.depth, &inputs.motion] {
+        transition(
+            commands,
+            texture,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_COMMON,
+        );
     }
 }
 
-#[unsafe(no_mangle)]
+/// The presentation setup's prepare callback; `user` is the fixture [`State`].
 #[allow(clippy::too_many_arguments)]
-pub(super) unsafe extern "C" fn rsf_fg_fixture_prepare(
+pub(super) unsafe extern "C" fn prepare_callback(
     user: Raw,
     _: Raw,
     _: Raw,
@@ -308,11 +241,17 @@ pub(super) unsafe extern "C" fn rsf_fg_fixture_prepare(
     session: Raw,
     _: u32,
 ) {
-    unsafe { prepare_input(user, commands, back, session) };
+    unsafe {
+        prepare_input(
+            &*user.cast::<State>(),
+            borrow(&commands),
+            borrow(&back),
+            session,
+        )
+    };
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_fg_fixture_latency(
+pub(super) unsafe extern "C" fn latency_callback(
     user: Raw,
     event: *const rsf_observer_present_event,
 ) {
@@ -335,8 +274,7 @@ pub(super) unsafe extern "C" fn rsf_fg_fixture_latency(
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_fg_fixture_retire(user: Raw, session: Raw) {
+pub(super) unsafe extern "C" fn retire_callback(user: Raw, session: Raw) {
     let state = unsafe { &*user.cast::<State>() };
     let Some(api) = provider() else {
         return;
@@ -361,14 +299,14 @@ pub(super) unsafe extern "C" fn rsf_fg_fixture_retire(user: Raw, session: Raw) {
     state.check(result == 0 && !fence.is_null() && value != 0);
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_fg_fixture_expect_auto(preferred: u32) -> i32 {
+/// Whether Auto created the provider it resolved to before the first Present.
+pub(super) fn expect_auto(preferred: u32) -> bool {
     if unsafe { rsf_d3d11_present_backend() } != preferred
         || (preferred != 0 && unsafe { rsf_d3d11_present_session() }.is_null())
     {
         println!("FAIL: Auto must create the resolved provider");
-        return 0;
+        return false;
     }
     println!("PASS: Auto instantiated provider {preferred} before the first Present");
-    1
+    true
 }

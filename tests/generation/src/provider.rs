@@ -4,7 +4,7 @@ use crate::session::Raw;
 use crate::sys::rsf_fg_retirement;
 use crate::sys::*;
 use rsf_game_sys::backend_result::OK;
-use rsf_test_support::d3d12::{debug_messages, wait_for_signal};
+use rsf_test_support::d3d12::{debug_messages, device_and_queue, wait_for_signal};
 use rsf_test_support::{enable_d3d12_debug_layer, hardware_adapter};
 use std::ffi::{CStr, c_char, c_int};
 use std::ptr::null_mut;
@@ -145,7 +145,7 @@ fn graphics(
         }
         GraphicsOwner::Streamline(host)
     } else {
-        let (device, queue) = device::device_and_queue(adapter).map_err(|_| 1)?;
+        let (device, queue) = device_and_queue(adapter).map_err(|_| 1)?;
         info.device = device.as_raw();
         info.queue = queue.as_raw();
         info.native_device = info.device;

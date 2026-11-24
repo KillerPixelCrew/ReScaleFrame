@@ -6,39 +6,11 @@
 #include <rescaleframe/native_window.h>
 #include <rescaleframe/overlay_d3d12.h>
 #include <rescaleframe/native_cpu.h>
-#include "device_fixture_bridge.h"
 #include "d3d11_marker_bridge.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef struct rsf_fg_loop_state rsf_fg_loop_state;
-
-rsf_fg_loop_state* rsf_fg_fixture_state_create(uint32_t service, uint32_t hot, uint32_t flip11, uint32_t mfg);
-void rsf_fg_fixture_state_destroy(rsf_fg_loop_state*);
-/* Takes the five COM references returned by rsf_fg_bridge_fixture_allocate. */
-void rsf_fg_fixture_state_inputs(rsf_fg_loop_state*, const rsf_fg_fixture_inputs*);
-void rsf_fg_fixture_prepare(void* user, void* chain, void* context, void* commands,
-    void* backbuffer, rsf_streamline_host*, void* session, uint32_t sync);
-void rsf_fg_fixture_latency(void* user, const rsf_observer_present_event*);
-void rsf_fg_fixture_retire(void* user, void* session);
-int rsf_fg_fixture_expect_auto(uint32_t preferred);
-
-typedef struct rsf_fg_loop {
-    void *chain, *gpu, *queue, *graphics_queue, *fence, *done, *application_wait, *window;
-    void *device11, *context11, *cached_rtv;
-    void *allocator, *commands, *finish_allocator, *finish_commands;
-    uint32_t backend, vendor, native12, service, hot, legacy_hot, flip11, mfg, overlay, with_streamline;
-    uint32_t focus_test;
-    uint32_t fsr4_supported, backend_choices;
-    rsf_backend_log_fn log;
-    rsf_fg_loop_state* state;
-} rsf_fg_loop;
-
-/* Negative means the frame loop could not complete. The launcher keeps the watchdog
-   lease while it unwinds, and only performs SDK cleanup after a completed loop. */
-int rsf_fg_fixture_run_loop(const rsf_fg_loop*, void** focus);
 
 typedef struct rsf_ac7_loop {
     void *chain, *window, *gpu;

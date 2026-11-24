@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 //! Draw and readback checks for the linked D3D11 presentation fixture.
-use rsf_test_support::borrow;
 use std::ffi::c_void;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Direct3D11::*;
@@ -29,7 +28,8 @@ fn texture(device: &ID3D11Device, desc: &D3D11_TEXTURE2D_DESC) -> Option<ID3D11T
     texture
 }
 
-fn create_inputs(
+/// Four SR textures followed by five hint textures.
+pub(super) fn create_inputs(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
 ) -> Option<Vec<ID3D11Texture2D>> {
@@ -84,27 +84,6 @@ fn create_inputs(
     Some(inputs)
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11_fixture_inputs(
-    device: Raw,
-    context: Raw,
-    output: *mut Raw,
-) -> i32 {
-    let inputs = unsafe {
-        create_inputs(
-            borrow::<ID3D11Device>(&device),
-            borrow::<ID3D11DeviceContext>(&context),
-        )
-    };
-    let Some(inputs) = inputs else {
-        return 1;
-    };
-    for (index, input) in inputs.into_iter().enumerate() {
-        unsafe { output.add(index).write(input.into_raw()) };
-    }
-    0
-}
-
 fn stage(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
@@ -132,48 +111,35 @@ fn stage(
     (!mapped.pData.is_null()).then_some(())
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11_fixture_red_half(
-    device: Raw,
-    context: Raw,
-    source: Raw,
+/// The red channel of the first texel of an R16G16B16A16_FLOAT texture, or zero when it cannot be read.
+pub(super) fn red_half(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    source: &ID3D11Texture2D,
 ) -> u16 {
     let mut red = 0;
-    let _ = unsafe {
-        stage(
-            borrow::<ID3D11Device>(&device),
-            borrow::<ID3D11DeviceContext>(&context),
-            borrow::<ID3D11Texture2D>(&source),
-            |data| red = data.cast::<u16>().read_unaligned(),
-        )
-    };
+    let _ = stage(device, context, source, |data| {
+        red = unsafe { data.cast::<u16>().read_unaligned() }
+    });
     red
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11_fixture_flip_source(
-    device: Raw,
-    context: Raw,
-    target: Raw,
+/// Prints the first texel of the resource behind `target`.
+pub(super) fn flip_source(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    target: &ID3D11RenderTargetView,
     frame: u64,
 ) {
-    let target = unsafe { borrow::<ID3D11RenderTargetView>(&target) };
     let Ok(source) =
         (unsafe { target.GetResource() }).and_then(|res| res.cast::<ID3D11Texture2D>())
     else {
         return;
     };
-    let _ = unsafe {
-        stage(
-            borrow::<ID3D11Device>(&device),
-            borrow::<ID3D11DeviceContext>(&context),
-            &source,
-            |data| {
-                let [r, g, b, a] = data.cast::<[u8; 4]>().read();
-                println!("source RGBA={r},{g},{b},{a} callback={frame}");
-            },
-        )
-    };
+    let _ = stage(device, context, &source, |data| {
+        let [r, g, b, a] = unsafe { data.cast::<[u8; 4]>().read() };
+        println!("source RGBA={r},{g},{b},{a} callback={frame}");
+    });
 }
 
 fn draw_backbuffer(
@@ -190,25 +156,19 @@ fn draw_backbuffer(
     Some((buffer, target))
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11_fixture_clear_and_present(
-    device: Raw,
-    context: Raw,
-    chain: Raw,
-    held_resize: u32,
-) -> i32 {
-    let (device, context, chain) = unsafe {
-        (
-            borrow::<ID3D11Device>(&device),
-            borrow::<ID3D11DeviceContext>(&context),
-            borrow::<IDXGISwapChain>(&chain),
-        )
-    };
-    if held_resize == 0 {
+/// Draws and presents the back buffer once, or twelve times while holding it across a resize the
+/// chain must refuse. True when every call behaved.
+pub(super) fn clear_and_present(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    chain: &IDXGISwapChain,
+    held_resize: bool,
+) -> bool {
+    if !held_resize {
         let Some(_held) = draw_backbuffer(device, context, chain, &[0.2, 0.3, 0.4, 1.0]) else {
-            return 1;
+            return false;
         };
-        return i32::from(unsafe { chain.Present(0, DXGI_PRESENT(0)) }.is_err());
+        return unsafe { chain.Present(0, DXGI_PRESENT(0)) }.is_ok();
     }
     for frame in 0..12 {
         let Some(_held) = draw_backbuffer(
@@ -217,19 +177,19 @@ pub(super) unsafe extern "C" fn rsf_d3d11_fixture_clear_and_present(
             chain,
             &[frame as f32 / 12.0, 0.2, 0.6, 1.0],
         ) else {
-            return 1;
+            return false;
         };
         if unsafe { chain.Present(u32::from(frame == 0), DXGI_PRESENT(0)) }.is_err() {
-            return 1;
+            return false;
         }
         match unsafe {
             chain.ResizeBuffers(1, 1024, 576, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0))
         } {
             Err(error) if error.code() == DXGI_ERROR_INVALID_CALL => {}
-            _ => return 1,
+            _ => return false,
         }
     }
-    0
+    true
 }
 
 fn pump() {
@@ -255,10 +215,7 @@ fn window_rect(hwnd: HWND, when: &str) -> RECT {
     rect
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_d3d11_fixture_borderless(chain: Raw, window: Raw) -> i32 {
-    let chain = unsafe { borrow::<IDXGISwapChain>(&chain) };
-    let window = HWND(window);
+pub(super) fn borderless(chain: &IDXGISwapChain, window: HWND) -> i32 {
     let Ok(buffer) = (unsafe { chain.GetBuffer::<ID3D11Texture2D>(0) }) else {
         return 1;
     };

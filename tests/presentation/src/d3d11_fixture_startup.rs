@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Startup, cold COM contracts and cleanup for the linked AC7 presentation fixture.
-use crate::d3d11_bridge_sr::rsf_d3d11_fixture_shared_sr;
+use crate::d3d11_bridge_sr::shared_sr;
 use crate::d3d11_device_checks::*;
 use crate::d3d11_marker::{rsf_ac7_fixture_log, rsf_d3d11_marker_fixture};
-use crate::fixture_device::{rsf_d3d11_fixture_proxy_smoke, rsf_present_fixture_debug12};
 use crate::present_fixture_startup::*;
 use crate::sys::*;
 use crate::sys::{
@@ -11,21 +10,84 @@ use crate::sys::{
 };
 use rsf_game_sys::backend_result::{ABI_MISMATCH, INVALID_ARGUMENT, NOT_READY};
 use rsf_game_sys::{RSF_D3D11_DISPATCH_RELEASE, rsf_d3d11_chain_dispatch};
-use rsf_test_support::Window;
+use rsf_test_support::{Window, enable_d3d12_debug_layer, warp_d3d11};
 use std::ffi::{CStr, c_char};
-use std::ptr::null_mut;
+use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{HINSTANCE, HWND, RECT};
+use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
-use windows::Win32::System::Environment::GetEnvironmentVariableA;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::Storage::FileSystem::CreateDirectoryW;
+use windows::Win32::System::Environment::{GetEnvironmentVariableA, SetEnvironmentVariableW};
+use windows::Win32::System::LibraryLoader::{
+    GetModuleFileNameW, GetModuleHandleW, GetProcAddress, LoadLibraryA,
+};
+use windows::Win32::System::Threading::Sleep;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_SYSTEM_AWARE, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, IUnknown, Interface, PCSTR, PCWSTR, s, w};
+
+/// Loads the AC7 carrier by path and checks its DirectInput exports, then starts D3D11 beside it.
+unsafe fn proxy_smoke(proxy_path: *const c_char) -> i32 {
+    let mut logs = [0_u16; 260];
+    let path_length = unsafe { GetModuleFileNameW(None, &mut logs) } as usize;
+    if path_length == 0 || path_length >= logs.len() {
+        return 1;
+    }
+    let Some(leaf) = logs[..path_length]
+        .iter()
+        .rposition(|&unit| unit == u16::from(b'\\'))
+    else {
+        return 1;
+    };
+    let suffix = w!("\\proxy-smoke-logs");
+    let suffix = unsafe { suffix.as_wide() };
+    if leaf + suffix.len() + 1 > logs.len() {
+        return 1;
+    }
+    logs[leaf..leaf + suffix.len()].copy_from_slice(suffix);
+    logs[leaf + suffix.len()] = 0;
+    let dir = PCWSTR(logs.as_ptr());
+    let _ = unsafe { CreateDirectoryW(dir, None) };
+    if unsafe { SetEnvironmentVariableW(w!("RSF_DUMP_DIR"), dir) }.is_err() {
+        return 1;
+    }
+    let proxy = match unsafe { LoadLibraryA(PCSTR(proxy_path.cast())) } {
+        Ok(proxy) => proxy,
+        Err(error) => {
+            eprintln!("proxy load error={}", error.code().0 as u32 & 0xffff);
+            return 1;
+        }
+    };
+    let named = unsafe { GetProcAddress(proxy, PCSTR(c"DirectInput8Create".as_ptr().cast())) };
+    let ordinal = unsafe { GetProcAddress(proxy, PCSTR(ptr::without_provenance(1))) };
+    if !matches!((named, ordinal), (Some(named), Some(ordinal)) if ptr::fn_addr_eq(named, ordinal))
+        || unsafe { GetProcAddress(proxy, PCSTR(c"GetFileVersionInfoW".as_ptr().cast())) }.is_some()
+    {
+        return 1;
+    }
+    // Carrier hooks and its worker are process-owned. Leave the DLL loaded.
+    unsafe { Sleep(250) };
+    if unsafe { CreateDXGIFactory1::<IDXGIFactory2>() }.is_err()
+        || rsf_test_support::d3d11_device(
+            D3D_DRIVER_TYPE_HARDWARE,
+            D3D11_CREATE_DEVICE_FLAG(0),
+            None,
+        )
+        .or_else(|_| warp_d3d11(D3D11_CREATE_DEVICE_FLAG(0), None))
+        .is_err()
+    {
+        return 1;
+    }
+    println!(
+        "PASS: AC7-only carrier loads, DirectInput ordinal 1 matches, D3D11 observer/device startup succeeds"
+    );
+    0
+}
 
 static RENDERER_STARTUP_OBSERVED: AtomicBool = AtomicBool::new(false);
 
@@ -387,7 +449,7 @@ unsafe fn run(argv: &[*const c_char], native: &rsf_ac7_fixture_calls) -> Result<
         return Ok(0);
     }
     if argc == 3 && arg(1) == b"--proxy-smoke" {
-        return Ok(unsafe { rsf_d3d11_fixture_proxy_smoke(argv[2]) });
+        return Ok(unsafe { proxy_smoke(argv[2]) });
     }
     if !matches!(argc, 3 | 4 | 6) {
         println!(
@@ -402,11 +464,11 @@ unsafe fn run(argv: &[*const c_char], native: &rsf_ac7_fixture_calls) -> Result<
     }
     println!("fixture: creating D3D11 graphics");
     if unsafe { GetEnvironmentVariableA(s!("RSF_TEST_D3D12_DEBUG"), None) } != 0
-        && rsf_present_fixture_debug12() != 0
+        && !enable_d3d12_debug_layer()
     {
         return Err(1);
     }
-    let (factory, adapter) = adapter::<IDXGIFactory2>(unsafe { number(argv[2]) }, false)?;
+    let (factory, adapter) = adapter::<IDXGIFactory2>(unsafe { number(argv[2]) })?;
     let (device, context) = device11(&adapter).map_err(|_| 77)?;
     let observer = rsf_observer_options {
         struct_size: size_of::<rsf_observer_options>() as u32,
@@ -468,22 +530,14 @@ unsafe fn run(argv: &[*const c_char], native: &rsf_ac7_fixture_calls) -> Result<
     };
     let chain = create_chain(&factory, device.as_raw(), &desc)?;
     if mode.borderless {
-        let result = unsafe { rsf_d3d11_fixture_borderless(chain.as_raw(), hwnd.0) };
+        let result = borderless(&chain, hwnd);
         drop(chain);
         let _ = unsafe { DestroyWindow(hwnd) };
         return Ok(result);
     }
     let host = unsafe { rsf_d3d11_present_host() };
     if host.is_null() {
-        if unsafe {
-            rsf_d3d11_fixture_clear_and_present(
-                device.as_raw(),
-                context.as_raw(),
-                chain.as_raw(),
-                0,
-            )
-        } != 0
-        {
+        if !clear_and_present(&device, &context, &chain, false) {
             return Err(1);
         }
         println!(
@@ -493,27 +547,17 @@ unsafe fn run(argv: &[*const c_char], native: &rsf_ac7_fixture_calls) -> Result<
     }
 
     let transfer = engine_graphics()?;
-    let mut textures = [null_mut(); 9];
-    if unsafe { rsf_d3d11_fixture_inputs(device.as_raw(), context.as_raw(), textures.as_mut_ptr()) }
-        != 0
-    {
-        return Err(1);
-    }
-    let _inputs = textures.map(|texture| unsafe { ID3D11Texture2D::from_raw(texture) });
-    let mut frame = rsf_dlss_frame::default();
-    if unsafe {
-        rsf_d3d11_fixture_shared_sr(
+    let inputs = create_inputs(&device, &context).ok_or(1)?;
+    let mut frame = unsafe {
+        shared_sr(
             host.cast(),
-            device.as_raw(),
-            context.as_raw(),
-            &textures,
+            &device,
+            &context,
+            &inputs,
             Some(rsf_ac7_fixture_log),
-            &mut frame,
         )
-    } != 0
-    {
-        return Err(1);
     }
+    .ok_or(1)?;
     let modern = chain.cast::<IDXGISwapChain4>().map_err(|_| 1)?;
     let identity = chain.cast::<IUnknown>().map_err(|_| 1)?;
     let modern_identity = modern.cast::<IUnknown>().map_err(|_| 1)?;
@@ -521,10 +565,7 @@ unsafe fn run(argv: &[*const c_char], native: &rsf_ac7_fixture_calls) -> Result<
     if modern_identity.as_raw() != identity.as_raw() || returned.as_raw() != device.as_raw() {
         return Err(1);
     }
-    if unsafe {
-        rsf_d3d11_fixture_clear_and_present(device.as_raw(), context.as_raw(), chain.as_raw(), 1)
-    } != 0
-    {
+    if !clear_and_present(&device, &context, &chain, true) {
         return Err(1);
     }
     let (result, observed) = observer_status();

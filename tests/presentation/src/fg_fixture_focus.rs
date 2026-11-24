@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
 //! The opt-in MFG focus check restores the prior window while it still owns focus.
-use std::ffi::c_void;
-use std::ptr::null_mut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -14,7 +12,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const LIMIT: Duration = Duration::from_secs(20);
 
-struct Focus {
+/// The authorized foreground lease of the MFG focus test. Dropping it restores the prior window and
+/// destroys the fixture window.
+pub(super) struct Focus {
     previous: HWND,
     window: HWND,
     started: Instant,
@@ -39,54 +39,46 @@ impl Drop for Focus {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_fg_bridge_fixture_focus_start(window: HWND) -> *mut c_void {
-    let mut focus = Focus {
-        previous: unsafe { GetForegroundWindow() },
-        window,
-        started: Instant::now(),
-        stop: Arc::new(AtomicBool::new(false)),
-        watchdog: None,
-    };
-    let _ = unsafe { ShowWindow(window, SW_SHOW) };
-    if !unsafe { SetForegroundWindow(window) }.as_bool()
-        || unsafe { GetForegroundWindow() } != window
-    {
-        println!("FAIL: the explicitly authorized focus request was refused by Windows");
-        return null_mut();
+impl Focus {
+    /// Takes the foreground for `window` and starts the watchdog. Dropping the lease on a refusal
+    /// restores the prior window and destroys `window`.
+    pub(super) fn start(window: HWND) -> Option<Self> {
+        let mut focus = Focus {
+            previous: unsafe { GetForegroundWindow() },
+            window,
+            started: Instant::now(),
+            stop: Arc::new(AtomicBool::new(false)),
+            watchdog: None,
+        };
+        let _ = unsafe { ShowWindow(window, SW_SHOW) };
+        if !unsafe { SetForegroundWindow(window) }.as_bool()
+            || unsafe { GetForegroundWindow() } != window
+        {
+            println!("FAIL: the explicitly authorized focus request was refused by Windows");
+            return None;
+        }
+
+        let stop = focus.stop.clone();
+        let (previous, window) = (focus.previous.0 as usize, window.0 as usize);
+        let watchdog = thread::Builder::new().spawn(move || {
+            let (previous, window) = (HWND(previous as *mut _), HWND(window as *mut _));
+            let deadline = Instant::now() + LIMIT;
+            while !stop.load(Ordering::Acquire) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(25));
+            }
+            if !stop.load(Ordering::Acquire) {
+                restore(previous, window);
+                let _ = unsafe { ShowWindow(window, SW_HIDE) };
+                eprintln!("FAIL: 20-second focus deadline reached; stopping this fixture");
+                let _ = unsafe { TerminateProcess(GetCurrentProcess(), 2) };
+            }
+        });
+        focus.watchdog = Some(watchdog.ok()?);
+        Some(focus)
     }
 
-    let stop = focus.stop.clone();
-    let (previous, window) = (focus.previous.0 as usize, window.0 as usize);
-    let watchdog = thread::Builder::new().spawn(move || {
-        let (previous, window) = (HWND(previous as *mut _), HWND(window as *mut _));
-        let deadline = Instant::now() + LIMIT;
-        while !stop.load(Ordering::Acquire) && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(25));
-        }
-        if !stop.load(Ordering::Acquire) {
-            restore(previous, window);
-            let _ = unsafe { ShowWindow(window, SW_HIDE) };
-            eprintln!("FAIL: 20-second focus deadline reached; stopping this fixture");
-            let _ = unsafe { TerminateProcess(GetCurrentProcess(), 2) };
-        }
-    });
-    let Ok(watchdog) = watchdog else {
-        return null_mut();
-    };
-    focus.watchdog = Some(watchdog);
-    Box::into_raw(Box::new(focus)).cast()
-}
-
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_focus_valid(lease: *const c_void) -> i32 {
-    let lease = unsafe { &*lease.cast::<Focus>() };
-    i32::from(lease.started.elapsed() < LIMIT && unsafe { GetForegroundWindow() } == lease.window)
-}
-
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_fg_bridge_fixture_focus_end(lease: *mut c_void) {
-    if !lease.is_null() {
-        drop(unsafe { Box::from_raw(lease.cast::<Focus>()) });
+    /// Whether the lease is inside its time limit and still holds the foreground.
+    pub(super) fn valid(&self) -> bool {
+        self.started.elapsed() < LIMIT && unsafe { GetForegroundWindow() } == self.window
     }
 }

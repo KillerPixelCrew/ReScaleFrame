@@ -76,7 +76,9 @@ fn run(path: &Path) -> i32 {
         SysMemPitch: 16,
         SysMemSlicePitch: 0,
     };
-    let source = gpu.texture(&desc, Some(&initial)).expect("create velocity texture");
+    let source = gpu
+        .texture(&desc, Some(&initial))
+        .expect("create velocity texture");
     let prefix = utf8(&path.join("velocity"));
     let mut log = Log::default();
     let user = ptr::from_mut(&mut log).cast();

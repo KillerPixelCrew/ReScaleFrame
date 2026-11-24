@@ -35,19 +35,6 @@ pub(super) fn factory() -> Result<IDXGIFactory4> {
     unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }
 }
 
-pub(super) fn device_and_queue(
-    adapter: &IDXGIAdapter1,
-) -> Result<(ID3D12Device, ID3D12CommandQueue)> {
-    let device = rsf_test_support::d3d12_device(adapter)?;
-    let queue = unsafe {
-        device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
-            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
-            ..Default::default()
-        })?
-    };
-    Ok((device, queue))
-}
-
 pub(super) use rsf_test_support::Window;
 
 pub(super) fn setup(window: HWND, device: Raw, queue: Raw, generated: u32) -> rsf_generation_setup {

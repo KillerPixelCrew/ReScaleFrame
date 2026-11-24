@@ -32,7 +32,6 @@ mod fg_fixture_callbacks;
 mod fg_fixture_focus;
 mod fg_fixture_loop;
 mod fg_fixture_startup;
-mod fixture_device;
 mod fsr4_fg_bridge;
 #[cfg(feature = "gl-device-fixture")]
 mod gl_fixture;
@@ -49,7 +48,7 @@ use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11DeviceContext, ID3D11DeviceContext4, ID3D11Fence,
+    D3D11_CREATE_DEVICE_FLAG, ID3D11Device, ID3D11DeviceContext, ID3D11DeviceContext4, ID3D11Fence,
 };
 use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12Fence, ID3D12Resource};
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -95,15 +94,12 @@ impl Drop for Fence {
 }
 
 fn create_d3d11() -> Result<(ID3D11Device, ID3D11DeviceContext), FixtureError> {
-    let mut failure = 0;
     let levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0];
-    for driver in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
-        match fixture_device::create11(None, driver, Some(&levels)) {
-            Ok(created) => return Ok(created),
-            Err(code) => failure = code,
-        }
-    }
-    Err(FixtureError::Skip("no D3D11 device", failure))
+    let create =
+        |driver| rsf_test_support::d3d11_device(driver, D3D11_CREATE_DEVICE_FLAG(0), Some(&levels));
+    create(D3D_DRIVER_TYPE_HARDWARE)
+        .or_else(|_| create(D3D_DRIVER_TYPE_WARP))
+        .map_err(|error| FixtureError::Skip("no D3D11 device", error.code().0))
 }
 
 fn create_d3d12(device11: &ID3D11Device) -> Result<ID3D12Device, FixtureError> {

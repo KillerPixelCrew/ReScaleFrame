@@ -6,7 +6,21 @@ use windows::Win32::Foundation::{CloseHandle, E_POINTER, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
-use windows::core::{Interface, PCWSTR, Result};
+use windows::core::{IUnknown, Interface, PCWSTR, Param, Result};
+
+/// A feature level 11.0 device on `adapter` and a direct command queue on it.
+pub fn device_and_queue(
+    adapter: impl Param<IUnknown>,
+) -> Result<(ID3D12Device, ID3D12CommandQueue)> {
+    let device = crate::d3d12_device(adapter)?;
+    let queue = unsafe {
+        device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
+            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+            ..Default::default()
+        })
+    }?;
+    Ok((device, queue))
+}
 
 /// A non-owning reference for the `ManuallyDrop<Option<ID3D12Resource>>` fields of barrier and
 /// copy-location records. The caller keeps `resource` alive until the GPU work that names it ends.

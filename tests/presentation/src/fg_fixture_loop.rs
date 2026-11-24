@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! Drives real D3D11 and D3D12 chains through the linked provider and overlay.
-use crate::d3d11_device_checks::rsf_d3d11_fixture_flip_source;
-use crate::fg_bridge::*;
-use crate::fg_fixture_callbacks::{State, prepare_input, provider, provider_status};
-use crate::fg_fixture_focus::*;
+use crate::d3d11_device_checks::flip_source;
+use crate::fg_bridge::{
+    Commands, FramePlan, Submission, check_flip, drain, frame_plan, mfg_count, query, source_id,
+    submit,
+};
+use crate::fg_fixture_callbacks::{State, provider, provider_status};
+use crate::fg_fixture_focus::Focus;
+use crate::present_fixture_startup::Raw;
 use crate::present_fixture_time;
-use crate::sys::rsf_fg_fixture_submission;
 use crate::sys::*;
 use rsf_game_sys::backend_result::NOT_SUPPORTED;
 use std::ffi::CStr;
@@ -16,8 +19,12 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use windows::Win32::Foundation::{HANDLE, HWND, WAIT_OBJECT_0};
-use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11RenderTargetView};
-use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12Resource};
+use windows::Win32::Graphics::Direct3D11::{
+    ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
+};
+use windows::Win32::Graphics::Direct3D12::{
+    ID3D12CommandQueue, ID3D12Device, ID3D12Fence, ID3D12Resource,
+};
 use windows::Win32::Graphics::Dxgi::{DXGI_PRESENT, IDXGISwapChain};
 use windows::Win32::System::Threading::WaitForSingleObject;
 use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW};
@@ -42,8 +49,9 @@ impl Queries {
             .spawn(move || {
                 let (mut count, mut failed, mut previous) = (0, 0, 0);
                 while !stopping.load(Ordering::Acquire) {
-                    failed +=
-                        unsafe { rsf_fg_bridge_fixture_query(receiver as *mut _, &mut previous) };
+                    let raw = receiver as Raw;
+                    let chain = unsafe { IDXGISwapChain::from_raw_borrowed(&raw) }.unwrap();
+                    failed += query(chain, &mut previous);
                     count += 1;
                     thread::yield_now();
                 }
@@ -151,7 +159,7 @@ impl Activity {
                 vendor.active
             );
         }
-        if plan.expect_refusal != 0 {
+        if plan.expect_refusal {
             accepted &= result.reason != 0;
         }
         if hot {
@@ -163,6 +171,39 @@ impl Activity {
         }
         accepted
     }
+}
+
+/// The D3D11 objects the cached-view flip fixture draws through.
+pub(super) struct Flip<'a> {
+    pub(super) device: &'a ID3D11Device,
+    pub(super) context: &'a ID3D11DeviceContext,
+    pub(super) cached_rtv: &'a ID3D11RenderTargetView,
+}
+
+/// What `run_loop` drives: the chain under test, the graphics around it and the mode flags.
+pub(super) struct Loop<'a> {
+    pub(super) chain: &'a IDXGISwapChain,
+    pub(super) gpu: &'a ID3D12Device,
+    pub(super) queue: Option<&'a ID3D12CommandQueue>,
+    pub(super) graphics_queue: Option<&'a ID3D12CommandQueue>,
+    pub(super) fence: &'a ID3D12Fence,
+    pub(super) application_wait: HANDLE,
+    pub(super) window: HWND,
+    pub(super) flip: Option<Flip<'a>>,
+    pub(super) source_commands: Option<&'a Commands>,
+    pub(super) finish_commands: Option<&'a Commands>,
+    pub(super) backend: u32,
+    pub(super) vendor: u32,
+    pub(super) native12: bool,
+    pub(super) service: bool,
+    pub(super) hot: bool,
+    pub(super) legacy_hot: bool,
+    pub(super) mfg: bool,
+    pub(super) with_streamline: bool,
+    pub(super) fsr4_supported: bool,
+    pub(super) backend_choices: u32,
+    pub(super) log: rsf_backend_log_fn,
+    pub(super) state: &'a State,
 }
 
 fn cpu(source: u64) {
@@ -261,19 +302,12 @@ fn hot_switch(
     accepted
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_fg_fixture_run_loop(
-    run: &rsf_fg_loop,
-    focus_out: &mut *mut std::ffi::c_void,
-) -> i32 {
-    let state = unsafe { &*run.state.cast::<State>() };
-    let chain = unsafe { IDXGISwapChain::from_raw_borrowed(&run.chain) }.unwrap();
-    let hot = run.hot != 0;
-    let legacy_hot = run.legacy_hot != 0;
-    let mfg = run.mfg != 0;
-    let window = HWND(run.window);
-    let gpu = unsafe { ID3D12Device::from_raw_borrowed(&run.gpu) }.unwrap();
-    let fsr4_supported = run.fsr4_supported != 0;
+/// Runs the presentation frames. Negative means the loop could not complete; the caller then keeps
+/// the `focus` lease while it unwinds and only performs SDK cleanup after a completed loop.
+pub(super) unsafe fn run_loop(run: &Loop, focus: Option<&Focus>) -> i32 {
+    let (state, chain, gpu, window) = (run.state, run.chain, run.gpu, run.window);
+    let (hot, legacy_hot, mfg) = (run.hot, run.legacy_hot, run.mfg);
+    let fsr4_supported = run.fsr4_supported;
     let mut accepted = (run.backend_choices & (1 << RSF_FG_BACKEND_FSR4) != 0) == fsr4_supported;
     let held = if hot {
         let Ok(resource) = (unsafe { chain.GetBuffer::<ID3D12Resource>(0) }) else {
@@ -290,19 +324,12 @@ pub(super) unsafe extern "C" fn rsf_fg_fixture_run_loop(
             return -1;
         }
     }
-    if run.focus_test != 0 {
-        let lease = rsf_fg_bridge_fixture_focus_start(window);
-        if lease.is_null() {
-            return -1;
-        }
-        *focus_out = lease;
-    }
     let initial_api = provider();
     let mut session = unsafe { rsf_d3d11_present_session() };
     let mut activity = Activity::default();
     for id in 1..=if mfg { 130 } else { 40 } {
         state.frame.set(id);
-        if !focus_out.is_null() && unsafe { rsf_fg_bridge_fixture_focus_valid(*focus_out) } == 0 {
+        if focus.is_some_and(|focus| !focus.valid()) {
             println!("FAIL: focus test ended at its time limit or after a human focus change");
             accepted = false;
             break;
@@ -312,7 +339,7 @@ pub(super) unsafe extern "C" fn rsf_fg_fixture_run_loop(
             while unsafe { PeekMessageW(&mut message, Some(window), 0, 0, PM_REMOVE) }.as_bool() {
                 unsafe { DispatchMessageW(&message) };
             }
-            let count = rsf_fg_bridge_fixture_mfg_count(id);
+            let count = mfg_count(id);
             if count != 0 {
                 let changed = rsf_native_fg_options {
                     struct_size: size_of::<rsf_native_fg_options>() as u32,
@@ -324,68 +351,57 @@ pub(super) unsafe extern "C" fn rsf_fg_fixture_run_loop(
                 unsafe { rsf_fg12_options(&changed) };
             }
         }
-        if !run.application_wait.is_null()
-            && unsafe { WaitForSingleObject(HANDLE(run.application_wait), 10000) } != WAIT_OBJECT_0
+        if !run.application_wait.0.is_null()
+            && unsafe { WaitForSingleObject(run.application_wait, 10000) } != WAIT_OBJECT_0
         {
             println!("FAIL: retained application latency handle stalled at frame {id}");
             return -1;
         }
         let current = unsafe { rsf_d3d11_present_backend() };
         let epoch = unsafe { rsf_d3d11_present_generation() };
-        let plan = frame_plan(
-            id,
-            run.hot,
-            run.mfg,
-            run.vendor,
-            current,
-            run.with_streamline,
-        );
+        let plan = frame_plan(id, hot, mfg, run.vendor, current, run.with_streamline);
         session = unsafe { rsf_d3d11_present_session() };
-        if run.service != 0 {
-            let source = rsf_fg_bridge_fixture_source(id, run.hot);
+        if run.service {
+            let source = source_id(id, hot);
             cpu(source);
-            let submission = rsf_fg_fixture_submission {
-                chain: run.chain,
-                gpu: run.gpu,
-                queue: run.queue,
-                allocator: run.allocator,
-                list: run.commands,
-                finish_allocator: run.finish_allocator,
-                finish_list: run.finish_commands,
+            let (Some(queue), Some(source_commands)) = (run.queue, run.source_commands) else {
+                return -1;
+            };
+            let submission = Submission {
+                chain,
+                gpu,
+                queue,
+                source_commands,
+                finish_commands: run.finish_commands,
                 session,
                 source,
                 produce_input: plan.produce_input,
                 submit: plan.submit,
                 view: plan.view,
-                overlay: run.overlay,
                 overlay_visible: plan.overlay_visible,
-                prepare_user: run.state.cast(),
-                prepare: Some(prepare_input),
+                state,
                 log: run.log,
             };
-            let mut drawn = u32::from(accepted);
-            if unsafe { rsf_fg_bridge_fixture_submit(&submission, &mut drawn) } != 0 {
+            let Some(drawn) = submit(&submission) else {
                 return -1;
-            }
-            accepted &= drawn != 0;
+            };
+            accepted &= drawn;
         } else {
             accepted &= unsafe { legacy_begin(initial_api, session, id, legacy_hot) };
         }
-        if run.flip11 != 0 {
-            let context =
-                unsafe { ID3D11DeviceContext::from_raw_borrowed(&run.context11) }.unwrap();
-            let view =
-                unsafe { ID3D11RenderTargetView::from_raw_borrowed(&run.cached_rtv) }.unwrap();
-            unsafe { context.ClearRenderTargetView(view, &[(id % 2) as f32, 0.5, 0.25, 1.0]) };
+        if let Some(flip) = &run.flip {
+            let color = [(id % 2) as f32, 0.5, 0.25, 1.0];
+            unsafe { flip.context.ClearRenderTargetView(flip.cached_rtv, &color) };
         }
         let presented = unsafe { chain.Present(0, DXGI_PRESENT(0)) };
         if presented.is_err() {
-            let reason = unsafe { (gpu.vtable().GetDeviceRemovedReason)(run.gpu) };
+            let reason =
+                unsafe { gpu.GetDeviceRemovedReason() }.map_or_else(|error| error.code().0, |()| 0);
             println!(
                 "Present failed frame={id} backend={} HRESULT={:08x} device={:08x}",
                 unsafe { rsf_d3d11_present_backend() },
                 presented.0 as u32,
-                reason.0 as u32
+                reason as u32
             );
             return -1;
         }
@@ -393,42 +409,38 @@ pub(super) unsafe extern "C" fn rsf_fg_fixture_run_loop(
         if legacy_hot {
             accepted &= legacy_switch(&plan, id);
         }
-        if run.service != 0 {
+        if run.service {
             accepted &= activity.record(&plan, id, current, epoch, mfg, hot);
             if let Some(held) = &held {
                 accepted &= unsafe { chain.GetBuffer::<ID3D12Resource>(0) }
                     .is_ok_and(|buffer| buffer.as_raw() == held.as_raw());
-                accepted &= hot_switch(
-                    &plan,
-                    id,
-                    run.vendor,
-                    fsr4_supported,
-                    run.with_streamline != 0,
-                );
+                accepted &= hot_switch(&plan, id, run.vendor, fsr4_supported, run.with_streamline);
             }
         }
-        let drain_queue = if run.flip11 != 0 {
-            unsafe { rsf_d3d11_present_queue() }
+        let present_queue;
+        let drain_queue = if run.flip.is_some() {
+            present_queue = unsafe { rsf_d3d11_present_queue() };
+            unsafe { ID3D12CommandQueue::from_raw_borrowed(&present_queue) }
         } else {
             run.graphics_queue
         };
-        if unsafe { rsf_fg_bridge_fixture_drain(drain_queue, run.fence, run.done, id) } != 0 {
+        if !drain_queue.is_some_and(|queue| drain(queue, run.fence, id)) {
             return -1;
         }
-        if run.flip11 != 0 {
-            let captured = state.captured_frame.get();
-            let readback = state.readback.get();
-            let matched = unsafe { rsf_fg_bridge_fixture_check_flip(readback, id) };
-            if matched <= 0 {
-                if matched == 0 {
-                    unsafe {
-                        rsf_d3d11_fixture_flip_source(
-                            run.device11,
-                            run.context11,
-                            run.cached_rtv,
-                            captured,
-                        )
-                    };
+        if let Some(flip) = &run.flip {
+            let flipped = state
+                .readback
+                .borrow()
+                .as_ref()
+                .and_then(|readback| check_flip(readback, id));
+            if flipped != Some(true) {
+                if flipped == Some(false) {
+                    flip_source(
+                        flip.device,
+                        flip.context,
+                        flip.cached_rtv,
+                        state.captured_frame.get(),
+                    );
                 }
                 return -1;
             }
@@ -477,7 +489,7 @@ pub(super) unsafe extern "C" fn rsf_fg_fixture_run_loop(
     println!(
         "backend={} API={} version={version} accepted={} active_samples={samples} callbacks={} total_presented={}",
         run.backend,
-        if run.native12 != 0 { 12 } else { 11 },
+        if run.native12 { 12 } else { 11 },
         u32::from(accepted),
         status.generated_callbacks,
         status.total_presented

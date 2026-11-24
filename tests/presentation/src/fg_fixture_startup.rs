@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! Startup and retirement for the linked shared FG executable.
-use crate::fg_bridge::{rsf_fg_bridge_fixture_allocate, rsf_fg_bridge_fixture_commands};
-use crate::fg_fixture_callbacks::*;
-use crate::fg_fixture_focus::rsf_fg_bridge_fixture_focus_end;
-use crate::fg_fixture_loop::rsf_fg_fixture_run_loop;
-use crate::fixture_device::{rsf_present_fixture_debug_errors, rsf_present_fixture_debug12};
+use crate::fg_bridge::{Commands, allocate_inputs, commands};
+use crate::fg_fixture_callbacks::{
+    State, expect_auto, latency_callback, prepare_callback, retire_callback,
+};
+use crate::fg_fixture_focus::Focus;
+use crate::fg_fixture_loop::{Flip, Loop, run_loop};
 use crate::present_fixture_startup::*;
-use crate::sys::rsf_fg_fixture_inputs;
 use crate::sys::*;
-use rsf_test_support::Window;
+use rsf_test_support::{Window, enable_d3d12_debug_layer};
 use std::ffi::{CStr, CString, c_char};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -19,19 +19,21 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_MODE_DESC, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::*;
-use windows::Win32::System::Threading::CreateEventW;
 use windows::Win32::UI::WindowsAndMessaging::WS_OVERLAPPEDWINDOW;
-use windows::core::{BOOL, Interface, PCWSTR, w};
+use windows::core::{BOOL, Interface, w};
 
 unsafe extern "C" {
     fn atexit(callback: extern "C" fn()) -> i32;
 }
 
 // The provider can retain callback inputs after a failed GPU retirement.
-static PROCESS_STATE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
+static PROCESS_STATE: AtomicPtr<State> = AtomicPtr::new(null_mut());
 
 extern "C" fn release_state() {
-    unsafe { rsf_fg_fixture_state_destroy(PROCESS_STATE.swap(null_mut(), Ordering::AcqRel)) };
+    let state = PROCESS_STATE.swap(null_mut(), Ordering::AcqRel);
+    if !state.is_null() {
+        drop(unsafe { Box::from_raw(state) });
+    }
 }
 
 unsafe extern "C" fn log(_: Raw, message: *const c_char) {
@@ -43,13 +45,6 @@ unsafe extern "C" fn log(_: Raw, message: *const c_char) {
 
 unsafe extern "C" fn accept(_: Raw, _: Raw) -> i32 {
     1
-}
-
-struct Focus(Raw);
-impl Drop for Focus {
-    fn drop(&mut self) {
-        unsafe { rsf_fg_bridge_fixture_focus_end(self.0) };
-    }
 }
 
 struct Mode {
@@ -137,9 +132,9 @@ impl Mode {
             log: Some(log),
             user: state,
             accept_window: Some(accept),
-            prepare: Some(rsf_fg_fixture_prepare),
-            latency_event: Some(rsf_fg_fixture_latency),
-            retire: Some(rsf_fg_fixture_retire),
+            prepare: Some(prepare_callback),
+            latency_event: Some(latency_callback),
+            retire: Some(retire_callback),
             depth_inverted: 1,
             depth_infinite: u32::from(!self.native),
             units_to_meters: if self.native { 1.0 } else { 0.01 },
@@ -245,10 +240,6 @@ impl Directories {
     }
 }
 
-fn raw<T: Interface>(object: &Option<T>) -> Raw {
-    object.as_ref().map_or(null_mut(), Interface::as_raw)
-}
-
 unsafe fn attach_sr(gpu: Raw, directory: *const c_char) -> Result<*mut rsf_sr12, i32> {
     let mut bytes = unsafe { CStr::from_ptr(directory) }.to_bytes().to_vec();
     bytes.extend_from_slice(b"\\sl.interposer.dll");
@@ -281,23 +272,8 @@ unsafe fn attach_sr(gpu: Raw, directory: *const c_char) -> Result<*mut rsf_sr12,
     Ok(result)
 }
 
-fn commands(
-    gpu: Raw,
-    used: bool,
-) -> Result<Option<(ID3D12CommandAllocator, ID3D12GraphicsCommandList)>, i32> {
-    if !used {
-        return Ok(None);
-    }
-    let (mut allocator, mut list) = (null_mut(), null_mut());
-    if unsafe { rsf_fg_bridge_fixture_commands(gpu, &mut allocator, &mut list) } != 0 {
-        return Err(1);
-    }
-    Ok(Some(unsafe {
-        (
-            ID3D12CommandAllocator::from_raw(allocator),
-            ID3D12GraphicsCommandList::from_raw(list),
-        )
-    }))
+fn command_lists(gpu: &ID3D12Device, used: bool) -> Result<Option<Commands>, i32> {
+    used.then(|| commands(gpu).map_err(|_| 1)).transpose()
 }
 
 unsafe fn run(argv: &[*const c_char]) -> Result<i32, i32> {
@@ -309,7 +285,7 @@ unsafe fn run(argv: &[*const c_char]) -> Result<i32, i32> {
     }
     let (backend, vendor) = unsafe { (number(argv[1]), number(argv[3])) };
     let debug = env_present(c"RSF_UNITY_GPU_DEBUG");
-    if debug && rsf_present_fixture_debug12() != 0 {
+    if debug && !enable_d3d12_debug_layer() {
         return Ok(77);
     }
     let mode = Mode::new(unsafe { CStr::from_ptr(argv[4]) }.to_bytes());
@@ -317,7 +293,7 @@ unsafe fn run(argv: &[*const c_char]) -> Result<i32, i32> {
     if explicit && !mode.native {
         return Err(1);
     }
-    let (factory, adapter) = adapter::<IDXGIFactory4>(vendor, true)?;
+    let (factory, adapter) = adapter::<IDXGIFactory4>(vendor)?;
     let focus_test = mode.mfg && env_present(c"RSF_MFG_FOCUS_TEST");
     let window = Window::new(
         w!("RSFSharedFG"),
@@ -328,13 +304,14 @@ unsafe fn run(argv: &[*const c_char]) -> Result<i32, i32> {
     )
     .map_err(|_| 1)?;
     let hwnd = window.handle;
-    let mut focus = Focus(null_mut());
-    let state = rsf_fg_fixture_state_create(
-        u32::from(mode.service),
-        u32::from(mode.hot),
-        u32::from(mode.flip),
-        u32::from(mode.mfg),
-    );
+    // Declared before the graphics objects so the lease outlives them while the run unwinds.
+    let focus: Option<Focus>;
+    let state = Box::into_raw(Box::new(State::new(
+        mode.service,
+        mode.hot,
+        mode.flip,
+        mode.mfg,
+    )));
     PROCESS_STATE.store(state, Ordering::Release);
     // On CRT registration failure, the resource lease still lives until process exit.
     let _ = unsafe { atexit(release_state) };
@@ -343,7 +320,7 @@ unsafe fn run(argv: &[*const c_char]) -> Result<i32, i32> {
         xess: argv.get(5).copied().unwrap_or(argv[2]),
         extra: argv.get(6).copied().unwrap_or(null()),
     };
-    if !mode.install(&directories, backend, explicit, state) {
+    if !mode.install(&directories, backend, explicit, state.cast()) {
         return Err(1);
     }
 
@@ -387,8 +364,7 @@ unsafe fn run(argv: &[*const c_char]) -> Result<i32, i32> {
     } else {
         HANDLE::default()
     };
-    if backend == RSF_FG_BACKEND_AUTO
-        && rsf_fg_fixture_expect_auto(unsafe { rsf_fg_default_backend(vendor, 0) }) == 0
+    if backend == RSF_FG_BACKEND_AUTO && !expect_auto(unsafe { rsf_fg_default_backend(vendor, 0) })
     {
         return Err(1);
     }
@@ -413,68 +389,54 @@ unsafe fn run(argv: &[*const c_char]) -> Result<i32, i32> {
     } else {
         null_mut()
     };
-    let mut inputs: rsf_fg_fixture_inputs = unsafe { std::mem::zeroed() };
-    if unsafe {
-        rsf_fg_bridge_fixture_allocate(
-            device,
-            u32::from(mode.mixed),
-            u32::from(mode.hot),
-            &mut inputs,
-        )
-    } != 0
-    {
-        return Err(1);
-    }
-    unsafe { rsf_fg_fixture_state_inputs(state, &inputs) };
+    let state = unsafe { &*state };
+    state.set_inputs(allocate_inputs(gpu, mode.mixed, mode.hot).map_err(|_| 1)?);
     let fence =
         unsafe { gpu.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }.map_err(|_| 1)?;
-    let done = unsafe { CreateEventW(None, false, false, PCWSTR::null()) }.map_err(|_| 1)?;
-    let source = commands(device, mode.service)?;
-    let finish = commands(device, mode.overlay)?;
-    let (allocator, commands) = source
-        .as_ref()
-        .map_or((null_mut(), null_mut()), |(a, l)| (a.as_raw(), l.as_raw()));
-    let (finish_allocator, finish_commands) = finish
-        .as_ref()
-        .map_or((null_mut(), null_mut()), |(a, l)| (a.as_raw(), l.as_raw()));
-    let run = rsf_fg_loop {
-        chain: chain.as_raw(),
-        gpu: device,
-        queue: raw(&queue),
-        graphics_queue: graphics.queue,
-        fence: fence.as_raw(),
-        done: done.0,
-        application_wait: application_wait.0,
-        window: hwnd.0,
-        device11: raw(&dx11),
-        context11: raw(&context),
-        cached_rtv: raw(&cached_rtv),
-        allocator,
-        commands,
-        finish_allocator,
-        finish_commands,
+    let source_commands = command_lists(gpu, mode.service)?;
+    let finish_commands = command_lists(gpu, mode.overlay)?;
+    focus = if focus_test {
+        Some(Focus::start(hwnd).ok_or(1)?)
+    } else {
+        None
+    };
+    let flip = match (&dx11, &context, &cached_rtv) {
+        (Some(device), Some(context), Some(cached_rtv)) => Some(Flip {
+            device,
+            context,
+            cached_rtv,
+        }),
+        _ => None,
+    };
+    let run = Loop {
+        chain: &chain,
+        gpu,
+        queue: queue.as_ref(),
+        graphics_queue: unsafe { ID3D12CommandQueue::from_raw_borrowed(&graphics.queue) },
+        fence: &fence,
+        application_wait,
+        window: hwnd,
+        flip,
+        source_commands: source_commands.as_ref(),
+        finish_commands: finish_commands.as_ref(),
         backend,
         vendor,
-        native12: u32::from(mode.native),
-        service: u32::from(mode.service),
-        hot: u32::from(mode.hot),
-        legacy_hot: u32::from(mode.legacy_hot),
-        flip11: u32::from(mode.flip),
-        mfg: u32::from(mode.mfg),
-        overlay: u32::from(mode.overlay),
-        with_streamline: u32::from(!directories.extra.is_null()),
-        focus_test: u32::from(focus_test),
-        fsr4_supported,
+        native12: mode.native,
+        service: mode.service,
+        hot: mode.hot,
+        legacy_hot: mode.legacy_hot,
+        mfg: mode.mfg,
+        with_streamline: !directories.extra.is_null(),
+        fsr4_supported: fsr4_supported != 0,
         backend_choices,
         log: Some(log),
-        state: state.cast(),
+        state,
     };
-    let result = unsafe { rsf_fg_fixture_run_loop(&run, &mut focus.0) };
+    let result = unsafe { run_loop(&run, focus.as_ref()) };
     // Keep the original failure path: an incomplete GPU loop does not ask the SDK to tear down.
     if result < 0 {
         return Err(1);
     }
-    let _ = unsafe { CloseHandle(done) };
     if result == 0 && mode.flip {
         println!("PASS: DX11 cached buffer-zero view reached every physical presentation");
     }
@@ -489,7 +451,7 @@ unsafe fn run(argv: &[*const c_char]) -> Result<i32, i32> {
         unsafe { rsf_overlay_d3d12_stop() };
     }
     if debug {
-        let accepted = unsafe { rsf_present_fixture_debug_errors(device) } == 0 && result == 0;
+        let accepted = validation_clean(gpu) && result == 0;
         println!(
             "D3D12 overlay/presentation validation={}",
             u32::from(accepted)

@@ -3,7 +3,7 @@ use crate::device::{self, HEIGHT, SKIP, WIDTH, Window};
 use crate::session::{Raw, rsf_fg_session_create, rsf_fg_session_destroy, rsf_fg_session_select};
 use crate::sys::*;
 use rsf_game_sys::backend_result::{FEATURE_FAILED, INIT_FAILED, NOT_READY, OK};
-use rsf_test_support::d3d12::wait_for_signal;
+use rsf_test_support::d3d12::{device_and_queue, wait_for_signal};
 use rsf_test_support::hardware_adapter;
 use std::ffi::{c_char, c_int};
 use std::ptr::{from_mut, null, null_mut};
@@ -104,7 +104,7 @@ unsafe extern "C" fn rsf_test_fg_switching(argc: c_int, argv: *const *const c_ch
         Ok(None) => return SKIP,
         Err(_) => return 1,
     };
-    let Ok((device, queue)) = device::device_and_queue(&adapter) else {
+    let Ok((device, queue)) = device_and_queue(&adapter) else {
         return 1;
     };
     let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {

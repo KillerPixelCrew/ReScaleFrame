@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Live AC7 device fixture cadence and assertions over the production presentation owners.
-use crate::fixture_device::rsf_present_fixture_debug_errors;
+use crate::present_fixture_startup::validation_clean;
 use crate::present_fixture_time::{frequency, milliseconds, stamp};
 use crate::sys::rsf_native_cpu_frame;
 use crate::sys::*;
@@ -318,7 +318,7 @@ unsafe extern "C" fn rsf_d3d11_fixture_run_loop(run: &rsf_ac7_loop) -> i32 {
                 "AC7 adapter failed source={id} SR={evaluated} Present={:08x} device={:08x} passes={passes}",
                 presented as u32, device_reason.0 as u32
             );
-            unsafe { rsf_present_fixture_debug_errors(run.gpu) };
+            validation_clean(gpu);
             return 1;
         }
         let Some(activity) = fg_status(run) else {

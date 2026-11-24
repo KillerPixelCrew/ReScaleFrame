@@ -3,7 +3,6 @@
 /// from those crates.
 fn bindings() {
     let headers = [
-        "tests/presentation/device_fixture_bridge.h",
         "tests/presentation/d3d11_marker_bridge.h",
         "tests/presentation/d3d11_scope_fixture.h",
         "tests/presentation/present_fixture_loops.h",
@@ -24,7 +23,7 @@ fn bindings() {
         &[],
     )
     // Defined in Rust by this crate.
-    .blocklist_function("rsf_(d3d11_fixture|fg_bridge_fixture|fg_fixture)_.*");
+    .blocklist_function("rsf_(d3d11|fg)_fixture_.*");
     rsf_bindgen::write(builder, "sys.rs");
 }
 
