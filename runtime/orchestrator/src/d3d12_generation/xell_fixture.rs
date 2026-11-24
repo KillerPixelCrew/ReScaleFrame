@@ -105,90 +105,92 @@ unsafe extern "C" fn load_library(_: &Setup, _: *const u16) -> Raw {
     unsafe { LoadLibraryW(kernel32.as_ptr()) }
 }
 
-static OPS: Ops = Ops {
-    check: &CHECKS,
-    resolve,
-    close,
-    create_fg: create_context,
-    create_xell: create_context,
-    destroy_fg: ok2,
-    destroy_xell: ok2,
-    max_count,
-    bind_xell,
-    version,
-    create_chain,
-    compose: ok3,
-    count: ok3,
-    enabled,
-    sleep_mode,
-    sleep,
-    marker,
-    present_id: ok3,
-    tag,
-    constants,
-    present_status,
-    create_fence,
-    create_event,
-    drain,
-};
+/// The leaves the XeSS FG owner calls in the fixture-leaves archive.
+pub(super) mod leaf {
+    pub(in crate::d3d12_generation::xess) use super::{
+        bind_xell, close, constants, create_chain, create_event, create_fence, drain, enabled,
+        marker, max_count, present_status, resolve, sleep, sleep_mode, tag, version,
+    };
+    pub(in crate::d3d12_generation::xess) use super::{
+        create_context as create_fg, create_context as create_xell, ok2 as destroy_fg,
+        ok2 as destroy_xell, ok3 as compose, ok3 as count, ok3 as present_id,
+    };
+    use crate::d3d12_generation::Checks;
 
-unsafe extern "C" fn resolve(_: &Setup, _: Raw, _: Raw, out: &mut Raw) -> i32 {
+    pub(in crate::d3d12_generation::xess) fn checks() -> &'static Checks {
+        &super::CHECKS
+    }
+}
+pub(super) unsafe extern "C" fn resolve(_: &Setup, _: Raw, _: Raw, out: &mut Raw) -> i32 {
     *out = DEVICE.raw();
     OK
 }
 
-unsafe extern "C" fn close(_: Raw) {}
+pub(super) unsafe extern "C" fn close(_: Raw) {}
 
-unsafe extern "C" fn create_context(_: Raw, _: Raw, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn create_context(_: Raw, _: Raw, out: *mut Raw) -> i32 {
     unsafe { out.write(DEVICE.raw()) };
     OK
 }
 
-unsafe extern "C" fn ok2(_: Raw, _: Raw) -> i32 {
+pub(super) unsafe extern "C" fn ok2(_: Raw, _: Raw) -> i32 {
     OK
 }
 
-unsafe extern "C" fn ok3(_: Raw, _: Raw, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn ok3(_: Raw, _: Raw, _: u32) -> i32 {
     OK
 }
 
-unsafe extern "C" fn max_count(_: Raw, _: Raw, out: *mut u32) -> i32 {
+pub(super) unsafe extern "C" fn max_count(_: Raw, _: Raw, out: *mut u32) -> i32 {
     unsafe { out.write(2) };
     OK
 }
 
-unsafe extern "C" fn bind_xell(_: Raw, _: Raw, _: Raw) -> i32 {
+pub(super) unsafe extern "C" fn bind_xell(_: Raw, _: Raw, _: Raw) -> i32 {
     OK
 }
 
-unsafe extern "C" fn version(_: Raw, _: *mut Version) {}
+pub(super) unsafe extern "C" fn version(_: Raw, _: *mut Version) {}
 
-unsafe extern "C" fn create_chain(_: Raw, _: Raw, _: *const Setup, _: u32, out: *mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn create_chain(
+    _: Raw,
+    _: Raw,
+    _: *const Setup,
+    _: u32,
+    out: *mut Raw,
+) -> i32 {
     unsafe { out.write(CHAIN.retain()) };
     OK
 }
 
-unsafe extern "C" fn tag(_: Raw, _: Raw, _: Raw, _: u32, _: u32, _: *const Resource) -> i32 {
+pub(super) unsafe extern "C" fn tag(
+    _: Raw,
+    _: Raw,
+    _: Raw,
+    _: u32,
+    _: u32,
+    _: *const Resource,
+) -> i32 {
     INVALID
 }
 
-unsafe extern "C" fn constants(_: Raw, _: Raw, _: u32, _: *const Frame, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn constants(_: Raw, _: Raw, _: u32, _: *const Frame, _: u32) -> i32 {
     INVALID
 }
 
-unsafe extern "C" fn present_status(_: Raw, _: Raw, _: *mut Present) -> i32 {
+pub(super) unsafe extern "C" fn present_status(_: Raw, _: Raw, _: *mut Present) -> i32 {
     OK
 }
 
-unsafe extern "C" fn create_fence(_: Raw) -> Raw {
+pub(super) unsafe extern "C" fn create_fence(_: Raw) -> Raw {
     FENCE.retain()
 }
 
-unsafe extern "C" fn create_event() -> Raw {
+pub(super) unsafe extern "C" fn create_event() -> Raw {
     unsafe { CreateEventW(null_mut(), 0, 0, null_mut()) }
 }
 
-unsafe extern "C" fn drain(queue: Raw, fence: Raw, event: Raw, _: u64) -> i32 {
+pub(super) unsafe extern "C" fn drain(queue: Raw, fence: Raw, event: Raw, _: u64) -> i32 {
     if queue == QUEUE.raw() && fence == FENCE.raw() && !event.is_null() {
         OK
     } else {
@@ -216,14 +218,14 @@ static SDK: Mutex<FakeSdk> = Mutex::new(FakeSdk {
 });
 static CHANGED: Condvar = Condvar::new();
 
-unsafe extern "C" fn sleep_mode(_: Raw, _: Raw, interval: u32, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn sleep_mode(_: Raw, _: Raw, interval: u32, _: u32) -> i32 {
     let mut sdk = SDK.lock().unwrap();
     sdk.interval = interval;
     sdk.updates += 1;
     OK
 }
 
-unsafe extern "C" fn sleep(_: Raw, _: Raw, id: u32) -> i32 {
+pub(super) unsafe extern "C" fn sleep(_: Raw, _: Raw, id: u32) -> i32 {
     match id {
         1 => OK,
         2 => {
@@ -239,7 +241,7 @@ unsafe extern "C" fn sleep(_: Raw, _: Raw, id: u32) -> i32 {
     }
 }
 
-unsafe extern "C" fn marker(_: Raw, _: Raw, id: u32, kind: u32) -> i32 {
+pub(super) unsafe extern "C" fn marker(_: Raw, _: Raw, id: u32, kind: u32) -> i32 {
     if kind != PRESENT_END {
         return INVALID;
     }
@@ -254,7 +256,7 @@ unsafe extern "C" fn marker(_: Raw, _: Raw, id: u32, kind: u32) -> i32 {
     }
 }
 
-unsafe extern "C" fn enabled(_: Raw, _: Raw, _: u32) -> i32 {
+pub(super) unsafe extern "C" fn enabled(_: Raw, _: Raw, _: u32) -> i32 {
     if SDK.lock().unwrap().fail_enable {
         INVALID
     } else {
@@ -283,7 +285,7 @@ impl Session {
         setup.chain.max_generated_frames = 2;
         let mut present = null_mut();
         assert_eq!(
-            unsafe { rsf_core_xeg12_create(&OPS, &setup, &mut self.0, &mut present) },
+            unsafe { rsf_core_xeg12_create(&setup, &mut self.0, &mut present) },
             OK,
         );
         assert_eq!(present, CHAIN.raw());

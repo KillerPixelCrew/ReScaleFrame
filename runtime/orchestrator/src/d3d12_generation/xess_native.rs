@@ -91,7 +91,7 @@ impl Sdk {
     }
 }
 
-unsafe extern "C" fn resolve(_: &Setup, fg: Raw, xell: Raw, out: &mut Raw) -> i32 {
+pub(super) unsafe extern "C" fn resolve(_: &Setup, fg: Raw, xell: Raw, out: &mut Raw) -> i32 {
     let sdk = match Sdk::resolve(fg, xell) {
         Ok(sdk) => sdk,
         Err(result) => return result,
@@ -100,13 +100,13 @@ unsafe extern "C" fn resolve(_: &Setup, fg: Raw, xell: Raw, out: &mut Raw) -> i3
     if out.is_null() { INIT_FAILED } else { OK }
 }
 
-unsafe extern "C" fn close(bindings: Raw) {
+pub(super) unsafe extern "C" fn close(bindings: Raw) {
     drop(unsafe { Box::from_raw(bindings.cast::<Sdk>()) });
 }
 
 macro_rules! route {
     ($name:ident($($arg:ident: $ty:ty),*)) => {
-        unsafe extern "C" fn $name(bindings: Raw, $($arg: $ty),*) -> i32 {
+        pub(super) unsafe extern "C" fn $name(bindings: Raw, $($arg: $ty),*) -> i32 {
             let sdk = unsafe { &*bindings.cast::<Sdk>() };
             unsafe { (sdk.$name)($($arg),*) }
         }
@@ -122,7 +122,7 @@ route!(count(context: Raw, count: u32));
 route!(sleep(context: Raw, frame: u32));
 route!(present_id(context: Raw, frame: u32));
 
-unsafe extern "C" fn max_count(bindings: Raw, context: Raw, out: *mut u32) -> i32 {
+pub(super) unsafe extern "C" fn max_count(bindings: Raw, context: Raw, out: *mut u32) -> i32 {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
     let mut properties = xefg_swapchain_properties_t::default();
     let result = unsafe { (sdk.properties)(context, &mut properties) };
@@ -130,7 +130,7 @@ unsafe extern "C" fn max_count(bindings: Raw, context: Raw, out: *mut u32) -> i3
     result
 }
 
-unsafe extern "C" fn version(bindings: Raw, out: *mut Version) {
+pub(super) unsafe extern "C" fn version(bindings: Raw, out: *mut Version) {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
     let mut version = xefg_swapchain_version_t::default();
     unsafe {
@@ -143,7 +143,7 @@ unsafe extern "C" fn version(bindings: Raw, out: *mut Version) {
     }
 }
 
-unsafe extern "C" fn create_chain(
+pub(super) unsafe extern "C" fn create_chain(
     bindings: Raw,
     context: Raw,
     setup: *const Setup,
@@ -199,17 +199,17 @@ unsafe extern "C" fn create_chain(
     OK
 }
 
-unsafe extern "C" fn create_fence(device: Raw) -> Raw {
+pub(super) unsafe extern "C" fn create_fence(device: Raw) -> Raw {
     let device = unsafe { ID3D12Device::from_raw_borrowed(&device) }.unwrap();
     unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }
         .map_or(null_mut(), Interface::into_raw)
 }
 
-unsafe extern "C" fn create_event() -> Raw {
+pub(super) unsafe extern "C" fn create_event() -> Raw {
     unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) }
 }
 
-unsafe extern "C" fn drain(queue: Raw, fence: Raw, event: Raw, serial: u64) -> i32 {
+pub(super) unsafe extern "C" fn drain(queue: Raw, fence: Raw, event: Raw, serial: u64) -> i32 {
     let queue = unsafe { ID3D12CommandQueue::from_raw_borrowed(&queue) }.unwrap();
     let fence = unsafe { ID3D12Fence::from_raw_borrowed(&fence) }.unwrap();
     if let Err(err) = unsafe { queue.Signal(fence, serial) } {
@@ -237,7 +237,7 @@ unsafe extern "C" fn drain(queue: Raw, fence: Raw, event: Raw, serial: u64) -> i
     }
 }
 
-unsafe extern "C" fn compose(bindings: Raw, context: Raw, enabled: u32) -> i32 {
+pub(super) unsafe extern "C" fn compose(bindings: Raw, context: Raw, enabled: u32) -> i32 {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
     let mode = if enabled != 0 {
         XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_ENABLED
@@ -247,7 +247,7 @@ unsafe extern "C" fn compose(bindings: Raw, context: Raw, enabled: u32) -> i32 {
     unsafe { (sdk.compose)(context, mode) }
 }
 
-unsafe extern "C" fn sleep_mode(
+pub(super) unsafe extern "C" fn sleep_mode(
     bindings: Raw,
     context: Raw,
     interval: u32,
@@ -262,12 +262,17 @@ unsafe extern "C" fn sleep_mode(
     unsafe { (sdk.sleep_mode)(context, &mode) }
 }
 
-unsafe extern "C" fn marker(bindings: Raw, context: Raw, frame: u32, marker: u32) -> i32 {
+pub(super) unsafe extern "C" fn marker(
+    bindings: Raw,
+    context: Raw,
+    frame: u32,
+    marker: u32,
+) -> i32 {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
     unsafe { (sdk.marker)(context, frame, marker as i32) }
 }
 
-unsafe extern "C" fn tag(
+pub(super) unsafe extern "C" fn tag(
     bindings: Raw,
     context: Raw,
     command: Raw,
@@ -300,7 +305,7 @@ unsafe extern "C" fn tag(
     unsafe { (sdk.tag)(context, command, frame, &data) }
 }
 
-unsafe extern "C" fn constants(
+pub(super) unsafe extern "C" fn constants(
     bindings: Raw,
     context: Raw,
     id: u32,
@@ -324,7 +329,11 @@ unsafe extern "C" fn constants(
     unsafe { (sdk.constants)(context, id, &data) }
 }
 
-unsafe extern "C" fn present_status(bindings: Raw, context: Raw, out: *mut Present) -> i32 {
+pub(super) unsafe extern "C" fn present_status(
+    bindings: Raw,
+    context: Raw,
+    out: *mut Present,
+) -> i32 {
     let sdk = unsafe { &*bindings.cast::<Sdk>() };
     let mut status = xefg_swapchain_present_status_t::default();
     let result = unsafe { (sdk.present_status)(context, &mut status) };
@@ -338,33 +347,20 @@ unsafe extern "C" fn present_status(bindings: Raw, context: Raw, out: *mut Prese
     result
 }
 
-static OPS: Ops = Ops {
-    check: &admission::NATIVE_CHECKS,
-    resolve,
-    close,
-    create_fg,
-    create_xell,
-    destroy_fg,
-    destroy_xell,
-    max_count,
-    bind_xell,
-    version,
-    create_chain,
-    compose,
-    count,
-    enabled,
-    sleep_mode,
-    sleep,
-    marker,
-    present_id,
-    tag,
-    constants,
-    present_status,
-    create_fence,
-    create_event,
-    drain,
-};
+/// The XeSS FG and XeLL SDK leaves the owner calls, by the names the XeLL fixture also uses.
+#[cfg_attr(feature = "fixture-leaves", allow(dead_code, unused_imports))]
+pub(super) mod leaf {
+    pub(in crate::d3d12_generation::xess) use super::{
+        bind_xell, close, compose, constants, count, create_chain, create_event, create_fence,
+        create_fg, create_xell, destroy_fg, destroy_xell, drain, enabled, marker, max_count,
+        present_id, present_status, resolve, sleep, sleep_mode, tag, version,
+    };
+    use crate::d3d12_generation::{Checks, admission};
 
+    pub(in crate::d3d12_generation::xess) fn checks() -> &'static Checks {
+        &admission::NATIVE_CHECKS
+    }
+}
 fn rsf_core_xeg12_native_provider(compiled: u32) -> *const Provider {
     static NATIVE_PROVIDER: Provider = Provider {
         create: Some(create),
@@ -378,7 +374,7 @@ fn rsf_core_xeg12_native_provider(compiled: u32) -> *const Provider {
 }
 
 unsafe extern "C" fn create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
-    unsafe { rsf_core_xeg12_create(&OPS, setup, out, chain) }
+    unsafe { rsf_core_xeg12_create(setup, out, chain) }
 }
 
 // The xess-fg feature is CMake's XeSS-FG header detection (runtime/orchestrator/CMakeLists.txt).

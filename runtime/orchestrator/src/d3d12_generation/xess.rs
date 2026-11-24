@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #[path = "xess_native.rs"]
 mod native;
-#[cfg(feature = "test-fixtures")]
+#[cfg(feature = "fixture-leaves")]
 #[path = "xell_fixture.rs"]
 mod xell_fixture;
 pub(crate) use native::rsf_generation_xess;
@@ -36,38 +36,15 @@ struct Present {
     frames: u32,
 }
 
-#[repr(C)]
-struct Ops {
-    check: &'static Checks,
-    resolve: Resolve,
-    close: unsafe extern "C" fn(Raw),
-    create_fg: unsafe extern "C" fn(Raw, Raw, *mut Raw) -> i32,
-    create_xell: unsafe extern "C" fn(Raw, Raw, *mut Raw) -> i32,
-    destroy_fg: unsafe extern "C" fn(Raw, Raw) -> i32,
-    destroy_xell: unsafe extern "C" fn(Raw, Raw) -> i32,
-    max_count: unsafe extern "C" fn(Raw, Raw, *mut u32) -> i32,
-    bind_xell: unsafe extern "C" fn(Raw, Raw, Raw) -> i32,
-    version: unsafe extern "C" fn(Raw, *mut Version),
-    create_chain: unsafe extern "C" fn(Raw, Raw, *const Setup, u32, *mut Raw) -> i32,
-    compose: unsafe extern "C" fn(Raw, Raw, u32) -> i32,
-    count: unsafe extern "C" fn(Raw, Raw, u32) -> i32,
-    enabled: unsafe extern "C" fn(Raw, Raw, u32) -> i32,
-    sleep_mode: unsafe extern "C" fn(Raw, Raw, u32, u32) -> i32,
-    sleep: unsafe extern "C" fn(Raw, Raw, u32) -> i32,
-    marker: unsafe extern "C" fn(Raw, Raw, u32, u32) -> i32,
-    present_id: unsafe extern "C" fn(Raw, Raw, u32) -> i32,
-    tag: unsafe extern "C" fn(Raw, Raw, Raw, u32, u32, *const Resource) -> i32,
-    constants: unsafe extern "C" fn(Raw, Raw, u32, *const Frame, u32) -> i32,
-    present_status: unsafe extern "C" fn(Raw, Raw, *mut Present) -> i32,
-    create_fence: unsafe extern "C" fn(Raw) -> Raw,
-    create_event: unsafe extern "C" fn() -> Raw,
-    drain: unsafe extern "C" fn(Raw, Raw, Raw, u64) -> i32,
-}
-
+// The XeSS FG and XeLL SDK leaves in xess_native.rs; the XeLL fixture's CPU doubles in the
+// fixture-leaves archive.
+#[cfg(not(feature = "fixture-leaves"))]
+use native::leaf;
+#[cfg(feature = "fixture-leaves")]
+use xell_fixture::leaf;
 const _: () = {
     assert!(size_of::<Version>() == 12);
     assert!(size_of::<Present>() == 12);
-    assert!(size_of::<Ops>() == 24 * size_of::<Raw>());
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -93,21 +70,21 @@ struct SettingsFence {
 }
 
 impl SettingsFence {
-    fn drain(&mut self, ops: &Ops, device: Raw, queue: Raw) -> i32 {
+    fn drain(&mut self, device: Raw, queue: Raw) -> i32 {
         if self.fence.is_none() {
-            self.fence = unsafe { com_ref::owned((ops.create_fence)(device)) };
+            self.fence = unsafe { com_ref::owned(leaf::create_fence(device)) };
         }
         let Some(fence) = &self.fence else {
             return INIT_FAILED;
         };
         if self.event.is_none() {
-            self.event = unsafe { crate::owned_win32_handle((ops.create_event)()) };
+            self.event = unsafe { crate::owned_win32_handle(leaf::create_event()) };
         }
         let Some(event) = &self.event else {
             return INIT_FAILED;
         };
         self.serial = self.serial.wrapping_add(1);
-        if unsafe { (ops.drain)(queue, fence.as_raw(), event.as_raw_handle(), self.serial) } >= 0 {
+        if unsafe { leaf::drain(queue, fence.as_raw(), event.as_raw_handle(), self.serial) } >= 0 {
             OK
         } else {
             FEATURE_FAILED
@@ -128,7 +105,6 @@ struct Latency {
 }
 
 struct Xess {
-    ops: &'static Ops,
     sdk: Bindings,
     device: IUnknown,
     queue: IUnknown,
@@ -160,25 +136,24 @@ impl Xess {
     }
 
     fn enabled(&self, on: bool) -> bool {
-        unsafe { (self.ops.enabled)(self.sdk.raw, self.fg.get(), u32::from(on)) == 0 }
+        unsafe { leaf::enabled(self.sdk.raw, self.fg.get(), u32::from(on)) == 0 }
     }
 
     unsafe fn initialize(&mut self, setup: &Setup) -> i32 {
         let result =
-            unsafe { (self.ops.create_fg)(self.sdk.raw, self.device.as_raw(), self.fg.get_mut()) };
+            unsafe { leaf::create_fg(self.sdk.raw, self.device.as_raw(), self.fg.get_mut()) };
         if result != 0 || self.fg.get().is_null() {
             return NOT_SUPPORTED;
         }
-        let result = unsafe {
-            (self.ops.create_xell)(self.sdk.raw, self.device.as_raw(), self.xell.get_mut())
-        };
+        let result =
+            unsafe { leaf::create_xell(self.sdk.raw, self.device.as_raw(), self.xell.get_mut()) };
         if result != 0 || self.xell.get().is_null() {
             return NOT_SUPPORTED;
         }
         let mut max = 0;
-        if unsafe { (self.ops.max_count)(self.sdk.raw, self.fg.get(), &mut max) } != 0
+        if unsafe { leaf::max_count(self.sdk.raw, self.fg.get(), &mut max) } != 0
             || max == 0
-            || unsafe { (self.ops.bind_xell)(self.sdk.raw, self.fg.get(), self.xell.get()) } != 0
+            || unsafe { leaf::bind_xell(self.sdk.raw, self.fg.get(), self.xell.get()) } != 0
         {
             return NOT_SUPPORTED;
         }
@@ -187,7 +162,7 @@ impl Xess {
         initial.pacing_owner = RSF_PACING_XELL;
         initial.low_latency_available = 1;
         let mut version = Version::default();
-        unsafe { (self.ops.version)(self.sdk.raw, &mut version) };
+        unsafe { leaf::version(self.sdk.raw, &mut version) };
         initial.version_id = (u64::from(version.major) << 32)
             | (u64::from(version.minor) << 16)
             | u64::from(version.patch);
@@ -201,7 +176,7 @@ impl Xess {
         if !setup.chain.hwnd.is_null() {
             let mut chain = null_mut();
             let result = unsafe {
-                (self.ops.create_chain)(self.sdk.raw, self.fg.get(), setup, reserved, &mut chain)
+                leaf::create_chain(self.sdk.raw, self.fg.get(), setup, reserved, &mut chain)
             };
             *self.chain.get_mut() = unsafe { com_ref::owned(chain) };
             if result != OK {
@@ -211,7 +186,7 @@ impl Xess {
                 return INIT_FAILED;
             }
             if unsafe {
-                (self.ops.compose)(
+                leaf::compose(
                     self.sdk.raw,
                     self.fg.get(),
                     u32::from(self.ui_mode != UI_NONE),
@@ -265,11 +240,10 @@ impl Session for Xess {
             let Ok(sleeper) = self.sleep.try_lock() else {
                 return NOT_READY;
             };
-            let result = self.settings_fence.borrow_mut().drain(
-                self.ops,
-                self.device.as_raw(),
-                self.queue.as_raw(),
-            );
+            let result = self
+                .settings_fence
+                .borrow_mut()
+                .drain(self.device.as_raw(), self.queue.as_raw());
             if result != OK {
                 return result;
             }
@@ -278,12 +252,12 @@ impl Session for Xess {
             None
         };
         self.options_dirty.set(true);
-        if count != 0 && unsafe { (self.ops.count)(self.sdk.raw, self.fg.get(), count) } != 0 {
+        if count != 0 && unsafe { leaf::count(self.sdk.raw, self.fg.get(), count) } != 0 {
             return FEATURE_FAILED;
         }
         if sleep_changed {
             if unsafe {
-                (self.ops.sleep_mode)(
+                leaf::sleep_mode(
                     self.sdk.raw,
                     self.xell.get(),
                     requested.interval_us,
@@ -328,7 +302,7 @@ impl Session for Xess {
             latency.sdk_frame = next;
             next
         };
-        if unsafe { (self.ops.sleep)(self.sdk.raw, self.xell.get(), sdk) } != 0 {
+        if unsafe { leaf::sleep(self.sdk.raw, self.xell.get(), sdk) } != 0 {
             return FEATURE_FAILED;
         }
         let mut latency = self.latency.lock().unwrap();
@@ -355,7 +329,7 @@ impl Session for Xess {
         if kind == INPUT_SAMPLE && frame.input_sampled {
             return OK;
         }
-        if unsafe { (self.ops.marker)(self.sdk.raw, self.xell.get(), frame.sdk, kind) } == 0 {
+        if unsafe { leaf::marker(self.sdk.raw, self.xell.get(), frame.sdk, kind) } == 0 {
             if kind == INPUT_SAMPLE {
                 frame.input_sampled = true;
             }
@@ -367,7 +341,7 @@ impl Session for Xess {
 
     unsafe fn prepare(&self, list: Raw, frame: *const Frame) -> i32 {
         let (frame, record) =
-            match unsafe { read_frame(self.ops.check, frame, self.device.as_raw()) } {
+            match unsafe { read_frame(leaf::checks(), frame, self.device.as_raw()) } {
                 Ok(frame) => frame,
                 Err(result) => return result,
             };
@@ -390,7 +364,7 @@ impl Session for Xess {
             return NOT_READY;
         };
         let fg = self.fg.get();
-        if unsafe { (self.ops.present_id)(self.sdk.raw, fg, sdk) } != 0 {
+        if unsafe { leaf::present_id(self.sdk.raw, fg, sdk) } != 0 {
             return FEATURE_FAILED;
         }
         if frame.interpolate == 0 || before.mode() == RSF_FG_OFF {
@@ -402,7 +376,7 @@ impl Session for Xess {
                 FEATURE_FAILED
             };
         }
-        let result = unsafe { (self.ops.check.command)(list, self.device.as_raw()) };
+        let result = unsafe { (leaf::checks().command)(list, self.device.as_raw()) };
         if result != OK {
             return result;
         }
@@ -423,13 +397,12 @@ impl Session for Xess {
         let resources = [&frame.depth, &frame.motion, &frame.hudless, &frame.ui];
         for (kind, resource) in resources.into_iter().enumerate() {
             if !resource.resource.is_null()
-                && unsafe { (self.ops.tag)(self.sdk.raw, fg, list, sdk, kind as u32, resource) }
-                    != 0
+                && unsafe { leaf::tag(self.sdk.raw, fg, list, sdk, kind as u32, resource) } != 0
             {
                 return FEATURE_FAILED;
             }
         }
-        if unsafe { (self.ops.constants)(self.sdk.raw, fg, sdk, frame, u32::from(reset)) } != 0
+        if unsafe { leaf::constants(self.sdk.raw, fg, sdk, frame, u32::from(reset)) } != 0
             || !self.enabled(true)
         {
             return FEATURE_FAILED;
@@ -453,8 +426,7 @@ impl Session for Xess {
     fn after(&self) -> i32 {
         let before = self.state.read();
         let mut present = Present::default();
-        let result =
-            unsafe { (self.ops.present_status)(self.sdk.raw, self.fg.get(), &mut present) };
+        let result = unsafe { leaf::present_status(self.sdk.raw, self.fg.get(), &mut present) };
         let mut observation = Observation {
             vendor_status: result,
             ..Observation::default()
@@ -482,12 +454,12 @@ impl Session for Xess {
         let chain = self.chain.borrow_mut().take();
         drop(chain);
         let fg = self.fg.get();
-        if !fg.is_null() && unsafe { (self.ops.destroy_fg)(self.sdk.raw, fg) } != 0 {
+        if !fg.is_null() && unsafe { leaf::destroy_fg(self.sdk.raw, fg) } != 0 {
             return false;
         }
         self.fg.set(null_mut());
         let xell = self.xell.get();
-        if !xell.is_null() && unsafe { (self.ops.destroy_xell)(self.sdk.raw, xell) } != 0 {
+        if !xell.is_null() && unsafe { leaf::destroy_xell(self.sdk.raw, xell) } != 0 {
             return false;
         }
         self.xell.set(null_mut());
@@ -497,33 +469,27 @@ impl Session for Xess {
 
 static PROVIDER: Provider = provider::<Xess>();
 
-unsafe fn rsf_core_xeg12_create(
-    ops: &'static Ops,
-    setup: *const Setup,
-    out: *mut Raw,
-    chain: *mut Raw,
-) -> i32 {
-    let result = unsafe { (ops.check.setup)(setup, out, chain) };
+unsafe fn rsf_core_xeg12_create(setup: *const Setup, out: *mut Raw, chain: *mut Raw) -> i32 {
+    let result = unsafe { (leaf::checks().setup)(setup, out, chain) };
     if result != OK {
         return result;
     }
     let setup = unsafe { &*setup };
-    if let Err(result) = ops.check.preflight(setup, setup.chain.ui_mode != UI_LAYER) {
+    if let Err(result) = leaf::checks().preflight(setup, setup.chain.ui_mode != UI_LAYER) {
         return result;
     }
     let sdk = match Bindings::open(
         setup,
-        ops.check,
+        leaf::checks(),
         "libxess_fg.dll",
         Some("libxell.dll"),
-        ops.resolve,
-        ops.close,
+        leaf::resolve,
+        leaf::close,
     ) {
         Ok(sdk) => sdk,
         Err(result) => return result,
     };
     let session = crate::allocate_handle(Xess {
-        ops,
         sdk,
         log: Log::new(setup),
         device: unsafe { com_ref::retain(setup.chain.d3d12_device) },
