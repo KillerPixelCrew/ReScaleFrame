@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::json::{
-    rsf_census_json_close, rsf_census_json_open, rsf_census_json_string, rsf_census_json_u64,
-};
-use super::rsf_census_json;
+use super::json::Json;
 use std::cell::Cell;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::io::Write;
 use std::ptr::{null, null_mut};
 use std::sync::{
@@ -196,8 +193,8 @@ pub(super) fn rsf_census_thread_name(tid: u32, now: u64, out: &mut [u8; THREAD_B
     });
 }
 
-pub(super) unsafe extern "C" fn rsf_census_threads_summary(json: &mut rsf_census_json) {
-    unsafe { rsf_census_json_open(json, c"threads".as_ptr(), b'[' as c_char) };
+pub(super) fn rsf_census_threads_summary(json: &mut Json<'_>) {
+    json.open(c"threads", b'[');
     for thread in &THREAD {
         let tid = thread.tid.load(Acquire);
         if tid == 0 {
@@ -207,13 +204,14 @@ pub(super) unsafe extern "C" fn rsf_census_threads_summary(json: &mut rsf_census
             .name
             .try_lock()
             .map_or([0; THREAD_BYTES], |name| *name);
-        unsafe {
-            rsf_census_json_open(json, null(), b'{' as c_char);
-            rsf_census_json_u64(json, c"tid".as_ptr(), tid.into());
-            rsf_census_json_string(json, c"name".as_ptr(), name.as_ptr().cast());
-            rsf_census_json_u64(json, c"calls".as_ptr(), thread.calls.load(Relaxed));
-            rsf_census_json_close(json, b'}' as c_char);
-        }
+        json.open(None, b'{');
+        json.number(c"tid", tid);
+        json.text(
+            c"name",
+            CStr::from_bytes_until_nul(&name).unwrap_or_default(),
+        );
+        json.number(c"calls", thread.calls.load(Relaxed));
+        json.close(b'}');
     }
-    rsf_census_json_close(json, b']' as c_char);
+    json.close(b']');
 }

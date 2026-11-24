@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::json::{Json, rsf_census_json_string};
+use super::json::Json;
 use super::rsf_census_json;
 use super::rsf_census_sample;
 use crate::sys::rsf_census_hook_desc;
@@ -241,16 +241,14 @@ pub(super) fn rsf_census_stats_sample(
     ordinal < cfg.cap || (cfg.interval != 0 && (ordinal - cfg.cap).is_multiple_of(cfg.interval))
 }
 
-pub(super) fn rsf_census_stats_counts(
-    calls: &mut u64,
-    present: &mut u64,
-    sites: &mut u32,
-    overflow: &mut u32,
-) {
-    *calls = CALLS.load(Relaxed);
-    *present = PRESENT.load(Relaxed);
-    *sites = SITE_COUNT.load(Relaxed);
-    *overflow = SITE_OVERFLOW.load(Relaxed);
+/// Calls seen, presents, sites, and sites that did not fit.
+pub(super) fn rsf_census_stats_counts() -> (u64, u64, u32, u32) {
+    (
+        CALLS.load(Relaxed),
+        PRESENT.load(Relaxed),
+        SITE_COUNT.load(Relaxed),
+        SITE_OVERFLOW.load(Relaxed),
+    )
 }
 
 fn roll_present() {
@@ -316,16 +314,6 @@ pub(super) fn rsf_census_stats_queue_submit(kind: u8, address: *const c_void, li
     first
 }
 
-trait StatsJson {
-    unsafe fn raw_text(&mut self, key: &CStr, text: *const c_char);
-}
-
-impl StatsJson for Json<'_> {
-    unsafe fn raw_text(&mut self, key: &CStr, text: *const c_char) {
-        unsafe { rsf_census_json_string(self.0, key.as_ptr(), text) };
-    }
-}
-
 fn function_name(desc: &rsf_census_hook_desc) -> *const c_char {
     if desc.name.is_null() {
         desc.id
@@ -347,9 +335,9 @@ pub(super) unsafe fn rsf_census_stats_sites(output: &mut rsf_census_json) {
         let desc = unsafe { &*super::platform().entries.add(entry) };
         json.open(None, b'{');
         unsafe {
-            json.raw_text(c"api", desc.api);
-            json.raw_text(c"function", function_name(desc));
-            json.raw_text(
+            json.text_ptr(c"api", desc.api);
+            json.text_ptr(c"function", function_name(desc));
+            json.text_ptr(
                 c"module",
                 super::identity::rsf_census_module_name(module.into()),
             );
@@ -388,7 +376,7 @@ pub(super) unsafe fn rsf_census_stats_histograms(
             }
             let desc = unsafe { &*entries.add(id) };
             json.open(None, b'{');
-            unsafe { json.raw_text(c"function", function_name(desc)) };
+            unsafe { json.text_ptr(c"function", function_name(desc)) };
             json.number(Some(c"calls"), calls);
             function.histogram.summary(&mut json);
             json.close(b'}');
@@ -408,7 +396,7 @@ pub(super) fn rsf_census_stats_queues(output: &mut rsf_census_json) {
         }
         let d3d12 = kind == D3D12_QUEUE;
         json.open(None, b'{');
-        unsafe { json.raw_text(c"kind", if d3d12 { c"d3d12" } else { c"vulkan" }.as_ptr()) };
+        unsafe { json.text_ptr(c"kind", if d3d12 { c"d3d12" } else { c"vulkan" }.as_ptr()) };
         json.hex(c"queue", address);
         let [a, b, c] = queue
             .descriptors

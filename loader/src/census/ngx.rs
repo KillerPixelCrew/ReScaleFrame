@@ -115,13 +115,7 @@ fn number(params: u64, name: &CStr, prefer_float: bool) -> Option<f64> {
         .or_else(|| parameter::<f64>(params, 13, name))
 }
 
-trait NgxJson {
-    fn scalar(&mut self, params: u64, key: &CStr, prefer_float: bool);
-    fn string(&mut self, key: &CStr, address: u64);
-    fn path(&mut self, address: u64);
-}
-
-impl NgxJson for Json<'_> {
+impl Json<'_> {
     fn scalar(&mut self, params: u64, key: &CStr, prefer_float: bool) {
         if let Some(value) = number(params, key, prefer_float) {
             unsafe { emit_decimal(self.0, key.as_ptr(), value, platform().decimal.unwrap()) };
@@ -277,15 +271,7 @@ fn resource(json: &mut Json<'_>, api: usize, params: u64, name: &CStr) {
         .or_else(|| parameter::<u64>(params, 8, name));
     if let Some(resource) = resource {
         if api == D3D12 || api == D3D11 {
-            unsafe {
-                super::decode::rsf_census_json_resource(
-                    json.0,
-                    name.as_ptr(),
-                    resource as _,
-                    api == D3D12,
-                    platform(),
-                );
-            }
+            json.d3d_resource(name, resource, api == D3D12);
         } else {
             vulkan_resource(json, name, resource);
         }

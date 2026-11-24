@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::memory::{read, u32_at};
+use super::memory::{read, u16_at, u32_at};
 use super::rsf_census_json;
 use std::ffi::{CStr, c_char, c_void};
 use std::fmt::Write;
@@ -62,6 +62,10 @@ impl Json<'_> {
     pub(super) fn text(&mut self, key: impl Key, value: &CStr) {
         unsafe { rsf_census_json_string(self.0, key.ptr(), value.as_ptr()) };
     }
+    /// A string the native tables hand out as a pointer; null is the empty string.
+    pub(super) unsafe fn text_ptr(&mut self, key: &CStr, value: *const c_char) {
+        unsafe { rsf_census_json_string(self.0, key.as_ptr(), value) };
+    }
     pub(super) fn raw(&mut self, key: impl Key, value: &CStr) {
         unsafe { rsf_census_json_raw(self.0, key.ptr(), value.as_ptr()) };
     }
@@ -75,6 +79,28 @@ impl Json<'_> {
         } else {
             self.raw(key, c"null");
         }
+    }
+    /// The GUID at `address`, as `riid`.
+    pub(super) fn guid(&mut self, address: u64) {
+        let Some(g) = read::<16>(address, 0) else {
+            return;
+        };
+        unsafe { self.0.lead(c"riid".as_ptr()) };
+        let _ = write!(
+            self.0,
+            "\"{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}\"",
+            u32_at(&g, 0),
+            u16_at(&g, 4),
+            u16_at(&g, 6),
+            g[8],
+            g[9],
+            g[10],
+            g[11],
+            g[12],
+            g[13],
+            g[14],
+            g[15]
+        );
     }
     pub(super) fn fields(&mut self, data: &[u8], fields: &[(&CStr, usize)]) {
         for &(key, offset) in fields {

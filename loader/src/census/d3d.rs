@@ -2,7 +2,8 @@
 use super::Ids;
 use super::decode::rsf_census_dxgi_format_name;
 use super::hooks::{rsf_census_hook_bind_inline, rsf_census_hook_original, rsf_census_hooks_apply};
-use super::json::{Json, rsf_census_json_raw, rsf_census_json_string};
+use super::json::{Json, rsf_census_json_raw};
+use super::memory::read_as;
 use super::platform;
 use super::session::{Call, rsf_census_active, rsf_census_flags};
 use super::stats::{
@@ -12,7 +13,6 @@ use super::stats::{
 use crate::sys::RSF_CENSUS_FLAG_D3D12_DEBUG_ONLY;
 use crate::sys::*;
 use std::ffi::{CStr, c_void};
-use std::io::Write;
 use std::mem::{MaybeUninit, transmute};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, Ordering::*};
@@ -42,7 +42,6 @@ use windows_sys::{
 };
 
 type Ptr = *mut c_void;
-type Info = *const c_void;
 type Entry = rsf_census_d3d_entry;
 const COUNT: usize = RSF_D3D_COUNT as usize;
 const QUEUE: u8 = 1;
@@ -104,26 +103,10 @@ fn id(entry: Entry) -> u16 {
     IDS.get(entry as usize)
 }
 
-trait D3dJson {
-    fn ptr(&mut self, key: &CStr, pointer: Info);
-    fn fmt_code(&mut self, format: u32);
-    fn written(&mut self, key: &CStr, out: *mut Ptr);
-    fn guid(&mut self, iid: *const GUID);
-}
-
-impl D3dJson for Json<'_> {
-    fn ptr(&mut self, key: &CStr, pointer: Info) {
-        self.hex(Some(key), pointer as u64);
-    }
+impl Json<'_> {
     fn fmt_code(&mut self, format: u32) {
         self.number(c"format", format);
-        unsafe {
-            rsf_census_json_string(
-                self.0,
-                c"format_name".as_ptr(),
-                rsf_census_dxgi_format_name(format),
-            )
-        };
+        unsafe { self.text_ptr(c"format_name", rsf_census_dxgi_format_name(format)) };
     }
     fn written(&mut self, key: &CStr, out: *mut Ptr) {
         if let Some(value) = read_ptr(out) {
@@ -132,38 +115,10 @@ impl D3dJson for Json<'_> {
             unsafe { rsf_census_json_raw(self.0, key.as_ptr(), c"null".as_ptr()) };
         }
     }
-    fn guid(&mut self, iid: *const GUID) {
-        let Some(value) = (unsafe { read::<GUID>(iid.cast()) }) else {
-            return;
-        };
-        let mut text = [0u8; 48];
-        let mut buffer = &mut text[..47];
-        let _ = write!(
-            buffer,
-            "{:08X}-{:04X}-{:04X}-{:02X}{:02X}-",
-            value.data1, value.data2, value.data3, value.data4[0], value.data4[1]
-        );
-        for byte in &value.data4[2..] {
-            let _ = write!(buffer, "{byte:02X}");
-        }
-        self.text(
-            Some(c"riid"),
-            CStr::from_bytes_until_nul(&text).unwrap_or(c""),
-        );
-    }
 }
 
-// The requested type must match the native layout and accept arbitrary bit patterns.
-unsafe fn read<T: Default>(source: Info) -> Option<T> {
-    if !(0x1_0000..0x0000_7fff_ffff_0000).contains(&(source as usize)) {
-        return None;
-    }
-    let mut value = T::default();
-    unsafe { platform().read.unwrap()(source, (&raw mut value).cast(), size_of::<T>()) }
-        .then_some(value)
-}
 fn read_ptr(source: *mut Ptr) -> Option<Ptr> {
-    unsafe { read::<usize>(source.cast()) }.map(|value| value as Ptr)
+    unsafe { read_as::<usize>(source as u64) }.map(|value| value as Ptr)
 }
 
 fn bind(entry: Entry, object: Ptr, slot: usize, interface: &CStr) {
@@ -274,7 +229,7 @@ fn create_factory(
         if let Some(flags) = flags {
             json.hex(Some(c"flags"), flags.into());
         }
-        json.guid(iid);
+        json.guid(iid as u64);
     }
     let status = if let Some(flags) = flags {
         original!(
@@ -330,7 +285,7 @@ unsafe extern "system" fn debug_message(
     let mut call = Call::begin(&mut slot, id(RSF_D3D_D3d12DebugMessage), pc);
     if let Some(mut json) = call.json() {
         json.number(c"id", message.0 as u32);
-        json.ptr(c"device", device);
+        json.hex(c"device", device as u64);
         json.number(c"category", category.0 as u32);
         json.text(
             Some(c"severity"),
@@ -418,7 +373,7 @@ fn attach_info(device: Ptr) {
     let mut call = Call::begin(&mut slot, id(RSF_D3D_CensusEvent), attach_info as Ptr);
     if let Some(mut json) = call.json() {
         json.text(Some(c"event"), c"d3d12_info_queue");
-        json.ptr(c"device", device);
+        json.hex(c"device", device as u64);
         json.hex(Some(c"hr"), result(status));
         json.number(c"cookie", cookie);
     }
@@ -469,9 +424,9 @@ extern "system" fn create_device(adapter: Ptr, level: i32, iid: *const GUID, out
     let mut slot = MaybeUninit::uninit();
     let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
-        json.ptr(c"adapter", adapter);
+        json.hex(c"adapter", adapter as u64);
         json.hex(Some(c"minimum_feature_level"), result(level));
-        json.guid(iid);
+        json.guid(iid as u64);
         json.flag(c"capability_test", out.is_null());
     }
     let status = original.map_or(E_FAIL, |function| unsafe {
@@ -538,8 +493,8 @@ extern "system" fn create_queue(
             c"VIDEO_PROCESS",
             c"VIDEO_ENCODE",
         ];
-        json.ptr(c"device", device);
-        if let Some(value) = unsafe { read::<D3D12_COMMAND_QUEUE_DESC>(desc.cast()) } {
+        json.hex(c"device", device as u64);
+        if let Some(value) = unsafe { read_as::<D3D12_COMMAND_QUEUE_DESC>(desc as u64) } {
             json.number(c"type", value.Type.0 as u32);
             json.text(
                 Some(c"type_name"),
@@ -552,7 +507,7 @@ extern "system" fn create_queue(
             json.hex(Some(c"flags"), result(value.Flags.0));
             json.number(c"node_mask", value.NodeMask);
         }
-        json.guid(iid);
+        json.guid(iid as u64);
     }
     let status = original.map_or(0, |function| unsafe { function(device, desc, iid, out) });
     if let Some(mut json) = call.json() {
@@ -561,7 +516,7 @@ extern "system" fn create_queue(
     if status >= 0
         && let Some(queue) = read_ptr(out).filter(|ptr| !ptr.is_null())
     {
-        if let Some(value) = unsafe { read::<D3D12_COMMAND_QUEUE_DESC>(desc.cast()) } {
+        if let Some(value) = unsafe { read_as::<D3D12_COMMAND_QUEUE_DESC>(desc as u64) } {
             describe_queue(queue, &value);
         }
         bind(
@@ -583,12 +538,12 @@ extern "system" fn execute(queue: Ptr, count: u32, lists: *const Ptr) {
     let mut slot = MaybeUninit::uninit();
     let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
-        json.ptr(c"queue", queue);
+        json.hex(c"queue", queue as u64);
         json.number(c"num_lists", count);
         json.open(c"lists", b'[');
         for index in 0..count.min(8) as usize {
-            let address = (lists as usize).wrapping_add(index * size_of::<Ptr>());
-            let Some(list) = (unsafe { read::<usize>(address as _) }) else {
+            let address = (lists as u64).wrapping_add((index * size_of::<Ptr>()) as u64);
+            let Some(list) = (unsafe { read_as::<usize>(address) }) else {
                 break;
             };
             json.hex(None, list as u64);
@@ -626,7 +581,7 @@ fn legacy_desc(json: &mut Json<'_>, desc: &DXGI_SWAP_CHAIN_DESC, creation: bool)
     }
     json.number(c"buffer_count", desc.BufferCount);
     if creation {
-        json.ptr(c"output_window", desc.OutputWindow.0);
+        json.hex(c"output_window", desc.OutputWindow.0 as u64);
         json.flag(c"windowed", desc.Windowed.as_bool());
     }
     json.number(c"swap_effect", desc.SwapEffect.0 as u32);
@@ -638,7 +593,7 @@ fn legacy_desc(json: &mut Json<'_>, desc: &DXGI_SWAP_CHAIN_DESC, creation: bool)
 }
 
 fn desc1(json: &mut Json<'_>, desc: *const DXGI_SWAP_CHAIN_DESC1) {
-    let Some(desc) = (unsafe { read::<DXGI_SWAP_CHAIN_DESC1>(desc.cast()) }) else {
+    let Some(desc) = (unsafe { read_as::<DXGI_SWAP_CHAIN_DESC1>(desc as u64) }) else {
         return;
     };
     json.open(c"desc", b'{');
@@ -685,9 +640,9 @@ extern "system" fn create_swapchain(
     let mut slot = MaybeUninit::uninit();
     let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
-        json.ptr(c"factory", factory);
-        json.ptr(c"device_or_queue", device);
-        if let Some(desc) = unsafe { read::<DXGI_SWAP_CHAIN_DESC>(desc.cast()) } {
+        json.hex(c"factory", factory as u64);
+        json.hex(c"device_or_queue", device as u64);
+        if let Some(desc) = unsafe { read_as::<DXGI_SWAP_CHAIN_DESC>(desc as u64) } {
             legacy_desc(&mut json, &desc, true);
         }
     }
@@ -724,11 +679,13 @@ extern "system" fn create_hwnd(
     let mut slot = MaybeUninit::uninit();
     let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
-        json.ptr(c"factory", factory);
-        json.ptr(c"device_or_queue", device);
-        json.ptr(c"hwnd", window);
+        json.hex(c"factory", factory as u64);
+        json.hex(c"device_or_queue", device as u64);
+        json.hex(c"hwnd", window as u64);
         desc1(&mut json, desc);
-        if let Some(value) = unsafe { read::<DXGI_SWAP_CHAIN_FULLSCREEN_DESC>(fullscreen.cast()) } {
+        if let Some(value) =
+            unsafe { read_as::<DXGI_SWAP_CHAIN_FULLSCREEN_DESC>(fullscreen as u64) }
+        {
             json.flag(c"fullscreen_windowed", value.Windowed.as_bool());
             json.number(c"fullscreen_scaling", value.Scaling.0 as u32);
         }
@@ -764,9 +721,9 @@ extern "system" fn create_core_window(
     let mut slot = MaybeUninit::uninit();
     let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
-        json.ptr(c"factory", factory);
-        json.ptr(c"device_or_queue", device);
-        json.ptr(c"core_window", window);
+        json.hex(c"factory", factory as u64);
+        json.hex(c"device_or_queue", device as u64);
+        json.hex(c"core_window", window as u64);
         desc1(&mut json, desc);
     }
     let status = original.map_or(0, |function| unsafe {
@@ -789,7 +746,7 @@ fn put_present(
     flags: u32,
     params: *const DXGI_PRESENT_PARAMETERS,
 ) {
-    json.ptr(c"swapchain", chain);
+    json.hex(c"swapchain", chain as u64);
     json.number(c"sync_interval", sync);
     json.hex(Some(c"present_flags"), flags.into());
     json.open(c"present_flag_names", b'[');
@@ -809,7 +766,7 @@ fn put_present(
         }
     }
     json.close(b']');
-    if let Some(params) = unsafe { read::<DXGI_PRESENT_PARAMETERS>(params.cast()) } {
+    if let Some(params) = unsafe { read_as::<DXGI_PRESENT_PARAMETERS>(params as u64) } {
         json.number(c"dirty_rects", params.DirtyRectsCount);
         json.flag(c"scroll_rect", !params.pScrollRect.is_null());
     }
@@ -880,7 +837,7 @@ fn resize_fields(
     format: i32,
     flags: u32,
 ) {
-    json.ptr(c"swapchain", chain);
+    json.hex(c"swapchain", chain as u64);
     json.number(c"buffer_count", count);
     json.number(c"width", width);
     json.number(c"height", height);
@@ -952,7 +909,7 @@ extern "system" fn set_color(chain: Ptr, color: i32) -> i32 {
     let mut slot = MaybeUninit::uninit();
     let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
-        json.ptr(c"swapchain", chain);
+        json.hex(c"swapchain", chain as u64);
         json.number(c"color_space", color as u32);
     }
     let status = original.map_or(0, |function| unsafe { function(chain, color) });
@@ -975,9 +932,9 @@ extern "system" fn fullscreen(chain: Ptr, enabled: i32, output: Ptr) -> i32 {
     let mut slot = MaybeUninit::uninit();
     let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
-        json.ptr(c"swapchain", chain);
+        json.hex(c"swapchain", chain as u64);
         json.flag(c"fullscreen", enabled != 0);
-        json.ptr(c"target_output", output);
+        json.hex(c"target_output", output as u64);
     }
     let status = original.map_or(0, |function| unsafe { function(chain, enabled, output) });
     call.finish(result(status));
@@ -992,7 +949,7 @@ extern "system" fn waitable(chain: Ptr) -> Ptr {
     let mut slot = MaybeUninit::uninit();
     let mut call = Call::begin(&mut slot, id(entry), pc);
     if let Some(mut json) = call.json() {
-        json.ptr(c"swapchain", chain);
+        json.hex(c"swapchain", chain as u64);
     }
     let handle = original.map_or(null_mut(), |function| unsafe { function(chain) });
     call.finish(handle as u64);

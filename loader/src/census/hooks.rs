@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: MIT
-use super::json::{
-    rsf_census_json_close, rsf_census_json_i64, rsf_census_json_open, rsf_census_json_raw,
-    rsf_census_json_string, rsf_census_json_u64,
-};
-use super::rsf_census_json;
+use super::json::Json;
 use super::session::rsf_census_active;
 use super::vendor::register_vendors;
 use crate::sys::*;
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::transmute;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 use std::sync::{
     Mutex, OnceLock,
     atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering::*},
@@ -600,69 +596,64 @@ pub(super) fn rsf_census_hooks_apply() {
     }
 }
 
-pub(super) fn rsf_census_hook_counts(installed: &mut u32, conflicts: &mut u32, modules: &mut u32) {
-    *installed = INSTALLED.load(Relaxed);
-    *conflicts = CONFLICTS.load(Relaxed);
-    *modules = MODULES.load(Relaxed);
+/// Hooks installed, conflicts, and modules hooked.
+pub(super) fn rsf_census_hook_counts() -> (u32, u32, u32) {
+    (
+        INSTALLED.load(Relaxed),
+        CONFLICTS.load(Relaxed),
+        MODULES.load(Relaxed),
+    )
 }
 
-pub(super) unsafe fn rsf_census_hooks_summary(json: &mut rsf_census_json) {
+pub(super) fn rsf_census_hooks_summary(json: &mut Json<'_>) {
     // The fatal-error writer may reach this while another thread is publishing a hook.
     let book = BOOK.try_lock().ok();
-    unsafe {
-        rsf_census_json_open(json, c"hooks".as_ptr(), b'[' as c_char);
-        if let Some((book, cfg)) = book.as_ref().zip(CONFIG.get()) {
-            for hook in &book.records[..book.count] {
-                let desc = descriptor(cfg, hook.entry).unwrap();
-                rsf_census_json_open(json, null(), b'{' as c_char);
-                let name = if desc.name.is_null() {
+    json.open(c"hooks", b'[');
+    if let Some((book, cfg)) = book.as_ref().zip(CONFIG.get()) {
+        for hook in &book.records[..book.count] {
+            let desc = descriptor(cfg, hook.entry).unwrap();
+            json.open(None, b'{');
+            json.text(
+                c"function",
+                bytes(if desc.name.is_null() {
                     desc.id
                 } else {
                     desc.name
-                };
-                rsf_census_json_string(json, c"function".as_ptr(), name);
-                rsf_census_json_string(json, c"api".as_ptr(), desc.api);
-                let binding = if hook.detour {
-                    c"detour"
-                } else {
-                    c"getprocaddress_thunk"
-                };
-                rsf_census_json_string(json, c"binding".as_ptr(), binding.as_ptr());
-                if hook.module[0] != 0 {
-                    rsf_census_json_string(json, c"module".as_ptr(), hook.module.as_ptr().cast());
-                }
-                if hook.detour {
-                    rsf_census_json_i64(json, c"minhook_status".as_ptr(), hook.status.into());
-                }
-                if let Some(patched) = hook.patched {
-                    let mut now = [0u8; 5];
-                    let readable = cfg.platform.read.unwrap()(
-                        hook.target as _,
-                        now.as_mut_ptr().cast(),
-                        now.len(),
-                    );
-                    let modified = if !readable || now != patched {
-                        c"true"
-                    } else {
-                        c"false"
-                    };
-                    rsf_census_json_raw(json, c"entry_modified".as_ptr(), modified.as_ptr());
-                }
-                rsf_census_json_close(json, b'}' as c_char);
+                })
+                .unwrap_or_default(),
+            );
+            json.text(c"api", bytes(desc.api).unwrap_or_default());
+            let binding = if hook.detour {
+                c"detour"
+            } else {
+                c"getprocaddress_thunk"
+            };
+            json.text(c"binding", binding);
+            if let Ok(module) = CStr::from_bytes_until_nul(&hook.module)
+                && !module.is_empty()
+            {
+                json.text(c"module", module);
             }
-        }
-        rsf_census_json_close(json, b']' as c_char);
-        rsf_census_json_u64(
-            json,
-            c"hook_conflicts".as_ptr(),
-            CONFLICTS.load(Relaxed).into(),
-        );
-        rsf_census_json_open(json, c"modules_hooked".as_ptr(), b'[' as c_char);
-        if let Some(book) = book.as_ref() {
-            for module in book.modules.iter().take(MODULES.load(Relaxed) as usize) {
-                rsf_census_json_string(json, null(), module.as_ptr().cast());
+            if hook.detour {
+                json.signed(c"minhook_status", hook.status);
             }
+            if let Some(patched) = hook.patched {
+                let mut now = [0u8; 5];
+                let readable = unsafe {
+                    cfg.platform.read.unwrap()(hook.target as _, now.as_mut_ptr().cast(), now.len())
+                };
+                json.flag(c"entry_modified", !readable || now != patched);
+            }
+            json.close(b'}');
         }
-        rsf_census_json_close(json, b']' as c_char);
     }
+    json.close(b']');
+    json.number(c"hook_conflicts", CONFLICTS.load(Relaxed));
+    json.open(c"modules_hooked", b'[');
+    if let Some(book) = book.as_ref() {
+        for module in book.modules.iter().take(MODULES.load(Relaxed) as usize) {
+            json.text(None, CStr::from_bytes_until_nul(module).unwrap_or_default());
+        }
+    }
+    json.close(b']');
 }

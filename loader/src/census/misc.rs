@@ -8,7 +8,6 @@ use super::platform;
 use super::session::{Args, Call, forward8};
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
-use std::io::Write;
 use std::mem::MaybeUninit;
 use std::ptr::{null, null_mut};
 
@@ -33,11 +32,7 @@ fn label(names: &[&'static CStr], index: u32) -> &'static CStr {
         .unwrap_or(c"other")
 }
 
-trait MiscJson {
-    fn float(&mut self, key: Option<&CStr>, bytes: &[u8], offset: usize);
-}
-
-impl MiscJson for Json<'_> {
+impl Json<'_> {
     fn float(&mut self, key: Option<&CStr>, bytes: &[u8], offset: usize) {
         let value = f64::from(f32::from_bits(u32_at(bytes, offset)));
         unsafe {
@@ -259,15 +254,7 @@ fn tags(json: &mut Json<'_>, address: u64, count: u32) {
                 &[(c"width", 68), (c"height", 72), (c"native_format", 76)],
             );
             if resource[32] == 0 && native != 0 {
-                unsafe {
-                    super::decode::rsf_census_json_resource(
-                        json.0,
-                        c"native".as_ptr(),
-                        native as _,
-                        true,
-                        platform(),
-                    )
-                };
+                json.d3d_resource(c"native", native, true);
             } else if native == 0 {
                 json.raw(c"native_ptr", c"null");
             } else {
@@ -437,29 +424,6 @@ fn reflex_options(json: &mut Json<'_>, args: &Args) {
     }
 }
 
-fn put_guid(json: &mut Json<'_>, address: u64) {
-    let Some(data) = read::<16>(address, 0) else {
-        return;
-    };
-    let mut text = [0u8; 48];
-    let mut line = &mut text[..47];
-    let _ = write!(
-        line,
-        "{:08X}-{:04X}-{:04X}-{:02X}{:02X}-",
-        u32_at(&data, 0),
-        u16_at(&data, 4),
-        u16_at(&data, 6),
-        data[8],
-        data[9]
-    );
-    for byte in &data[10..] {
-        let _ = write!(line, "{byte:02X}");
-    }
-    if let Ok(text) = CStr::from_bytes_until_nul(&text) {
-        json.text(c"riid", text);
-    }
-}
-
 fn pre(entry: Entry, json: &mut Json<'_>, args: &Args) {
     match entry {
         RSF_MISC_NvapiSetSleepMode => nv_mode(json, args),
@@ -535,7 +499,7 @@ fn pre(entry: Entry, json: &mut Json<'_>, args: &Args) {
         }
         RSF_MISC_AmdExtD3DCreateInterface => {
             json.hex(Some(c"outer"), args[0]);
-            put_guid(json, args[1]);
+            json.guid(args[1]);
         }
         RSF_MISC_AgsInitialize | RSF_MISC_AgsDriverExtensionsDX12CreateDevice => {
             json.open(Some(c"raw_args"), b'[');

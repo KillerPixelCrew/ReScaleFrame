@@ -4,10 +4,8 @@
 use super::Ids;
 use super::decode::rsf_census_dxgi_format_name;
 use super::hooks::rsf_census_hook_original;
-use super::json::{
-    Json, emit_decimal, rsf_census_json_bytes, rsf_census_json_string, rsf_census_json_wide,
-};
-use super::memory::{plausible, read, u32_at, u64_at};
+use super::json::{Json, emit_decimal, rsf_census_json_bytes, rsf_census_json_wide};
+use super::memory::{plausible, read, read_as, u32_at, u64_at};
 use super::platform;
 use super::session::{Args, Call, forward8};
 use crate::sys::*;
@@ -43,14 +41,7 @@ fn pointed_word(address: u64) -> Option<u64> {
     read::<8>(address, 0).map(u64::from_le_bytes)
 }
 
-trait FsrJson {
-    fn decimal(&mut self, key: &CStr, value: f32);
-    fn decimals(&mut self, data: &[u8], fields: &[(&CStr, usize)]);
-    fn ptr(&mut self, key: &CStr, address: u64);
-    fn resource(&mut self, key: &CStr, address: u64, require_slot: bool);
-}
-
-impl FsrJson for Json<'_> {
+impl Json<'_> {
     fn decimal(&mut self, key: &CStr, value: f32) {
         unsafe {
             emit_decimal(
@@ -70,7 +61,7 @@ impl FsrJson for Json<'_> {
         if address == 0 {
             self.raw(key, c"null");
         } else {
-            self.hex(Some(key), address);
+            self.hex(key, address);
         }
     }
     fn resource(&mut self, key: &CStr, address: u64, require_slot: bool) {
@@ -79,18 +70,9 @@ impl FsrJson for Json<'_> {
         {
             return;
         }
-        unsafe {
-            super::decode::rsf_census_json_resource(
-                self.0,
-                key.as_ptr(),
-                address as _,
-                true,
-                platform(),
-            )
-        };
+        self.d3d_resource(key, address, true);
     }
 }
-
 fn fsr2_name(resource: &[u8]) -> [u16; 65] {
     let mut name = [0u16; 65];
     for (unit, bytes) in name.iter_mut().zip(resource[8..136].chunks_exact(2)) {
@@ -334,13 +316,6 @@ fn api_resource(json: &mut Json<'_>, key: &CStr, data: &[u8]) {
     json.close(b'}');
 }
 
-// The requested Windows structure must accept arbitrary native bit patterns.
-unsafe fn sdk_desc<T: Default>(address: u64) -> Option<T> {
-    let mut value = T::default();
-    unsafe { platform().read.unwrap()(address as _, (&raw mut value).cast(), size_of::<T>()) }
-        .then_some(value)
-}
-
 fn chain_desc(json: &mut Json<'_>, address: u64, legacy: bool) {
     if !plausible(address) {
         return;
@@ -354,7 +329,7 @@ fn chain_desc(json: &mut Json<'_>, address: u64, legacy: bool) {
         b'{',
     );
     let fields = if legacy {
-        unsafe { sdk_desc::<DXGI_SWAP_CHAIN_DESC>(address) }.map(|d| {
+        unsafe { read_as::<DXGI_SWAP_CHAIN_DESC>(address) }.map(|d| {
             (
                 d.BufferDesc.Width,
                 d.BufferDesc.Height,
@@ -365,7 +340,7 @@ fn chain_desc(json: &mut Json<'_>, address: u64, legacy: bool) {
             )
         })
     } else {
-        unsafe { sdk_desc::<DXGI_SWAP_CHAIN_DESC1>(address) }.map(|d| {
+        unsafe { read_as::<DXGI_SWAP_CHAIN_DESC1>(address) }.map(|d| {
             (
                 d.Width,
                 d.Height,
@@ -380,13 +355,7 @@ fn chain_desc(json: &mut Json<'_>, address: u64, legacy: bool) {
         json.number(c"width", width);
         json.number(c"height", height);
         json.number(c"format", format as u32);
-        unsafe {
-            rsf_census_json_string(
-                json.0,
-                c"format_name".as_ptr(),
-                rsf_census_dxgi_format_name(format as u32),
-            )
-        };
+        unsafe { json.text_ptr(c"format_name", rsf_census_dxgi_format_name(format as u32)) };
         json.number(c"buffer_count", buffers);
         json.number(c"swap_effect", effect as u32);
         json.hex(Some(c"flags"), flags.into());

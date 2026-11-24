@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::json::{
-    rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_raw,
-    rsf_census_json_string, rsf_census_json_u64,
-};
-use super::rsf_census_json;
-use crate::sys::rsf_census_platform;
-use std::ffi::{c_char, c_void};
+use super::json::Json;
+use super::platform;
+use std::ffi::{CStr, c_char};
 use windows::Win32::Graphics::{
     Direct3D11::{D3D11_RESOURCE_DIMENSION_TEXTURE2D, D3D11_TEXTURE2D_DESC},
     Direct3D12::D3D12_RESOURCE_DESC,
@@ -68,102 +64,73 @@ pub(super) fn rsf_census_dxgi_format_name(format: u32) -> *const c_char {
     .as_ptr()
 }
 
-/// A resource's description as a JSON object, read through the platform's guarded calls.
-pub(super) unsafe fn rsf_census_json_resource(
-    json: &mut rsf_census_json,
-    key: *const c_char,
-    resource: *const c_void,
-    d3d12: bool,
-    reads: &rsf_census_platform,
-) {
-    if resource.is_null() {
-        unsafe { rsf_census_json_raw(json, key, c"null".as_ptr()) };
-        return;
-    }
-
-    unsafe {
-        rsf_census_json_open(json, key, b'{' as c_char);
-        rsf_census_json_hex(json, c"ptr".as_ptr(), resource as u64);
+impl Json<'_> {
+    /// A D3D resource's description as a JSON object, read through the platform's guarded calls.
+    pub(super) fn d3d_resource(&mut self, key: &CStr, resource: u64, d3d12: bool) {
+        if resource == 0 {
+            self.raw(key, c"null");
+            return;
+        }
+        self.open(key, b'{');
+        self.hex(c"ptr", resource);
         let readable = if d3d12 {
-            describe12(json, resource, reads)
+            self.describe12(resource)
         } else {
-            describe11(json, resource, reads)
+            self.describe11(resource)
         };
         if !readable {
-            rsf_census_json_raw(json, c"desc_unreadable".as_ptr(), c"true".as_ptr());
+            self.flag(c"desc_unreadable", true);
         }
-        rsf_census_json_close(json, b'}' as c_char);
+        self.close(b'}');
     }
-}
 
-unsafe fn texture_fields(json: &mut rsf_census_json, format: u32, width: u64, height: u32) {
-    unsafe {
-        rsf_census_json_u64(json, c"format".as_ptr(), format.into());
-        rsf_census_json_string(
-            json,
-            c"format_name".as_ptr(),
-            rsf_census_dxgi_format_name(format),
-        );
-        rsf_census_json_u64(json, c"width".as_ptr(), width);
-        rsf_census_json_u64(json, c"height".as_ptr(), height.into());
+    fn texture_fields(&mut self, format: u32, width: u64, height: u32) {
+        self.number(c"format", format);
+        unsafe { self.text_ptr(c"format_name", rsf_census_dxgi_format_name(format)) };
+        self.number(c"width", width);
+        self.number(c"height", height);
     }
-}
 
-unsafe fn describe12(
-    json: &mut rsf_census_json,
-    resource: *const c_void,
-    reads: &rsf_census_platform,
-) -> bool {
-    let mut desc = D3D12_RESOURCE_DESC::default();
-    if !reads
-        .resource12_desc
-        .is_some_and(|read| unsafe { read(resource, (&raw mut desc).cast()) })
-    {
-        return false;
+    fn describe12(&mut self, resource: u64) -> bool {
+        let mut desc = D3D12_RESOURCE_DESC::default();
+        if !platform()
+            .resource12_desc
+            .is_some_and(|read| unsafe { read(resource as _, (&raw mut desc).cast()) })
+        {
+            return false;
+        }
+        self.number(c"dimension", desc.Dimension.0 as u32);
+        self.texture_fields(desc.Format.0 as u32, desc.Width, desc.Height);
+        self.number(c"depth_or_layers", desc.DepthOrArraySize);
+        self.number(c"mips", desc.MipLevels);
+        self.number(c"samples", desc.SampleDesc.Count);
+        self.hex(c"flags", u64::from(desc.Flags.0 as u32));
+        true
     }
-    unsafe {
-        rsf_census_json_u64(json, c"dimension".as_ptr(), desc.Dimension.0 as u32 as u64);
-        texture_fields(json, desc.Format.0 as u32, desc.Width, desc.Height);
-        rsf_census_json_u64(
-            json,
-            c"depth_or_layers".as_ptr(),
-            desc.DepthOrArraySize.into(),
-        );
-        rsf_census_json_u64(json, c"mips".as_ptr(), desc.MipLevels.into());
-        rsf_census_json_u64(json, c"samples".as_ptr(), desc.SampleDesc.Count.into());
-        rsf_census_json_hex(json, c"flags".as_ptr(), desc.Flags.0 as u32 as u64);
-    }
-    true
-}
 
-unsafe fn describe11(
-    json: &mut rsf_census_json,
-    resource: *const c_void,
-    reads: &rsf_census_platform,
-) -> bool {
-    let mut dimension = 0;
-    if !reads
-        .resource11_dimension
-        .is_some_and(|read| unsafe { read(resource, &mut dimension) })
-    {
-        return false;
+    fn describe11(&mut self, resource: u64) -> bool {
+        let mut dimension = 0;
+        if !platform()
+            .resource11_dimension
+            .is_some_and(|read| unsafe { read(resource as _, &mut dimension) })
+        {
+            return false;
+        }
+        self.number(c"dimension", dimension as u32);
+        if dimension != D3D11_RESOURCE_DIMENSION_TEXTURE2D.0 {
+            return true;
+        }
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        if !platform()
+            .resource11_desc
+            .is_some_and(|read| unsafe { read(resource as _, (&raw mut desc).cast()) })
+        {
+            return false;
+        }
+        self.texture_fields(desc.Format.0 as u32, desc.Width.into(), desc.Height);
+        self.number(c"mips", desc.MipLevels);
+        self.number(c"array_size", desc.ArraySize);
+        self.hex(c"bind_flags", desc.BindFlags.into());
+        true
     }
-    unsafe { rsf_census_json_u64(json, c"dimension".as_ptr(), dimension as u32 as u64) };
-    if dimension != D3D11_RESOURCE_DIMENSION_TEXTURE2D.0 {
-        return true;
-    }
-    let mut desc = D3D11_TEXTURE2D_DESC::default();
-    if !reads
-        .resource11_desc
-        .is_some_and(|read| unsafe { read(resource, (&raw mut desc).cast()) })
-    {
-        return false;
-    }
-    unsafe {
-        texture_fields(json, desc.Format.0 as u32, desc.Width.into(), desc.Height);
-        rsf_census_json_u64(json, c"mips".as_ptr(), desc.MipLevels.into());
-        rsf_census_json_u64(json, c"array_size".as_ptr(), desc.ArraySize.into());
-        rsf_census_json_hex(json, c"bind_flags".as_ptr(), desc.BindFlags.into());
-    }
-    true
 }

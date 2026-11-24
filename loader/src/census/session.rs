@@ -221,7 +221,7 @@ pub(super) fn drop_line() {
     DROPPED_SIZE.fetch_add(1, Relaxed);
 }
 
-fn json_buffer(output: &mut [u8], reserve: usize) -> rsf_census_json {
+pub(super) fn json_buffer(output: &mut [u8], reserve: usize) -> rsf_census_json {
     rsf_census_json {
         buffer: output.as_mut_ptr().cast(),
         capacity: output.len() - reserve,
@@ -250,11 +250,9 @@ impl Writer {
         );
         json.number(c"pid", unsafe { GetCurrentProcessId() });
         json.number(c"elapsed_ms", core.now() / 1000);
-        let (mut calls, mut present, mut sites, mut overflow) = (0, 0, 0, 0);
-        rsf_census_stats_counts(&mut calls, &mut present, &mut sites, &mut overflow);
+        let (calls, present, sites, overflow) = rsf_census_stats_counts();
         json.number(c"present_index", present);
-        let (mut written, mut dropped, mut bytes, mut exhausted) = (0, 0, 0, false);
-        rsf_census_output_counts(&mut written, &mut dropped, &mut bytes, &mut exhausted);
+        let (written, dropped, bytes, exhausted) = rsf_census_output_counts();
         json.open(Some(c"budget"), b'{');
         json.number(c"byte_budget", core.budget);
         json.number(c"bytes_written", bytes);
@@ -275,10 +273,10 @@ impl Writer {
         unsafe {
             rsf_census_stats_sites(json.0);
             rsf_census_stats_histograms(json.0, core.platform.entries);
-            rsf_census_threads_summary(json.0);
+            rsf_census_threads_summary(&mut json);
             rsf_census_stats_queues(json.0);
-            rsf_census_hooks_summary(json.0);
         }
+        rsf_census_hooks_summary(&mut json);
         json.open(Some(c"static_findings"), b'[');
         if let Ok(findings) = FINDINGS.try_lock() {
             let count = (FINDING_COUNT.load(Relaxed) as usize).min(findings.len());
@@ -799,27 +797,9 @@ unsafe extern "C" fn rsf_census_get_counters(out: *mut rsf_census_counters) -> r
     if abi_version != RSF_CENSUS_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    let (mut calls_seen, mut present_index, mut sites, mut site_overflow) = (0, 0, 0, 0);
-    rsf_census_stats_counts(
-        &mut calls_seen,
-        &mut present_index,
-        &mut sites,
-        &mut site_overflow,
-    );
-    let (mut records_written, mut records_dropped_budget, mut bytes_written) = (0, 0, 0);
-    let mut exhausted = false;
-    rsf_census_output_counts(
-        &mut records_written,
-        &mut records_dropped_budget,
-        &mut bytes_written,
-        &mut exhausted,
-    );
-    let (mut hooks_installed, mut hook_conflicts, mut modules_hooked) = (0, 0, 0);
-    rsf_census_hook_counts(
-        &mut hooks_installed,
-        &mut hook_conflicts,
-        &mut modules_hooked,
-    );
+    let (calls_seen, present_index, sites, site_overflow) = rsf_census_stats_counts();
+    let (records_written, records_dropped_budget, bytes_written, _) = rsf_census_output_counts();
+    let (hooks_installed, hook_conflicts, modules_hooked) = rsf_census_hook_counts();
     unsafe {
         out.write(rsf_census_counters {
             struct_size,

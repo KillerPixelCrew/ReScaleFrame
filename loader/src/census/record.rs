@@ -1,18 +1,14 @@
 // SPDX-License-Identifier: MIT
 use super::identity::{rsf_census_module_base, rsf_census_module_name_from_base};
-use super::json::{
-    rsf_census_json_close, rsf_census_json_hex, rsf_census_json_open, rsf_census_json_string,
-    rsf_census_json_u64,
-};
+use super::json::Json;
 use super::platform;
-use super::rsf_census_json;
-use super::session::{append_line, drop_line};
+use super::session::{append_line, drop_line, json_buffer};
 use super::{RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES, rsf_census_queued_record};
 use std::cell::UnsafeCell;
-use std::ffi::{CStr, c_char};
+use std::ffi::CStr;
 use std::io::Write;
 use std::mem::MaybeUninit;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 use std::slice;
 use std::sync::{
     OnceLock,
@@ -113,59 +109,56 @@ unsafe fn write_line(record: &rsf_census_queued_record, seq: u64, line: &mut [u8
         drop_line();
         return;
     }
-    let mut json = rsf_census_json {
-        buffer: line.as_mut_ptr().cast(),
-        capacity: line.len() - 16,
-        length: 0,
-        comma: 0,
-        depth: 0,
-        overflow: false,
-    };
+    let mut state = json_buffer(line, 16);
+    let mut json = Json(&mut state);
+    let desc = unsafe { &*platform().entries.add(fi) };
+    json.open(None, b'{');
+    json.number(c"seq", seq);
+    json.number(c"t_us", record.t_us);
+    json.number(c"present", record.present);
     unsafe {
-        let desc = &*platform().entries.add(fi);
-        let module = rsf_census_module_name_from_base(record.base);
-        rsf_census_json_open(&mut json, null(), b'{' as c_char);
-        rsf_census_json_u64(&mut json, c"seq".as_ptr(), seq);
-        rsf_census_json_u64(&mut json, c"t_us".as_ptr(), record.t_us);
-        rsf_census_json_u64(&mut json, c"present".as_ptr(), record.present);
-        rsf_census_json_string(&mut json, c"api".as_ptr(), desc.api);
-        let name = if desc.name.is_null() {
-            desc.id
-        } else {
-            desc.name
-        };
-        rsf_census_json_string(&mut json, c"fn".as_ptr(), name);
-        rsf_census_json_u64(&mut json, c"ord".as_ptr(), record.ord);
-        rsf_census_json_u64(&mut json, c"site_ord".as_ptr(), record.site_ord);
-        rsf_census_json_string(&mut json, c"module".as_ptr(), module);
-        rsf_census_json_hex(&mut json, c"rva".as_ptr(), record.rva.into());
-        rsf_census_json_u64(&mut json, c"tid".as_ptr(), record.tid.into());
-        rsf_census_json_string(&mut json, c"thread".as_ptr(), record.thread.as_ptr());
-        rsf_census_json_hex(&mut json, c"ret".as_ptr(), record.ret);
-        if record.stack_n != 0 {
-            rsf_census_json_open(&mut json, c"stack".as_ptr(), b'[' as c_char);
-            for &frame in record.stack.iter().take(record.stack_n as usize) {
-                let base = rsf_census_module_base(frame);
-                let mut label = [0u8; 96];
-                let mut output = &mut label[..95];
-                if base != 0 {
-                    let module = CStr::from_ptr(rsf_census_module_name_from_base(base));
-                    let _ = output.write_all(module.to_bytes());
-                    let _ = write!(output, "+{:#x}", (frame as u64).wrapping_sub(base));
-                } else {
-                    let _ = write!(output, "{:#x}", frame as usize);
-                }
-                rsf_census_json_string(&mut json, null(), label.as_ptr().cast());
-            }
-            rsf_census_json_close(&mut json, b']' as c_char);
-        }
+        json.text_ptr(c"api", desc.api);
+        json.text_ptr(
+            c"fn",
+            if desc.name.is_null() {
+                desc.id
+            } else {
+                desc.name
+            },
+        );
     }
-    if json.overflow || json.length + body + 12 > line.len() {
+    json.number(c"ord", record.ord);
+    json.number(c"site_ord", record.site_ord);
+    unsafe { json.text_ptr(c"module", rsf_census_module_name_from_base(record.base)) };
+    json.hex(c"rva", record.rva.into());
+    json.number(c"tid", record.tid);
+    unsafe { json.text_ptr(c"thread", record.thread.as_ptr()) };
+    json.hex(c"ret", record.ret);
+    if record.stack_n != 0 {
+        json.open(c"stack", b'[');
+        for &frame in record.stack.iter().take(record.stack_n as usize) {
+            let base = rsf_census_module_base(frame);
+            let mut label = [0u8; 96];
+            let mut output = &mut label[..95];
+            if base != 0 {
+                let module = unsafe { CStr::from_ptr(rsf_census_module_name_from_base(base)) };
+                let _ = output.write_all(module.to_bytes());
+                let _ = write!(output, "+{:#x}", (frame as u64).wrapping_sub(base));
+            } else {
+                let _ = write!(output, "{:#x}", frame as usize);
+            }
+            json.text(None, CStr::from_bytes_until_nul(&label).unwrap_or_default());
+        }
+        json.close(b']');
+    }
+    let json_length = state.length;
+    let json_overflow = state.overflow;
+    if json_overflow || json_length + body + 12 > line.len() {
         drop_line();
         return;
     }
     let record_body = unsafe { slice::from_raw_parts(record.body.as_ptr().cast::<u8>(), body) };
-    let mut offset = json.length;
+    let mut offset = json_length;
     for part in [b",\"args\":".as_slice(), record_body, b"}\n"] {
         line[offset..offset + part.len()].copy_from_slice(part);
         offset += part.len();

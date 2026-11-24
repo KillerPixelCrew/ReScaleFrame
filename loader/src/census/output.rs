@@ -160,23 +160,16 @@ pub(super) fn rsf_census_output_reset_records() {
     }
 }
 
-pub(super) fn rsf_census_output_counts(
-    written: &mut u64,
-    dropped_budget: &mut u64,
-    bytes: &mut u64,
-    exhausted: &mut bool,
-) {
-    let Some(output) = OUTPUT.get() else {
-        *written = 0;
-        *dropped_budget = 0;
-        *bytes = 0;
-        *exhausted = false;
-        return;
-    };
-    *written = output.written.load(Relaxed);
-    *dropped_budget = output.dropped_budget.load(Relaxed);
-    *bytes = output.admitted_bytes.load(Relaxed);
-    *exhausted = output.exhausted.load(Relaxed);
+/// Records written, records dropped for the budget, bytes admitted and whether the budget is spent.
+pub(super) fn rsf_census_output_counts() -> (u64, u64, u64, bool) {
+    OUTPUT.get().map_or((0, 0, 0, false), |output| {
+        (
+            output.written.load(Relaxed),
+            output.dropped_budget.load(Relaxed),
+            output.admitted_bytes.load(Relaxed),
+            output.exhausted.load(Relaxed),
+        )
+    })
 }
 
 pub(super) fn rsf_census_output_summary(
