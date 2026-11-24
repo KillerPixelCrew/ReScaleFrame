@@ -17,7 +17,7 @@ pub(crate) const ADMIT_RENDERER: u32 = 2;
 
 pub(crate) const FIELD_COUNT: usize = 21;
 // The first CHECKED fields must be Variant INT or BOOL within 0..=u32::MAX. The sharpening
-// fields are converted by Godot's Variant rules without a type check, as they always were.
+// fields are converted by Godot's Variant rules without a type check.
 const CHECKED: usize = 9;
 const SR_BACKEND: usize = 0;
 const QUALITY: usize = 1;
@@ -78,8 +78,7 @@ pub(crate) static FIELDS: FieldTable = FieldTable([
 ]);
 
 /// The requested settings, or `None` when a checked field has the wrong type or range. Absent
-/// fields keep the defaults; present integers truncate to 32 bits and reals narrow to `f32`, the
-/// conversions the C++ class applied.
+/// fields keep the defaults; present integers truncate to 32 bits and reals narrow to `f32`.
 pub(crate) fn compose(values: &[OptionValue; FIELD_COUNT]) -> Option<Settings> {
     let refused = values[..CHECKED].iter().any(|value| {
         value.present != 0

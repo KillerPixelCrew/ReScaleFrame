@@ -71,7 +71,7 @@ impl Creation {
         self.owner.load(Ordering::Acquire)
     }
 
-    /// The start leaf picked `underlying`. The owner instance survives, as before.
+    /// The start leaf picked `underlying`. The owner instance survives.
     pub(crate) fn begin(
         &self,
         underlying: Option<VkProc>,

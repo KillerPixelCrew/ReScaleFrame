@@ -144,7 +144,7 @@ impl Leaves {
     fn dlss_preset_valid(&self, preset: u32) -> bool {
         unsafe { raw::dlss_preset_valid(preset) != 0 }
     }
-    /// The bridge always accepts the policy; its result was never read.
+    /// The bridge always accepts the policy, so there is no result.
     fn set_engine_spatial(&self, spatial: bool, quality: u32) {
         raw::set_engine_spatial(u32::from(spatial), quality);
     }

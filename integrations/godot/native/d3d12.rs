@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Godot D3D12 SR context and submission owner formerly held by `runtime.cpp`: the engine's
+//! Godot D3D12 SR context and submission owner: the engine's
 //! device and queue identity, the SR context plan (requested provider, Auto resolved by the
 //! Runtime, spatial mapped to the normalising context, the fallback to backend 0, the planned
 //! input extent and the creation result) with its retirement and recreation rules, the three
@@ -7,13 +7,13 @@
 //! FG provider switch request, screen gating, sharpening defaults, the refusal diagnostics budget,
 //! the current render frame and the pass identity Present reuses.
 //!
-//! `runtime.cpp` keeps the leaves and decides nothing: the device, queue and fence references,
+//! `host.rs` holds the leaves and decides nothing: the device, queue and fence references,
 //! the fence wait and signal, the DXGI vendor lookup behind the Runtime's Auto provider policy
 //! (`rsf_gpu_default_sr_backend`, `rsf_fg_default_backend`), `rsf_sr12_*`, `rsf_fg12_*`, the
 //! `rsf_d3d11_present_*` provider calls, frame capture and the diagnostics text. The context
 //! handle is held here and lent to each leaf.
 //!
-//! These paths run on Godot's render thread, as before. The ledger lock is never held across a
+//! These paths run on Godot's render thread. The ledger lock is never held across a
 //! leaf except the fence signal, which calls no owner and keeps fence values in submission order.
 use crate::control::Control;
 use crate::platform::{Platform, Settings, Sharpening, SrCreate, SrEvaluate, SrFrame};
@@ -40,7 +40,7 @@ struct Rendered(rsf_game_render_pass);
 
 // SAFETY: the texture handles are cleared before the copy is stored. The remaining pointer
 // fields are identity values copied from the engine's pass; this crate never dereferences them
-// and hands the record only to the Present leaf, as `runtime.cpp` did with its global copy.
+// and hands the record only to the Present leaf.
 unsafe impl Send for Rendered {}
 
 impl Rendered {
@@ -108,7 +108,7 @@ struct Ledger {
     /// The engine's first device and queue, as addresses.
     bound: Option<(usize, usize)>,
     context: Option<Context>,
-    /// `rsf_sr12_plan` of the last context made; kept after retirement, as before.
+    /// `rsf_sr12_plan` of the last context made; kept after retirement.
     plan: (u32, u32),
     /// The first creation result of the last context request, before any fallback.
     context_result: i32,

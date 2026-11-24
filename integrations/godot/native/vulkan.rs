@@ -281,7 +281,7 @@ impl Vulkan {
         }
     }
 
-    /// Device readiness and provider refusals, in the order `vulkan.cpp` applied them. Runs under
+    /// Device readiness and provider refusals, in the order they are checked. Runs under
     /// the guard; the FSR4 FG probe and the presenter capacity are asked only when reached.
     fn admit(&self, value: &Settings) -> bool {
         let capabilities = self.capabilities();
@@ -333,7 +333,7 @@ impl Vulkan {
     }
 
     /// The record with the Streamline Vulkan latency overlay. Fills the record even when the
-    /// session is not booted, as before.
+    /// session is not booted.
     pub(crate) fn status(&self) -> (Status, c_int) {
         let mut value = self.state().status;
         if let Some(latency) = Platform.vulkan_latency_facts() {

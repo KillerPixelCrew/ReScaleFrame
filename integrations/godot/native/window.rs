@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Godot window and input ownership formerly held in `runtime.cpp` globals:
+//! Godot window and input ownership:
 //!
 //! - the input window: the first window of this process whose class is `Engine`, the class
 //!   Godot's Windows display server registers. The Runtime's presentation bridge asks through
@@ -12,11 +12,11 @@
 //!   window's procedure;
 //! - the Runtime CPU service bound at graphics setup, and window admission for Present.
 //!
-//! `runtime.cpp` keeps the typed Win32 and Runtime calls as leaves. What an input event, a ping
+//! `host.rs` keeps the typed Win32 and Runtime calls as leaves. What an input event, a ping
 //! or a present marker means, and any pacing, stays with the Runtime (Rule 3): this owner reports
 //! what the window received and when.
 use crate::platform::{CpuService, Platform};
-use rsf_game_sys::ffi_util::ascii_wide;
+use rsf_game_sys::ffi_util::{ascii_wide, lock_or_recover};
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_INPUT_EVENT,
     RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_RENDER_PRESENT,
@@ -144,7 +144,7 @@ impl Window {
     /// Replaces the admitted window's procedure once. A failed replacement leaves nothing
     /// attached, and the next frame begin tries again.
     fn attach(&self) {
-        let mut procedures = self.previous.lock().unwrap_or_else(|err| err.into_inner());
+        let mut procedures = lock_or_recover(&self.previous);
         let window = self.input();
         if window.is_null() || procedures.iter().any(|(owner, _)| *owner == window.addr()) {
             return;
@@ -165,7 +165,7 @@ impl Window {
         lparam: isize,
     ) -> isize {
         let previous = {
-            let mut procedures = self.previous.lock().unwrap_or_else(|err| err.into_inner());
+            let mut procedures = lock_or_recover(&self.previous);
             procedures
                 .iter()
                 .position(|(owner, _)| *owner == window.addr())
@@ -213,7 +213,7 @@ impl Window {
     /// window's own and the restore succeeds. A refused restore or an intervening subclass
     /// keeps forwarding to the replaced procedure. The admission and session end either way.
     pub(crate) fn release(&self) {
-        let mut procedures = self.previous.lock().unwrap_or_else(|err| err.into_inner());
+        let mut procedures = lock_or_recover(&self.previous);
         self.input.store(ptr::null_mut(), Ordering::Release);
         self.session.store(0, Ordering::Release);
         procedures.retain(|&(owner, previous)| {

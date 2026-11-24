@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-//! Godot Runtime control, settings and session state formerly held by `runtime.cpp`: the
+//! Godot Runtime control, settings and session state: the
 //! requested settings and their generation, the settings refusal rules, the engine-module
 //! service routing, the D3D12 session (identity, paths, log, FG presenter install values and
 //! boot state) and the status record with its assembly from Runtime facts.
 //!
-//! The Vulkan session (`vulkan.rs`) holds its own settings, generation and status record, as
-//! `vulkan.cpp` did; while it is booted, configuration, settings and status route to it after the
+//! The Vulkan session (`vulkan.rs`) holds its own settings, generation and status record;
+//! while it is booted, configuration, settings and status route to it after the
 //! same refusal rules. The D3D12 SR context and submission owner (`d3d12.rs`) reads the request,
 //! its generation and the paths here and reports each evaluated pass here. The input window
 //! owner (`window.rs`) supplies the window the status facts describe.
