@@ -14,7 +14,7 @@ use crate::host_log::Log;
 use crate::native_geometry::rsf_anomaly_geometry_active;
 use crate::native_geometry::rsf_anomaly_geometry_set_near;
 use crate::native_geometry::{CONSTANT_BUFFER_DATA, CONSTANT_BUFFER_SIZE, CONSTANT_BUFFER_SLOTS};
-use crate::native_hooks::Site as HookSite;
+use crate::native_hooks::{self, HookSet, Site as HookSite};
 use crate::native_profile::{PROFILES as NATIVE, Profile as NativeProfile};
 use crate::runtime_module::rsf_anomaly_runtime_set_colour_transport;
 use crate::sr_d3d11::native::rsf_anomaly_sr_set_full_viewport;
@@ -625,7 +625,7 @@ pub(crate) unsafe fn verify_guards(
 }
 
 pub(crate) unsafe fn hooks_created() -> bool {
-    unsafe { c::hooks_created() }
+    native_hooks::created(&HOOKS)
 }
 
 pub(crate) unsafe fn set_engine(module: Ptr, build: *const c_void, temporal: bool) {
@@ -655,33 +655,27 @@ const DETOURS: [usize; crate::sys::RSF_ANOMALY_SR_DETOUR_COUNT as usize] = [
     SITE_SUN_CASCADES,
 ];
 
+static HOOKS: HookSet = HookSet::new(null_mut());
+
 pub(crate) unsafe fn install_hooks() -> bool {
-    if unsafe { c::hooks_created() } {
-        return unsafe { c::enable_hooks() };
+    if native_hooks::created(&HOOKS) {
+        return native_hooks::set_enabled(&HOOKS, true);
     }
     let Some((image, build)) = engine() else {
         return false;
     };
-    let mut sites = DETOURS.map(|index| {
-        let site = &build.sr.function_sites[index];
-        // The leaf fills `replacement` and `original`.
+    let (detours, originals) = c::detours();
+    let sites: [HookSite; 5] = std::array::from_fn(|i| {
+        let site = &build.sr.function_sites[DETOURS[i]];
         HookSite {
             name: site.name,
             rva: site.rva,
             expected: site.expected,
-            replacement: null_mut(),
-            original: null_mut(),
+            replacement: detours[i],
+            original: originals.wrapping_add(i),
         }
     });
-    unsafe {
-        c::install_hooks(
-            image as Ptr,
-            build.native.image_size,
-            // native_hooks::Site is the bound rsf_anomaly_hook_site, which this leaf's header forward-declares.
-            sites.as_mut_ptr().cast(),
-            sites.len(),
-        )
-    }
+    native_hooks::install(&HOOKS, image as Ptr, build.native.image_size, &sites)
 }
 
 const POSITION_SLOT: u32 = 1; // RSF_ANOMALY_POSITION_SLOT (engine_slots.h)
@@ -707,10 +701,8 @@ pub(crate) unsafe fn install_position_slot() -> bool {
 }
 
 pub(crate) unsafe fn disable_hooks() {
-    unsafe {
-        let _ = rsf_anomaly_slot_set(POSITION_SLOT, false);
-        let _ = c::disable_hooks();
-    }
+    let _ = rsf_anomaly_slot_set(POSITION_SLOT, false);
+    let _ = native_hooks::set_enabled(&HOOKS, false);
 }
 
 unsafe extern "C" fn rm_near_callback(_: Ptr) {
@@ -722,12 +714,10 @@ pub(crate) unsafe fn set_rm_near(on: bool) {
 }
 
 pub(crate) unsafe fn remove_hooks() -> bool {
-    unsafe {
-        rsf_anomaly_geometry_set_near(None);
-        let restored = rsf_anomaly_slot_set(POSITION_SLOT, false);
-        let disabled = c::disable_hooks();
-        restored && disabled
-    }
+    rsf_anomaly_geometry_set_near(None);
+    let restored = rsf_anomaly_slot_set(POSITION_SLOT, false);
+    let disabled = native_hooks::set_enabled(&HOOKS, false);
+    restored && disabled
 }
 
 pub(crate) unsafe fn apply_colour_transport(enabled: bool) {
@@ -807,9 +797,12 @@ mod c {
     use super::Ptr;
     use std::ffi::c_void;
 
+    pub(super) use crate::engine_guards::guarded_copy as copy;
+
     unsafe extern "C" {
-        #[link_name = "rsf_anomaly_sr_native_copy"]
-        pub(super) fn copy(output: Ptr, input: *const c_void, size: usize) -> bool;
+        static rsf_anomaly_sr_detours: [Ptr; crate::sys::RSF_ANOMALY_SR_DETOUR_COUNT as usize];
+        static mut rsf_anomaly_sr_originals:
+            [Ptr; crate::sys::RSF_ANOMALY_SR_DETOUR_COUNT as usize];
         #[link_name = "rsf_anomaly_sr_native_set_projection"]
         pub(super) fn set_projection(function: Ptr, xforms: Ptr, matrix: *const c_void) -> bool;
         #[link_name = "rsf_anomaly_sr_native_set_mip_bias"]
@@ -821,14 +814,7 @@ mod c {
             constant: usize,
             stage: u32,
         ) -> usize;
-        #[link_name = "rsf_anomaly_sr_native_install_hooks"]
-        pub(super) fn install_hooks(image: Ptr, size: u32, sites: Ptr, count: usize) -> bool;
-        #[link_name = "rsf_anomaly_sr_native_hooks_created"]
-        pub(super) fn hooks_created() -> bool;
-        #[link_name = "rsf_anomaly_sr_native_enable_hooks"]
-        pub(super) fn enable_hooks() -> bool;
-        #[link_name = "rsf_anomaly_sr_native_disable_hooks"]
-        pub(super) fn disable_hooks() -> bool;
+
         /// The cl_pos_decompress_params::setup vtable replacement; only its address is taken.
         #[link_name = "rsf_anomaly_sr_position_setup_detour"]
         pub(super) fn position_setup(this: Ptr, constant: Ptr);
@@ -847,6 +833,16 @@ mod c {
         #[link_name = "rsf_d3d11_create_shader_view"]
         pub(super) fn create_view(device: Ptr, texture: Ptr) -> Ptr;
     }
+
+    /// The stage detours in DETOURS order and their trampoline slots.
+    pub(super) fn detours() -> (&'static [Ptr; 5], *mut Ptr) {
+        unsafe {
+            (
+                &*(&raw const rsf_anomaly_sr_detours),
+                (&raw mut rsf_anomaly_sr_originals).cast(),
+            )
+        }
+    }
 }
 
 #[cfg(test)]
@@ -854,7 +850,9 @@ mod c {
     use super::Ptr;
     use std::ffi::c_void;
 
-    pub(super) unsafe extern "C" fn copy(_: Ptr, _: *const c_void, _: usize) -> bool {
+    pub(super) use crate::engine_guards::guarded_copy as copy;
+
+    pub(super) fn detours() -> (&'static [Ptr; 5], *mut Ptr) {
         unreachable!("C leaf in a unit test")
     }
     pub(super) unsafe fn set_projection(_: Ptr, _: Ptr, _: *const c_void) -> bool {
@@ -866,18 +864,7 @@ mod c {
     pub(super) unsafe fn constant_buffer(_: Ptr, _: Ptr, _: usize, _: u32) -> usize {
         unreachable!("C leaf in a unit test")
     }
-    pub(super) unsafe fn install_hooks(_: Ptr, _: u32, _: Ptr, _: usize) -> bool {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn hooks_created() -> bool {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn enable_hooks() -> bool {
-        unreachable!("C leaf in a unit test")
-    }
-    pub(super) unsafe fn disable_hooks() -> bool {
-        unreachable!("C leaf in a unit test")
-    }
+
     pub(super) unsafe extern "C" fn position_setup(_: Ptr, _: Ptr) {
         unreachable!("C leaf in a unit test")
     }

@@ -161,23 +161,17 @@ typedef struct rsf_anomaly_sr_driver_config {
 /* The C11 leaf (sr_stage_platform.c) keeps what Rust cannot express; sr_stage/native.rs calls these by name and reads
    every engine address from the selected build's profile records (sr_profile.rs, native_profile.rs). The trampolines
    call back into the Rust stage. */
-struct rsf_anomaly_hook_site;
 #define RSF_ANOMALY_SR_DETOUR_COUNT 5   /* phase_scene_prepare, phase_combine, phase_sunshafts, phase_blur, sun cascades */
 #ifdef __cplusplus
 extern "C" {
 #endif
-// Guarded engine-memory copy.
-bool rsf_anomaly_sr_native_copy(void* output, const void* input, size_t size);
+
 // R_xforms::set_P(this, rdx = matrix), dx10SamplerStateCache::SetMipLODBias(this, xmm1 = bias) and
 // R_constants::GetCBuffer(this, constant, stage) at `function`, each under SEH (false or 0 on a fault).
 bool rsf_anomaly_sr_native_set_projection(void* function, void* xforms, const void* matrix);
 bool rsf_anomaly_sr_native_set_mip_bias(void* function, void* cache, float bias);
 uintptr_t rsf_anomaly_sr_native_constant_buffer(void* function, void* constants, uintptr_t constant, uint32_t stage);
-// Fills each lent site's replacement and trampoline slot in detour order, then installs the batch.
-bool rsf_anomaly_sr_native_install_hooks(void* image, uint32_t size, struct rsf_anomaly_hook_site* sites, size_t count);
-bool rsf_anomaly_sr_native_hooks_created(void);
-bool rsf_anomaly_sr_native_enable_hooks(void);
-bool rsf_anomaly_sr_native_disable_hooks(void);
+
 // The cl_pos_decompress_params::setup vtable replacement (x64, so the engine's __fastcall is the C convention).
 void rsf_anomaly_sr_position_setup_detour(void* self, void* constant);
 
