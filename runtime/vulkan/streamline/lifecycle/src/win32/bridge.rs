@@ -13,6 +13,7 @@ use crate::sdk_records::{self, legacy_camera, legacy_tags};
 use crate::sys::{
     rsf_slvk_legacy_camera, rsf_slvk_legacy_image, rsf_slvk_sdk_pcl_options,
     rsf_slvk_sdk_pcl_state, rsf_slvk_sdk_reflex_options, rsf_slvk_sdk_reflex_state,
+    rsf_slvk_sdk_tag,
 };
 use std::ffi::{CStr, c_char, c_void};
 use std::marker::PhantomData;
@@ -503,13 +504,11 @@ extern "C" fn rsf_vk_sl_marker_for_token(token: usize, marker: u32) -> i32 {
 }
 
 fn submit_tags(
+    set_tags: sdk_api::SetTagForFrame<rsf_slvk_sdk_tag>,
     frame: sdk_api::Token,
     commands: *mut c_void,
     images: Option<&[*const rsf_slvk_legacy_image; 4]>,
 ) -> i32 {
-    let Some(set_tags) = core().set_tag_for_frame else {
-        return -1;
-    };
     let mut batch = unsafe { legacy_tags(images) };
     if images.is_some() {
         for (tag, resource) in batch.tags.iter_mut().zip(&mut batch.resources) {
@@ -537,7 +536,8 @@ unsafe extern "C" fn rsf_vk_sl_tag_frame(
     with_token(0, -1, |frame| {
         let images = [depth, motion, hudless, ui];
         let entries = core();
-        let (Some(set_constants), Some(_)) = (entries.set_constants, entries.set_tag_for_frame)
+        let (Some(set_constants), Some(set_tags)) =
+            (entries.set_constants, entries.set_tag_for_frame)
         else {
             return -1;
         };
@@ -552,7 +552,7 @@ unsafe extern "C" fn rsf_vk_sl_tag_frame(
         if result != OK {
             return result;
         }
-        submit_tags(frame, commands, Some(&images))
+        submit_tags(set_tags, frame, commands, Some(&images))
     })
 }
 
@@ -560,7 +560,11 @@ unsafe extern "C" fn rsf_vk_sl_tag_frame(
 /// or before resources or provider state change.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vk_sl_invalidate_frame_tags() -> i32 {
-    with_token(0, -1, |frame| submit_tags(frame, null_mut(), None))
+    with_token(0, -1, |frame| {
+        core().set_tag_for_frame.map_or(-1, |set_tags| {
+            submit_tags(set_tags, frame, null_mut(), None)
+        })
+    })
 }
 
 /// Applies DLSS-G enablement, interpolation count and presentation metadata.
