@@ -9,7 +9,6 @@ extern "C" {
 // return without throwing and remain callable until the detour readers drain.
 void rsf_xinput_facts_install_loaded(void (*callback)(void));
 void rsf_xinput_facts_disable(void);
-bool rsf_xinput_facts_idle(void);
 bool rsf_xinput_facts_remove(void);
 #ifdef __cplusplus
 }

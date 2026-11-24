@@ -118,14 +118,9 @@ extern "C" fn rsf_xinput_facts_disable() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_xinput_facts_idle() -> bool {
-    READERS.load(SeqCst) == 0
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_xinput_facts_remove() -> bool {
     let mut targets = TARGETS.lock().unwrap_or_else(PoisonError::into_inner);
-    if !disable(&targets) || !rsf_xinput_facts_idle() {
+    if !disable(&targets) || READERS.load(SeqCst) != 0 {
         return false;
     }
     let mut removed = true;
