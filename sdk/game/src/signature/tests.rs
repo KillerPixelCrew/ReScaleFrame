@@ -172,6 +172,8 @@ fn import_slot_follows_the_named_lookup_table() {
         import_slot(read, "d3d11.dll", "D3D11CreateDeviceAndSwapChain"),
         Some(0x288)
     );
+    assert_eq!(import_slot(read, "d3d11.dll", "#7"), Some(0x280));
+    assert_eq!(import_slot(read, "d3d11.dll", "#8"), None);
     assert_eq!(import_slot(read, "d3d11.dll", "D3D11CreateDevice"), None);
     assert_eq!(import_slot(read, "dxgi.dll", "CreateDXGIFactory"), None);
 }

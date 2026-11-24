@@ -287,7 +287,8 @@ pub fn find_rip_reference(
 }
 
 /// The RVA of the import address table slot of `function` imported by name from `library`
-/// (ASCII, case-insensitive). `read(rva, out)` copies image bytes at an RVA.
+/// (ASCII, case-insensitive), or by ordinal when `function` is `#N`. `read(rva, out)` copies
+/// image bytes at an RVA.
 pub fn import_slot(
     mut read: impl FnMut(usize, &mut [u8]) -> bool,
     library: &str,
@@ -296,6 +297,10 @@ pub fn import_slot(
     let mut u32_at = |rva: usize| {
         let mut bytes = [0; 4];
         read(rva, &mut bytes).then(|| u32::from_le_bytes(bytes) as usize)
+    };
+    let ordinal = match function.strip_prefix('#') {
+        Some(number) => Some(number.parse::<u16>().ok()?),
+        None => None,
     };
     let nt = u32_at(0x3c)?;
     // PE32+ optional header at nt + 24; import directory is data directory 1 at +120.
@@ -338,7 +343,11 @@ pub fn import_slot(
                 break;
             }
             // Bit 63 marks an ordinal import; a name import points at a hint/name record.
-            if entry >> 63 == 0 && name(&mut read, entry as usize + 2, function) {
+            let found = match ordinal {
+                Some(ordinal) => entry >> 63 == 1 && entry & 0xffff == u64::from(ordinal),
+                None => entry >> 63 == 0 && name(&mut read, entry as usize + 2, function),
+            };
+            if found {
                 return Some(slots + index * 8);
             }
         }
