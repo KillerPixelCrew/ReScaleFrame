@@ -695,11 +695,15 @@ set_tests_properties(module_dump_v2 PROPERTIES TIMEOUT 120)
 # Vendor call census: fake vendor DLLs named like the real ones, a test that installs the census
 # and calls them, and a real DXGI/D3D12 (WARP) path. MSVC only, like the library.
 if(TARGET rsf_vendor_census)
+    # The fake DLLs' exports have the vendor names the census test imports, so they get an archive of their own.
+    rsf_add_rust_static(rsf_loader_vendor_dll_fixtures_rust rsf_rust_loader_vendor_dll_fixtures
+        rsf-loader-fixtures rsf_loader_fixtures --features vendor-dll-fixtures)
+    target_link_libraries(rsf_loader_vendor_dll_fixtures_rust INTERFACE minhook)
     function(rsf_census_fixture target define output)
         string(TOLOWER "${define}" fixture)
         add_library(${target} SHARED loader/vendor_census_fixture.c "loader/${fixture}.def")
         target_compile_definitions(${target} PRIVATE ${define})
-        target_link_libraries(${target} PRIVATE rsf_loader_fixtures_rust rsf_build_options)
+        target_link_libraries(${target} PRIVATE rsf_loader_vendor_dll_fixtures_rust rsf_build_options)
         set_target_properties(${target} PROPERTIES OUTPUT_NAME "${output}")
         # Identical-function folding or incremental thunks would put two exports on one address.
         target_link_options(${target} PRIVATE /OPT:NOICF /INCREMENTAL:NO)

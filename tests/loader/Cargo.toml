@@ -9,6 +9,11 @@ license.workspace = true
 [lib]
 crate-type = ["staticlib"]
 
+[features]
+# The fake vendor DLLs' exports (vendor_census_fixture.rs). Only those DLLs link this archive: the
+# census test imports the same names from them.
+vendor-dll-fixtures = []
+
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
 

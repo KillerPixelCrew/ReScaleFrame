@@ -15,7 +15,7 @@ mod module_dump;
 mod thin;
 #[cfg(target_env = "msvc")]
 mod vendor_census_asi;
-#[cfg(target_env = "msvc")]
+#[cfg(all(target_env = "msvc", feature = "vendor-dll-fixtures"))]
 mod vendor_census_fixture;
 
 use rsf_test_support::wide_os;
