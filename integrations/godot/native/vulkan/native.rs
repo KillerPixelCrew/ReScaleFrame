@@ -25,7 +25,6 @@ mod capture;
 mod linked;
 
 type Handle = *mut c_void;
-const INVALID: i32 = -1;
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x800;
 const VK_INIT_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
 const SHADER_READ: u32 = 5;
@@ -385,10 +384,10 @@ unsafe extern "C" fn rsfg_vk_create(
     chain: *mut u64,
 ) -> i32 {
     if !CONTROL.vulkan.booted() || out.is_null() || chain.is_null() {
-        return INVALID;
+        return backend_result::INVALID_ARGUMENT;
     }
     let Some(setup) = (unsafe { checked(setup) }) else {
-        return INVALID;
+        return backend_result::INVALID_ARGUMENT;
     };
     let _guard = guard();
     if !state().presenter.is_null() {

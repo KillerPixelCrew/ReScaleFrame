@@ -14,13 +14,13 @@ use crate::platform::{
 use crate::sys::*;
 use crate::vulkan::handle;
 use ash::vk::{self, Handle};
+use rsf_game_sys::backend_result::NOT_SUPPORTED;
 use std::ffi::{c_char, c_void};
 use std::ptr;
 
 mod chain;
 use chain::{Chain, chain_facts};
 
-const NOT_SUPPORTED: i32 = -7;
 const MAX_EXTENSIONS: u32 = 4096;
 
 // The linked Runtime's XeSS and latency services (crate::sys); typed/tests.rs mocks them.
