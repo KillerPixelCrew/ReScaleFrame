@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::com_ref::vtable;
-use crate::d3d11_output_platform::rsf_d3d11_output_child_device;
+use crate::d3d11_output_platform::{rsf_d3d11_output_child_device, rsf_d3d11_output_is_immediate};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::{
     Direct3D::{D3D_FEATURE_LEVEL_11_1, D3D_PRIMITIVE_TOPOLOGY},
@@ -142,10 +142,7 @@ fn stage_ops(api: &ID3D11DeviceContext_Vtbl) -> [StageOps; 6] {
 }
 
 pub(super) unsafe fn immediate(context: Handle) -> u32 {
-    u32::from(
-        unsafe { (vtable::<ID3D11DeviceContext>(&context).GetType)(context) }
-            == D3D11_DEVICE_CONTEXT_IMMEDIATE,
-    )
+    unsafe { rsf_d3d11_output_is_immediate(context) }
 }
 
 pub(super) unsafe fn device(context: Handle) -> Handle {
@@ -489,22 +486,6 @@ pub unsafe extern "C" fn rsf_d3d11_state_save_independent(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_d3d11_state_restore(context: Handle, storage: *mut State) {
     unsafe { rsf_core_d3d11_state_restore(context, storage) }
-}
-
-/// # Safety
-///
-/// Each handle is null or live; both resources belong to the context's device.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_d3d11_copy_resource(
-    context: Handle,
-    destination: Handle,
-    source: Handle,
-) {
-    if !context.is_null() && !destination.is_null() && !source.is_null() {
-        unsafe {
-            (vtable::<ID3D11DeviceContext>(&context).CopyResource)(context, destination, source)
-        };
-    }
 }
 
 /// # Safety

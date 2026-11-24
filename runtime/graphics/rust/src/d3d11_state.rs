@@ -7,8 +7,8 @@ mod native;
 use native as leaf;
 #[cfg(not(test))]
 pub use native::{
-    rsf_d3d11_copy_resource, rsf_d3d11_create_shader_view, rsf_d3d11_state_restore,
-    rsf_d3d11_state_save, rsf_d3d11_state_save_independent,
+    rsf_d3d11_create_shader_view, rsf_d3d11_state_restore, rsf_d3d11_state_save,
+    rsf_d3d11_state_save_independent,
 };
 #[cfg(test)]
 use tests as leaf;

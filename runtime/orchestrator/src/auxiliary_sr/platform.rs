@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::d3d11_d3d12::borrow;
-pub(super) use crate::d3d11_output_platform::rsf_d3d11_output_create_rtv as create_output_view;
+pub(super) use crate::d3d11_output_platform::{
+    rsf_d3d11_output_copy_resource as copy, rsf_d3d11_output_create_rtv as create_output_view,
+};
 use crate::graphics_d3d11::{
     constant_buffer, pixel_shader, rasterizer, shader_with_log, vertex_shader,
 };
 pub(super) use crate::graphics_d3d11::{
     rsf_d3d11_state_restore as restore, rsf_d3d11_state_save as save,
 };
-pub(super) use rsf_graphics::d3d11_state::{
-    rsf_d3d11_copy_resource as copy, rsf_d3d11_create_shader_view as create_source_view,
-};
+pub(super) use rsf_graphics::d3d11_state::rsf_d3d11_create_shader_view as create_source_view;
 use rsf_shader_compiler::Request;
 use windows::Win32::Graphics::{
     Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, Fxc::D3DCOMPILE_ENABLE_STRICTNESS},
