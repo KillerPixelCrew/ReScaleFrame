@@ -33,6 +33,7 @@ use rsf_graphics as _;
 use {rsf_loader as _, rsf_orchestrator as _};
 mod carrier;
 pub mod contact_shadow;
+pub mod discovery;
 use rsf_game_sys::dxbc_chunks;
 mod hook_batch;
 // Unit tests leave out the D3D11 and engine leaves (cfg(not(test))) that drive the capture.

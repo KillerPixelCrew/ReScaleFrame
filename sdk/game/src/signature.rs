@@ -137,15 +137,16 @@ impl std::fmt::Display for Refusal {
 
 /// Resolves every signature to an RVA, in order, or names the first that does not resolve.
 pub fn resolve(sections: &[Section], signatures: &[Signature]) -> Result<Vec<usize>, Refusal> {
+    resolve_each(sections, signatures).into_iter().collect()
+}
+
+/// Resolves every signature in one pass, each to its RVA or to the refusal that names it, so an
+/// adapter can refuse only the features whose sites did not resolve.
+pub fn resolve_each(sections: &[Section], signatures: &[Signature]) -> Vec<Result<usize, Refusal>> {
     let patterns = signatures
         .iter()
-        .map(|signature| {
-            Pattern::parse(signature.pattern).ok_or(Refusal {
-                name: signature.name,
-                miss: Miss::Pattern,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|signature| Pattern::parse(signature.pattern))
+        .collect::<Vec<_>>();
     let hits = scan(sections, &patterns);
     signatures
         .iter()
@@ -156,6 +157,7 @@ pub fn resolve(sections: &[Section], signatures: &[Signature]) -> Result<Vec<usi
                 name: signature.name,
                 miss,
             };
+            let pattern = pattern.as_ref().ok_or(refuse(Miss::Pattern))?;
             match count {
                 0 => return Err(refuse(Miss::Missing)),
                 1 => {}
@@ -183,8 +185,8 @@ pub fn resolve(sections: &[Section], signatures: &[Signature]) -> Result<Vec<usi
         .collect()
 }
 
-/// Match count (stopping at two) and first match (section, offset) of every pattern.
-fn scan(sections: &[Section], patterns: &[Pattern]) -> Vec<(u32, (usize, usize))> {
+/// Match count (stopping at two) and first match (section, offset) of every parsed pattern.
+fn scan(sections: &[Section], patterns: &[Option<Pattern>]) -> Vec<(u32, (usize, usize))> {
     // Anchor each pattern on its least frequent fixed pair in these sections.
     let mut counts = vec![0u32; 1 << 16];
     for section in sections {
@@ -198,6 +200,7 @@ fn scan(sections: &[Section], patterns: &[Pattern]) -> Vec<(u32, (usize, usize))
         .enumerate()
         .filter_map(|(index, pattern)| {
             let (offset, key) = pattern
+                .as_ref()?
                 .pairs()
                 .min_by_key(|&(_, key)| counts[usize::from(key)])?;
             Some((key, offset, index))
@@ -223,7 +226,11 @@ fn scan(sections: &[Section], patterns: &[Pattern]) -> Vec<(u32, (usize, usize))
                     continue;
                 };
                 let hit = &mut hits[index];
-                if hit.0 < 2 && patterns[index].matches(&bytes[start..]) {
+                if hit.0 < 2
+                    && patterns[index]
+                        .as_ref()
+                        .is_some_and(|pattern| pattern.matches(&bytes[start..]))
+                {
                     if hit.0 == 0 {
                         hit.1 = (number, start);
                     }

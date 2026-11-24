@@ -69,6 +69,26 @@ fn every_pattern_must_match_exactly_once_across_sections() {
         resolve(&sections, &[straddle]).unwrap_err().miss,
         Miss::Missing
     );
+    // Each site resolves or refuses on its own.
+    let parsed = signature("4", Find::At(0));
+    assert_eq!(
+        resolve_each(&sections, &[ambiguous, unique, parsed, missing]),
+        [
+            Err(Refusal {
+                name: "site",
+                miss: Miss::Ambiguous
+            }),
+            Ok(0x1007),
+            Err(Refusal {
+                name: "site",
+                miss: Miss::Pattern
+            }),
+            Err(Refusal {
+                name: "site",
+                miss: Miss::Missing
+            }),
+        ]
+    );
     let refusal = Refusal {
         name: "jitter",
         miss: Miss::Ambiguous,
