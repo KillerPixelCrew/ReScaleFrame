@@ -43,7 +43,7 @@ namespace ReScaleFrame.Unity
         {
             if (Native.ReportCpu == null) return;
             subscription = ReScaleFrame.Engine.InputSystemFacts.AttachLoaded(ReceivedKinds);
-            ReScaleFrame.Engine.InputLoop.Install(Begin, Received, End);
+            ReScaleFrame.Engine.InputLoop.Install(Begin, Received, Simulated, Finished);
         }
         private static void Begin()
         {
@@ -55,13 +55,18 @@ namespace ReScaleFrame.Unity
                 Native.ReportCpu(2, frame);
             }
         }
-        private static void End()
+        // The simulation ends after PreLateUpdate; the frame ends after PostLateUpdate, once the
+        // main thread has recorded and queued its rendering.
+        private static void Simulated()
         {
             using (var producer = Bootstrap.EnterProducer()) {
-                if (producer.Valid) {
-                    Native.ReportCpu(3, (ulong)(uint)Time.frameCount + 1);
-                    Native.ReportCpu(4, (ulong)(uint)Time.frameCount + 1);
-                }
+                if (producer.Valid) Native.ReportCpu(3, (ulong)(uint)Time.frameCount + 1);
+            }
+        }
+        private static void Finished()
+        {
+            using (var producer = Bootstrap.EnterProducer()) {
+                if (producer.Valid) Native.ReportCpu(4, (ulong)(uint)Time.frameCount + 1);
             }
         }
         internal static void Clear()

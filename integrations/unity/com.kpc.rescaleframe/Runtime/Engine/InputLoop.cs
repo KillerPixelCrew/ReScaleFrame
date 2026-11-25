@@ -6,14 +6,19 @@ using UnityEngine.PlayerLoop;
 
 namespace ReScaleFrame.Engine
 {
-    // Engine boundaries only. Pacing and missing-event policy belong to the native core.
+    // Engine boundaries only, each reported where it happens. Pacing and missing-event policy
+    // belong to the native core. The simulation ends after PreLateUpdate; the main-thread frame,
+    // which records and queues the frame's rendering in PostLateUpdate, ends after it. Unity's
+    // render thread submits and presents that frame later; the core observes both itself.
     internal static class InputLoop
     {
         private struct BeforeInput { }
         private struct AfterInput { }
         private struct AfterSimulation { }
+        private struct AfterFrame { }
         internal static bool PollBoundaryAvailable { get; private set; }
-        private static bool Ours(Type type) => type == typeof(BeforeInput) || type == typeof(AfterInput) || type == typeof(AfterSimulation);
+        private static bool Ours(Type type) => type == typeof(BeforeInput) || type == typeof(AfterInput) || type == typeof(AfterSimulation) ||
+            type == typeof(AfterFrame);
         internal static PlayerLoopSystem Remove(PlayerLoopSystem loop)
         {
             if (loop.subSystemList == null) return loop;
@@ -22,7 +27,8 @@ namespace ReScaleFrame.Engine
             loop.subSystemList = nodes.ToArray(); return loop;
         }
         internal static PlayerLoopSystem Plan(PlayerLoopSystem loop, PlayerLoopSystem.UpdateFunction begin,
-            PlayerLoopSystem.UpdateFunction received, PlayerLoopSystem.UpdateFunction end)
+            PlayerLoopSystem.UpdateFunction received, PlayerLoopSystem.UpdateFunction simulated,
+            PlayerLoopSystem.UpdateFunction finished)
         {
             loop = Remove(loop); PollBoundaryAvailable = false;
             var nodes = new List<PlayerLoopSystem>();
@@ -51,12 +57,14 @@ namespace ReScaleFrame.Engine
                     }
                 }
                 nodes.Add(node);
-                if (node.type == typeof(PreLateUpdate)) nodes.Add(new PlayerLoopSystem { type = typeof(AfterSimulation), updateDelegate = end });
+                if (node.type == typeof(PreLateUpdate)) nodes.Add(new PlayerLoopSystem { type = typeof(AfterSimulation), updateDelegate = simulated });
+                if (node.type == typeof(PostLateUpdate)) nodes.Add(new PlayerLoopSystem { type = typeof(AfterFrame), updateDelegate = finished });
             }
             loop.subSystemList = nodes.ToArray(); return loop;
         }
-        internal static void Install(PlayerLoopSystem.UpdateFunction begin, PlayerLoopSystem.UpdateFunction received, PlayerLoopSystem.UpdateFunction end)
-            => PlayerLoop.SetPlayerLoop(Plan(PlayerLoop.GetCurrentPlayerLoop(), begin, received, end));
+        internal static void Install(PlayerLoopSystem.UpdateFunction begin, PlayerLoopSystem.UpdateFunction received,
+            PlayerLoopSystem.UpdateFunction simulated, PlayerLoopSystem.UpdateFunction finished)
+            => PlayerLoop.SetPlayerLoop(Plan(PlayerLoop.GetCurrentPlayerLoop(), begin, received, simulated, finished));
         internal static void Clear() => PlayerLoop.SetPlayerLoop(Remove(PlayerLoop.GetCurrentPlayerLoop()));
     }
 }
