@@ -4,9 +4,9 @@
 //! Prepare discovers the native sites and admits the observer sites, arms the Community Shaders
 //! checkpoint, requests per-monitor-v2 DPI once per process, creates the observer hooks and the
 //! CPU hooks, then creates the Runtime's scoped D3D11 host once per process. A later prepare must
-//! present the original session. Start enables observers, sampling, presentation inputs, CPU
-//! events and native creation in that order and retires the started ones when a later stage
-//! refuses or throws. The host setup carries this adapter's facts; the Runtime owns every vendor
+//! present the original session. Start enables native creation, observers, sampling,
+//! presentation inputs and CPU events in that order and retires the started ones when a later
+//! stage refuses or throws. The host setup carries this adapter's facts; the Runtime owns every vendor
 //! and pacing decision.
 //!
 //! One lock serializes the lifecycle, the borrowed services lent to the native detours and the
@@ -76,6 +76,7 @@ mod subsystems {
         bind as cpu_bind, busy as cpu_busy, disable as cpu_disable, prepare as cpu_prepare,
         quiesce as cpu_quiesce, stop as cpu_stop,
     };
+    pub(super) use crate::creation::{start as creation_start, stop as creation_stop};
     pub(super) use crate::discovery::{executable_sha256, refusal as discovery_refusal};
     pub(super) use crate::observers::busy as observers_busy;
     pub(super) use crate::plugin::admit_observers;
@@ -228,44 +229,52 @@ fn request_dpi(host: &rsf_game_host_services) -> Result<(), Threw> {
     Ok(())
 }
 
-/// Subsystems that start after the observers, in start order.
+/// The started subsystems, in start order. Prepare saw no device, but the game creates it once
+/// and may do so while start runs; only a live creation hook can scope that call. Every other
+/// stage observes per-frame events, so native creation goes live first instead of after the
+/// other hook enables, each of which freezes every thread.
 #[derive(Clone, Copy)]
 enum Stage {
+    Creation,
+    Observers,
     Sampling,
     Presentation,
     Cpu,
-    Creation,
 }
 
-const STAGES: [Stage; 4] = [
+const STAGES: [Stage; 5] = [
+    Stage::Creation,
+    Stage::Observers,
     Stage::Sampling,
     Stage::Presentation,
     Stage::Cpu,
-    Stage::Creation,
 ];
 
 impl Stage {
-    fn start(self, services: &rsf_game_host_services) -> bool {
+    fn start(self, observers: &mut Control, services: &rsf_game_host_services) -> bool {
         match self {
+            Self::Creation => subsystems::creation_start(),
+            Self::Observers => observers.start(services),
             Self::Sampling => subsystems::sampling_start(services),
             Self::Presentation => subsystems::presentation_start(services),
             Self::Cpu => subsystems::cpu_start(),
-            Self::Creation => creation::start(),
         }
     }
 
     /// A stage retires only when it acknowledges cleanup.
-    fn retire(self) -> bool {
+    fn retire(self, observers: &mut Control) -> bool {
         match self {
+            Self::Creation => subsystems::creation_stop(),
+            Self::Observers => observers.disable(true),
             Self::Sampling => subsystems::sampling_stop(),
             Self::Presentation => subsystems::presentation_stop(),
             Self::Cpu => subsystems::cpu_disable(),
-            Self::Creation => creation::stop(),
         }
     }
 
     fn refusal(self) -> &'static CStr {
         match self {
+            Self::Observers => c"Skyrim start refused: observer hook enable failed.",
             Self::Sampling => {
                 c"Skyrim start refused: sampler guard, binding service or hook enable failed."
             }
@@ -286,7 +295,6 @@ struct Session {
     enabled: bool,
     retirement_pending: bool,
     rollback_stages: u8,
-    rollback_observers: bool,
     dpi_requested: bool,
     // Borrowed by the detours through the lease while accepting, and by the renderer-end
     // detour as retained.
@@ -312,7 +320,6 @@ impl Session {
             enabled: false,
             retirement_pending: false,
             rollback_stages: 0,
-            rollback_observers: false,
             dpi_requested: false,
             services: empty_services(),
             bound_services: empty_services(),
@@ -476,14 +483,11 @@ impl Session {
     fn rollback(&mut self) -> bool {
         for (index, stage) in STAGES.into_iter().enumerate().rev() {
             let bit = 1 << index;
-            if self.rollback_stages & bit != 0 && stage.retire() {
+            if self.rollback_stages & bit != 0 && stage.retire(&mut self.observers) {
                 self.rollback_stages &= !bit;
             }
         }
-        if self.rollback_observers {
-            self.rollback_observers = !self.observers.disable(true);
-        }
-        self.rollback_stages == 0 && !self.rollback_observers
+        self.rollback_stages == 0
     }
 
     fn start(&mut self) -> Result<rsf_result, Threw> {
@@ -510,19 +514,12 @@ impl Session {
             return Ok(NATIVE_REFUSED);
         }
         let services = self.services;
-        if !self.observers.start(&services) {
-            self.rollback_observers = true;
-            let retired = self.rollback();
-            self.retirement_pending = !retired;
-            return Ok(if retired { NATIVE_REFUSED } else { BUSY });
-        }
         for (index, stage) in STAGES.into_iter().enumerate() {
-            if stage.start(&services) {
+            if stage.start(&mut self.observers, &services) {
                 continue;
             }
             // Start can refuse after acquiring a subset of its hooks. Retire it too.
             self.rollback_stages = (1 << (index + 1)) - 1;
-            self.rollback_observers = true;
             let retired = self.rollback();
             self.retirement_pending = !retired;
             if !retired {
@@ -590,7 +587,10 @@ impl Session {
         if subsystems::resolution_owned() || subsystems::auxiliaries_pending() {
             return Ok(BUSY);
         }
-        if !creation::stop() || !subsystems::presentation_stop() || !subsystems::sampling_stop() {
+        if !subsystems::creation_stop()
+            || !subsystems::presentation_stop()
+            || !subsystems::sampling_stop()
+        {
             return Ok(BUSY);
         }
         let cpu_stopped = subsystems::cpu_disable();
@@ -605,7 +605,6 @@ impl Session {
         self.prepared = false;
         self.retirement_pending = false;
         self.rollback_stages = 0;
-        self.rollback_observers = false;
         self.reason = STOPPED.as_ptr();
         Ok(OK)
     }

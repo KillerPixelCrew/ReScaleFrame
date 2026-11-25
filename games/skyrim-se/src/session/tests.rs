@@ -56,6 +56,12 @@ pub(super) mod subsystems {
     pub(in crate::session) fn cpu_busy() -> bool {
         record("cpu_busy", false)
     }
+    pub(in crate::session) fn creation_start() -> bool {
+        record("creation_start", true)
+    }
+    pub(in crate::session) fn creation_stop() -> bool {
+        record("creation_stop", true)
+    }
     pub(in crate::session) fn sampling_start(_: &rsf_game_host_services) -> bool {
         record("sampling_start", true)
     }
@@ -123,6 +129,7 @@ fn prepared() -> Session {
     session
 }
 
+/// Native creation goes live before every other hook, and retires last.
 #[test]
 fn a_refused_stage_and_its_predecessors_retire() {
     let mut session = prepared();
@@ -131,12 +138,14 @@ fn a_refused_stage_and_its_predecessors_retire() {
         OPERATIONS.take(),
         [
             "admit_observers",
+            "creation_start",
             "sampling_start",
             "presentation_start",
             "cpu_start",
             "cpu_disable",
             "presentation_stop",
             "sampling_stop",
+            "creation_stop",
         ]
     );
     assert_eq!(DISABLED.get(), 5);

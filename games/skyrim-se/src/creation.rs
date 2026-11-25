@@ -43,6 +43,7 @@ const DISPLAY_RELAY: &CStr =
     c"Display Tweaks creation relay, original thunk or call-return bytes refused.";
 const THUNK_REFUSED: &CStr = c"Native creation thunk bytes refused.";
 const UNEXPECTED_CALLER: &CStr = c"Native creation refused: unexpected guarded-route caller.";
+const MISSED: &CStr = c"Skyrim native creation ran before its hook went live; the game's swapchain stays native and presentation binding refuses.";
 const PREPARED: &CStr = c"Skyrim native creation root prepared: discovered game import thunk -> current D3D11 IAT slot; guarded native or discovered Display Tweaks call route; scoped inner creation, outer chain retained; no graphics created yet.";
 
 /// Process-lived trampoline of the game thunk. Published before the hook can be enabled.
@@ -282,6 +283,12 @@ pub(crate) fn start() -> bool {
         return false;
     }
     LIVE.store(true, Ordering::Release);
+    // Prepare saw a cold owner; a device created since then bypassed the hook.
+    if !cold(platform)
+        && let Some(services) = &shared.services
+    {
+        platform.log(services, MISSED);
+    }
     true
 }
 
