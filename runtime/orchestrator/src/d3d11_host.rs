@@ -30,17 +30,19 @@ use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_ABI_VERSION,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE,
     RSF_GAME_CPU_SOURCE_ABORT, RSF_GAME_CPU_SOURCE_RESERVE, RSF_GAME_FRAME_ABI_VERSION,
-    RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_FRAME,
-    RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
-    RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW, RSF_SCREEN_FLIGHT, RSF_SCREEN_GAMEPLAY,
-    rsf_camera_frame, rsf_frame_record, rsf_game_cpu_event, rsf_game_host_services,
-    rsf_game_render_config, rsf_game_render_feedback,
+    RSF_GAME_RENDER_CLOUD_DEPTH, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE,
+    RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_MATERIALS, RSF_GAME_RENDER_RECONFIGURE,
+    RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_SUBMISSION,
+    RSF_GAME_RENDER_TEXTURE_BINDING, RSF_GAME_RENDER_TRANSLUCENCY, RSF_GAME_RENDER_UI_COMPOSITE,
+    RSF_GAME_RENDER_WINDOW, RSF_OVERLAY_SERVICE_OPTION_LIMIT, RSF_SCREEN_FLIGHT,
+    RSF_SCREEN_GAMEPLAY, rsf_camera_frame, rsf_frame_record, rsf_game_cpu_event,
+    rsf_game_host_services, rsf_game_render_config, rsf_game_render_feedback,
 };
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::mem::offset_of;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 #[cfg(test)]
 use tests::native;
 use windows::core::{IUnknown, Interface};
@@ -272,6 +274,21 @@ impl Graphics {
 // owner that holds the callback lease.
 unsafe impl Send for Graphics {}
 
+/// What `rsf_d3d11_host_set_adapter` registered: overlay options after the host's own and a
+/// Present callback for the adapter's input preparation.
+struct Adapter {
+    options: Vec<rsf_overlay_service_option>,
+    _labels: Vec<CString>,
+    read: Option<unsafe extern "C" fn(Raw, *mut i32, u32)>,
+    changed: Option<unsafe extern "C" fn(Raw, u32, i32) -> c_int>,
+    present: Option<unsafe extern "C" fn(Raw, *const rsf_observer_present_event)>,
+    user: Raw,
+}
+
+// SAFETY: the callbacks and user pointer are process-lived adapter state; labels are owned.
+unsafe impl Send for Adapter {}
+unsafe impl Sync for Adapter {}
+
 pub(crate) struct Host {
     upstream: rsf_game_host_services,
     setup: rsf_d3d11_host_setup,
@@ -291,6 +308,7 @@ pub(crate) struct Host {
     cpu_sample_reports: AtomicU32,
     cpu_refusal_stages: AtomicU32,
     cpu_stage_reports: [AtomicU32; RSF_GAME_CPU_SOURCE_ABORT as usize + 1],
+    adapter: OnceLock<Adapter>,
     shared: Mutex<Shared>,
     graphics: Mutex<Graphics>,
 }
@@ -413,7 +431,8 @@ fn validate_setup(setup: &rsf_d3d11_host_setup, services: &rsf_game_host_service
     let caps = setup.capabilities;
     let known = RSF_D3D11_HOST_CAP_FG_INPUTS
         | RSF_D3D11_HOST_CAP_INPUT_TIMELINE
-        | RSF_D3D11_HOST_CAP_RENDERED_SOURCE;
+        | RSF_D3D11_HOST_CAP_RENDERED_SOURCE
+        | RSF_D3D11_HOST_CAP_NATIVE_GRAPH;
     !(setup.configuration_path.is_null()
         || setup.configuration_section.is_null()
         || setup.runtime_directory.is_null()
@@ -499,6 +518,7 @@ impl Host {
             cpu_sample_reports: AtomicU32::new(0),
             cpu_refusal_stages: AtomicU32::new(0),
             cpu_stage_reports: Default::default(),
+            adapter: OnceLock::new(),
             shared: Mutex::new(Shared {
                 desired: rsf_render_settings {
                     struct_size: size_of::<rsf_render_settings>() as u32,
@@ -525,6 +545,10 @@ impl Host {
 
     fn bridge(&self) -> bool {
         self.bridge_installed.load(Ordering::Acquire)
+    }
+
+    fn native_graph(&self) -> bool {
+        self.setup.capabilities & RSF_D3D11_HOST_CAP_NATIVE_GRAPH != 0
     }
 
     fn active(&self) -> bool {
@@ -762,7 +786,14 @@ impl Host {
             divisor: 1,
             restart: 0,
         };
-        let advanced = ADVANCED.map(|option| toggle(option.label, option.value(self) != 0));
+        // The host's own options, then the adapter's.
+        let mut options: Vec<_> = ADVANCED
+            .iter()
+            .map(|option| toggle(option.label, option.value(self) != 0))
+            .collect();
+        if let Some(adapter) = self.adapter.get() {
+            options.extend_from_slice(&adapter.options);
+        }
         let panel = rsf_overlay_service_setup {
             struct_size: size_of::<rsf_overlay_service_setup>() as u32,
             abi_version: RSF_OVERLAY_API_VERSION,
@@ -788,8 +819,8 @@ impl Host {
             sr_report: Some(host_sr_report),
             settings_changed: Some(host_changed),
             user: self.user(),
-            option_count: advanced.len() as u32,
-            options: advanced.as_ptr(),
+            option_count: options.len() as u32,
+            options: options.as_ptr(),
             options_read: Some(host_options),
             option_changed: Some(host_action),
             ..Default::default()
@@ -999,6 +1030,42 @@ impl Host {
         ready
     }
 
+    // A changed settings generation restarts preparation and resets history; the colour
+    // toggles are applied before every plan.
+    fn adopt_generation(&self, g: &mut Graphics, generation: u32) {
+        if generation != g.applied_generation {
+            g.attempted = false;
+            g.reset = true;
+            g.applied_generation = generation;
+        }
+        native::pipeline_colour_transport(self.transport.load(Ordering::Acquire) as u32);
+        native::pipeline_colour_correction(self.fidelity.load(Ordering::Acquire) as u32);
+    }
+
+    // A native-graph renderer inserts SR only into an enabled plan, so the plan follows the
+    // bound chain's extent at each Present rather than a RECONFIGURE lease.
+    fn plan_from_chain(&self, g: &mut Graphics, chain: Raw) {
+        let (mut width, mut height) = (0, 0);
+        if g.reduced_pending()
+            || unsafe { native::chain_extent(chain, &mut width, &mut height) } == 0
+            || width == 0
+            || height == 0
+        {
+            return;
+        }
+        let mut plan = zeroed_pass();
+        plan.struct_size = size_of::<Pass>() as u32;
+        plan.role = RSF_GAME_RENDER_SR;
+        plan.flags = RSF_GAME_RENDER_RECONFIGURE;
+        plan.session_id = self.upstream.session_id;
+        plan.swapchain = chain;
+        plan.camera.output_width = width;
+        plan.camera.output_height = height;
+        let settings = self.shared().desired;
+        self.adopt_generation(g, self.requested_generation.load(Ordering::SeqCst));
+        self.prepare_pipeline(g, &plan, &settings);
+    }
+
     fn process(&self, context: Raw, pass: &Pass, auxiliary: Option<&[Surface]>) -> i32 {
         if pass.session_id != self.upstream.session_id {
             return INVALID;
@@ -1038,10 +1105,9 @@ impl Host {
             return NOT_READY;
         }
         let device = g.device_ptr();
-        if !self.on_device(context, device)
-            || pass.swapchain != g.chain_ptr()
-            || !self.is_immediate(context)
-        {
+        let bound_chain =
+            pass.swapchain == g.chain_ptr() || (pass.swapchain.is_null() && self.native_graph());
+        if !self.on_device(context, device) || !bound_chain || !self.is_immediate(context) {
             return NOT_READY;
         }
         // Reject foreign temporal resources before auxiliary preparation or capture.
@@ -1071,14 +1137,8 @@ impl Host {
             && g.preset == settings.dlss_preset
             && g.output_width == pass.camera.output_width
             && g.output_height == pass.camera.output_height;
-        if !recovery && generation != g.applied_generation {
-            g.attempted = false;
-            g.reset = true;
-            g.applied_generation = generation;
-        }
         if !recovery {
-            native::pipeline_colour_transport(self.transport.load(Ordering::Acquire) as u32);
-            native::pipeline_colour_correction(self.fidelity.load(Ordering::Acquire) as u32);
+            self.adopt_generation(g, generation);
         }
         let pipeline_ready = if recovery {
             g.running
@@ -1758,7 +1818,25 @@ impl Host {
                 }
             }
             RSF_GAME_RENDER_WINDOW if pass.swapchain == g.chain_ptr() => unsafe {
+                // A source whose window ended without presenting cannot carry a later frame.
+                if begin == 0 && self.native_graph() {
+                    native::fg_window_end(pass);
+                }
                 native::window_scope(pass, begin);
+            },
+            RSF_GAME_RENDER_TEXTURE_BINDING if begin == 0 && self.native_graph() => unsafe {
+                native::scene_texture_binding(pass);
+            },
+            // Native-graph inputs that reconstruction consumes; they wait for a running SR.
+            RSF_GAME_RENDER_TRANSLUCENCY
+            | RSF_GAME_RENDER_CLOUD_DEPTH
+            | RSF_GAME_RENDER_MATERIALS
+                if g.running && self.native_graph() && !context.is_null() =>
+            unsafe { native::translucency_pass(context, pass, begin) },
+            RSF_GAME_RENDER_UI_COMPOSITE
+                if g.running && self.native_graph() && !context.is_null() =>
+            unsafe {
+                native::composition_capture(context, pass, begin);
             },
             _ => {}
         }
@@ -1887,6 +1965,9 @@ impl Host {
         }
         if event.completed != 0 {
             return;
+        }
+        if self.native_graph() {
+            self.plan_from_chain(g, event.swapchain);
         }
         native::overlay_poll_toggle();
         unsafe { native::overlay_present(event.swapchain) };
@@ -2158,6 +2239,13 @@ unsafe extern "C" fn host_passes(user: Raw, context: Raw, pass: *const Pass, beg
     if begin > 1 || pass.session_id != host.upstream.session_id {
         return;
     }
+    // A native graph reports its SR pass here instead of calling process_upscale.
+    if pass.role == RSF_GAME_RENDER_SR && host.native_graph() {
+        if begin != 0 && !context.is_null() && pass.camera_valid != 0 {
+            host.process(context, pass, None);
+        }
+        return;
+    }
     host.passes(context, pass, begin);
 }
 
@@ -2204,15 +2292,38 @@ unsafe extern "C" fn host_options(user: Raw, values: *mut i32, count: u32) {
     {
         *target = value;
     }
+    if let Some(adapter) = host.adapter.get()
+        && let Some(read) = adapter.read
+        && let Some(rest) = values.get_mut(ADVANCED.len()..)
+    {
+        let count = rest.len().min(adapter.options.len()) as u32;
+        unsafe { read(adapter.user, rest.as_mut_ptr(), count) };
+    }
 }
 
 unsafe extern "C" fn host_action(user: Raw, index: u32, value: i32) -> c_int {
-    unsafe { host(user) }.action(index, value) as c_int
+    let host = unsafe { host(user) };
+    let Some(own) = index.checked_sub(ADVANCED.len() as u32) else {
+        return host.action(index, value) as c_int;
+    };
+    match host.adapter.get() {
+        Some(adapter) if (own as usize) < adapter.options.len() => adapter
+            .changed
+            .is_some_and(|changed| unsafe { changed(adapter.user, own, value) } != 0)
+            as c_int,
+        _ => 0,
+    }
 }
 
 unsafe extern "C" fn host_present(user: Raw, event: *const rsf_observer_present_event) {
     if let Some(event) = unsafe { event.as_ref() } {
-        unsafe { host(user) }.present(event);
+        let host = unsafe { host(user) };
+        if let Some(adapter) = host.adapter.get()
+            && let Some(present) = adapter.present
+        {
+            unsafe { present(adapter.user, event) };
+        }
+        host.present(event);
     }
 }
 
@@ -2372,6 +2483,70 @@ extern "C" fn rsf_d3d11_host_set_active(user: Raw, active: u32) -> i32 {
         host.requested_generation.fetch_add(1, Ordering::SeqCst);
     }
     OK
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11_host_set_adapter(
+    user: Raw,
+    adapter: *const rsf_d3d11_host_adapter,
+) -> i32 {
+    let Some(host) = owner(user) else {
+        return INVALID;
+    };
+    match unsafe { admitted(adapter, RSF_D3D11_HOST_ABI_VERSION) } {
+        Ok(adapter) => host.register(adapter),
+        Err(code) => code,
+    }
+}
+
+impl Host {
+    fn register(&self, adapter: &rsf_d3d11_host_adapter) -> i32 {
+        let count = adapter.option_count as usize;
+        if count > RSF_OVERLAY_SERVICE_OPTION_LIMIT as usize - ADVANCED.len()
+            || (count != 0 && (adapter.options.is_null() || adapter.option_changed.is_none()))
+        {
+            return INVALID;
+        }
+        let options = if count == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(adapter.options, count) }
+        };
+        if options.iter().any(|option| option.label_utf8.is_null()) {
+            return INVALID;
+        }
+        // The panel takes its option list once, when the presentation is bound.
+        match self.try_graphics() {
+            Some(g) if !g.configured => {}
+            Some(_) => return NOT_READY,
+            None => return BUSY,
+        }
+        let labels: Vec<CString> = options
+            .iter()
+            .map(|option| unsafe { CStr::from_ptr(option.label_utf8) }.to_owned())
+            .collect();
+        let options = options
+            .iter()
+            .zip(&labels)
+            .map(|(option, label)| rsf_overlay_service_option {
+                label_utf8: label.as_ptr(),
+                ..*option
+            })
+            .collect();
+        let registered = Adapter {
+            options,
+            _labels: labels,
+            read: adapter.options_read,
+            changed: adapter.option_changed,
+            present: adapter.present,
+            user: adapter.user,
+        };
+        if self.adapter.set(registered).is_ok() {
+            OK
+        } else {
+            BUSY
+        }
+    }
 }
 
 unsafe fn dispatch_chain(host: &Host, request: *mut rsf_d3d11_chain_dispatch) -> i32 {

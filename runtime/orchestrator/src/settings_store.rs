@@ -575,17 +575,6 @@ pub(crate) unsafe fn read_sharpening(ini: PCWSTR, section: PCWSTR) -> Sharpening
     sharpening_policy::sanitize(options)
 }
 
-#[unsafe(no_mangle)]
-pub(crate) unsafe extern "C" fn rsf_settings_store_read_sharpening(
-    ini: PCWSTR,
-    section: PCWSTR,
-    output: *mut Sharpening,
-) {
-    if !output.is_null() {
-        unsafe { output.write(read_sharpening(ini, section)) };
-    }
-}
-
 /// Reads only the DLSS preset key for hosts that own their other SR settings.
 ///
 /// # Safety

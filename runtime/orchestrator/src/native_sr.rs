@@ -37,8 +37,8 @@ use crate::native_exposure::rsf_core_native_exposure_release;
 use crate::native_regions::{Region, rsf_native_regions_release};
 use crate::native_reinsert::rsf_native_reinsert_release;
 use crate::native_scene::rsf_native_scene_reset;
+use crate::native_sr_state::reset_history;
 use crate::native_sr_state::{camera_for, commit_history};
-use crate::native_sr_state::{clear_surface, reset_history, rsf_native_sr_set_enabled};
 use crate::native_translucency::rsf_native_translucency_release;
 use crate::native_window::rsf_native_window_reset;
 use crate::owned_handle::OwnedHandle;
@@ -561,7 +561,6 @@ pub(crate) extern "C" fn rsf_native_sr_release_resources() {
     rsf_native_window_reset();
     rsf_native_cpu_release();
     rsf_native_composition_release();
-    rsf_native_sr_set_enabled(0);
     rsf_core_native_exposure_release();
     rsf_native_regions_release();
     FG_INPUTS.with(|cache| *cache = None);
@@ -569,7 +568,6 @@ pub(crate) extern "C" fn rsf_native_sr_release_resources() {
     rsf_native_reinsert_release();
     reset_history(SR);
     rsf_native_translucency_release();
-    clear_surface();
 }
 
 #[cfg(test)]

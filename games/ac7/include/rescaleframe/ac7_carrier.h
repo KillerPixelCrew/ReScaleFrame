@@ -36,24 +36,14 @@ typedef struct rsf_ac7_carrier_leaves {
 void rsf_ac7_carrier_install_decrypted(const rsf_ac7_carrier_leaves* leaves);
 /* Measure-only decryption gate. The caller supplies the native measure and timeout results. */
 int32_t rsf_ac7_carrier_wait_decrypted(int32_t (*measure)(double*), int32_t still_encrypted);
-/* Used by the Present callback to gate automatic SR startup. */
+/* Used by the Present callback to gate the native renderer's start. */
 unsigned long rsf_ac7_carrier_startup_ready(void);
 
-/* A valid presenting extent spends one automatic attempt before start is called. Re-enabling
-   clears the attempt flag. Manual start takes its own path. */
-int rsf_ac7_carrier_startup_attempted(void);
-void rsf_ac7_carrier_set_startup_attempted(int attempted);
-void rsf_ac7_carrier_try_auto_start(int enabled, int started, unsigned long (*ready)(void),
-    int (*present_extent)(uint32_t* width, uint32_t* height), void (*start)(uint32_t width, uint32_t height));
 /* Numeric startup choices defined by the adapter. A returned key and label live for the process.
    Returns null at the end of the list without writing the output pointers. */
-#define RSF_AC7_CARRIER_START_OPTION_COUNT 7u
+#define RSF_AC7_CARRIER_START_OPTION_COUNT 5u
 const char* rsf_ac7_carrier_start_option(uint32_t index, const char** label,
     uint32_t* fallback, uint32_t* maximum);
-
-/* Apply the carrier's startup overrides to an available presenting extent. */
-void rsf_ac7_carrier_override_start_extent(uint32_t (*read_number)(const char* name, uint32_t fallback),
-    uint32_t* width, uint32_t* height);
 
 /* Opens or closes the verified gate. previous must have room for six bytes. Returns the native
    patch result. */

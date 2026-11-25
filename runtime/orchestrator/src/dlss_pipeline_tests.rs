@@ -54,7 +54,6 @@ struct World {
     dumps: Vec<(String, u32, &'static str, Raw)>,
     reentered: Option<i32>,
     reenter: bool,
-    surface_retry: bool,
 }
 
 impl World {
@@ -91,7 +90,6 @@ impl World {
             dumps: Vec::new(),
             reentered: None,
             reenter: false,
-            surface_retry: false,
         }
     }
 }
@@ -213,17 +211,6 @@ pub(super) unsafe extern "C" fn fg_capture(_: Raw, frame: *const DlssFrame) {
     with(|world| world.captures.push(frame));
 }
 pub(super) unsafe extern "C" fn native_sr_release() {
-    // A surface published from inside the release must not survive it.
-    if with(|world| world.surface_retry) {
-        crate::native_sr_state::clear_surface();
-        let published = unsafe { &*PIPE.get() }.set_surface([1280, 720]);
-        call(if published == 0 {
-            "native_sr_release"
-        } else {
-            "surface republished during release"
-        });
-        return;
-    }
     call("native_sr_release");
 }
 pub(super) unsafe extern "C" fn texture_desc(texture: Raw, out: *mut TextureDesc) {
@@ -521,7 +508,7 @@ fn run(pipeline: &Pipeline, frame: &Frame) -> i32 {
 }
 
 #[test]
-fn the_pipeline_reports_the_common_set_its_packages_serve() {
+fn the_pipeline_resolves_auto_among_the_common_set_its_packages_serve() {
     use crate::sr_choices::{COMMON, Packages};
     let packages = Packages::all("pipeline");
     let leaf =
@@ -530,7 +517,7 @@ fn the_pipeline_reports_the_common_set_its_packages_serve() {
     let pipeline = Pipeline::new();
     PIPE.set(&pipeline);
     assert_eq!(
-        pipeline.backend_choices(),
+        pipeline.shared().choices,
         0,
         "nothing is known before a start"
     );
@@ -541,7 +528,7 @@ fn the_pipeline_reports_the_common_set_its_packages_serve() {
     let device = fake();
     // Whether the start itself succeeds is not the question: the offer outlives a refusal.
     unsafe { pipeline.start(device, &request) };
-    assert_eq!(pipeline.backend_choices(), COMMON);
+    assert_eq!(pipeline.shared().choices, COMMON);
 }
 
 #[test]
@@ -581,9 +568,7 @@ fn start_validates_plans_and_stop_releases_every_lease() {
         (state.output_width, state.output_height, state.backend),
         (1280, 720, RSF_SR_DLSS)
     );
-    assert_eq!(pipeline.set_surface([1280, 720]), 1);
-    assert_eq!(pipeline.set_surface([1280, 721]), 0);
-    assert_eq!(pipeline.set_surface([0, 720]), 0);
+
     assert_eq!(
         with(|world| world.calls.clone()),
         [
@@ -608,14 +593,8 @@ fn start_validates_plans_and_stop_releases_every_lease() {
     assert_eq!(desc.bind_flags, 32 | 8 | 128);
     assert_eq!(unsafe { pipeline.start(device, &setup()) }, ALREADY_RUNNING);
 
-    with(|world| {
-        world.calls.clear();
-        world.surface_retry = true;
-    });
-    PIPE.set(&pipeline);
+    with(|world| world.calls.clear());
     assert_eq!(unsafe { pipeline.stop() }, OK);
-    PIPE.set(ptr::null());
-    with(|world| world.surface_retry = false);
     assert_eq!(
         with(|world| world.calls.clone()),
         [
@@ -628,7 +607,6 @@ fn start_validates_plans_and_stop_releases_every_lease() {
     assert_eq!((refs(device), refs(output)), (1, 0));
     assert!(pipeline.output_texture().is_null());
     assert_eq!(status(&pipeline).running, 0);
-    assert_eq!(pipeline.set_surface([1280, 720]), 0);
     let lines = with(|world| world.logs.len());
     assert_eq!(unsafe { pipeline.set_preset(5) }, OK);
     assert_eq!(with(|world| world.logs.len()), lines, "no line after stop");

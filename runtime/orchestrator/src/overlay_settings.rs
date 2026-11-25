@@ -62,7 +62,7 @@ pub(super) unsafe extern "C" fn rsf_overlay_fill_fg_stats(stats: &mut Stats, fg:
         0
     };
     stats.fg_requested_backend = choice.backend;
-    // Auto is always offered: `rsf_overlay_request_fg_backend` and the hosts resolve it per GPU.
+    // Auto is always offered: the hosts resolve it per GPU.
     stats.fg_backend_choices = (choice.choices & rsf_d3d11_present_backend_choices())
         | RSF_OVERLAY_FG_RUNTIME_SWITCH
         | (1 << RSF_FG_BACKEND_AUTO);
@@ -94,29 +94,6 @@ pub(super) unsafe extern "C" fn rsf_overlay_fill_fg_stats(stats: &mut Stats, fg:
         fg.available != 0 && fg.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED != 0,
     );
     stats.frame_limit_us = fg.requested.frame_limit_us;
-}
-
-/// Request the generation provider a panel choice names on the presenting `chain`: Auto becomes the
-/// one this GPU prefers among those the bridge serves, so a host that applies the choice itself
-/// needs no policy of its own. Zero results are not requested (the bridge keeps its provider).
-///
-/// # Safety
-/// `chain` is the live swap chain the panel drew on.
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn rsf_overlay_request_fg_backend(
-    chain: *mut std::ffi::c_void,
-    backend: u32,
-) -> i32 {
-    let vendor = unsafe { crate::overlay_service::owner_vendor(chain) };
-    let backend = crate::fg_choice::resolve(
-        backend,
-        crate::fg_choice::rsf_fg_default_backend(vendor, 0),
-        rsf_d3d11_present_backend_choices(),
-    );
-    if backend == 0 {
-        return 0;
-    }
-    crate::d3d11_present::rsf_d3d11_present_request(backend)
 }
 
 pub(super) fn sr_name(backend: u32) -> &'static CStr {
@@ -163,20 +140,6 @@ pub(super) fn fill_sharpening_stats(stats: &mut Stats, options: &Sharpening) {
     stats.sharpening_depth_bias = options.depth_bias;
     stats.sharpening_clamp_output = options.clamp_output;
     stats.sharpening_debug = options.debug;
-}
-
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_overlay_fill_sharpening_stats(
-    stats: &mut Stats,
-    options: &Sharpening,
-) {
-    stats.sharpening_available = 1;
-    fill_sharpening_stats(stats, options);
-}
-
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_overlay_requested_sharpening(intent: &Intent) -> Sharpening {
-    intent_sharpening(intent)
 }
 
 pub(super) fn settings_changed(intent: &Intent) -> bool {
@@ -265,8 +228,7 @@ mod tests {
             ..sharpening_policy::defaults()
         };
         let mut stats = Stats::default();
-        rsf_overlay_fill_sharpening_stats(&mut stats, &original);
-        assert_eq!(stats.sharpening_available, 1);
+        fill_sharpening_stats(&mut stats, &original);
         let mut intent = Intent::default();
         macro_rules! check_fields {
             ($($field:ident => $wire:ident),+ $(,)?) => {
@@ -274,7 +236,7 @@ mod tests {
                     assert_eq!(stats.$wire, original.$field);
                     intent.$wire = stats.$wire;
                 )+
-                let mapped = rsf_overlay_requested_sharpening(&intent);
+                let mapped = intent_sharpening(&intent);
                 $(assert_eq!(mapped.$field, original.$field);)+
             };
         }

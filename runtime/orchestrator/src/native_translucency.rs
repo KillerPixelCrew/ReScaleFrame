@@ -721,7 +721,11 @@ unsafe fn translucency(context: Object, pass: &Pass, begin: bool) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_translucency_pass(context: Object, pass: *const Pass, begin: u32) {
+pub(crate) unsafe extern "C" fn rsf_native_translucency_pass(
+    context: Object,
+    pass: *const Pass,
+    begin: u32,
+) {
     if context.is_null() || !unsafe { has_capacity(pass) } {
         return;
     }

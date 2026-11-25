@@ -18,7 +18,6 @@ use crate::dlss_pipeline_abi::*;
 use crate::frame_assembly::rsf_assemble_dlss_frame;
 use crate::frame_capture_vk::general;
 use crate::motion_resolve_params::{dense_resolve_params, has_motion_sentinel};
-use crate::native_sr_state::publish_surface;
 use crate::sharpening_policy;
 use crate::sr_legacy::{
     Adapter, rsf_sr_legacy_destroy, rsf_sr_legacy_evaluate, rsf_sr_legacy_fg_inputs,
@@ -1706,20 +1705,6 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         OK
     }
 
-    fn set_surface(&self, output: [u32; 2]) -> i32 {
-        let shared = self.shared();
-        if !shared.running || shared.output != output || output.contains(&0) {
-            return 0;
-        }
-        publish_surface(output, [shared.range.width, shared.range.height]);
-        1
-    }
-
-    /// The SR backends this machine serves, zero before the first start.
-    pub(super) fn backend_choices(&self) -> u32 {
-        self.shared().choices
-    }
-
     pub(super) unsafe fn status(&self, status: *mut Status) -> i32 {
         if !unsafe { has_capacity(status) } {
             return INVALID;
@@ -2271,11 +2256,6 @@ fn frame_record(frame: &Frame, dlss: &DlssFrame, backend: u32, output: [u32; 2])
         dlss.camera_motion_included,
         dlss.reset,
     )
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_native_sr_set_surface(width: u32, height: u32) -> i32 {
-    PROCESS.set_surface([width, height])
 }
 
 #[cfg(not(test))]

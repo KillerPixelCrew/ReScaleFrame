@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
-use crate::sr_session::has_capacity;
 use crate::sys::{RSF_FRAME_ASSEMBLY_ABI_VERSION, rsf_pipeline_camera_frame as Camera};
 use rsf_game_sys::{
     RSF_GAME_RENDER_RESET, rsf_game_depth_domain, rsf_game_depth_domains,
-    rsf_game_render_config as Config, rsf_game_render_pass as Pass,
+    rsf_game_render_pass as Pass,
 };
-use std::{ffi::c_void, sync::Mutex};
+use std::sync::Mutex;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct DomainLayout {
@@ -92,15 +91,6 @@ impl History {
 
 // SR publication and explicit FG capture commit independently on success.
 static HISTORY: Mutex<[Option<History>; 2]> = Mutex::new([None; 2]);
-const EMPTY_CONFIG: Config = Config {
-    struct_size: size_of::<Config>() as u32,
-    enabled: 0,
-    output_width: 0,
-    output_height: 0,
-    render_width: 0,
-    render_height: 0,
-};
-static SURFACE: Mutex<Config> = Mutex::new(EMPTY_CONFIG);
 
 fn camera(pass: &Pass, history: Option<History>) -> Camera {
     let source = &pass.camera;
@@ -157,39 +147,6 @@ pub(super) fn reset_history(kind: u32) {
     if let Some(slot) = HISTORY.lock().unwrap().get_mut(kind as usize) {
         *slot = None;
     }
-}
-
-pub(super) fn publish_surface(
-    [output_width, output_height]: [u32; 2],
-    [render_width, render_height]: [u32; 2],
-) {
-    let mut surface = SURFACE.lock().unwrap();
-    *surface = Config {
-        output_width,
-        output_height,
-        render_width,
-        render_height,
-        enabled: surface.enabled,
-        ..EMPTY_CONFIG
-    };
-}
-
-pub(super) fn clear_surface() {
-    *SURFACE.lock().unwrap() = EMPTY_CONFIG;
-}
-
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_native_sr_set_enabled(enabled: u32) {
-    SURFACE.lock().unwrap().enabled = u32::from(enabled != 0);
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_sr_render_config(_: *mut c_void, out: *mut Config) -> i32 {
-    if !unsafe { has_capacity(out) } {
-        return 0;
-    }
-    unsafe { out.write(*SURFACE.lock().unwrap()) };
-    1
 }
 
 #[cfg(test)]

@@ -39,12 +39,6 @@ pub(crate) unsafe extern "C" fn rsf_dlss_pipeline_get_status(status: *mut Status
     unsafe { PROCESS.status(status) }
 }
 
-/// SR backends this machine can serve as a choices mask (bit n for backend id n), Auto included.
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_dlss_pipeline_backend_choices() -> u32 {
-    PROCESS.backend_choices()
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_dlss_pipeline_prepare_layer(
     width: u32,

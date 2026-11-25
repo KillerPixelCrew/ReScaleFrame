@@ -8,19 +8,16 @@
 #include <stdlib.h>
 #include <rescaleframe/module_dump.h>
 
+#include <rescaleframe/d3d11_host.h>
 #include <rescaleframe/d3d11_observer.h>
-#include <rescaleframe/overlay_input.h>
+#include <rescaleframe/overlay_api.h>
 #include <rescaleframe/texture_dump.h>
 #include <rescaleframe/ac7_carrier.h>
 #include <rescaleframe/ac7_motion_capture.h>
-#include <rescaleframe/native_fg.h>
 #include <rescaleframe/input_dump.h>
-#include <rescaleframe/dlss_pipeline.h>
 
 #include "dlss_bridge.h"
-#include "../../../runtime/orchestrator/src/overlay_host.h"
 #include "../../../runtime/orchestrator/src/render_settings_store.h"
-#include <rescaleframe/fg_choice.h>
 
 #if RSF_HAVE_FRAME_CAPTURE
 #include <rescaleframe/frame_capture.h>
@@ -40,8 +37,6 @@ extern IMAGE_DOS_HEADER __ImageBase;
 static HMODULE real_dinput8;
 static wchar_t log_path[MAX_PATH * 2];
 static wchar_t preference_path[MAX_PATH * 2];
-static uint32_t preferred_enabled = 1;
-static uint32_t preferred_quality = 3;
 
 static int executable_sha256(char output[65])
 {
@@ -259,10 +254,18 @@ static DWORD read_number(const char* name, DWORD fallback)
     return (DWORD)value;
 }
 
+/* The carrier's overlay options, after the host's own: the adapter's startup choices (applied at
+   the next start), then the jitter gate, the observer dump and, with capture support, RenderDoc. */
 static const wchar_t startup_section[] = L"Startup";
+enum {
+    OPTION_JITTER = RSF_AC7_CARRIER_START_OPTION_COUNT,
+    OPTION_DUMP,
+    OPTION_CAPTURE,
+    OPTION_LIMIT
+};
+static rsf_overlay_service_option panel_options[OPTION_LIMIT];
 static struct {
     const char* key;
-    rsf_overlay_host_option descriptor;
     volatile LONG value;
     uint32_t active_value;
 } startup_options[RSF_AC7_CARRIER_START_OPTION_COUNT];
@@ -270,14 +273,14 @@ static struct {
 static void load_startup_options(void)
 {
     for (uint32_t index = 0; index < RSF_AC7_CARRIER_START_OPTION_COUNT; ++index) {
-        rsf_overlay_host_option* option = &startup_options[index].descriptor;
+        rsf_overlay_service_option* option = &panel_options[index];
         uint32_t fallback, maximum;
-        const char* key = rsf_ac7_carrier_start_option(index, &option->label, &fallback, &maximum);
+        const char* key = rsf_ac7_carrier_start_option(index, &option->label_utf8, &fallback, &maximum);
         if (!key) {
             return;
         }
         startup_options[index].key = key;
-        option->kind = maximum == 1 ? RSF_OVERLAY_HOST_OPTION_TOGGLE : RSF_OVERLAY_HOST_OPTION_NUMBER;
+        option->kind = maximum == 1 ? RSF_OVERLAY_SERVICE_OPTION_TOGGLE : RSF_OVERLAY_SERVICE_OPTION_NUMBER;
         option->maximum = (int32_t)maximum;
         option->step = 1;
         option->divisor = 1;
@@ -287,6 +290,7 @@ static void load_startup_options(void)
             ? rsf_settings_store_read_integer(preference_path, startup_section, key, configured)
             : configured;
         startup_options[index].active_value = saved <= maximum ? saved : maximum;
+        option->value = (int32_t)startup_options[index].active_value;
         InterlockedExchange(&startup_options[index].value, (LONG)startup_options[index].active_value);
     }
 }
@@ -307,23 +311,10 @@ static void load_carrier_preferences(void)
     load_startup_options();
 }
 
-static uint32_t read_startup_options(rsf_overlay_host_option* out, uint32_t capacity)
-{
-    uint32_t index = 0;
-    for (; index < capacity && index < RSF_AC7_CARRIER_START_OPTION_COUNT; ++index) {
-        if (!startup_options[index].key) {
-            break;
-        }
-        out[index] = startup_options[index].descriptor;
-        out[index].value = InterlockedCompareExchange(&startup_options[index].value, 0, 0);
-    }
-    return index;
-}
-
 static int save_startup_option(uint32_t index, int32_t value)
 {
     if (!preference_path[0] || index >= RSF_AC7_CARRIER_START_OPTION_COUNT || !startup_options[index].key ||
-        value < 0 || value > startup_options[index].descriptor.maximum) {
+        value < 0 || value > panel_options[index].maximum) {
         return 0;
     }
     if (rsf_settings_store_write_integer(preference_path, startup_section, startup_options[index].key,
@@ -403,9 +394,6 @@ static void observer_note(void* user, const char* message)
     note("%s", message);
 }
 
-/* Defined below, next to the actions themselves. Declared here because they are registered when
-   the observer is installed, which is before anything can call them. */
-static void register_overlay_actions(void);
 
 static void start_observer(void)
 {
@@ -446,15 +434,8 @@ static void start_observer(void)
     options.motion_scale = RSF_UNREAL_MOTION_SCALE;
     options.motion_bias = RSF_UNREAL_MOTION_BIAS;
     options.motion_invalid_value = RSF_MOTION_SENTINEL;
-    /* Where the reconstruction gets drawn when it is asked for. Registered at install because the
-       observer's options are written once, and harmless until something turns the display on. */
-    options.on_present = rsf_bridge_present_hook();
-    options.on_present_event = rsf_bridge_present_event_hook();
-    /* Same reason, and it has to happen before the first present rather than at F8: the overlay
-       starts as soon as the game has a device, and the bridge would otherwise have nowhere to
-       speak until the backend was started. */
+    /* Present work arrives through the core host's adapter callback, not the observer. */
     rsf_bridge_set_log(observer_note, NULL);
-    register_overlay_actions();
 
     /* Input layouts feed the velocity pass and the motion capture; shaders only the capture. */
     options.on_layout = rsf_bridge_layout_hook();
@@ -607,7 +588,6 @@ static void report_and_dump(void)
         snprintf(dlss_prefix, sizeof(dlss_prefix), "%s\\capture%02u_dlss", observe_directory,
                  index);
         rsf_bridge_request_dump(dlss_prefix);
-        rsf_bridge_report();
     }
 
     /* Wait briefly for a frame to carry it out, then report what it produced. */
@@ -640,7 +620,7 @@ static int prepare_native_game(void)
     if (!rsf_ac7_carrier_probe(&probe, sha256)) return 0;
     // Evidence only: the adapter recognizes the executable by name and discovers its sites.
     note("executable SHA-256 %s", sha256);
-    return rsf_bridge_prepare_game(path, &probe, observer_note, NULL);
+    return rsf_bridge_prepare_game(path, &probe);
 }
 static int accept_ac7_window(void* user, void* window)
 {
@@ -653,75 +633,148 @@ static int accept_ac7_window(void* user, void* window)
     // presentation host creates any D3D12 objects. A refusal keeps the original chain.
     return prepare_native_game();
 }
-static void fg_latency_event(void* user, const rsf_observer_present_event* event)
-{ (void)user; rsf_native_fg_present(event); }
-/* Runtime directory for a backend: its environment override, RSF_FFX_BIN for the FidelityFX pair,
-   then the default folder beside this module. Backend 0 (off) and unknown ids use the Streamline one. */
-static int backend_directory(DWORD backend, char* directory, size_t size)
+/* The observer dump, on its own thread: it waits for a later frame to carry the request out. */
+static DWORD WINAPI dump_thread(LPVOID parameter)
 {
-    const rsf_fg_backend_info* info = rsf_fg_backend_info_for(backend);
-    if (!info) info = rsf_fg_backend_info_for(RSF_FG_BACKEND_DLSS);
-    return read_text(info->env_var, directory, size) ||
-        ((info->id == RSF_FG_BACKEND_FSR3 || info->id == RSF_FG_BACKEND_FSR4) && read_text("RSF_FFX_BIN", directory, size)) ||
-        beside_this_module(info->default_subdir, directory, size);
-}
-static void start_generation(void)
-{
-    char directory[MAX_PATH * 2];
-    const DWORD fallback = read_number("RSF_FG_ENABLE", 0) ? read_number("RSF_FG_BACKEND", RSF_FG_BACKEND_DLSS) : 0;
-    const DWORD backend = rsf_fg_choice_start(preference_path, fallback, RSF_FG_BACKEND_ALL);
-    if (!backend_directory(backend, directory, sizeof(directory))) {
-        note("frame generation: runtime directory unavailable; retaining D3D11 presentation"); return;
-    }
-    rsf_native_fg_options options = {0}; options.struct_size = sizeof(options);
-    options.mode = read_number("RSF_FG_MODE", RSF_FG_FIXED);
-    options.generated_frames = read_number("RSF_FG_GENERATED", 1);
-    options.reflex_mode = read_number("RSF_REFLEX_MODE", RSF_REFLEX_ON);
-    /* A limit on rendered frames, applied before generation. FPS wins over the interval form. */
-    {
-        const DWORD limit_fps = read_number("RSF_FRAME_LIMIT_FPS", 0);
-        const DWORD fallback_limit = limit_fps ?
-            (1000000u + limit_fps / 2u) / limit_fps : read_number("RSF_REFLEX_LIMIT_US", 0);
-        options.frame_limit_us = rsf_settings_store_read_integer(
-            preference_path, L"Rendering", "FrameLimitUs", fallback_limit);
-    }
-    options.debug = read_number("RSF_FG_DEBUG", 0);
-    rsf_native_fg_options_set(&options);
-    rsf_native_fg_set_log(observer_note, NULL);
-    rsf_d3d11_present_setup setup = {0}; setup.struct_size = sizeof(setup);
-    setup.runtime_directory_utf8 = directory; setup.development_runtime = read_number("RSF_FG_DEVELOPMENT", 0);
-    setup.log = observer_note; setup.accept_window = accept_ac7_window;
-    setup.before_present = rsf_bridge_present_hook(); setup.present_event = rsf_bridge_present_event_hook();
-    setup.latency_event = fg_latency_event; setup.prepare = rsf_native_fg_prepare; setup.retire = rsf_native_fg_retire;
-    setup.debug_timing = options.debug;
-    setup.backend = backend; setup.max_generated_frames = UINT32_MAX;
-    setup.runtime_switching = 1; setup.ui_mode = RSF_UI_MODE_BACKBUFFER_HUDLESS;
-    /* Unreal units are centimetres and the depth buffer is reversed with an infinite far plane. */
-    setup.units_to_meters = 0.01f; setup.depth_inverted = 1; setup.depth_infinite = 1;
-    setup.engine_type = RSF_AC7_ENGINE_TYPE; setup.engine_version_utf8 = RSF_AC7_ENGINE_VERSION;
-    setup.project_id_utf8 = RSF_AC7_PROJECT_ID;
-    {
-        char streamline[MAX_PATH * 2] = {0}, fsr3[MAX_PATH * 2] = {0}, fsr4[MAX_PATH * 2] = {0}, xess[MAX_PATH * 2] = {0};
-        backend_directory(RSF_FG_BACKEND_DLSS, streamline, sizeof(streamline));
-        backend_directory(RSF_FG_BACKEND_FSR3, fsr3, sizeof(fsr3));
-        backend_directory(RSF_FG_BACKEND_FSR4, fsr4, sizeof(fsr4));
-        backend_directory(RSF_FG_BACKEND_XESS, xess, sizeof(xess));
-        setup.streamline_directory_utf8 = streamline; setup.fsr3_directory_utf8 = fsr3;
-        setup.fsr4_directory_utf8 = fsr4; setup.xess_directory_utf8 = xess;
-        if (!rsf_d3d11_present_install(&setup)) note("frame generation: interception refused; retaining D3D11 presentation");
-    }
-    note("frame generation: cold startup requested, backend=%lu mode=%lu generated=%lu Reflex=%lu directory=%s (%s)",
-        (unsigned long)backend, (unsigned long)options.mode, (unsigned long)options.generated_frames, (unsigned long)options.reflex_mode,
-        directory, setup.development_runtime ? "development" : "production");
-    if (options.frame_limit_us == RSF_OVERLAY_FRAME_LIMIT_VRR) {
-        note("frame limit: VRR policy");
-    } else {
-        note("frame limit before generation: %lu us between rendered frames (0 is unlimited)",
-            (unsigned long)options.frame_limit_us);
-    }
-    note("Latency pacing, input markers and Present ordering are owned by the core orchestrator.");
+    (void)parameter;
+    report_and_dump();
+    return 0;
 }
 
+static void panel_options_read(void* user, int32_t* values, uint32_t count)
+{
+    (void)user;
+    for (uint32_t index = 0; index < count && index < (uint32_t)OPTION_LIMIT; ++index) {
+        values[index] = index < RSF_AC7_CARRIER_START_OPTION_COUNT
+            ? (int32_t)InterlockedCompareExchange(&startup_options[index].value, 0, 0)
+            : index == (uint32_t)OPTION_JITTER ? jitter_patch.enabled : 0;
+    }
+}
+
+/* Startup choices are saved for the next start; the others act now. */
+static int panel_option_changed(void* user, uint32_t index, int32_t value)
+{
+    (void)user;
+    if (index < RSF_AC7_CARRIER_START_OPTION_COUNT) return save_startup_option(index, value);
+    switch (index) {
+    case OPTION_JITTER:
+        if (!action_jitter_available()) return 0;
+        action_set_jitter(value != 0);
+        return 1;
+    case OPTION_DUMP:
+        if (value) {
+            HANDLE worker = CreateThread(NULL, 0, dump_thread, NULL, 0, NULL);
+            if (!worker) return 0;
+            CloseHandle(worker);
+        }
+        return 1;
+#if RSF_HAVE_FRAME_CAPTURE
+    case OPTION_CAPTURE:
+        if (value) {
+            const rsf_capture_result result = rsf_capture_trigger(1);
+            note("capture triggered from the panel, result %d, captures so far %u", (int)result,
+                 rsf_capture_count());
+        }
+        return 1;
+#endif
+    default:
+        return 0;
+    }
+}
+
+static void panel_action(uint32_t index, const char* label)
+{
+    rsf_overlay_service_option* option = &panel_options[index];
+    option->label_utf8 = label;
+    option->kind = RSF_OVERLAY_SERVICE_OPTION_TOGGLE;
+    option->maximum = 1;
+    option->step = 1;
+    option->divisor = 1;
+}
+
+/* The core D3D11 host owns SR, frame generation, pacing, settings and the overlay. AC7 supplies
+   its engine facts: Unreal motion encoding, centimetre units, reversed infinite depth, its window
+   and native graph, and the overlay options above. */
+static void start_host(void)
+{
+    wchar_t runtime[MAX_PATH];
+    char sha256[65] = {0};
+    rsf_d3d11_host_setup setup;
+    rsf_game_host_services services;
+    rsf_d3d11_host_adapter adapter;
+    int32_t result;
+    const DWORD length = GetModuleFileNameW((HMODULE)&__ImageBase, runtime, MAX_PATH);
+    wchar_t* separator = length && length < MAX_PATH ? wcsrchr(runtime, L'\\') : NULL;
+    if (!separator || (size_t)(separator - runtime) + 14 >= MAX_PATH) {
+        note("core D3D11 host not started: the carrier's folder is unknown");
+        return;
+    }
+    wcscpy(separator + 1, L"ReScaleFrame");
+    executable_sha256(sha256);
+
+    memset(&setup, 0, sizeof(setup));
+    setup.struct_size = sizeof(setup);
+    setup.abi_version = RSF_D3D11_HOST_ABI_VERSION;
+    setup.configuration_path = preference_path;
+    setup.configuration_section = L"Rendering";
+    setup.runtime_directory = runtime;
+    setup.identity_utf8 = "AC7";
+    setup.executable_sha256 = sha256;
+    setup.engine_type = RSF_AC7_ENGINE_TYPE;
+    setup.engine_version_utf8 = RSF_AC7_ENGINE_VERSION;
+    setup.project_id_utf8 = RSF_AC7_PROJECT_ID;
+    /* Unreal units are centimetres and the depth buffer is reversed with an infinite far plane. */
+    setup.units_to_meters = 0.01f;
+    setup.depth_inverted = 1;
+    setup.depth_far_plane = RSF_D3D11_HOST_DEPTH_INFINITE;
+    setup.motion.struct_size = sizeof(setup.motion);
+    setup.motion.scale_x = RSF_UNREAL_MOTION_SCALE;
+    setup.motion.scale_y = RSF_UNREAL_MOTION_SCALE;
+    setup.motion.bias_x = RSF_UNREAL_MOTION_BIAS;
+    setup.motion.bias_y = RSF_UNREAL_MOTION_BIAS;
+    setup.motion.output_scale_x = 1.0f;
+    setup.motion.output_scale_y = 1.0f;
+    setup.motion.invalid_value = RSF_MOTION_SENTINEL;
+    setup.motion.zero_means_unwritten = 1u;
+    setup.quality_choices = 0x1fu;
+    setup.presentation_bridge = 1u;
+    setup.accept_window = accept_ac7_window;
+    setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_INPUT_TIMELINE |
+        RSF_D3D11_HOST_CAP_NATIVE_GRAPH;
+
+    memset(&services, 0, sizeof(services));
+    services.struct_size = sizeof(services);
+    services.abi_version = RSF_GAME_ABI_VERSION;
+    services.session_id = ((uint64_t)GetCurrentProcessId() << 32) | GetTickCount();
+    services.log = observer_note;
+    result = rsf_d3d11_host_create(&setup, &services);
+    if (result != RSF_OK) {
+        note("core D3D11 host refused, result %d; the game keeps its own rendering", (int)result);
+        return;
+    }
+    rsf_bridge_set_host(&services);
+
+    panel_action(OPTION_JITTER, "Temporal jitter gate");
+    panel_action(OPTION_DUMP, "Write observer and route dump");
+    panel_action(OPTION_CAPTURE, "RenderDoc capture");
+    memset(&adapter, 0, sizeof(adapter));
+    adapter.struct_size = sizeof(adapter);
+    adapter.abi_version = RSF_D3D11_HOST_ABI_VERSION;
+#if RSF_HAVE_FRAME_CAPTURE
+    adapter.option_count = OPTION_LIMIT;
+#else
+    adapter.option_count = OPTION_CAPTURE;
+#endif
+    adapter.options = panel_options;
+    adapter.options_read = panel_options_read;
+    adapter.option_changed = panel_option_changed;
+    adapter.present = rsf_bridge_present;
+    result = rsf_d3d11_host_set_adapter(services.user, &adapter);
+    if (result != RSF_OK) note("core D3D11 host refused the AC7 options, result %d", (int)result);
+    rsf_d3d11_host_set_active(services.user, 1);
+    rsf_bridge_set_jitter_control(action_set_jitter);
+    note("core D3D11 host started: SR, frame generation, latency and the overlay are the Runtime's");
+}
 _Static_assert(sizeof(wchar_t) == sizeof(uint16_t), "AC7 carrier UTF-16 ABI");
 _Static_assert(sizeof(rsf_ac7_carrier_leaves) == 56, "AC7 carrier ABI");
 _Static_assert(offsetof(rsf_ac7_carrier_leaves, read_number) == 8, "AC7 carrier ABI");
@@ -777,7 +830,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     observe_directory[MAX_PATH - 1] = '\0';
     load_carrier_preferences();
     start_observer();
-    start_generation();
+    start_host();
 
     double entropy = 0.0;
     rsf_measure_module_code(NULL, &entropy);
@@ -803,14 +856,14 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
         result = rsf_ac7_carrier_wait_decrypted(measure_code_entropy, RSF_DUMP_ERROR_STILL_ENCRYPTED);
     }
     if (result != RSF_DUMP_OK) {
-        note("startup: executable did not become ready, result %d; DLSS remains inactive", (int)result);
+        note("startup: executable did not become ready, result %d; the native renderer stays off", (int)result);
         return 0;
     }
     /* Only now: the code was ciphertext until the dump succeeded, so patching earlier would
        write into bytes about to be overwritten. */
     rsf_ac7_carrier_install_decrypted(&carrier_leaves);
     if (!dump_module) {
-        note("startup: renderer patches prepared; waiting for a presented frame to start DLSS");
+        note("startup: renderer patches prepared; waiting for a presented frame to start the native renderer");
         return 0;
     }
 
@@ -839,183 +892,6 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
        key press still produces something. F10 repeats it on demand. */
     report_and_dump();
     return 0;
-}
-
-/* Start on the render thread after decryption and the first presenting device are ready. */
-static void start_dlss_at_extent(uint32_t width, uint32_t height)
-{
-    char directory[MAX_PATH * 2];
-    char fsr_directories[3][MAX_PATH * 2] = {{0}};
-    char xess_directory[MAX_PATH * 2] = {0};
-    char sdk_override[MAX_PATH * 2] = {0};
-
-    if (rsf_bridge_running()) {
-        rsf_bridge_report();
-        return;
-    }
-    if (!read_text("RSF_STREAMLINE_BIN", directory, sizeof(directory)) &&
-        !beside_this_module("ReScaleFrame\\streamline", directory, sizeof(directory))) {
-        note("RSF_STREAMLINE_BIN is not set and no ReScaleFrame\\streamline sits beside the proxy, "
-             "so there is nothing to load DLSS from");
-        return;
-    }
-
-    rsf_ac7_carrier_override_start_extent(carrier_read_number, &width, &height);
-
-    note("starting DLSS for %lux%lu output at quality %lu", (unsigned long)width,
-         (unsigned long)height, (unsigned long)preferred_quality);
-    if (!read_text("RSF_FFX_BIN", fsr_directories[0], sizeof(fsr_directories[0])))
-        beside_this_module("ReScaleFrame\\fidelityfx", fsr_directories[0], sizeof(fsr_directories[0]));
-    memcpy(fsr_directories[1], fsr_directories[0], sizeof(fsr_directories[0]));
-    memcpy(fsr_directories[2], fsr_directories[0], sizeof(fsr_directories[0]));
-    if (read_text("RSF_FSR2_BIN", sdk_override, sizeof(sdk_override))) strcpy(fsr_directories[0], sdk_override);
-    if (read_text("RSF_FSR3_BIN", sdk_override, sizeof(sdk_override))) strcpy(fsr_directories[1], sdk_override);
-    if (read_text("RSF_FSR4_BIN", sdk_override, sizeof(sdk_override))) strcpy(fsr_directories[2], sdk_override);
-    if (!read_text("RSF_XESS_BIN", xess_directory, sizeof(xess_directory)))
-        beside_this_module("ReScaleFrame\\xess", xess_directory, sizeof(xess_directory));
-    rsf_bridge_set_sdk_directories(fsr_directories[0], fsr_directories[1], fsr_directories[2], xess_directory);
-    rsf_bridge_start(directory, width, height, preferred_quality, observer_note,
-                     NULL);
-    rsf_bridge_report();
-}
-
-static void start_dlss(void)
-{
-    uint32_t width = 0, height = 0;
-    if (rsf_bridge_running()) {
-        rsf_bridge_report();
-    } else if (rsf_bridge_present_extent(&width, &height)) {
-        start_dlss_at_extent(width, height);
-    } else {
-        note("no presented size yet, so DLSS cannot be told what to output");
-    }
-}
-
-/* What the overlay panel can ask this file for.
-
-   These are the actions that used to be function keys. They run on the render thread, called from
-   the present hook where the panel was drawn, which is the boundary the review finding wants and
-   is why the panel can drive them safely when a hotkey worker cannot. */
-
-static void action_trigger_capture(void)
-{
-#if RSF_HAVE_FRAME_CAPTURE
-    const rsf_capture_result result = rsf_capture_trigger(1);
-    note("capture triggered from the panel, result %d, captures so far %u", (int)result,
-         rsf_capture_count());
-#else
-    note("this build has no frame capture support");
-#endif
-}
-
-static unsigned long action_capture_count(void)
-{
-#if RSF_HAVE_FRAME_CAPTURE
-    return rsf_capture_count();
-#else
-    return 0;
-#endif
-}
-
-/* The user-owned profile keeps Enabled (0/1) and Quality (0-4); a missing or out-of-range value
-   leaves the configured default in place. */
-static void load_preferences(void)
-{
-    const uint32_t enabled = rsf_settings_store_read_integer(preference_path, L"Rendering", "Enabled", 2);
-    const uint32_t quality = rsf_settings_store_read_integer(preference_path, L"Rendering", "Quality", 5);
-    if (enabled <= 1) {
-        preferred_enabled = enabled;
-    }
-    if (quality <= 4) {
-        preferred_quality = quality;
-    }
-}
-
-static void save_preferences(void)
-{
-    if (rsf_settings_store_write_integer(preference_path, L"Rendering", "Quality", preferred_quality) != RSF_OK ||
-        rsf_settings_store_write_integer(preference_path, L"Rendering", "Enabled", preferred_enabled) != RSF_OK) {
-        note("settings: could not save preferences; the current session still uses them");
-    }
-}
-
-/* The shared post-pass keys belong to the Runtime settings store, which also restores the keys
-   it already wrote when one write fails. The bridge saves only options the pipeline accepted. */
-static void action_save_sharpening(const rsf_sharpening_options* options)
-{
-    if (rsf_settings_store_write_sharpening(preference_path, L"Rendering", options) != RSF_OK)
-        note("settings: could not save sharpening");
-}
-
-static void load_sharpening(void)
-{
-    rsf_sharpening_options options;
-    rsf_settings_store_read_sharpening(preference_path, L"Rendering", &options);
-    rsf_bridge_select_sharpening(&options);
-}
-
-static void action_save_dlss_preset(unsigned long preset)
-{
-    if (rsf_settings_store_write_dlss_preset(preference_path, L"Rendering", (uint32_t)preset) != RSF_OK)
-        note("settings: could not save DLSS model preset");
-}
-
-static void action_save_quality(unsigned long quality)
-{
-    if (quality <= 4) {
-        preferred_quality = (uint32_t)quality;
-        save_preferences();
-    }
-}
-
-static void action_save_enabled(unsigned long enabled)
-{
-    preferred_enabled = enabled != 0;
-    save_preferences();
-}
-
-static int action_save_frame_limit(uint32_t interval_or_policy)
-{
-    return rsf_settings_store_write_integer(
-        preference_path, L"Rendering", "FrameLimitUs", interval_or_policy) == RSF_OK;
-}
-
-static void register_overlay_actions(void)
-{
-    rsf_bridge_actions actions;
-    memset(&actions, 0, sizeof(actions));
-    actions.start_backend = start_dlss;
-    actions.start_backend_at_extent = start_dlss_at_extent;
-    actions.trigger_dump = report_and_dump;
-    actions.trigger_capture = action_trigger_capture;
-    actions.capture_count = action_capture_count;
-    actions.set_jitter = action_set_jitter;
-    actions.jitter_available = action_jitter_available;
-    actions.startup_ready = rsf_ac7_carrier_startup_ready;
-    actions.save_quality = action_save_quality;
-    actions.save_dlss_preset = action_save_dlss_preset;
-    actions.save_sharpening = action_save_sharpening;
-    actions.save_enabled = action_save_enabled;
-    actions.read_host_options = read_startup_options;
-    actions.save_host_option = save_startup_option;
-    actions.save_frame_limit = action_save_frame_limit;
-    preferred_enabled = read_number("RSF_DLSS_ENABLE", 1) != 0;
-    rsf_dlss_pipeline_set_colour_correction(read_number("RSF_DLSS_COLOUR_CORRECTION", 0) != 0);
-    rsf_dlss_pipeline_set_colour_transport(read_number("RSF_DLSS_TONEMAP", 1) != 0);
-    preferred_quality = read_number("RSF_DLSS_QUALITY", 3);
-    if (preferred_quality > 4) {
-        preferred_quality = 3;
-    }
-    load_preferences();
-    rsf_bridge_set_actions(&actions);
-    {
-        uint32_t preset = rsf_settings_store_read_dlss_preset(preference_path, L"Rendering",
-            (uint32_t)read_number("RSF_DLSS_PRESET", 0));
-        rsf_bridge_select_dlss_preset(rsf_dlss_preset_valid(preset) ? preset : 0);
-    }
-    load_sharpening();
-    rsf_bridge_select_quality(preferred_quality);
-    rsf_bridge_set_enabled((int)preferred_enabled);
 }
 
 /* Crash reporting, because a machine with Windows Error Reporting switched off leaves nothing to

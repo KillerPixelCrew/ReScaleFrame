@@ -13,6 +13,12 @@ extern "C" {
 #define RSF_D3D11_HOST_CAP_FG_INPUTS 1u
 #define RSF_D3D11_HOST_CAP_INPUT_TIMELINE 2u
 #define RSF_D3D11_HOST_CAP_RENDERED_SOURCE 4u
+/* The engine reports its native render graph through render_pass: the SR pass (the host
+   evaluates it; swapchain may be null for the bound chain), TRANSLUCENCY, CLOUD_DEPTH and
+   MATERIALS hints, UI_COMPOSITE, TEXTURE_BINDING and the WINDOW end of a source. Its renderer
+   inserts SR only into an enabled plan, so the host plans from the bound chain's extent at
+   each Present instead of waiting for a RECONFIGURE lease. Requires a presentation bridge. */
+#define RSF_D3D11_HOST_CAP_NATIVE_GRAPH 8u
 /* ABI 8 size extension. The original setup prefix used depth_inverted for both flags. */
 #define RSF_D3D11_HOST_DEPTH_FINITE 0u
 #define RSF_D3D11_HOST_DEPTH_INFINITE 1u
@@ -66,6 +72,26 @@ RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_setup*, rsf_g
 /* Any thread. Suspend callbacks during adapter quiescence; no graphics retirement occurs here.
    The returned host is process-lived and starts suspended. */
 RSF_RUNTIME_API int32_t rsf_d3d11_host_set_active(void* services_user, uint32_t active);
+
+struct rsf_overlay_service_option;
+struct rsf_observer_present_event;
+typedef struct rsf_d3d11_host_adapter {
+    uint32_t struct_size, abi_version;
+    /* Adapter overlay options, shown after the host's own (overlay_api.h). Labels are
+       copied; a nonempty list requires option_changed. Calls run on the present owner. */
+    uint32_t option_count;
+    const struct rsf_overlay_service_option* options;
+    void (*options_read)(void* user, int32_t* values, uint32_t count);
+    int (*option_changed)(void* user, uint32_t index, int32_t value);
+    /* Optional. Every application Present the host observes, before (completed 0) and after
+       the native call, ahead of the host's own work. Input preparation only. */
+    void (*present)(void* user, const struct rsf_observer_present_event* event);
+    void* user;
+} rsf_d3d11_host_adapter;
+/* Once, after create and before the presentation is bound. Callbacks and user are
+   process-lived. A second call, or one after binding, is refused. */
+RSF_RUNTIME_API int32_t rsf_d3d11_host_set_adapter(void* services_user,
+    const rsf_d3d11_host_adapter*);
 
 typedef struct rsf_d3d11_present_dispatch {
     uint32_t struct_size, abi_version;

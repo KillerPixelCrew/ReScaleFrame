@@ -257,7 +257,7 @@ impl Composition {
 static COMPOSITION: GraphicsCache<Composition> = GraphicsCache::new(Composition::new());
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_native_composition_capture(
+pub(crate) unsafe extern "C" fn rsf_native_composition_capture(
     context: *mut c_void,
     pass: *const Pass,
     begin: u32,

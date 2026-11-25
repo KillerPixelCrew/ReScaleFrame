@@ -72,6 +72,9 @@ thread_local! {
     static RESERVE_OK: Cell<bool> = const { Cell::new(true) };
     static RESERVES: Cell<u32> = const { Cell::new(0) };
     static OWNER_FACADE: Cell<i32> = const { Cell::new(0) };
+    static CHAIN_EXTENT: Cell<[u32; 2]> = const { Cell::new([64, 64]) };
+    // Bits: 1 translucency, 2 UI composition, 4 texture binding, 8 window end.
+    static ROUTED: Cell<u32> = const { Cell::new(0) };
 }
 
 fn owned(cell: &'static std::thread::LocalKey<Cell<Raw>>) -> Raw {
@@ -86,26 +89,28 @@ fn owned(cell: &'static std::thread::LocalKey<Cell<Raw>>) -> Raw {
 pub(super) mod native {
     pub(in crate::d3d11_host) use super::{
         auxiliary_products, begin as creation_begin, bind_window as latency_window_bind,
-        capture_fg as fg_capture, colour as pipeline_colour_correction,
-        colour as pipeline_colour_transport, context_of as immediate_context,
-        cpu_dispatch as cpu_dispatch_fg, cpu_event, device_of as chain_device,
-        device_of as child_device, dispatch as chain_dispatch, dump_begin, dump_complete,
-        dump_configure, dump_inputs, dump_pass, dump_result, dump_texture, dump_wants,
-        end as creation_end, evaluate as sr_evaluate, facade as present_is_owner, fg_latency_event,
-        fg_options_set, fg_prepare, fg_rendered_source_set, fg_retire, fg_set_log,
-        final_fact as fg_final, ini_read, ini_write, last_present as window_last_present,
-        native_present as dlss_native_present, none as chain_buffer, none as chain_present,
-        none as com_identity, nothing as dump_poll, nothing as dump_request,
-        observe as observer_install, output as pipeline_output, overlay_configure, overlay_present,
-        pass_fact as fg_frame, pass_fact as fg_submission, pass_result as scene_pass,
-        pass_result as window_scope, poll_toggle as overlay_poll_toggle,
+        capture_fg as fg_capture, chain_extent, colour as pipeline_colour_correction,
+        colour as pipeline_colour_transport, composition as composition_capture,
+        context_of as immediate_context, cpu_dispatch as cpu_dispatch_fg, cpu_event,
+        device_of as chain_device, device_of as child_device, dispatch as chain_dispatch,
+        dump_begin, dump_complete, dump_configure, dump_inputs, dump_pass, dump_result,
+        dump_texture, dump_wants, end as creation_end, evaluate as sr_evaluate,
+        facade as present_is_owner, fg_latency_event, fg_options_set, fg_prepare,
+        fg_rendered_source_set, fg_retire, fg_set_log, final_fact as fg_final, ini_read, ini_write,
+        last_present as window_last_present, native_present as dlss_native_present,
+        none as chain_buffer, none as chain_present, none as com_identity, nothing as dump_poll,
+        nothing as dump_request, observe as observer_install, output as pipeline_output,
+        overlay_configure, overlay_present, pass_fact as fg_frame, pass_fact as fg_submission,
+        pass_result as scene_pass, pass_result as window_scope, poll_toggle as overlay_poll_toggle,
         present_path as scene_present_path, preset as pipeline_preset,
         refuse_bridge as present_install, refuse_bridge as present_install_scoped,
         refuse_bridge as present_prepare, release_count as com_release, resize as pipeline_resize,
         same as same_object, select as pipeline_quality, select as pipeline_select,
         sharpen as pipeline_sharpen, start as pipeline_start, status as pipeline_status,
-        vendor as device_vendor, window as chain_window, window_match, window_present,
-        wrap as wrap_native, yes as device_ok, yes as is_immediate, zero as dump_requested,
+        texture_binding as scene_texture_binding, translucency as translucency_pass,
+        vendor as device_vendor, window as chain_window, window_end as fg_window_end, window_match,
+        window_present, wrap as wrap_native, yes as device_ok, yes as is_immediate,
+        zero as dump_requested,
     };
 }
 
@@ -172,6 +177,31 @@ pub(super) unsafe extern "C" fn wrap(_: Raw, _: Raw, _: *mut Raw) -> i32 {
 }
 pub(super) unsafe extern "C" fn release_count(_: Raw) -> u32 {
     0
+}
+pub(super) unsafe fn chain_extent(_: Raw, width: *mut u32, height: *mut u32) -> i32 {
+    let [w, h] = CHAIN_EXTENT.get();
+    unsafe {
+        width.write(w);
+        height.write(h);
+    }
+    1
+}
+fn route(bit: u32) {
+    ROUTED.set(ROUTED.get() | bit);
+}
+pub(super) unsafe extern "C" fn translucency(_: Raw, _: *const Pass, _: u32) {
+    route(1);
+}
+pub(super) unsafe extern "C" fn composition(_: Raw, _: *const Pass, _: u32) -> i32 {
+    route(2);
+    1
+}
+pub(super) unsafe extern "C" fn texture_binding(_: *const Pass) -> i32 {
+    route(4);
+    1
+}
+pub(super) unsafe extern "C" fn window_end(_: *const Pass) {
+    route(8);
 }
 pub(super) unsafe extern "C" fn pass_fact(_: *const Pass, _: u32) {}
 pub(super) unsafe extern "C" fn final_fact(_: Raw, _: *const Pass) {}
@@ -853,4 +883,222 @@ fn sr_reports_only_inputs_from_actual_evaluation() {
     let report = fixture.host.shared().report;
     assert_eq!(report.inputs, expected);
     assert_eq!(report.jitter_pixels, [0.25, -0.25]);
+}
+
+impl Fixture {
+    fn native_graph() -> Self {
+        let mut fixture = Self::new();
+        fixture.host.setup.capabilities = RSF_D3D11_HOST_CAP_NATIVE_GRAPH;
+        fixture
+    }
+
+    fn present(&self) {
+        let event = rsf_observer_present_event {
+            struct_size: size_of::<rsf_observer_present_event>() as u32,
+            completed: 0,
+            swapchain: raw(&self.chain),
+            sync_interval: 1,
+            flags: 0,
+            result: 0,
+            method: 0,
+        };
+        unsafe { host_present(self.host.user(), &event) };
+    }
+
+    fn report(&self, role: u32, begin: u32, swapchain: Raw) {
+        let mut pass = self.pass(5);
+        pass.role = role;
+        pass.swapchain = swapchain;
+        unsafe { host_passes(self.host.user(), self.context(), &pass, begin) };
+    }
+}
+
+#[test]
+fn native_graph_plans_from_the_bound_chain_before_any_scene() {
+    for native_graph in [false, true] {
+        let fixture = if native_graph {
+            Fixture::native_graph()
+        } else {
+            Fixture::new()
+        };
+        assert_eq!(fixture.host.bind_presentation(raw(&fixture.chain)), OK);
+        fixture.present();
+        let g = fixture.host.lock_graphics();
+        assert_eq!(g.running, native_graph);
+        assert!(!g.scene_bound, "planning binds no scene");
+        drop(g);
+        let planned = fixture.host.shared().planned;
+        let expected = if native_graph { (1, 32, 64) } else { (0, 0, 0) };
+        assert_eq!(
+            (planned.enabled, planned.render_width, planned.output_width),
+            expected
+        );
+    }
+    // A chain whose extent the pipeline does not serve leaves the plan disabled.
+    let fixture = Fixture::native_graph();
+    assert_eq!(fixture.host.bind_presentation(raw(&fixture.chain)), OK);
+    CHAIN_EXTENT.set([80, 64]);
+    fixture.present();
+    CHAIN_EXTENT.set([64, 64]);
+    let planned = fixture.host.shared().planned;
+    assert_eq!((planned.enabled, planned.output_width), (0, 80));
+}
+
+#[test]
+fn native_graph_evaluates_the_sr_pass_it_reports() {
+    for native_graph in [false, true] {
+        let fixture = if native_graph {
+            Fixture::native_graph()
+        } else {
+            Fixture::new()
+        };
+        assert_eq!(fixture.host.bind_presentation(raw(&fixture.chain)), OK);
+        fixture.present();
+        // The native graph's SR pass names no swapchain; the bound chain is implied.
+        fixture.report(RSF_GAME_RENDER_SR, 1, null_mut());
+        fixture.report(RSF_GAME_RENDER_SR, 0, null_mut());
+        let g = fixture.host.lock_graphics();
+        assert_eq!(g.evaluated, u64::from(native_graph));
+        assert_eq!(g.scene_bound, native_graph);
+    }
+    // Only a native graph may leave the chain implied.
+    let fixture = Fixture::new();
+    let mut pass = fixture.pass(5);
+    pass.swapchain = null_mut();
+    assert_eq!(fixture.evaluate(), OK);
+    assert_eq!(
+        fixture.host.process(fixture.context(), &pass, None),
+        NOT_READY
+    );
+}
+
+#[test]
+fn native_graph_routes_its_inputs_once_sr_runs() {
+    for native_graph in [false, true] {
+        let fixture = if native_graph {
+            Fixture::native_graph()
+        } else {
+            Fixture::new()
+        };
+        let chain = raw(&fixture.chain);
+        assert_eq!(fixture.host.bind_presentation(chain), OK);
+        ROUTED.set(0);
+        // Before SR runs, the reconstruction inputs wait; the presentation facts do not.
+        for role in [RSF_GAME_RENDER_TRANSLUCENCY, RSF_GAME_RENDER_UI_COMPOSITE] {
+            fixture.report(role, 1, chain);
+        }
+        fixture.report(RSF_GAME_RENDER_TEXTURE_BINDING, 0, chain);
+        fixture.report(RSF_GAME_RENDER_WINDOW, 0, chain);
+        assert_eq!(ROUTED.get(), if native_graph { 4 | 8 } else { 0 });
+        fixture.present();
+        assert_eq!(fixture.evaluate(), OK);
+        ROUTED.set(0);
+        for role in [
+            RSF_GAME_RENDER_TRANSLUCENCY,
+            RSF_GAME_RENDER_CLOUD_DEPTH,
+            RSF_GAME_RENDER_MATERIALS,
+            RSF_GAME_RENDER_UI_COMPOSITE,
+        ] {
+            fixture.report(role, 1, chain);
+        }
+        fixture.report(RSF_GAME_RENDER_WINDOW, 1, chain);
+        assert_eq!(ROUTED.get(), if native_graph { 1 | 2 } else { 0 });
+        // A window end on another chain is not this host's.
+        ROUTED.set(0);
+        fixture.report(RSF_GAME_RENDER_WINDOW, 0, raw(&fixture.output));
+        assert_eq!(ROUTED.get(), 0);
+    }
+}
+
+thread_local! {
+    static ADAPTER_CHANGES: Cell<Option<(u32, i32)>> = const { Cell::new(None) };
+    static ADAPTER_PRESENTS: Cell<u32> = const { Cell::new(0) };
+}
+
+unsafe extern "C" fn adapter_read(_: Raw, values: *mut i32, count: u32) {
+    for index in 0..count as usize {
+        unsafe { values.add(index).write(70 + index as i32) };
+    }
+}
+
+unsafe extern "C" fn adapter_changed(_: Raw, index: u32, value: i32) -> c_int {
+    ADAPTER_CHANGES.set(Some((index, value)));
+    1
+}
+
+unsafe extern "C" fn adapter_present(_: Raw, event: *const rsf_observer_present_event) {
+    assert_eq!(unsafe { (*event).completed }, 0);
+    ADAPTER_PRESENTS.set(ADAPTER_PRESENTS.get() + 1);
+}
+
+fn adapter(options: &[rsf_overlay_service_option]) -> rsf_d3d11_host_adapter {
+    rsf_d3d11_host_adapter {
+        struct_size: size_of::<rsf_d3d11_host_adapter>() as u32,
+        abi_version: RSF_D3D11_HOST_ABI_VERSION,
+        option_count: options.len() as u32,
+        options: options.as_ptr(),
+        options_read: Some(adapter_read),
+        option_changed: Some(adapter_changed),
+        present: Some(adapter_present),
+        user: null_mut(),
+    }
+}
+
+#[test]
+fn adapter_options_follow_the_host_options_and_present_comes_first() {
+    let option = |label: &'static CStr| rsf_overlay_service_option {
+        label_utf8: label.as_ptr(),
+        kind: RSF_OVERLAY_SERVICE_OPTION_TOGGLE,
+        value: 0,
+        minimum: 0,
+        maximum: 1,
+        step: 1,
+        divisor: 1,
+        restart: 1,
+    };
+    let options = [option(c"First"), option(c"Second")];
+    let fixture = Fixture::new();
+    let host = &fixture.host;
+    let mut unlabelled = options;
+    unlabelled[1].label_utf8 = ptr::null();
+    assert_eq!(host.register(&adapter(&unlabelled)), INVALID);
+    let too_many = vec![options[0]; RSF_OVERLAY_SERVICE_OPTION_LIMIT as usize];
+    assert_eq!(host.register(&adapter(&too_many)), INVALID);
+    let mut silent = adapter(&options);
+    silent.option_changed = None;
+    assert_eq!(host.register(&silent), INVALID);
+    assert_eq!(host.register(&adapter(&options)), OK);
+    assert_eq!(host.register(&adapter(&options)), BUSY, "registered once");
+
+    let mut values = [-1; ADVANCED.len() + 2];
+    unsafe { host_options(host.user(), values.as_mut_ptr(), values.len() as u32) };
+    assert_eq!(&values[ADVANCED.len()..], &[70, 71]);
+    assert_eq!(
+        values[Advanced::Transport as usize],
+        ADVANCED[Advanced::Transport as usize].value(host)
+    );
+    let first = ADVANCED.len() as u32;
+    assert_eq!(unsafe { host_action(host.user(), first + 1, 1) }, 1);
+    assert_eq!(ADAPTER_CHANGES.get(), Some((1, 1)));
+    assert_eq!(unsafe { host_action(host.user(), first + 2, 1) }, 0);
+    assert_eq!(
+        unsafe { host_action(host.user(), 1, 0) },
+        1,
+        "host options stay first"
+    );
+
+    ADAPTER_PRESENTS.set(0);
+    fixture.present();
+    assert_eq!(
+        ADAPTER_PRESENTS.get(),
+        1,
+        "the adapter sees Present before binding"
+    );
+    assert_eq!(host.bind_presentation(raw(&fixture.chain)), OK);
+    fixture.present();
+    assert_eq!(ADAPTER_PRESENTS.get(), 2);
+
+    let late = Fixture::new();
+    assert_eq!(late.host.bind_presentation(raw(&late.chain)), OK);
+    assert_eq!(late.host.register(&adapter(&options)), NOT_READY);
 }

@@ -299,10 +299,6 @@ RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_request_dump(const ch
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_get_status(
     rsf_dlss_pipeline_status* status);
 
-/* The super-resolution backends this machine can serve, bit n for backend id n and Auto (7)
-   included: the packages beside the Runtime and the adapter decide, the host keeps no list. Zero
-   until the first start attempt. Safe from any thread. */
-RSF_RUNTIME_API uint32_t rsf_dlss_pipeline_backend_choices(void);
 
 /* Change the quality level while running, without tearing Streamline down.
 

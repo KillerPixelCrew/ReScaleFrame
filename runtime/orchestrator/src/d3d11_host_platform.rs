@@ -34,9 +34,11 @@ pub(super) use crate::dlss_pipeline::exports::{
 };
 pub(super) use crate::dlss_pipeline::rsf_core_dlss_pipeline_apply_sharpening as pipeline_sharpen;
 pub(super) use crate::dlss_streamline::rsf_dlss_native_present as dlss_native_present;
+pub(super) use crate::native_composition::rsf_native_composition_capture as composition_capture;
 pub(super) use crate::native_fg::{
     rsf_native_fg_final as fg_final, rsf_native_fg_options_set as fg_options_set,
     rsf_native_fg_retire as fg_retire, rsf_native_fg_set_log as fg_set_log,
+    rsf_native_fg_window_end as fg_window_end,
 };
 pub(super) use crate::native_fg_cpu::platform::{
     rsf_native_fg_frame as fg_frame, rsf_native_fg_rendered_source_set as fg_rendered_source_set,
@@ -44,10 +46,12 @@ pub(super) use crate::native_fg_cpu::platform::{
 };
 pub(super) use crate::native_scene::{
     rsf_native_scene_pass as scene_pass, rsf_native_scene_present_path as scene_present_path,
+    rsf_native_scene_texture_binding as scene_texture_binding,
 };
 pub(super) use crate::native_sr::{
     rsf_native_sr_capture_fg as fg_capture, rsf_native_sr_evaluate_ordered as sr_evaluate,
 };
+pub(super) use crate::native_translucency::rsf_native_translucency_pass as translucency_pass;
 pub(super) use crate::native_window::{
     rsf_native_window_last_present as window_last_present, rsf_native_window_match as window_match,
     rsf_native_window_present as window_present, rsf_native_window_scope as window_scope,
@@ -242,6 +246,19 @@ pub(super) unsafe fn chain_window(chain: Raw) -> Raw {
     unsafe { IDXGISwapChain::from_raw_borrowed(&chain) }
         .and_then(|chain| unsafe { chain.GetDesc() }.ok())
         .map_or(null_mut(), |desc| desc.OutputWindow.0)
+}
+
+pub(super) unsafe fn chain_extent(chain: Raw, width: *mut u32, height: *mut u32) -> i32 {
+    let Some(desc) = (unsafe { IDXGISwapChain::from_raw_borrowed(&chain) })
+        .and_then(|chain| unsafe { chain.GetDesc() }.ok())
+    else {
+        return 0;
+    };
+    unsafe {
+        width.write(desc.BufferDesc.Width);
+        height.write(desc.BufferDesc.Height);
+    }
+    1
 }
 
 pub(super) unsafe fn chain_buffer(chain: Raw) -> Raw {

@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{TestResult, check};
-use crate::overlay_settings::{
-    rsf_overlay_fill_sharpening_stats, rsf_overlay_requested_sharpening,
-};
+use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening};
 use crate::settings_store::{
     read_sharpening, rsf_settings_store_read, rsf_settings_store_read_layout,
     rsf_settings_store_write, rsf_settings_store_write_sharpening, set_sharpening, sharpening_of,
@@ -310,7 +308,7 @@ fn store_format(api: &Services, ini: &Ini) -> TestResult {
 
 fn overlay(options: &Options) -> TestResult {
     let mut stats: Stats = unsafe { std::mem::zeroed() };
-    rsf_overlay_fill_sharpening_stats(&mut stats, options);
+    fill_sharpening_stats(&mut stats, options);
     let mut intent: Intent = unsafe { std::mem::zeroed() };
     intent.sharpening_mode = stats.sharpening_mode;
     intent.sharpening_sharpness = stats.sharpening_sharpness;
@@ -324,11 +322,8 @@ fn overlay(options: &Options) -> TestResult {
     intent.sharpening_depth_bias = stats.sharpening_depth_bias;
     intent.sharpening_clamp_output = stats.sharpening_clamp_output;
     intent.sharpening_debug = stats.sharpening_debug;
-    let readback = rsf_overlay_requested_sharpening(&intent);
-    check(
-        stats.sharpening_available != 0 && same(options, &readback),
-        "D3D12 stats/intent mapping",
-    )
+    let readback = intent_sharpening(&intent);
+    check(same(options, &readback), "D3D12 stats/intent mapping")
 }
 
 fn verify(api: &Services) -> TestResult {
