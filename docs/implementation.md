@@ -38,11 +38,18 @@ Built and unit-tested, not game-run or device-tested. Rule 5 audit F4 and overla
   status overlay, DLSS model and sharpening are `rsf_render_settings` in the preferences `[Rendering]` section,
   written on every accepted change. A key never saved keeps the adapter's `[UnitySR]` start value; the provider
   keeps fg_choice's key.
+- Unity package on the same host: the D3D12 callback host gained per-view SR contexts and an attach mode, and the
+  package now attaches it per session instead of keeping its own SR views, plan, settings checks, provider
+  requests and view setup. `rsfu_configure`, `rsfu_settings` and `rsfu_status` translate onto the host's settings
+  (stored in `preferences.ini` in the package's SDK root) and status, with the C# contract unchanged; package
+  games get the shared overlay on the D3D12 route. sr12 plans FSR1 from the shared `fsr1.rs` table.
 
 Game runs must confirm: Drag'n Wash FSR1 on and off at run time with FG on and off, and settings restored after a
-restart; RDR2 upscaling unchanged and its new FSR1 image stable (jitter sign) with sharpening; FG providers and
+restart; RDR2 upscaling unchanged and its new FSR1 image stable (jitter sign) with sharpening; a Unity package test
+project on D3D12, D3D11 and Vulkan (SR per camera, the C# options and the overlay changing one setting,
+status, Editor preview); FG providers and
 the overlay in both. Rule 5 F9 (RDR2 screen class) and F10 (RDR2 masks) wait for a game run; the Unity package
-host is not on the shared host yet (see the audit's F4).
+host's generation install still happens in the integration (see the audit's F4).
 
 ## Overlay parity across games, 25 November 2026
 

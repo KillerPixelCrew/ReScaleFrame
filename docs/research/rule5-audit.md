@@ -152,6 +152,9 @@ established by static review; the fg-ac7 and fg-unity workers are changing that 
 | b67de62b | F4, first part: `callback_host.rs` folded into `render_host` (`render_host/callback.rs`); vendor packages, engine identity, SR context setup and the overlay SR card are one implementation for RDR2 and Unity Mono. Two C entries stay: RDR2 hands its recordings to the host's fence, Unity's bridge retires its own ring. | `cargo test -p rsf-orchestrator --lib render_host` (33), clippy. |
 | 81c2319c | Runtime FSR1 (overlay-parity follow-up 1) on D3D12: sr12 serves Spatial with an FSR1 EASU kernel where the engine has no scaler; RDR2 offers it. | `render_host sr12 sr_choices` (54), kernel compiled with d3dcompiler_47. Not device-tested. |
 | ffb75f75 | Rule 2 for Unity Mono: SR backend, quality, enable state, generation mode and frames saved as `rsf_render_settings` in the preferences `[Rendering]` section; unsaved keys keep the adapter's `[UnitySR]` start values. | `render_host` (36), `-p rsf-unity-mono`. |
+| 04ba51ba | F4: the D3D12 callback host gains per-view SR contexts (a view's context is released once idle and its last recording slot has been recorded again), an attach mode for an adapter that owns its lifecycle (V3 setup), `rsf_render_settings_get/apply` for it, and `rsf_callback_host_status_get`. | `render_host` (38). `rust_exports.c` changed, not compiled. |
+| 71ab561f | F4 completed: the Unity package host moved onto that host. The package keeps its bridges, Editor preview, screen class, input and lifecycle; `package_views.rs`, its settings validation, view creation, provider requests and the bridges' ring epochs are deleted. `rsfu_configure/settings/status` translate onto the host's settings and status; package games get the shared overlay on the D3D12 route. | `-p rsf-unity --lib` (74), `render_host` (38), `-p rsf-unity-mono`, clippy, `cargo check -p rsf-unity --features package`. Not built with CMake or run in Unity. |
+| a8cbbf00 | sr12 plans FSR1 from the shared `fsr1.rs` table (9b598e77, from the D3D11 branch). | `sr12 fsr1` (19). |
 
 ## Follow-ups, ranked by user impact
 
@@ -234,11 +237,11 @@ which also removes A12.
 admission, SR context lifetime, recording slots, settings and overlay routing for D3D12. Merge
 them so RDR2 and Unity games share one offered set and one settings path; the Unity package host
 (`integrations/unity/src`) then moves onto it as well. *Status:* RDR2 and Unity Mono share one
-module, offered set and settings store (b67de62b, ffb75f75). The package host is open: it keeps
-its own SR views (one context per camera), settings from the developer's C# API
-(`rsfu_configure`), view creation that rebuilds the DLSS and vendor setup
-(`package_state/native.rs`), generation install and FG Auto without the host's offered set, and
-no shared overlay.
+module, offered set and settings store (b67de62b, ffb75f75), and the Unity package attaches the
+same host (04ba51ba, 71ab561f): one D3D12 host serves every D3D12 integration. Two C entries
+remain because the retirement facts differ (host-fenced recordings for RDR2, an adapter-retired
+command ring for Unity Mono and the package). Open: the generation install still happens in both
+Unity integrations, before graphics creation.
 
 **F5. Jitter phase count and LOD bias from the core.** Add to `rsf_game_render_config` (append,
 bump the ABI) the jitter phase count and the texture LOD bias for the active backend and current
