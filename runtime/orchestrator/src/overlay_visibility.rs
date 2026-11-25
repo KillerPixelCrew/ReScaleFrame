@@ -8,6 +8,9 @@ const DEBOUNCE_MS: u64 = 250;
 const EXTERNAL: u32 = 0;
 const WINDOW: u32 = 1;
 const POLL: u32 = 2;
+// A caller's own toggle-key detection. It sees the same press as the window message, so it is
+// debounced with the key routes; an explicit open or close (EXTERNAL) is not.
+const TOGGLE: u32 = 3;
 
 #[derive(Clone, Copy)]
 struct Change {
@@ -77,6 +80,10 @@ impl Visibility {
         }
     }
 
+    fn toggle(&mut self, now: u64) -> Option<Change> {
+        self.request(!self.requested, TOGGLE, now)
+    }
+
     fn next(&mut self) -> Option<Change> {
         let next = self.pending.take();
         self.applying = next.is_some();
@@ -131,6 +138,11 @@ pub(super) extern "C" fn rsf_core_overlay_visibility_set(visible: u32, now: u64)
     apply_changes(change);
 }
 
+pub(super) extern "C" fn rsf_core_overlay_toggle(now: u64) {
+    let change = lock().toggle(now);
+    apply_changes(change);
+}
+
 pub(super) fn message_press(repeat: bool, now: u64) -> bool {
     let (edge, change) = lock().press(repeat, now);
     apply_changes(change);
@@ -165,6 +177,39 @@ mod tests {
         assert!(!state.requested);
         assert!(!state.next().unwrap().visible);
         assert!(state.next().is_none());
+    }
+
+    // Anomaly polls Insert at Present and toggles; the window message saw the same press.
+    #[test]
+    fn a_callers_toggle_and_the_window_message_change_once_per_press() {
+        for message_first in [true, false] {
+            let mut state = Visibility::new(false);
+            let (first, second) = if message_first {
+                let open = state.press(false, 1000).1;
+                state.next();
+                (open, state.toggle(1015))
+            } else {
+                let open = state.toggle(1000);
+                state.next();
+                (open, state.press(false, 1015).1)
+            };
+            assert!(first.unwrap().visible);
+            assert!(second.is_none(), "the same press does not close it again");
+            state.next();
+            state.key_down = false;
+            // The next press, from either route, closes it.
+            let close = if message_first {
+                state.toggle(1400)
+            } else {
+                state.press(false, 1400).1
+            };
+            assert!(!close.unwrap().visible);
+        }
+        // An explicit close is never debounced.
+        let mut state = Visibility::new(false);
+        assert!(state.toggle(0).unwrap().visible);
+        state.next();
+        assert!(!state.request(false, EXTERNAL, 1).unwrap().visible);
     }
 
     #[test]

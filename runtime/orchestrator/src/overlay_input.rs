@@ -4,8 +4,8 @@ use crate::overlay_cursor_hooks::{self as hooks, Platform as HookPlatform};
 use crate::overlay_input_route::{Contact, Disposition, rsf_core_overlay_route_message};
 use crate::overlay_pointer::{self as pointer, ClientPoint};
 use crate::overlay_visibility::{
-    rsf_core_overlay_toggle_key, rsf_core_overlay_toggle_poll, rsf_core_overlay_visibility_set,
-    rsf_core_overlay_visible,
+    rsf_core_overlay_toggle, rsf_core_overlay_toggle_key, rsf_core_overlay_toggle_poll,
+    rsf_core_overlay_visibility_set, rsf_core_overlay_visible,
 };
 use crate::overlay_window as window;
 use crate::sys::{rsf_overlay_input as Input, rsf_overlay_input_options as Options};
@@ -352,6 +352,7 @@ pub(super) unsafe fn apply_visibility(visible: u32, route: u32) {
     let source = match route {
         1 => "window-message",
         2 => "foreground-poll",
+        3 => "caller-toggle",
         _ => "external",
     };
     let state = if visible != 0 { "visible" } else { "hidden" };
@@ -504,6 +505,11 @@ pub(super) extern "C" fn rsf_overlay_input_poll_toggle() {
 #[unsafe(no_mangle)]
 pub(super) extern "C" fn rsf_overlay_input_set_visible(visible: u32) {
     rsf_core_overlay_visibility_set(visible, unsafe { GetTickCount64() });
+}
+
+/* A caller's toggle key press, debounced with the window message that sees the same press. */
+pub(super) fn rsf_overlay_input_toggle() {
+    rsf_core_overlay_toggle(unsafe { GetTickCount64() });
 }
 
 unsafe extern "C" fn sample_cursor(window: HWND, out: *mut ClientPoint) -> u32 {

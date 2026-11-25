@@ -9,7 +9,7 @@ use crate::overlay_geometry::{
 };
 use crate::overlay_input::{
     rsf_overlay_input_collect, rsf_overlay_input_install, rsf_overlay_input_set_visible,
-    rsf_overlay_input_uninstall, rsf_overlay_input_visible,
+    rsf_overlay_input_toggle, rsf_overlay_input_uninstall, rsf_overlay_input_visible,
 };
 use crate::overlay_panel::{OpenPanel, PanelEntries, elapsed_seconds, open_panel};
 use crate::overlay_window::{NOT_INSTALLED, OK};
@@ -1158,7 +1158,7 @@ pub(crate) fn rsf_overlay_native12_toggle() {
     if let Ok(_panel) = PANEL.try_lock()
         && READY.load(Ordering::Acquire)
     {
-        rsf_overlay_input_set_visible(u32::from(rsf_overlay_input_visible() == 0));
+        rsf_overlay_input_toggle();
     }
 }
 

@@ -14,7 +14,9 @@ use crate::graphics_d3d11::rsf_call_native_log;
 use crate::native_fg::{rsf_native_fg_options_set, rsf_native_fg_status_get};
 #[cfg(not(test))]
 use crate::overlay_host::native::rsf_overlay_host_present;
-use crate::overlay_input::{rsf_overlay_input_set_visible, rsf_overlay_input_visible};
+use crate::overlay_input::{
+    rsf_overlay_input_set_visible, rsf_overlay_input_toggle, rsf_overlay_input_visible,
+};
 use crate::overlay_input_route::rsf_overlay_input_counters_get;
 #[cfg(not(test))]
 use crate::overlay_wrapped12::{rsf_overlay_d3d12_frame_for_window, rsf_overlay_d3d12_stop};
@@ -1424,8 +1426,19 @@ extern "C" fn set_visible(requested: u32) -> i32 {
     }
 }
 
+// An adapter's own toggle key detection: debounced with the window message for the same press,
+// so a refused repeat reports BUSY.
 extern "C" fn toggle() -> i32 {
-    set_visible(u32::from(visible() == 0))
+    if !started() {
+        return NOT_READY;
+    }
+    let requested = visible() == 0;
+    rsf_overlay_input_toggle();
+    if (visible() != 0) == requested {
+        OK
+    } else {
+        BUSY
+    }
 }
 
 unsafe extern "C" fn capture(out: *mut rsf_overlay_capture) -> i32 {
