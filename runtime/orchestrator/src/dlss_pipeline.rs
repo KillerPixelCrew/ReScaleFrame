@@ -157,7 +157,7 @@ impl Range {
 
     /// FSR1 accepts the same and plans its published ratios.
     fn spatial(output: [u32; 2], quality: u32) -> Self {
-        let [width, height] = crate::spatial_d3d11::plan(output, quality);
+        let [width, height] = crate::fsr1::plan(output, quality);
         Self {
             width,
             height,

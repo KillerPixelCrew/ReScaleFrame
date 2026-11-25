@@ -189,6 +189,7 @@ mod frame_capture_vk;
 #[cfg(windows)]
 mod frame_limit;
 mod frame_sequencer;
+mod fsr1;
 #[cfg(windows)]
 mod fsr4_fg_bridge;
 #[cfg(windows)]
