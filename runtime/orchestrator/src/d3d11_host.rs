@@ -203,6 +203,7 @@ struct Graphics {
     dlss_started: bool,
     present_pairs: u64,
     ownership_reports: u32,
+    owner_transfers: u32,
     capture_refusal_terms: u32,
     // What the SR Auto choice resolves to on this adapter and these packages.
     auto_backend: u32,
@@ -246,6 +247,7 @@ impl Graphics {
             dlss_started: false,
             present_pairs: 0,
             ownership_reports: 0,
+            owner_transfers: 0,
             capture_refusal_terms: 0,
             auto_backend: 0,
         }
@@ -1886,10 +1888,16 @@ impl Host {
         let event_thread = current_thread();
         if !self.active()
             || event.flags & DXGI_PRESENT_TEST != 0
-            || event_thread != g.execution_thread
             || (g.facade && unsafe { native::present_is_owner(event.swapchain) } == 0)
             || !self.same(event.swapchain, g.chain_ptr())
         {
+            return;
+        }
+        // A bound chain's Present on a new thread moves the owner there (an engine's first
+        // frames can present from its main thread before its renderer takes over).
+        let owner = event_thread == g.execution_thread
+            || (event.completed == 0 && self.transfer_owner(g, event_thread));
+        if !owner {
             return;
         }
         unsafe { native::window_present(event) };
@@ -2111,6 +2119,24 @@ impl Host {
         true
     }
 
+    // Startup presentation can move from a loading or main thread to the renderer. The owner
+    // follows it until a scene lease admits SR; a native graph's plan starts the pipeline at the
+    // first Present, which binds no scene and so does not pin the owner.
+    fn transfer_owner(&self, g: &mut Graphics, thread: u32) -> bool {
+        if g.scene_bound {
+            return false;
+        }
+        if g.owner_transfers < 4 {
+            g.owner_transfers += 1;
+            self.log(&format!(
+                "D3D11 host presentation owner transferred {} -> {thread} on the same native chain before scene admission.",
+                g.execution_thread
+            ));
+        }
+        g.execution_thread = thread;
+        true
+    }
+
     fn bind_presentation(&self, swapchain: Raw) -> i32 {
         if !self.active() {
             return NOT_READY;
@@ -2124,17 +2150,8 @@ impl Host {
                 return NOT_READY;
             }
             let thread = current_thread();
-            if g.execution_thread != thread {
-                // Startup presentation can transfer from a loading worker to the main
-                // renderer. Serialize UI work and admit that transfer before SR owns it.
-                if g.running || g.scene_bound {
-                    return NOT_READY;
-                }
-                self.log(&format!(
-                    "D3D11 host presentation owner transferred {} -> {thread} on the same native chain before scene admission.",
-                    g.execution_thread
-                ));
-                g.execution_thread = thread;
+            if g.execution_thread != thread && !self.transfer_owner(g, thread) {
+                return NOT_READY;
             }
             return OK;
         }

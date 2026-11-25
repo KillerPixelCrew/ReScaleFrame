@@ -82,6 +82,8 @@ thread_local! {
     // What the host offered the overlay: SR, FG and latency choices.
     static OFFERED: Cell<[u32; 3]> = const { Cell::new([0; 3]) };
     static INSTALLS: Cell<i32> = const { Cell::new(1) };
+    // Presents that reached the shared overlay on this thread.
+    static OVERLAY_DRAWS: Cell<u32> = const { Cell::new(0) };
 }
 
 fn owned(cell: &'static std::thread::LocalKey<Cell<Raw>>) -> Raw {
@@ -347,7 +349,9 @@ pub(super) unsafe extern "C" fn overlay_configure(
     };
     OK
 }
-pub(super) unsafe extern "C" fn overlay_present(_: Raw) {}
+pub(super) unsafe extern "C" fn overlay_present(_: Raw) {
+    OVERLAY_DRAWS.set(OVERLAY_DRAWS.get() + 1);
+}
 pub(super) unsafe extern "C" fn ini_read(
     _: *const u16,
     _: *const u16,
@@ -791,6 +795,59 @@ fn presentation_owner_transfers_only_before_scene_admission() {
             .expect("worker")
     });
     assert_eq!(refused, NOT_READY, "scene-admitted SR keeps its owner");
+}
+
+// An engine can present its first frame on its main thread and every later one on its renderer,
+// with no second bind. The overlay and SR follow the bound chain's Presents to the renderer.
+#[test]
+fn a_present_on_a_new_thread_moves_the_owner_until_a_scene_binds() {
+    for native_graph in [false, true] {
+        let fixture = if native_graph {
+            Fixture::native_graph()
+        } else {
+            Fixture::new()
+        };
+        assert_eq!(fixture.host.bind_presentation(raw(&fixture.chain)), OK);
+        OVERLAY_DRAWS.set(0);
+        fixture.present();
+        assert_eq!(OVERLAY_DRAWS.get(), 1);
+        assert_eq!(fixture.host.lock_graphics().running, native_graph);
+        let host = &fixture.host;
+        let chain_key = raw(&fixture.chain).expose_provenance();
+        let renderer = || {
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        let event = rsf_observer_present_event {
+                            struct_size: size_of::<rsf_observer_present_event>() as u32,
+                            completed: 0,
+                            swapchain: ptr::with_exposed_provenance_mut(chain_key),
+                            sync_interval: 1,
+                            flags: 0,
+                            result: 0,
+                            method: 0,
+                        };
+                        unsafe { host_present(host.user(), &event) };
+                        (OVERLAY_DRAWS.get(), current_thread())
+                    })
+                    .join()
+                    .expect("renderer")
+            })
+        };
+        let (drawn, thread) = renderer();
+        assert_eq!(drawn, 1, "the renderer's Present draws the overlay");
+        assert_eq!(host.lock_graphics().execution_thread, thread);
+        assert_eq!(
+            fixture.evaluate(),
+            NOT_READY,
+            "the main thread no longer owns it"
+        );
+        // Once a scene binds on its owner, another thread's Present changes nothing.
+        host.lock_graphics().execution_thread = current_thread();
+        assert_eq!(fixture.evaluate(), OK);
+        assert_eq!(renderer().0, 0, "scene-admitted SR keeps its owner");
+        assert_eq!(host.lock_graphics().execution_thread, current_thread());
+    }
 }
 
 #[test]
