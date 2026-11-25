@@ -441,6 +441,24 @@ pub(super) unsafe extern "C" fn record_copy(
     unsafe { rsf_d3d11p_gpu_record_copy(commands, backbuffer, source, state(facade).native12) };
 }
 
+pub(super) unsafe extern "C" fn copy_direct(facade: Raw, chain: Raw, source: Raw) -> i32 {
+    unsafe { rsf_d3d11p_gpu_copy_direct(raw(&state(facade).context), chain, source) }
+}
+
+pub(super) unsafe extern "C" fn removed_reasons(facade: Raw, d3d11: *mut i32, d3d12: *mut i32) {
+    let s = unsafe { state(facade) };
+    let (device11, device12) = if s.native12 != 0 {
+        (null_mut(), raw(&s.direct_device))
+    } else {
+        (raw(&s.device), raw(&s.direct_device))
+    };
+    let (reason11, reason12) = unsafe { rsf_d3d11p_gpu_removed_reasons(device11, device12) };
+    unsafe {
+        d3d11.write(reason11);
+        d3d12.write(reason12);
+    }
+}
+
 pub(super) unsafe extern "C" fn context11(facade: Raw) -> Raw {
     raw(&unsafe { state(facade) }.context)
 }

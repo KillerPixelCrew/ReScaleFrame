@@ -6,7 +6,7 @@ use super::dxgi::{
     rsf_d3d11p_facade_resize1,
 };
 use super::{
-    DXGI_ERROR_INVALID_CALL, E_POINTER, Physical, owner, rsf_core_d3d11p_acquire_physical,
+    DXGI_ERROR_INVALID_CALL, E_POINTER, Physical, log, owner, rsf_core_d3d11p_acquire_physical,
     rsf_core_d3d11p_application_presents, rsf_core_d3d11p_chain_destroy,
     rsf_core_d3d11p_duplicate_application_ready, rsf_core_d3d11p_get_buffer,
     rsf_core_d3d11p_max_latency, rsf_core_d3d11p_physical_pending, rsf_core_d3d11p_present,
@@ -181,7 +181,18 @@ macro_rules! forward {
 forward!(set_private_data, IDXGIObject, SetPrivateData, key: *const GUID, bytes: u32, data: *const c_void);
 forward!(set_private_interface, IDXGIObject, SetPrivateDataInterface, key: *const GUID, value: Raw);
 forward!(get_private_data, IDXGIObject, GetPrivateData, key: *const GUID, bytes: *mut u32, data: Raw);
-forward!(resize_target, IDXGISwapChain, ResizeTarget, mode: *const DXGI_MODE_DESC);
+unsafe extern "system" fn resize_target(this: Raw, mode: *const DXGI_MODE_DESC) -> HRESULT {
+    let facade = unsafe { Facade::borrow(this) };
+    let result = facade.forward(|physical| unsafe {
+        physical_method!(IDXGISwapChain, ResizeTarget(physical, mode))
+    });
+    let (width, height) = unsafe { mode.as_ref() }.map_or((0, 0), |mode| (mode.Width, mode.Height));
+    log(&format!(
+        "presentation bridge: application ResizeTarget({width}x{height}) result=0x{:08x}",
+        result.0 as u32
+    ));
+    result
+}
 forward!(get_containing_output, IDXGISwapChain, GetContainingOutput, out: *mut Raw);
 forward!(get_restrict_to_output, IDXGISwapChain1, GetRestrictToOutput, out: *mut Raw);
 forward!(set_background_color, IDXGISwapChain1, SetBackgroundColor, color: *const DXGI_RGBA);

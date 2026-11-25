@@ -81,6 +81,9 @@ struct Fake {
     create_results: HashMap<u32, i32>,
     real_results: HashMap<u32, i32>,
     plain_result: i32,
+    device11: Box<FakeCom>,
+    direct_result: i32,
+    d3d11_removed: i32,
     status: rsf_fg_status,
     drain_result: i32,
     retirement_result: i32,
@@ -154,6 +157,9 @@ impl Fake {
             create_results: HashMap::new(),
             real_results: HashMap::new(),
             plain_result: S_OK,
+            device11: fake_com(),
+            direct_result: S_OK,
+            d3d11_removed: S_OK,
             status,
             drain_result: S_OK,
             retirement_result: OK,
@@ -449,7 +455,7 @@ pub(super) unsafe extern "C" fn facts(_: Raw, out: *mut rsf_d3d11p_facts) {
         } else {
             null_mut()
         },
-        device11: raw(0x44),
+        device11: com_raw(&fake.device11),
         buffer_usage: fake.buffer_usage,
     });
     unsafe { *out = value };
@@ -699,6 +705,9 @@ pub(super) unsafe extern "C" fn create_plain(
     physical: *mut Raw,
     queue: *mut Raw,
 ) -> i32 {
+    if plan.queue == with(|fake| com_raw(&fake.device11)) {
+        return unsafe { create_direct(plan, physical, queue) };
+    }
     call("plain");
     with(|fake| {
         let (owner_queue, count, usage) = if fake.native12 {
@@ -734,6 +743,49 @@ pub(super) unsafe extern "C" fn create_plain(
         }
         fake.plain_result
     })
+}
+// The direct D3D11 chain on the application's device.
+unsafe fn create_direct(plan: &rsf_d3d11p_plain_plan, physical: *mut Raw, queue: *mut Raw) -> i32 {
+    call("direct plain");
+    with(|fake| {
+        assert!(!fake.native12);
+        assert_eq!(plan.swap_effect, DXGI_SWAP_EFFECT_FLIP_DISCARD);
+        assert_eq!(
+            (plan.buffer_count, plan.buffer_usage),
+            (DIRECT_BUFFERS, DXGI_USAGE_RENDER_TARGET_OUTPUT)
+        );
+        if fake.direct_result >= 0 {
+            let device = com_raw(&fake.device11);
+            let chain = stage_physical(fake, device);
+            unsafe {
+                give_ref(chain, physical);
+                *queue = if fake.queue_missing {
+                    null_mut()
+                } else {
+                    device
+                };
+            }
+        }
+        fake.direct_result
+    })
+}
+pub(super) unsafe extern "C" fn copy_direct(_: Raw, chain: Raw, source: Raw) -> i32 {
+    assert_chain(chain);
+    let slot = with(|fake| {
+        fake.buffers
+            .iter()
+            .find(|buffer| com_raw(&buffer.application) == source)
+            .unwrap()
+            .slot
+    });
+    call(format!("direct copy {slot}"));
+    S_OK
+}
+pub(super) unsafe extern "C" fn removed_reasons(_: Raw, d3d11: *mut i32, d3d12: *mut i32) {
+    unsafe {
+        *d3d11 = with(|fake| fake.d3d11_removed);
+        *d3d12 = S_OK;
+    }
 }
 pub(super) unsafe extern "C" fn query_chain4(_: Raw, out: *mut Raw) -> i32 {
     call("adopt");
@@ -1701,8 +1753,12 @@ fn d3d11_present_orders_callbacks_and_rotates_slots() {
     assert_eq!(with(|fake| *fake.presents.last().unwrap()), (0, 0));
     assert_eq!(present(bridge, 0, DXGI_PRESENT_TEST), S_OK);
     assert_eq!(take_calls().last().unwrap(), "present_test");
-    // A failed physical Present faults the facade without touching native work again.
-    with(|fake| fake.present_result = DXGI_ERROR_DEVICE_REMOVED);
+    // A failed Present on a removed application device faults the facade without touching
+    // native work again, as DXGI does.
+    with(|fake| {
+        fake.present_result = DXGI_ERROR_DEVICE_REMOVED;
+        fake.d3d11_removed = DXGI_ERROR_DEVICE_REMOVED;
+    });
     assert_eq!(present(bridge, 1, 0), DXGI_ERROR_DEVICE_REMOVED);
     take_calls();
     assert_eq!(present(bridge, 1, 0), DXGI_ERROR_DEVICE_REMOVED);
@@ -2054,12 +2110,23 @@ fn failed_creation_releases_partial_pairs_before_fallback() {
         assert_eq!(rsf_d3d11_present_switch_result(), INIT_FAILED);
         assert!(rsf_d3d11_present_session().is_null());
         let calls = take_calls();
-        assert!(calls.ends_with(&[
+        let sequence: [String; 4] = [
             "create 5".into(),
             "adopt".into(),
             "destroy 1001".into(),
-            "plain".into()
-        ]));
+            "plain".into(),
+        ];
+        assert!(calls.windows(4).any(|window| window == sequence));
+        // An unpublishable plain chain retreats to the direct D3D11 chain, which needs the same
+        // creation output and so cannot be published either.
+        assert_eq!(
+            calls.last().map(String::as_str),
+            Some(if queue_missing {
+                "direct plain"
+            } else {
+                "plain"
+            })
+        );
         with(|fake| assert_eq!(fake.physical[0].chain.refs.get(), 1));
         if queue_missing {
             assert_eq!((result, lease, physical), (E_FAIL, null(), null_mut()));
@@ -2665,7 +2732,7 @@ fn lazy_creation_publishes_before_fullscreen_entry() {
 // Defect in the C++ owner: early Present failures after the application notification
 // returned without its completion and left the facade accepting further Presents.
 #[test]
-fn early_present_failures_complete_the_notification_and_fault() {
+fn early_present_failures_complete_the_notification() {
     let _guard = reset();
     let mut value = setup(DLSS, 1);
     value.streamline_directory_utf8 = c"streamline".as_ptr();
@@ -2704,7 +2771,25 @@ fn early_present_failures_complete_the_notification_and_fault() {
             .any(|call| matches!(call.as_str(), "prepare" | "present"))
     );
     assert!(calls.iter().any(|call| call.starts_with("slot_signal")));
-    assert_eq!(unsafe { faulted(chain_of(bridge)) }, 1);
+    // A D3D11 facade on a live device loses this frame only: the next Present shows the
+    // application's own frame through the direct D3D11 chain.
+    assert_eq!(unsafe { faulted(chain_of(bridge)) }, 0);
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    let calls = take_calls();
+    assert!(calls.ends_with(&[
+        "direct plain".into(),
+        "observer".into(),
+        "present_event".into(),
+        "before".into(),
+        // This facade's slot zero is the fake's third allocation in this test.
+        "direct copy 2".into(),
+        "present".into(),
+        "observed".into(),
+        "presented".into()
+    ]));
+    assert!(with(|fake| fake.logs.iter().any(|line| line.starts_with(
+        "presentation bridge: step 'command list unwrap' failed HRESULT=0x80004005"
+    ))));
     unsafe { bridge_release_owned(bridge) };
 }
 
@@ -2783,10 +2868,163 @@ fn a_nonblocking_present_is_retryable_only_when_submission_is_fenced() {
             fake.signal_result = E_FAIL;
         });
         assert_eq!(present(bridge, 1, flags), DXGI_ERROR_DEVICE_REMOVED);
-        assert_eq!(unsafe { faulted(chain) }, 1);
-        assert_eq!(present(bridge, 1, flags), DXGI_ERROR_DEVICE_REMOVED);
+        // Native D3D12 has no other route. A D3D11 facade presents directly from the next call.
+        assert_eq!(unsafe { faulted(chain) }, u32::from(native12));
+        let next = if native12 {
+            DXGI_ERROR_DEVICE_REMOVED
+        } else {
+            DXGI_ERROR_WAS_STILL_DRAWING
+        };
+        assert_eq!(present(bridge, 1, flags), next);
         unsafe { bridge_release_owned(bridge) };
     }
+}
+
+#[test]
+fn a_lost_bridge_step_retreats_to_direct_presentation_and_back_to_dxgi_semantics() {
+    let _guard = reset();
+    assert_eq!(prepare(&setup(FSR3, 1)), 1);
+    let bridge = create();
+    let chain = chain_of(bridge);
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    assert_eq!(rsf_d3d11_present_backend(), FSR3);
+    take_calls();
+    with(|fake| fake.close_result = E_FAIL);
+    assert_eq!(present(bridge, 1, 0), E_FAIL);
+    assert_eq!(unsafe { faulted(chain) }, 0);
+    // The next call retires the bridge chain and provider and presents slot zero directly.
+    with(|fake| fake.close_result = S_OK);
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    let calls = take_calls();
+    assert!(calls.contains(&"destroy 1001".to_owned()));
+    assert!(calls.ends_with(&[
+        "direct copy 0".into(),
+        "present".into(),
+        "observed".into(),
+        "presented".into()
+    ]));
+    with(|fake| {
+        assert_eq!(
+            fake.physical[0].chain.refs.get(),
+            1,
+            "bridge chain released"
+        );
+        assert_eq!(
+            fake.device11.refs.get(),
+            2,
+            "direct chain holds the application device"
+        );
+    });
+    assert_eq!(rsf_d3d11_present_backend(), 0);
+    assert!(rsf_d3d11_present_session().is_null());
+    assert!(unsafe { rsf_d3d11_present_queue() }.is_null());
+    assert_eq!(rsf_d3d11_present_request(FSR3), NOT_SUPPORTED);
+    assert_eq!(status().0, NOT_READY);
+    // Resize keeps the direct chain's buffers and opens no D3D12 peer.
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_resize(chain, 0, 800, 600, 0, 0) },
+        S_OK
+    );
+    assert!(take_calls().contains(&"resize 0 800x600".to_owned()));
+    assert!(with(|fake| {
+        fake.buffers
+            .iter()
+            .rev()
+            .take(2)
+            .all(|buffer| buffer.peer.as_ref().unwrap().refs.get() == 1)
+    }));
+    // A Present refused on a live device returns its result once and keeps presenting.
+    with(|fake| fake.present_result = DXGI_ERROR_INVALID_CALL);
+    assert_eq!(present(bridge, 1, 0), DXGI_ERROR_INVALID_CALL);
+    with(|fake| fake.present_result = S_OK);
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    // A removed application device is DXGI's DEVICE_REMOVED from then on.
+    with(|fake| {
+        fake.present_result = DXGI_ERROR_DEVICE_REMOVED;
+        fake.d3d11_removed = DXGI_ERROR_DEVICE_REMOVED;
+    });
+    assert_eq!(present(bridge, 1, 0), DXGI_ERROR_DEVICE_REMOVED);
+    assert_eq!(unsafe { faulted(chain) }, 1);
+    take_calls();
+    assert_eq!(present(bridge, 1, 0), DXGI_ERROR_DEVICE_REMOVED);
+    assert!(take_calls().is_empty());
+    let logs = with(|fake| fake.logs.clone());
+    let once = |prefix: &str| logs.iter().filter(|line| line.starts_with(prefix)).count();
+    assert_eq!(
+        once("presentation bridge: step 'command list Close' failed HRESULT=0x80004005"),
+        1
+    );
+    assert_eq!(
+        once("presentation bridge: step 'direct Present' failed HRESULT=0x887a0001"),
+        1
+    );
+    assert_eq!(
+        once("presentation bridge: presenting the application's frame directly"),
+        1
+    );
+    assert_eq!(
+        once("presentation bridge: application D3D11 device removed reason=0x887a0005"),
+        1
+    );
+    unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn buffer_queries_and_resizes_are_logged_once_per_application_batch() {
+    let _guard = reset();
+    assert_eq!(prepare(&setup(FSR3, 1)), 1);
+    let bridge = create();
+    let chain = chain_of(bridge);
+    let queries = || {
+        with(|fake| {
+            fake.logs
+                .iter()
+                .filter(|line| {
+                    line.starts_with("presentation bridge: application GetBuffer index=0")
+                })
+                .count()
+        })
+    };
+    for _ in 0..2 {
+        let (result, buffer) = get_buffer(chain, 0);
+        assert_eq!(result, S_OK);
+        unsafe { crate::com_ref::test::release(buffer.cast()) };
+    }
+    assert_eq!(queries(), 1);
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_resize(chain, 0, 800, 600, 0, 0) },
+        S_OK
+    );
+    assert!(with(|fake| {
+        fake.logs.iter().any(|line| line.starts_with(
+        "presentation bridge: application ResizeBuffers(0, 800x600, format 0, flags 0x0) result=0x00000000"
+    ))
+    }));
+    let (result, buffer) = get_buffer(chain, 0);
+    assert_eq!(result, S_OK);
+    unsafe { crate::com_ref::test::release(buffer.cast()) };
+    assert_eq!(queries(), 2, "the replaced batch is queried again");
+    unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn present_ledger_closes_one_window_per_period() {
+    let mut ledger = PresentLedger::default();
+    assert_eq!(ledger.record(S_OK, 100, 10), None);
+    assert_eq!(ledger.record(E_FAIL, 120, 10), None);
+    let closed = ledger.record(S_OK, 150, 10).expect("five seconds elapsed");
+    assert_eq!(
+        (
+            closed.attempted,
+            closed.completed,
+            closed.failed,
+            closed.last_failure
+        ),
+        (3, 2, 1, E_FAIL)
+    );
+    assert_eq!((ledger.attempted, ledger.since), (0, 150));
+    assert_eq!(ledger.record(S_OK, 160, 0), None, "no clock, no window");
 }
 
 #[test]

@@ -7,7 +7,9 @@ use crate::d3d11_present_abi::Raw;
 use rsf_game_sys::backend_result::FEATURE_FAILED;
 use std::ptr::{null, null_mut};
 use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11DeviceContext4};
+use windows::Win32::Graphics::Direct3D11::{
+    ID3D11Device, ID3D11DeviceContext, ID3D11DeviceContext4, ID3D11Resource,
+};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING, IDXGISwapChain};
@@ -243,6 +245,43 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_record_copy(
             source_state,
         );
     }
+}
+
+// Direct presentation: the application's slot zero onto the D3D11 chain's buffer, in the
+// application's immediate-context order.
+pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_copy_direct(
+    context: Raw,
+    chain: Raw,
+    source: Raw,
+) -> i32 {
+    let swapchain = unsafe { borrow::<IDXGISwapChain>(&chain) };
+    let mut buffer = null_mut();
+    let got =
+        unsafe { (swapchain.vtable().GetBuffer)(chain, 0, &ID3D11Resource::IID, &mut buffer) };
+    let buffer = (!buffer.is_null()).then(|| unsafe { IUnknown::from_raw(buffer) });
+    let Some(buffer) = buffer.filter(|_| got.is_ok()) else {
+        return if got.is_ok() { E_FAIL } else { got.0 };
+    };
+    let immediate = unsafe { borrow::<ID3D11DeviceContext>(&context) };
+    unsafe { (immediate.vtable().CopyResource)(context, buffer.as_raw(), source) };
+    S_OK
+}
+
+// DXGI's removal reason of each device, S_OK for an absent one.
+pub(super) unsafe fn rsf_d3d11p_gpu_removed_reasons(device11: Raw, device12: Raw) -> (i32, i32) {
+    let d3d11 = if device11.is_null() {
+        S_OK
+    } else {
+        let device = unsafe { borrow::<ID3D11Device>(&device11) };
+        unsafe { (device.vtable().GetDeviceRemovedReason)(device11) }.0
+    };
+    let d3d12 = if device12.is_null() {
+        S_OK
+    } else {
+        let device = unsafe { borrow::<ID3D12Device>(&device12) };
+        unsafe { (device.vtable().GetDeviceRemovedReason)(device12) }.0
+    };
+    (d3d11, d3d12)
 }
 
 pub(super) unsafe extern "C" fn rsf_d3d11p_gpu_resize(
