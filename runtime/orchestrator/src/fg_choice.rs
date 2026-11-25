@@ -3,9 +3,10 @@ use crate::settings_store::{rsf_settings_store_read_integer, rsf_settings_store_
 use crate::sys::{
     RSF_FG_BACKEND_ALL as PROVIDERS, RSF_FG_BACKEND_AUTO as AUTO, rsf_fg_choice as Choice,
 };
+#[cfg(test)]
+use crate::sys::RSF_FG_BACKEND_FSR4 as FSR4;
 use crate::sys::{
-    RSF_FG_BACKEND_DLSS as DLSS, RSF_FG_BACKEND_FSR3 as FSR3, RSF_FG_BACKEND_FSR4 as FSR4,
-    RSF_FG_BACKEND_XESS as XESS, rsf_fg_backend_info,
+    RSF_FG_BACKEND_DLSS as DLSS, RSF_FG_BACKEND_FSR3 as FSR3, RSF_FG_BACKEND_XESS as XESS,
 };
 use rsf_game_sys::backend_result::{FEATURE_FAILED, NOT_SUPPORTED};
 use std::ffi::{CStr, c_int};
@@ -26,48 +27,6 @@ pub(crate) extern "C" fn rsf_fg_default_backend(vendor: u32, software: u32) -> u
         0x1002 => FSR3,
         _ => 0,
     }
-}
-
-struct BackendInfo(rsf_fg_backend_info);
-
-// SAFETY: The immutable records only hold pointers to static C string literals.
-unsafe impl Sync for BackendInfo {}
-
-impl BackendInfo {
-    const fn new(
-        id: u32,
-        ini_key: &'static CStr,
-        env_var: &'static CStr,
-        default_subdir: &'static CStr,
-    ) -> Self {
-        Self(rsf_fg_backend_info {
-            id,
-            ini_key: ini_key.as_ptr(),
-            env_var: env_var.as_ptr(),
-            default_subdir: default_subdir.as_ptr(),
-        })
-    }
-}
-
-// The legacy INI labels are returned to callers as metadata.
-static BACKENDS: [BackendInfo; 4] = [
-    BackendInfo::new(
-        DLSS,
-        c"Streamline",
-        c"RSF_STREAMLINE_BIN",
-        c"ReScaleFrame\\streamline",
-    ),
-    BackendInfo::new(FSR3, c"FSR3", c"RSF_FSR3_BIN", c"ReScaleFrame\\fidelityfx"),
-    BackendInfo::new(FSR4, c"FSR4", c"RSF_FSR4_BIN", c"ReScaleFrame\\fidelityfx"),
-    BackendInfo::new(XESS, c"XeSS", c"RSF_XESS_BIN", c"ReScaleFrame\\xess"),
-];
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fg_backend_info_for(id: u32) -> *const rsf_fg_backend_info {
-    BACKENDS
-        .iter()
-        .find(|info| info.0.id == id)
-        .map_or(std::ptr::null(), |info| &info.0)
 }
 
 pub(crate) fn known(backend: u32) -> bool {
