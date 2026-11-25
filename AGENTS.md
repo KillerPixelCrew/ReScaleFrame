@@ -85,6 +85,35 @@ executable build.
   structural check where one exists.
 - When a site is not found, refuse that feature, say which site, and keep the game running.
 
+## Rule 5: one integration, every feature; inputs and output in the integration, the technique in the core
+
+A game integrated once gets everything ReScaleFrame can do. The integration prepares the inputs
+and presents the output. Everything between the two is the core, shared by every game.
+
+- The integration owns the inputs: finding the engine's colour, depth, motion vectors, camera,
+  jitter, exposure, masks, UI and HUD-less frames; making the engine produce the ones it does not
+  produce by default; correcting them at the source (missing object or camera motion, a wrong depth
+  domain, a jittered or stale buffer, a shader pass the engine lacks); reporting when the engine's
+  events really happen (Rule 3); and tagging every optional vendor hint it can supply. It also owns
+  putting the result back: the engine's output target, presentation hand-off, UI composition and
+  the engine's own settings and resolution plumbing.
+- The core owns every technique: each upscaler, frame generator, sharpening mode, latency and
+  pacing technology, their vendor SDKs, sequencing, history and resets, fallbacks, presentation
+  mechanisms, the overlay and every option in it.
+- Where a fix goes follows from that. A defect in what reaches ReScaleFrame (an input is missing,
+  wrong, late, or reported at the wrong moment) is fixed in the integration, at the source. A
+  defect in how a technique works (marker order, frame-end and pacing rules, history resets, a
+  provider switch, a present fallback, device creation timing) is fundamental: fix it in the core
+  or the shared loader so every game inherits it. Ask whether another engine with the same property
+  would hit it; if so it is core. Do not compensate in the core for one game's bad input, and do
+  not patch around a core defect inside one adapter.
+- Every integrated game offers the same feature set. What the overlay offers comes from the
+  Runtime, one source for every host, never from a list an adapter or a host keeps for itself.
+  "This host cannot do it" and "nobody wired it" are defects to fix, not reasons to hide or grey out
+  an option. The only value that may be shown disabled is one the hardware or the vendor makes
+  impossible on this machine, decided by a capability query at run time, and it says why.
+- A feature added for one game is added to the shared path, and is not done until every integrated
+  game has it.
 ## Research and tool setup
 
 ### Reference completeness and shader coverage

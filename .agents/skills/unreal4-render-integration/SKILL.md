@@ -12,6 +12,11 @@ Determine the game's engine branch and match the implementation before using any
 Perform the shared render-analysis skill's shader-input and motion-coverage audit
 for every integration, even when no specific visual defect has been reported.
 UE4 games can carry custom renderers; concepts transfer more reliably than layouts or addresses.
+An Unreal integration only prepares the inputs and presents the output (AGENTS.md Rule 5): view,
+target, depth, motion, jitter, UI and event facts are its work; how an upscaler, frame generator or
+latency technology behaves is the core's, and a fix there must serve every engine. Unreal's render
+thread overlaps the game thread, so report each event at its true moment and let the core order
+them.
 For AC7/4.18 specifics, read [ue418-render-integration](../ue418-render-integration/SKILL.md).
 
 ## Find the native owner
