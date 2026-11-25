@@ -183,7 +183,8 @@ impl State {
     /// primary window; DLSS-G with the Streamline session while no native secondary window can be
     /// in use (`auto_without_dlssg`). FSR4 FG needs a provider probe that Auto does not trigger.
     fn fg_choices(&self, receipt: &DeviceReceipt) -> u32 {
-        let xess = cfg!(feature = "xess-fg-vk") && receipt.interop && !self.primary_window.is_null();
+        let xess =
+            cfg!(feature = "xess-fg-vk") && receipt.interop && !self.primary_window.is_null();
         let dlss = self.streamline_ready && !self.auto_without_dlssg();
         choice(true, RSF_FG_BACKEND_FSR3)
             | choice(xess, RSF_FG_BACKEND_XESS)
@@ -260,8 +261,7 @@ impl State {
                 abi_version: RSF_FSR4FG_BRIDGE_ABI_VERSION,
                 ..Default::default()
             };
-            if unsafe { rsf_fsr4gvk_probe(&setup, &mut info) }
-                != backend_result::OK
+            if unsafe { rsf_fsr4gvk_probe(&setup, &mut info) } != backend_result::OK
                 || info.max_generated < 1
             {
                 return false;
@@ -306,9 +306,7 @@ impl State {
         if wait.is_none_or(|wait| unsafe { wait(handle(self.sr_device)) } != vk::Result::SUCCESS) {
             return false;
         }
-        if unsafe { rsf_core_srvk_session_close(self.sr) }
-            != backend_result::OK
-        {
+        if unsafe { rsf_core_srvk_session_close(self.sr) } != backend_result::OK {
             return false;
         }
         self.sr = ptr::null_mut();
@@ -421,9 +419,7 @@ unsafe extern "C" fn rsf_vkhost_boot(setup: *const rsf_vkhost_setup) -> i32 {
     let Some(setup) = (unsafe { checked(setup) }) else {
         return 0;
     };
-    if setup.abi_version != RSF_VKHOST_ABI_VERSION
-        || setup.runtime_directory.is_null()
-        || !SR_BUILT
+    if setup.abi_version != RSF_VKHOST_ABI_VERSION || setup.runtime_directory.is_null() || !SR_BUILT
     {
         return 0;
     }

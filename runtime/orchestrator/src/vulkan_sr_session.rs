@@ -13,8 +13,8 @@ use rsf_game_sys::backend_result::{
     ABI_MISMATCH, INIT_FAILED, INVALID_ARGUMENT as INVALID, NOT_READY,
 };
 
-mod routes;
 pub(crate) mod linked;
+mod routes;
 use routes::{Route, Routes};
 
 pub(crate) struct Session {

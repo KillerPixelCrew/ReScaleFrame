@@ -4,8 +4,8 @@
 //! the D3D12 FG install and the status record assembled from the Runtime's facts. While the
 //! Runtime's Vulkan host is booted, configuration, settings and status go to it after the same
 //! refusal rules.
-use crate::sys::*;
 use crate::runtime::vulkan_booted;
+use crate::sys::*;
 use crate::{checked, checked_output, d3d12, window};
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
