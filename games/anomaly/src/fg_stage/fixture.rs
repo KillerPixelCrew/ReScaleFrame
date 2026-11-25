@@ -49,7 +49,6 @@ const LOG: Log = Log {
 fn options(backend: Option<u32>, capture_dir: String, vendors: [Vec<u16>; 3]) -> Options {
     Options::admit(
         Settings {
-            bridge: true,
             debug: false,
             development: false,
             scope_hold: 4,
