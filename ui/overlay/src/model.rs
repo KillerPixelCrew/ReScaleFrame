@@ -140,6 +140,8 @@ pub struct Stats<'a> {
     pub backend_loaded: bool,
     /// Why the backend is unusable, when it is.
     pub refusal_reason: Option<&'a str>,
+    /// Why the host offers no frame generation, when it says.
+    pub fg_unavailable_reason: Option<&'a str>,
     /// The quality in effect, including numeric values this panel build does not recognize.
     pub quality_raw: abi::RsfOverlayQuality,
     /// Available presets, keyed by their ABI values.
@@ -303,6 +305,7 @@ impl Default for Stats<'_> {
         Self {
             backend_loaded: false,
             refusal_reason: None,
+            fg_unavailable_reason: None,
             quality_raw: abi::RSF_OVERLAY_QUALITY_NATIVE,
             sr_quality_choices: abi::RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
             sr_change_id: 0,

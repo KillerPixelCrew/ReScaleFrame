@@ -1127,7 +1127,9 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     }
 
     let usable = generation.available && !pending;
-    let status = if !generation.available {
+    let status = if let Some(reason) = stats.fg_unavailable_reason.filter(|_| !generation.available) {
+        (reason.to_owned(), AMBER)
+    } else if !generation.available {
         (
             "Select a supported provider to enable frame generation".to_owned(),
             MUTED,
@@ -1365,7 +1367,9 @@ fn latency_toggle(
     }
 }
 
-/// Fixed caps count rendered frames. VRR is a policy resolved by the pacing owner.
+/// Fixed caps count rendered frames. VRR is a policy resolved by the pacing owner. The cap is the
+/// latency technology's own limiter: Reflex (frameLimitUs) and XeLL (minimumIntervalUs) cap in
+/// every latency mode, AMD Anti-Lag (maxFPS) only while it is On.
 fn frame_limit(
     ui: &mut Ui,
     generation: &GenerationStats,
@@ -1373,7 +1377,25 @@ fn frame_limit(
     controls: &mut Controls,
 ) {
     heading(ui, "Frame limit");
-    let usable = generation.reflex_available;
+    let amd_off = generation.requested_reflex == 0
+        && matches!(
+            generation.latency_owner,
+            LATENCY_ANTILAG2 | LATENCY_ANTILAG_VULKAN
+        );
+    let usable = generation.reflex_available && !amd_off;
+    if !generation.reflex_available {
+        note(
+            ui,
+            "Greyed out: the cap is the limiter of Reflex, XeLL or Anti-Lag, and none runs on this GPU.",
+            MUTED,
+        );
+    } else if amd_off {
+        note(
+            ui,
+            "Greyed out: AMD Anti-Lag caps frames only while it is On.",
+            MUTED,
+        );
+    }
     let stored = generation.frame_limit_us;
     let vrr = stored == crate::abi::RSF_OVERLAY_FRAME_LIMIT_VRR;
     let fps = if stored == 0 || vrr {
@@ -2610,6 +2632,44 @@ mod tests {
         let text = words(&Selection::default(), &stats, Tab::Frames);
         assert!(text.contains("AMD Vulkan Anti-Lag"));
         assert!(!text.contains("AMD Anti-Lag 2"));
+    }
+
+    #[test]
+    fn the_frame_cap_is_greyed_only_where_no_limiter_serves_it() {
+        let mut stats = Stats::default();
+        stats.generation.available = true;
+        let said = |stats: &Stats| words(&Selection::default(), stats, Tab::Frames);
+        assert!(said(&stats).contains("none runs on this GPU"));
+        stats.generation.reflex_available = true;
+        // Reflex and XeLL cap frames in every mode, Off included.
+        for owner in [LATENCY_REFLEX, LATENCY_XELL] {
+            stats.generation.latency_owner = owner;
+            let text = said(&stats);
+            assert!(
+                !text.contains("none runs on this GPU") && !text.contains("only while it is On"),
+                "{owner}"
+            );
+        }
+        for owner in [LATENCY_ANTILAG2, LATENCY_ANTILAG_VULKAN] {
+            stats.generation.latency_owner = owner;
+            stats.generation.requested_reflex = 0;
+            assert!(said(&stats).contains("caps frames only while it is On"));
+            stats.generation.requested_reflex = 1;
+            assert!(!said(&stats).contains("caps frames only while it is On"));
+        }
+    }
+
+    #[test]
+    fn the_host_says_why_frame_generation_is_not_offered() {
+        let mut stats = Stats::default();
+        let said = |stats: &Stats| words(&Selection::default(), stats, Tab::Frames);
+        assert!(said(&stats).contains("Select a supported provider"));
+        let reason = "Frame generation unavailable: the presentation bridge was refused";
+        stats.fg_unavailable_reason = Some(reason);
+        assert!(said(&stats).contains(reason));
+        // An available provider's own status wins.
+        stats.generation.available = true;
+        assert!(!said(&stats).contains(reason));
     }
 
     #[test]

@@ -765,6 +765,8 @@ impl Sample {
                 let reported = unsafe { report(config.callbacks.user, &mut out) } != 0;
                 let last = out.reason.len() - 1;
                 out.reason[last] = 0;
+                let last = out.fg_unavailable.len() - 1;
+                out.fg_unavailable[last] = 0;
                 reported.then_some(out)
             });
         let mut fg: FgStatus = unsafe { std::mem::zeroed() };
@@ -825,7 +827,12 @@ impl State {
         self.sample = sample;
     }
 
-    fn panel_stats(&self, config: &Config, reason: &mut [c_char; 160]) -> rsf_overlay_stats {
+    fn panel_stats(
+        &self,
+        config: &Config,
+        reason: &mut [c_char; 160],
+        fg_unavailable: &mut [c_char; 96],
+    ) -> rsf_overlay_stats {
         let settings = &self.settings;
         let sample = &self.sample;
         let sr = sample.sr.unwrap_or_default();
@@ -929,6 +936,12 @@ impl State {
             },
             sharpening_available: u32::from(config.sr_choices != 0),
             ui_preferences: self.ui_preferences,
+            fg_unavailable_reason: if sr.fg_unavailable[0] != 0 {
+                *fg_unavailable = sr.fg_unavailable;
+                fg_unavailable.as_ptr()
+            } else {
+                null()
+            },
             ..Default::default()
         };
         fill_sharpening_stats(
@@ -1257,10 +1270,11 @@ unsafe fn present_inner(
     let sample = Sample::read(config, bound_status);
     let now = unsafe { GetTickCount64() };
     let mut reason = [0; 160];
+    let mut fg_unavailable = [0; 96];
     let mut stats = {
         let mut state = state();
         state.record_sample(sample, [width, height], now);
-        let mut stats = state.panel_stats(config, &mut reason);
+        let mut stats = state.panel_stats(config, &mut reason, &mut fg_unavailable);
         if config.deferred {
             stats.requested_backend = state.settings.sr_backend;
             if state.settings.fg_enabled != 0 {

@@ -29,7 +29,7 @@ extern "C" {
 /* 5: input gains a host-timed, noninteractive startup hint opacity. */
 /* 16: the touch panel. Stats carry an opaque layout word the host stores, and intent can ask to
    close the panel and to store a new layout word. */
-#define RSF_OVERLAY_ABI_VERSION 20u
+#define RSF_OVERLAY_ABI_VERSION 21u
 /* 17: latency pacing owner and accepted pacing count follow the layout preferences. */
 #define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
@@ -220,6 +220,9 @@ typedef struct rsf_overlay_stats {
     uint32_t sr_change_id, sr_change_status;
     uint32_t saved_row_count;
     const rsf_overlay_saved_row* saved_rows;
+    /* ABI 21. Why frame generation is not offered on this host (for example the presentation
+       bridge was refused); null when it is offered or nothing is known. Borrowed for the call. */
+    const char* fg_unavailable_reason;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the

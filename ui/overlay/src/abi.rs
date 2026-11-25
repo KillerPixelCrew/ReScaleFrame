@@ -73,7 +73,7 @@ pub use rsf_game_sys::rsf_overlay_vertex as RsfOverlayVertex;
 #[cfg(all(test, target_pointer_width = "64"))]
 #[test]
 fn struct_sizes_match_the_header() {
-    assert_eq!(size_of::<RsfOverlayStats>(), 440);
+    assert_eq!(size_of::<RsfOverlayStats>(), 448);
     assert_eq!(size_of::<RsfOverlayIntent>(), 216);
     assert_eq!(size_of::<RsfOverlayHostOption>(), 40);
     assert_eq!(size_of::<RsfOverlayInput>(), 40);

@@ -92,6 +92,9 @@ typedef struct rsf_overlay_sr_report {
     float jitter_pixels[2];
     /* Why effective differs from requested; empty when it does not. */
     char reason[96];
+    /* Why the host offers no frame generation (the presentation bridge was refused, say); empty
+       when it does. The panel shows it as the frame generation status. */
+    char fg_unavailable[96];
 } rsf_overlay_sr_report;
 
 /* API 2. An adapter-defined option the panel draws under "Advanced" (AGENTS.md Rule 2). The

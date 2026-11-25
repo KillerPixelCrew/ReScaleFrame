@@ -331,6 +331,7 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
     Stats {
         backend_loaded: stats.backend_loaded != 0,
         refusal_reason: unsafe { borrow_str(stats.refusal_reason) },
+        fg_unavailable_reason: unsafe { borrow_str(stats.fg_unavailable_reason) },
         quality_raw: stats.quality,
         sr_quality_choices: stats.sr_quality_choices,
         sr_change_id: stats.sr_change_id,
@@ -728,7 +729,7 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 20);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 21);
         let intent = default_intent();
         assert_eq!(intent.struct_size, size_of::<RsfOverlayIntent>() as u32);
         assert_eq!((intent.backend, intent.fg_generated), (1, 1));
