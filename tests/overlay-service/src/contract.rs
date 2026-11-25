@@ -433,6 +433,14 @@ extern "C" fn rsf_test_overlay_contract(
         ),
         (
             rsf_render_settings {
+                sr_quality: 5,
+                ..settings
+            },
+            RSF_ERROR_INVALID_ARGUMENT,
+            "Ultra Quality is not DLSS's",
+        ),
+        (
+            rsf_render_settings {
                 abi_version: 1,
                 ..settings
             },

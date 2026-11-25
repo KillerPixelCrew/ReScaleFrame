@@ -1389,16 +1389,16 @@ mod settings_tests {
         for backend in [0, 8, 40] {
             assert_eq!(admit(Settings { backend, ..current }).backend, XESS);
         }
-        for quality in 0..5 {
+        for quality in 0..6 {
             assert_eq!(admit(Settings { quality, ..current }).quality, quality);
         }
-        for quality in [5, 6] {
+        for quality in [6, 32] {
             assert_eq!(admit(Settings { quality, ..current }).quality, 2);
         }
         let actual = admit(Settings {
             enabled: false,
             backend: 8,
-            quality: 5,
+            quality: 6,
             preset: 3,
         });
         assert!(!actual.enabled);

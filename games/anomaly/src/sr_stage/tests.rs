@@ -1406,7 +1406,7 @@ mod win32 {
             (w!("SRCutAngle"), w!("x")),
             (w!("SR"), w!("0")),
             (w!("SRBackend"), w!("5")),
-            (w!("SRQuality"), w!("5")),
+            (w!("SRQuality"), w!("6")),
             (w!("DLSSPreset"), w!("6")),
             (w!("SRColourTransport"), w!("1")),
             (w!("SRRequireSignature"), w!("1")),
@@ -1430,6 +1430,9 @@ mod win32 {
             ),
             (false, 5, 1, 6)
         );
+        // Ultra Quality is kept; the Runtime decides which backend serves it.
+        set(w!("SRQuality"), w!("5"));
+        assert_eq!(read().settings.quality, 5);
         set(w!("SRBackend"), w!("8"));
         assert_eq!(read().settings.backend, BACKEND_AUTO);
         // FSR1 is the Runtime's own EASU pass.

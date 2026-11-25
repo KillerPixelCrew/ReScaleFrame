@@ -198,6 +198,17 @@ fn has(mask: u32, id: u32) -> bool {
     id < u32::BITS && mask & (1 << id) != 0
 }
 
+// The quality levels an engine can render, from the ones its host reports: Ultra Quality is one
+// more reduced ratio (milder than Quality), so an engine that renders any reduced level renders it.
+// Which of them a backend serves is the Runtime's (sr_quality); hosts keep no list.
+fn engine_quality(reported: u32) -> u32 {
+    if reported & !1 != 0 {
+        reported | RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK
+    } else {
+        reported
+    }
+}
+
 struct Callbacks {
     user: *mut c_void,
     log: rsf_game_log_fn,
@@ -326,7 +337,7 @@ impl Config {
             },
             defaults,
             sr_choices: setup.sr_backend_choices,
-            quality_choices: setup.sr_quality_choices,
+            quality_choices: engine_quality(setup.sr_quality_choices),
             fg_choices: setup.fg_backend_choices,
             latency_choices: setup.latency_choices,
             max_generated: setup.max_generated_frames,
@@ -350,6 +361,11 @@ impl Config {
         Ok((config, sharpening))
     }
 
+    // The levels offered with `backend` requested: the engine's, narrowed to that backend's.
+    fn quality(&self, backend: u32) -> u32 {
+        self.quality_choices & crate::sr_choices::sr_quality(backend)
+    }
+
     fn accepts_fg_backend(&self, backend: u32) -> bool {
         if self.fg_choices == 0 {
             backend == RSF_FG_BACKEND_AUTO
@@ -364,7 +380,8 @@ impl Config {
                 && value.sr_backend == self.defaults.sr_backend
                 && value.sr_quality == self.defaults.sr_quality
         } else {
-            has(self.sr_choices, value.sr_backend) && has(self.quality_choices, value.sr_quality)
+            has(self.sr_choices, value.sr_backend)
+                && has(self.quality(value.sr_backend), value.sr_quality)
         };
         value.sr_enabled <= 1
             && value.fg_enabled <= 1
@@ -386,7 +403,7 @@ impl Config {
         if !has(self.sr_choices, value.sr_backend) {
             value.sr_backend = defaults.sr_backend;
         }
-        if self.sr_choices == 0 || !has(self.quality_choices, value.sr_quality) {
+        if self.sr_choices == 0 || !has(self.quality(value.sr_backend), value.sr_quality) {
             value.sr_quality = defaults.sr_quality;
         }
         if value.fg_enabled > 1 || (value.fg_enabled != 0 && self.fg_choices == 0) {
@@ -859,7 +876,7 @@ impl State {
             last_switch_result: self.panel_apply_result,
             sr_backend_choices: config.sr_choices,
             sr_quality_choices: if config.sr_choices != 0 {
-                config.quality_choices
+                config.quality(backend)
             } else {
                 0
             },
@@ -1096,6 +1113,13 @@ fn apply_intent(config: &Config, intent: &rsf_overlay_intent) {
             config,
             |mut current| {
                 apply_settings_intent(&mut current, intent);
+                // A newly chosen backend that does not serve the kept quality (Ultra Quality
+                // leaving XeSS) starts at the host's default quality instead of being refused.
+                if intent.backend_changed != 0
+                    && !has(config.quality(current.sr_backend), current.sr_quality)
+                {
+                    current.sr_quality = config.defaults.sr_quality;
+                }
                 current
             },
             "panel",
@@ -1549,6 +1573,21 @@ unsafe extern "C" fn rsf_get_overlay_api(api: *mut rsf_overlay_api) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ultra_quality_follows_the_engine_and_the_backend() {
+        const ULTRA_QUALITY: u32 = 1 << 5;
+        assert_eq!(engine_quality(0x1f), RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK);
+        // Native only stays native only.
+        assert_eq!((engine_quality(1), engine_quality(0)), (1, 0));
+        let offered = |backend| engine_quality(0x1f) & crate::sr_choices::sr_quality(backend);
+        for backend in [RSF_SR_XESS, RSF_SR_SPATIAL] {
+            assert_ne!(offered(backend) & ULTRA_QUALITY, 0);
+        }
+        for backend in [RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_AUTO] {
+            assert_eq!(offered(backend), RSF_OVERLAY_SR_QUALITY_STANDARD_MASK);
+        }
+    }
 
     #[test]
     fn reset_runs_stop_again_until_the_panel_is_cold() {

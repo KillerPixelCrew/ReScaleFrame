@@ -136,7 +136,8 @@ typedef struct rsf_anomaly_sr_reset_facts {
 /* DLSS, FSR2, FSR3, FSR4, XeSS and FSR1: every backend id the Runtime's admission can offer. It narrows
    the providers to this machine's packages and GPU; FSR1 is the Runtime's own EASU pass. */
 #define RSF_ANOMALY_SR_ADAPTER_BACKENDS 0x7eu
-#define RSF_ANOMALY_SR_ADAPTER_QUALITIES 0x1fu
+/* Native to Ultra Quality: X-Ray renders any reduced extent; which levels a backend serves is the Runtime's. */
+#define RSF_ANOMALY_SR_ADAPTER_QUALITIES 0x3fu
 
 typedef struct rsf_anomaly_sr_motion_target {
     void* texture;
