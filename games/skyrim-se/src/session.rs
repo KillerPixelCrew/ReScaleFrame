@@ -229,10 +229,9 @@ fn request_dpi(host: &rsf_game_host_services) -> Result<(), Threw> {
     Ok(())
 }
 
-/// The started subsystems, in start order. Prepare saw no device, but the game creates it once
-/// and may do so while start runs; only a live creation hook can scope that call. Every other
-/// stage observes per-frame events, so native creation goes live first instead of after the
-/// other hook enables, each of which freezes every thread.
+/// The started subsystems, in start order. The plugin carrier holds the game's device creation
+/// until start has returned (loader creation_gate.rs). Native creation goes first: it refuses a
+/// device that already exists before any other hook is enabled.
 #[derive(Clone, Copy)]
 enum Stage {
     Creation,

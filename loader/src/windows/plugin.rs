@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+use super::creation_gate;
+use super::forwarding::InitOnce;
 use super::{load_library, module_path, null_mut, spawn_startup, wide};
 use rsf_game_sys::rsf_game_cpu_event;
 use rsf_game_sys::rsf_plugin_session_options;
@@ -7,14 +9,14 @@ use rsf_game_sys::session::{Probe, host_services, with_session_options};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fs::create_dir;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
 };
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
-use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::System::Threading::{GetCurrentThreadId, INIT_ONCE};
 use windows_sys::core::BOOL;
 
 type CpuSink = unsafe extern "C" fn(*const rsf_game_cpu_event) -> i32;
@@ -24,8 +26,10 @@ type Start = unsafe extern "C" fn(*mut c_void) -> i32;
 static LOG: CarrierLog = CarrierLog::new();
 static CPU_SINK: OnceLock<CpuSink> = OnceLock::new();
 static CPU_SAMPLES: AtomicU32 = AtomicU32::new(0);
+static CARRIER: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static STARTUP: InitOnce = InitOnce::new();
 
-fn note(message: &[u8]) {
+pub(super) fn note(message: &[u8]) {
     LOG.write(unsafe { GetTickCount64() }, message);
 }
 
@@ -51,11 +55,14 @@ unsafe extern "C" fn cpu_event(_: *mut c_void, event: *const rsf_game_cpu_event)
         );
     }
 }
-fn configure(module: HMODULE) -> Option<u32> {
+fn configure(module: HMODULE) -> Option<()> {
     let path = module_path(module)?;
     let directory = path.parent()?.join("ReScaleFrame");
     let _ = create_dir(&directory);
     LOG.set_path(&wide(directory.join("loader.log")));
+    if let Some(report) = creation_gate::report() {
+        note(report.as_bytes());
+    }
     let runtime_path = wide(directory.join("ReScaleFrame.Runtime.dll"));
     let plugin_path = wide(directory.join("ReScaleFrame.Entry.dll"));
     let runtime = load_library(
@@ -103,25 +110,41 @@ fn configure(module: HMODULE) -> Option<u32> {
     }) as u32;
     note(format!("Plugin prepare result={prepared}").as_bytes());
     if prepared != 0 {
-        return Some(prepared);
+        return None;
     }
     let started = unsafe { start(session) } as u32;
     note(format!("Plugin start result={started}").as_bytes());
     // The runtime and carrier callbacks outlive the worker.
-    Some(started)
+    Some(())
 }
 
-unsafe extern "system" fn startup(module: *mut c_void) -> u32 {
-    std::panic::catch_unwind(|| configure(module))
-        .ok()
-        .flatten()
-        .unwrap_or(1)
+unsafe extern "system" fn start_once(
+    _: *mut INIT_ONCE,
+    _: *mut c_void,
+    _: *mut *mut c_void,
+) -> BOOL {
+    let _ = std::panic::catch_unwind(|| configure(CARRIER.load(Ordering::Acquire)));
+    // A refusal is final for this carrier mapping.
+    1
+}
+
+/// Prepares and starts the plugin session once, on the startup worker or on the game's held
+/// creation call, whichever comes first; the other waits until it has finished.
+pub(super) fn start() {
+    STARTUP.run(Some(start_once));
+}
+
+unsafe extern "system" fn startup(_: *mut c_void) -> u32 {
+    start();
+    0
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_plugin_carrier_attach(instance: HMODULE, event: u32) -> BOOL {
     if event == DLL_PROCESS_ATTACH {
         rsf_game_sys::panic_record::install();
+        CARRIER.store(instance, Ordering::Release);
+        creation_gate::arm();
         spawn_startup(instance, Some(startup));
     }
     1

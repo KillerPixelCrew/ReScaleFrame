@@ -9,7 +9,11 @@ The generic XInput carrier loads `ReScaleFrame/ReScaleFrame.Runtime.dll` and
 asks the runtime to select, prepare and start `ReScaleFrame/ReScaleFrame.Entry.dll`.
 For the current development deployment, Entry.dll is the built Skyrim game DLL.
 Executable detection, site patterns and native state offsets stay in this adapter.
-The carrier has no game detection or engine hook policy.
+The carrier has no game detection or engine hook policy. It starts the session on a
+worker and, from process attach, holds the executable's D3D11CreateDeviceAndSwapChain
+import until that start has finished (`loader/src/windows/creation_gate.rs`), so the
+game's device creation always reaches the adapter's hooked import thunk however the
+game was launched. A device that exists anyway refuses start.
 
 The adapter finds its sites by signature, not by build: admission scans the loaded
 executable once and resolves every hooked function, patched call, return address and
