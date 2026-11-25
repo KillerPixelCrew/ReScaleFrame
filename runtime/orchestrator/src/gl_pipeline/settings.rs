@@ -33,6 +33,15 @@ fn interval(fps: u32) -> u32 {
     1_000_000u32.checked_div(fps).unwrap_or(0)
 }
 
+// The SR backends the panel offers: the Runtime's answer from the packages and this machine's
+// adapters (DLSS needs an RTX GPU), within the providers this host creates.
+fn sr_offer(shared: &Shared) -> u32 {
+    use crate::sr_choices::{directory, package_has, sr_backends};
+    let vendors = &shared.vendors;
+    let packages = [&vendors.streamline, &vendors.fidelityfx, &vendors.xess].map(|d| directory(d));
+    sr_backends(None, package_has(packages), false) & (SR_CHOICES | (1 << RSF_SR_AUTO))
+}
+
 fn mode(enabled: bool) -> u32 {
     if enabled { RSF_FG_FIXED } else { RSF_FG_OFF }
 }
@@ -216,6 +225,14 @@ unsafe extern "C" fn rsf_gl_pipeline_settings_open(
             sharpening_policy::defaults()
         };
         set_sharpening(&mut defaults, &sharpening);
+        // A start backend this machine cannot serve starts as Auto, and SR off when nothing is.
+        let sr_choices = sr_offer(pipeline.shared);
+        if 1u32.checked_shl(defaults.sr_backend).unwrap_or(0) & sr_choices == 0 {
+            defaults.sr_backend = RSF_SR_AUTO;
+        }
+        if sr_choices & (1 << RSF_SR_AUTO) == 0 {
+            defaults.sr_enabled = 0;
+        }
         let option = rsf_overlay_service_option {
             label_utf8: c"Frame generation debug".as_ptr(),
             kind: RSF_OVERLAY_SERVICE_OPTION_TOGGLE,
@@ -233,7 +250,7 @@ unsafe extern "C" fn rsf_gl_pipeline_settings_open(
             configuration_path: settings.path.as_ptr(),
             configuration_section: settings.section.as_ptr(),
             defaults,
-            sr_backend_choices: SR_CHOICES | (1 << RSF_SR_AUTO),
+            sr_backend_choices: sr_choices,
             sr_quality_choices: 0x1f,
             fg_backend_choices: RSF_FG_BACKEND_ALL | (1 << RSF_FG_BACKEND_AUTO),
             latency_choices: (1 << (RSF_REFLEX_BOOST + 1)) - 1,

@@ -27,17 +27,53 @@ pub(crate) fn package_has<'a>(
     move |index, name| directories[index].is_some_and(|directory| directory.join(name).is_file())
 }
 
+/// Whether an adapter name is an RTX GPU's. DLSS runs on tensor cores, which every NVIDIA RTX GPU
+/// has (GeForce RTX, TITAN RTX, Quadro RTX, RTX A and Ada) and no GeForce GTX has, Turing GTX 16
+/// included; the driver names the adapter.
+fn rtx_name(description: &[u16]) -> bool {
+    String::from_utf16_lossy(description)
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| word == "RTX")
+}
+
+/// The pre-start DLSS capability query: an NVIDIA RTX adapter is present. Read once per process
+/// from DXGI, before any provider starts, so a machine without one sees DLSS greyed instead of
+/// offered and then refused by Streamline. Streamline still confirms support at start.
+#[cfg(not(test))]
+fn rtx_present() -> bool {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+    static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PRESENT.get_or_init(|| {
+        let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
+            return false;
+        };
+        (0..)
+            .map_while(|index| unsafe { factory.EnumAdapters1(index) }.ok())
+            .filter_map(|adapter| unsafe { adapter.GetDesc1() }.ok())
+            .any(|desc| desc.VendorId == NVIDIA && rtx_name(&desc.Description))
+    })
+}
+
+// Unit tests describe an RTX machine; rtx_name is tested on its own.
+#[cfg(test)]
+fn rtx_present() -> bool {
+    true
+}
+
 /// The SR backends this machine can serve. `vendor` is the owning adapter's, or `None` before a
 /// device exists. FSR2, FSR3 and FSR4 share one FidelityFX upscaler package. DLSS needs an NVIDIA
-/// adapter. `engine_spatial` is a spatial scaler the host serves: its engine's own, or the Runtime's
-/// (sr12 on D3D12). Auto is offered once any provider is.
+/// adapter on a machine with an RTX GPU. `engine_spatial` is a spatial scaler the host serves: its
+/// engine's own, or the Runtime's (sr12 on D3D12). Auto is offered once any provider is.
 pub(crate) fn sr_backends(
     vendor: Option<u32>,
     has: impl Fn(usize, &str) -> bool,
     engine_spatial: bool,
 ) -> u32 {
     let mut offered = 0;
-    if has(0, "sl.interposer.dll") && has(0, "nvngx_dlss.dll") && vendor.is_none_or(|v| v == NVIDIA)
+    if has(0, "sl.interposer.dll")
+        && has(0, "nvngx_dlss.dll")
+        && vendor.is_none_or(|v| v == NVIDIA)
+        && rtx_present()
     {
         offered |= 1 << RSF_SR_DLSS;
     }
@@ -131,6 +167,30 @@ mod tests {
         assert_eq!(sr_backends(Some(NVIDIA), |_, _| false, false), 0);
         // A spatial scaler alone does not make Auto available: Auto picks a provider.
         assert_eq!(sr_backends(None, |_, _| false, true), 1 << RSF_SR_SPATIAL);
+    }
+
+    #[test]
+    fn only_rtx_adapters_run_dlss() {
+        let name = |text: &str| rtx_name(&text.encode_utf16().collect::<Vec<_>>());
+        for rtx in [
+            "NVIDIA GeForce RTX 4090",
+            "NVIDIA GeForce RTX 2060 SUPER",
+            "NVIDIA TITAN RTX",
+            "Quadro RTX 5000",
+            "NVIDIA RTX A4000",
+            "NVIDIA RTX 2000 Ada Generation Laptop GPU",
+        ] {
+            assert!(name(rtx), "{rtx}");
+        }
+        for gtx in [
+            "NVIDIA GeForce GTX 1660 SUPER",
+            "NVIDIA GeForce GTX 1080 Ti",
+            "NVIDIA GeForce MX450",
+            "NVIDIA RTXDI test adapter",
+            "",
+        ] {
+            assert!(!name(gtx), "{gtx}");
+        }
     }
 
     #[test]
