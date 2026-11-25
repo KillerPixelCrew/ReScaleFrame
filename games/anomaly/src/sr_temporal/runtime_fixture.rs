@@ -373,11 +373,13 @@ fn adapter_binding(query: Query) {
         1
     );
     assert!(rsf_anomaly_sr_plan(&live, 1920, 1080).is_none());
+    // A value that is no provider id, and an unoffered quality, keep the current choice (Auto at
+    // the default quality).
     rsf_anomaly_sr_request(
         &live,
         &Settings {
             enabled: false,
-            backend: 2,
+            backend: 15,
             quality: 5,
             preset: 0,
         },
@@ -385,6 +387,17 @@ fn adapter_binding(query: Query) {
     assert!(!rsf_anomaly_sr_enabled(&live));
     assert_eq!(live.published().status.requested.backend, AUTO);
     assert_eq!(live.published().status.requested.quality, 1);
+    // FSR2 is one of the providers every game offers.
+    rsf_anomaly_sr_request(
+        &live,
+        &Settings {
+            enabled: false,
+            backend: 2,
+            quality: 1,
+            preset: 0,
+        },
+    );
+    assert_eq!(live.published().status.requested.backend, 2);
 
     let refused = driver();
     assert!(!unsafe {
