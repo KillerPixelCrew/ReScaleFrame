@@ -1259,6 +1259,20 @@ the_plugin_takes_the_asi_table_over_hooked_entries` overwrites the eight hooked 
 dump with a `jmp rel32`, shows the scan refusing by name, and checks the exported table and the
 plugin's verification of the sites it hooks itself.
 
+Social Club 2.4.0.302 (25 November 2026): the installed `SocialClubD3D12Renderer.dll` (PE size
+205,944 bytes, installed 4 November) has no `+4b70`/`+4b89` shape, so the backbuffer fix refuses
+by name ("site 'Social Club frame entry' was not found"). Read from disk with
+`tools/derive-site-patterns.py`'s image loader and capstone: the renderer interface vtable
+(`.rdata` +1f8b8: slot 0x20 initialize at `+4d50`, slot 0x48 at `+56a0`) now holds a frame
+function that reads the mode at `[rcx+1a0]`, takes the external command list in r8 (`mov rbp,r8`),
+returns early for mode 2 without a non-null rdx, then **unconditionally** loads the swapchain from
+`[rcx+10]` and calls `[rax+120]` (`IDXGISwapChain3::GetCurrentBackBufferIndex`) at `+56e9`, the
+only such call in the module. There is no `cmp byte [rcx+40c],0` selector, no index argument (r9
+and the stack argument are never read) and the swapchain is no longer at `+20`. That equals the
+2.4.0.240 behaviour with `+40c` set, the case run T measured as supplied index 1 against current
+index 0; the old gate cannot repair it because the game's index no longer reaches this function.
+Only 2.4.0.302 is installed here; no 2.4.0.240 copy exists to cross-check.
+
 Startup cost and the loader lock: ForceD3D12 at ASI attach is the first owner that needs a site,
 so discovery runs in `DllMain` (`rsf_rdr2_asi_process_attach` -> `attach` -> `force_d3d12` ->
 `discovery::admit`) while the loader lock is held. Measured on the dump in a release build, it takes

@@ -191,7 +191,9 @@ fn every_site_resolves_in_the_decrypted_executable() {
     }
 }
 
-/// The installed Social Club renderer resolves both of its sites (2.4.0.240 at +4b70 and +4b89).
+/// The installed Social Club renderer resolves both of its sites on the 2.4.0.240 shape (+4b70 and
+/// +4b89). A renderer without the index selector (2.4.0.302 queries the swapchain unconditionally)
+/// refuses by name.
 #[test]
 fn social_club_sites_resolve_in_the_installed_renderer() {
     let path = std::env::var_os("ProgramFiles").map(|root| {
@@ -202,8 +204,11 @@ fn social_club_sites_resolve_in_the_installed_renderer() {
         return;
     };
     let image = Pe32Plus::parse(&bytes).expect("PE32+ module");
-    let sites = resolve_social_club(&code(&image.sections(false))).unwrap();
+    let sites = resolve_social_club(&code(&image.sections(false)));
     if image.timestamp() == 0x6a86_d560 {
-        assert_eq!(sites, [0x4b70, 0x4b89]);
+        assert_eq!(sites.unwrap(), [0x4b70, 0x4b89]);
+    } else {
+        let refusal = sites.expect_err("no index selector in this renderer");
+        assert!(refusal.contains("Social Club frame entry"), "{refusal}");
     }
 }
