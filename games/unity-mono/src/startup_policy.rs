@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::runtime_config::{runtime_root, terminated, utf8};
+use rsf_game_sys::vendor_paths::VendorPaths;
+use std::ffi::CStr;
 use std::time::Duration;
 
 pub(crate) const NO_MONO: u32 = 1;
@@ -9,24 +11,17 @@ const MONO_POLL: Duration = Duration::from_millis(100);
 const MONO_SETTLE: Duration = Duration::from_secs(2);
 const SR_RETRY: Duration = Duration::from_millis(500);
 
-pub(crate) struct FgPaths {
+/// The ReScaleFrame directory beside the INI and its vendor runtime folders.
+pub(crate) struct Paths {
     pub(crate) runtime: Vec<u8>,
-    pub(crate) fsr3: Vec<u8>,
-    pub(crate) fsr4: Vec<u8>,
-    pub(crate) xess: Vec<u8>,
-    pub(crate) streamline: Vec<u8>,
+    pub(crate) vendors: VendorPaths,
 }
 
-impl FgPaths {
-    pub(crate) fn read(ini: &[u16], mut path_setting: impl FnMut(&str) -> Vec<u16>) -> Self {
-        let mut read = |key| terminated(utf8(&path_setting(key)));
-        Self {
-            runtime: terminated(utf8(&runtime_root(ini))),
-            fsr3: read("FSR3"),
-            fsr4: read("FSR4"),
-            xess: read("XeSS"),
-            streamline: read("Streamline"),
-        }
+impl Paths {
+    pub(crate) fn read(ini: &[u16]) -> Self {
+        let runtime = terminated(utf8(&runtime_root(ini)));
+        let vendors = VendorPaths::new(CStr::from_bytes_with_nul(&runtime).unwrap_or_default());
+        Self { runtime, vendors }
     }
 }
 
@@ -61,17 +56,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn auto_has_a_runtime_root_with_streamline_as_the_only_provider_path() {
+    fn vendor_folders_sit_in_the_runtime_root_beside_the_ini() {
         let ini: Vec<u16> = r"C:\Game\ReScaleFrame.Unity.ini".encode_utf16().collect();
-        let paths = FgPaths::read(&ini, |key| match key {
-            "Streamline" => r"C:\Vendor\Streamline".encode_utf16().collect(),
-            _ => Vec::new(),
-        });
+        let paths = Paths::read(&ini);
         assert_eq!(paths.runtime, b"C:\\Game\\ReScaleFrame\0");
-        assert_eq!(paths.streamline, b"C:\\Vendor\\Streamline\0");
-        assert_eq!(paths.fsr3, [0]);
-        assert_eq!(paths.fsr4, [0]);
-        assert_eq!(paths.xess, [0]);
+        let vendors = paths.vendors;
+        assert_eq!(
+            vendors.streamline.as_c_str(),
+            c"C:\\Game\\ReScaleFrame\\streamline"
+        );
+        assert_eq!(
+            vendors.fidelityfx.as_c_str(),
+            c"C:\\Game\\ReScaleFrame\\fidelityfx"
+        );
+        assert_eq!(vendors.xess.as_c_str(), c"C:\\Game\\ReScaleFrame\\xess");
     }
 
     #[test]

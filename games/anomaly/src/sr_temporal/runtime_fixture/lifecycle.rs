@@ -571,7 +571,7 @@ pub(super) fn refused_start() {
         assert!(lines.iter().any(|line| {
             line.contains("SR is OFF")
                 && line.contains(directory.to_str().unwrap())
-                && line.contains("SRStreamlineDir")
+                && line.contains("Vendor directories")
         }))
     });
     let view = report(&driver);
@@ -580,7 +580,7 @@ pub(super) fn refused_start() {
     assert!(
         details.contains("SR off")
             && details.contains("Streamline")
-            && details.contains("SRStreamlineDir")
+            && details.contains("Streamline directory")
     );
     assert!(details.len() < view.reason.len() - 1);
     assert!(start_refusal(NOT_SUPPORTED).contains("selected SR provider"));

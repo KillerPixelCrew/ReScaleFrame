@@ -192,9 +192,6 @@ unsafe extern "C" fn accept_window(_: *mut c_void, window: *mut c_void) -> c_int
     c_int::from(length > 0 && unity_window_class(&name[..length as usize]))
 }
 
-fn directory(ini: &Ini, key: PCWSTR) -> Vec<u8> {
-    terminated(utf8(&path_setting(ini, key)))
-}
 
 /// Backend for the next start: the saved preference, else [UnitySR] FrameGeneration, offering
 /// every implemented provider. 0 is Off.
@@ -235,10 +232,7 @@ fn fg_start(ini: *const u16) -> u32 {
     }
     let limit = setting(&ini, w!("FrameLimitFPS"), 0);
     let frame_limit_us = if limit != 0 { 1_000_000 / limit } else { 0 };
-    let paths = startup_policy::FgPaths::read(ini.chars(), |key| {
-        let key = terminated(key.encode_utf16().collect());
-        path_setting(&ini, key.as_ptr())
-    });
+    let paths = startup_policy::Paths::read(ini.chars());
     let options = rsf_native_fg_options {
         struct_size: size_of::<rsf_native_fg_options>() as u32,
         mode: RSF_FG_FIXED,
@@ -249,10 +243,10 @@ fn fg_start(ini: *const u16) -> u32 {
     };
     let sources = Sources {
         runtime: paths.runtime.as_ptr().cast(),
-        fsr3: paths.fsr3.as_ptr().cast(),
-        fsr4: paths.fsr4.as_ptr().cast(),
-        xess: paths.xess.as_ptr().cast(),
-        streamline: paths.streamline.as_ptr().cast(),
+        fsr3: paths.vendors.fidelityfx.as_ptr(),
+        fsr4: paths.vendors.fidelityfx.as_ptr(),
+        xess: paths.vendors.xess.as_ptr(),
+        streamline: paths.vendors.streamline.as_ptr(),
         engine_version: player.unity_version.as_ptr(),
         project_id: PROJECT_ID.as_ptr(),
     };
@@ -314,11 +308,7 @@ fn sr_start(ini: *const u16, identity: &mut Option<Identity>) -> u32 {
     *lock_or_recover(&LOG_PATH) = output.clone();
     let (plugin, output) = (terminated(plugin), terminated(output));
 
-    let streamline = directory(&ini, w!("Streamline"));
-    let fsr2 = directory(&ini, w!("FSR2"));
-    let fsr3 = directory(&ini, w!("FSR3"));
-    let fsr4 = directory(&ini, w!("FSR4"));
-    let xess = directory(&ini, w!("XeSS"));
+    let vendors = startup_policy::Paths::read(ini.chars()).vendors;
     let identity = match identity {
         Some(identity) => identity,
         slot @ None => match identify() {
@@ -356,11 +346,11 @@ fn sr_start(ini: *const u16, identity: &mut Option<Identity>) -> u32 {
             engine_type: RSF_DLSS_ENGINE_UNITY,
             engine_version_utf8: identity.player.unity_version.as_ptr(),
             project_id_utf8: PROJECT_ID.as_ptr(),
-            streamline_directory_utf8: streamline.as_ptr().cast(),
-            fsr2_directory_utf8: fsr2.as_ptr().cast(),
-            fsr3_directory_utf8: fsr3.as_ptr().cast(),
-            fsr4_directory_utf8: fsr4.as_ptr().cast(),
-            xess_directory_utf8: xess.as_ptr().cast(),
+            streamline_directory_utf8: vendors.streamline.as_ptr(),
+            fsr2_directory_utf8: vendors.fidelityfx.as_ptr(),
+            fsr3_directory_utf8: vendors.fidelityfx.as_ptr(),
+            fsr4_directory_utf8: vendors.fidelityfx.as_ptr(),
+            xess_directory_utf8: vendors.xess.as_ptr(),
             set_engine_spatial: Some(rsf_unity_set_engine_spatial),
         },
         request_policy: Some(crate::bridge_state::rsf_unity_mono_request_policy),

@@ -688,11 +688,7 @@ pub(super) fn run(
         eprintln!("FAIL fixture window");
         return 1;
     };
-    let dirs = [br"\streamline".as_slice(), br"\fidelityfx", br"\xess"].map(vendor_path);
-    // The old fixture widened each command-line byte for FG; SR consumed the original narrow path.
-    let vendors = dirs
-        .each_ref()
-        .map(|dir| dir.to_bytes().iter().copied().map(u16::from).collect());
+    let vendors = rsf_game_sys::vendor_paths::VendorPaths::new(root);
     let mut temp = [0u8; MAX_PATH as usize];
     let length = unsafe { GetTempPathA(MAX_PATH, temp.as_mut_ptr()) } as usize;
     if length == 0 || length >= temp.len() {
@@ -712,7 +708,7 @@ pub(super) fn run(
     let fg = tables.fg;
     let is_owner = tables.present.is_owner;
     if !Stage::install(
-        options(Some(backend), capture_dir, vendors),
+        options(Some(backend), capture_dir, vendors.clone()),
         LOG,
         tables,
         engine_bindings(state_scope),
@@ -725,7 +721,7 @@ pub(super) fn run(
     let driver = if stage5 {
         match Temporal::bind(
             runtime,
-            dirs.each_ref().map(CString::as_c_str),
+            [&vendors.streamline, &vendors.fidelityfx, &vendors.xess].map(CString::as_c_str),
             Some(log_line),
         ) {
             Some(driver) => Some(driver),

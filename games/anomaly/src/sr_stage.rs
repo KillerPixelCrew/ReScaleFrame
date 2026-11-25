@@ -35,6 +35,7 @@ use crate::sys::{
     rsf_anomaly_swap_fields as TargetFields, rsf_anomaly_swap_upscale as UpscaleInputs,
 };
 use rsf_game_sys::RSF_SR_AUTO as BACKEND_AUTO;
+use rsf_game_sys::vendor_paths::VendorPaths;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::io::Write;
@@ -58,12 +59,6 @@ const VIEW_DENSE_MOTION: u32 = 7;
 const BACKEND_DLSS: u32 = 1;
 const BACKENDS: u32 = RSF_ANOMALY_SR_ADAPTER_BACKENDS | (1 << BACKEND_AUTO);
 const QUALITIES: u32 = RSF_ANOMALY_SR_ADAPTER_QUALITIES;
-const MAX_PATH: usize = 260;
-// The vendor runtime directories, in Paths::vendors order, as the tests index them.
-#[cfg(test)]
-const STREAMLINE: usize = 0;
-#[cfg(test)]
-const XESS: usize = 2;
 // Temporal driver refusal transport values.
 const REFUSAL_PREPARE: u8 = 2;
 const REFUSAL_REINSERT: u8 = 5;
@@ -304,9 +299,6 @@ impl Ini<'_> {
         let end = out[..length].iter().position(|&c| c == 0).unwrap_or(length);
         out[..end].to_vec()
     }
-    fn vendor_directories(&self, path: &[u16]) -> [PathBuf; 3] {
-        vendor_directories(path, |key| self.text_of::<MAX_PATH>(key, c"")).map(|dir| path_of(&dir))
-    }
     // SRScale: clamped; `defaulted` when missing or not a number (sr_stage.h).
     fn scale(&self) -> (f32, bool) {
         let text = self.text(c"SRScale", c"");
@@ -512,7 +504,7 @@ struct Reported {
 #[derive(Clone, Default)]
 struct Paths {
     ini: Vec<u16>,
-    vendors: [PathBuf; 3],
+    vendors: VendorPaths,
 }
 
 struct State {
@@ -628,12 +620,6 @@ fn units(path: &Path) -> Vec<u16> {
     }
 }
 
-fn vendor_strings(paths: &[PathBuf; 3]) -> [CString; 3] {
-    paths
-        .each_ref()
-        .map(|path| CString::new(path.to_string_lossy().as_bytes()).unwrap_or_default())
-}
-
 // The path UTF-16 units name. Windows keeps unpaired surrogates.
 fn path_of(units: &[u16]) -> PathBuf {
     #[cfg(windows)]
@@ -647,59 +633,14 @@ fn path_of(units: &[u16]) -> PathBuf {
     }
 }
 
-// Resolve explicit vendor directories or the package layout beside the INI.
-pub(crate) fn vendor_directories(ini: &[u16], read: impl Fn(&CStr) -> Vec<u16>) -> [Vec<u16>; 3] {
+// The vendor runtime folders of the package beside the INI, as every host resolves them.
+pub(crate) fn vendor_directories(ini: &[u16]) -> VendorPaths {
     let path = path_of(ini);
     let package = path
         .parent()
         .unwrap_or_else(|| Path::new(""))
         .join("ReScaleFrame");
-    [
-        (c"SRStreamlineDir", "streamline"),
-        (c"SRFidelityFXDir", "fidelityfx"),
-        (c"SRXeSSDir", "xess"),
-    ]
-    .map(|(key, directory)| {
-        let value = read(key);
-        let value = if value.is_empty() {
-            units(&package.join(directory))
-        } else {
-            value
-        };
-        plain_directory(&value)
-    })
-}
-
-// A vendor runtime directory as Streamline, FidelityFX and XeSS can use it. The INI path the carrier hands over can
-// be a Win32 long-path name ("\\?\D:\...", "\\?\UNC\server\share\..."). Streamline appends "/sl.common.dll" to its
-// plugin directory, and a "\\?\" name disables the slash conversion, so every plugin failed to load and Stage 5
-// stayed on the bilinear seam (wave 7 run, c1 log). Strips the prefix, uses backslashes only and drops trailing
-// separators.
-pub(crate) fn plain_directory(path: &[u16]) -> Vec<u16> {
-    let starts = |prefix: &str| {
-        let prefix: Vec<u16> = prefix.encode_utf16().collect();
-        path.starts_with(&prefix)
-    };
-    let backslash = u16::from(b'\\');
-    let mut out = if starts(r"\\?\UNC\") {
-        [backslash, backslash]
-            .into_iter()
-            .chain(path[8..].iter().copied())
-            .collect()
-    } else if starts(r"\\?\") || starts(r"\??\") {
-        path[4..].to_vec()
-    } else {
-        path.to_vec()
-    };
-    for unit in &mut out {
-        if *unit == u16::from(b'/') {
-            *unit = backslash;
-        }
-    }
-    while out.len() > 3 && out.last() == Some(&backslash) {
-        out.pop();
-    }
-    out
+    VendorPaths::new(&CString::new(package.to_string_lossy().as_bytes()).unwrap_or_default())
 }
 
 fn selected(config: &Config) -> bool {
@@ -858,7 +799,7 @@ impl Stage {
         if !(apply && selected(&config)) {
             return selected(&config);
         }
-        let vendors = reader.vendor_directories(path);
+        let vendors = vendor_directories(path);
         let paths = Paths { ini, vendors };
         if self.configure(&config, paths, log, user) {
             #[cfg(windows)]
@@ -875,7 +816,7 @@ impl Stage {
         log: rsf_anomaly_sr_log,
         user: *mut c_void,
     ) -> bool {
-        let [streamline, fidelityfx, xess] = vendor_strings(&paths.vendors);
+        let vendors = paths.vendors.clone();
         let accepted = self.with(|state| {
             if self.active.load(Ordering::Acquire) {
                 return false;
@@ -910,9 +851,9 @@ impl Stage {
             first_person_zero: config.first_person_zero,
             require_signature: config.require_signature,
             initial: config.settings,
-            streamline: streamline.as_ptr(),
-            fidelityfx: fidelityfx.as_ptr(),
-            xess: xess.as_ptr(),
+            streamline: vendors.streamline.as_ptr(),
+            fidelityfx: vendors.fidelityfx.as_ptr(),
+            xess: vendors.xess.as_ptr(),
         };
         let driver = if sr_inputs(config.stage) {
             &raw const options
@@ -2597,15 +2538,14 @@ impl Stage {
 
     #[cfg(any(windows, test))]
     fn choices_with(&self, service: Option<Admit>) -> OverlayChoices {
-        let (config, vendors) =
-            self.with(|state| (state.config, vendor_strings(&state.paths.vendors)));
+        let (config, vendors) = self.with(|state| (state.config, state.paths.vendors.clone()));
         let mut out = OverlayChoices::default();
         let Some(service) = service.filter(|_| config.stage == 5) else {
             return out;
         };
         let Some(result) = crate::sr_temporal::admit(
             service,
-            vendors.each_ref().map(CString::as_c_str),
+            [&vendors.streamline, &vendors.fidelityfx, &vendors.xess].map(CString::as_c_str),
             null_mut(),
             config.settings.backend,
         ) else {

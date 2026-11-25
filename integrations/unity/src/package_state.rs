@@ -1059,7 +1059,7 @@ mod tests {
         }
         calls.extend([
             "surface".into(),
-            format!("host start {log} R\\preferences.ini R/streamline R/fidelityfx 2"),
+            format!("host start {log} R\\preferences.ini R\\streamline R\\fidelityfx 2"),
             "prepare 42".into(),
         ]);
         calls
@@ -1247,7 +1247,7 @@ mod tests {
         assert_eq!(package.services.session(), 42);
         assert_eq!(package.bridge_result.load(SeqCst), 0);
         assert!(package.lock().session == Session::Started(42));
-        assert_eq!(package.presentation.identity().xess.to_bytes(), b"R/xess");
+        assert_eq!(package.presentation.identity().xess.to_bytes(), br"R\xess");
         // A started session only restarts once drained and its own session ended.
         set(|f| f.drained = false);
         assert_eq!(started(&package), Err(code::BUSY));
@@ -1316,8 +1316,8 @@ mod tests {
         assert_eq!(
             calls(),
             [
-                "install 152 7 4294967295 R/fidelityfx | 24 0 1 0 0 0 | 1 0 1 1 4 | \
-                 R/fidelityfx R/fidelityfx R/xess R/streamline | 2 6000 P"
+                "install 152 7 4294967295 R\\fidelityfx | 24 0 1 0 0 0 | 1 0 1 1 4 | \
+                 R\\fidelityfx R\\fidelityfx R\\xess R\\streamline | 2 6000 P"
             ]
         );
         // A refusal is retried; an accepted install is not repeated.
@@ -1416,7 +1416,7 @@ mod tests {
                 "player",
                 "subclass 0x20",
                 "surface",
-                "host start C:\\rsf.log R\\preferences.ini R/streamline R/fidelityfx 2",
+                "host start C:\\rsf.log R\\preferences.ini R\\streamline R\\fidelityfx 2",
                 "prepare 42"
             ]
         );
@@ -1502,7 +1502,7 @@ mod tests {
                 "player",
                 "subclass 0x20",
                 "surface",
-                "host start NUL R\\preferences.ini R/streamline R/fidelityfx 2",
+                "host start NUL R\\preferences.ini R\\streamline R\\fidelityfx 2",
                 "prepare 42"
             ]
         );

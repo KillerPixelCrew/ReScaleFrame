@@ -466,7 +466,12 @@ fn installed(stage: u32) -> Stage {
     };
     let paths = Paths {
         ini: Vec::new(),
-        vendors: [r"V:\sl", r"V:\ffx", r"V:\xess"].map(PathBuf::from),
+        vendors: VendorPaths {
+            streamline: c"V:\\sl".into(),
+            fidelityfx: c"V:\\ffx".into(),
+            xess: c"V:\\xess".into(),
+            ..Default::default()
+        },
     };
     assert!(driver.configure(&config, paths, Some(log), null_mut()));
     assert!(driver.install(0x10000 as *mut c_void, 64, 64, 0x20 as *const c_void));
@@ -1200,7 +1205,7 @@ fn the_cold_entry_keeps_only_a_selected_configuration() {
 
 #[cfg(windows)]
 #[test]
-fn vendor_directories_default_beside_the_ini_and_follow_overrides() {
+fn vendor_directories_sit_beside_the_ini() {
     let driver = Stage::new();
     driver.bind();
     calls();
@@ -1217,19 +1222,8 @@ fn vendor_directories_default_beside_the_ini_and_follow_overrides() {
             r"configured stage=5 sl={beside}\streamline ffx={beside}\fidelityfx xess={beside}\xess exposure=true transport=false zero=true signature=false backend=5"
         )]
     );
-    // Explicit directories win as plain directories; a UNC long path keeps its server.
-    fake(|f| {
-        f.ini.push(("SRStreamlineDir", "C:/sl/"));
-        f.ini.push(("SRXeSSDir", r"\\?\UNC\server\share\rsf\xess\"));
-    });
-    assert!(driver.configure_ini(&ini, true, Some(log), null_mut()));
-    assert_eq!(
-        calls(),
-        [format!(
-            r"configured stage=5 sl=C:\sl ffx={beside}\fidelityfx xess=\\server\share\rsf\xess exposure=true transport=false zero=true signature=false backend=5"
-        )]
-    );
 }
+
 
 #[test]
 fn a_device_reset_rereads_srscale_from_the_kept_ini() {
@@ -1262,33 +1256,6 @@ fn a_device_reset_rereads_srscale_from_the_kept_ini() {
     fake(|f| f.generation = 4);
     other.prepare(null_mut());
     assert!(!fake(|f| f.logs.iter().any(|l| l.contains("device reset"))));
-}
-
-#[test]
-fn vendor_directories_are_plain_win32_paths() {
-    let plain = |text: &str| String::from_utf16(&plain_directory(&wide_text(text))).unwrap();
-    // The carrier's long-path INI name must not reach Streamline (wave 7 c1: no plugin loaded).
-    assert_eq!(
-        plain(r"\\?\D:\Anomaly 1.5.3\bin\ReScaleFrame\streamline"),
-        r"D:\Anomaly 1.5.3\bin\ReScaleFrame\streamline"
-    );
-    assert_eq!(
-        plain(r"\\?\UNC\server\share\rsf\xess\"),
-        r"\\server\share\rsf\xess"
-    );
-    assert_eq!(
-        plain("D:/Games/Anomaly/bin/ReScaleFrame/fidelityfx/"),
-        r"D:\Games\Anomaly\bin\ReScaleFrame\fidelityfx"
-    );
-    assert_eq!(plain(r"\??\C:\sl"), r"C:\sl");
-    assert_eq!(plain(r"D:\"), r"D:\");
-    assert_eq!(plain(r"C:\sl"), r"C:\sl");
-    // Windows keeps an unpaired surrogate through the kept path.
-    #[cfg(windows)]
-    {
-        let odd = [u16::from(b'C'), u16::from(b':'), u16::from(b'\\'), 0xd800];
-        assert_eq!(units(&path_of(&plain_directory(&odd))), odd);
-    }
 }
 
 #[cfg(windows)]
@@ -1437,7 +1404,6 @@ mod win32 {
             (w!("SRFirstPersonZero"), w!("0")),
             (w!("SRCutDistance"), w!("0.001")),
             (w!("SRCutAngle"), w!("x")),
-            (w!("SRStreamlineDir"), w!("C:\\sl")),
             (w!("SR"), w!("0")),
             (w!("SRBackend"), w!("5")),
             (w!("SRQuality"), w!("5")),
@@ -1516,7 +1482,7 @@ mod win32 {
     }
 
     #[test]
-    fn the_package_beside_a_real_ini_and_an_explicit_directory() {
+    fn the_package_beside_a_real_ini() {
         let root = std::env::temp_dir().join(format!("rsf-sr-config-{}", std::process::id()));
         let package = root.join("ReScaleFrame");
         std::fs::create_dir_all(&package).unwrap();
@@ -1528,21 +1494,12 @@ mod win32 {
         let path = units(&ini);
         assert!(driver.configure_ini(&path, true, None, null_mut()));
         driver.with(|state| {
+            let vendors = &state.paths.vendors;
             assert_eq!(
-                state.paths.vendors,
+                [&vendors.streamline, &vendors.fidelityfx, &vendors.xess]
+                    .map(|dir| std::path::PathBuf::from(dir.to_str().unwrap())),
                 ["streamline", "fidelityfx", "xess"].map(|dir| package.join(dir))
             )
-        });
-        let streamline = root.join("sl");
-        let text = format!(
-            "[Anomaly]\r\nSRStage=5\r\nSRStreamlineDir={}/\r\n",
-            streamline.display()
-        );
-        std::fs::write(&ini, text).unwrap();
-        assert!(driver.configure_ini(&path, true, None, null_mut()));
-        driver.with(|state| {
-            assert_eq!(state.paths.vendors[STREAMLINE], streamline);
-            assert_eq!(state.paths.vendors[XESS], package.join("xess"));
         });
         let _ = std::fs::remove_dir_all(&root);
     }

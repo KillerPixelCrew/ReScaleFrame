@@ -75,7 +75,7 @@ fn start_refusal(result: i32) -> String {
     match result {
         NOT_SUPPORTED => "SR off: the selected SR provider is unsupported on this GPU".into(),
         STREAMLINE_FAILED => {
-            "SR off (bilinear): Streamline failed to start; check SRStreamlineDir in the log".into()
+            "SR off (bilinear): Streamline failed to start; check the Streamline directory in the log".into()
         }
         _ => format!(
             "SR off (bilinear): the SR pipeline did not start ({})",
@@ -544,7 +544,7 @@ impl Driver {
                 result_name(result)
             ));
             render.say(&format!(
-                "Anomaly SR stage 5: SR is OFF (bilinear upscale) until the device, output or settings change. Vendor directories: Streamline '{streamline}', FidelityFX '{fidelityfx}', XeSS '{xess}' (SRStreamlineDir, SRFidelityFXDir, SRXeSSDir)."
+                "Anomaly SR stage 5: SR is OFF (bilinear upscale) until the device, output or settings change. Vendor directories: Streamline '{streamline}', FidelityFX '{fidelityfx}', XeSS '{xess}'."
             ));
             return;
         }

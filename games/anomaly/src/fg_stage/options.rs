@@ -5,6 +5,7 @@ use crate::sys::{
     RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3,
     RSF_FG_BACKEND_FSR4, RSF_FG_BACKEND_XESS, RSF_REFLEX_BOOST, RSF_REFLEX_ON,
 };
+use rsf_game_sys::vendor_paths::VendorPaths;
 use std::ffi::{CString, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
@@ -162,25 +163,17 @@ impl Options {
         } else {
             String::from_utf16_lossy(&capture)
         };
-        let vendors = crate::sr_stage::vendor_directories(ini_units, |key| {
-            let mut buffer = [0u16; MAX_PATH as usize];
-            let length = unsafe {
-                ini::rsf_anomaly_sr_ini_text(
-                    ini.cast(),
-                    key.as_ptr(),
-                    c"".as_ptr(),
-                    buffer.as_mut_ptr(),
-                    MAX_PATH,
-                )
-            };
-            buffer[..length as usize].to_vec()
-        });
+        let vendors = crate::sr_stage::vendor_directories(ini_units);
         Self::admit(settings, capture_dir, vendors)
     }
 
-    pub(super) fn admit(settings: Settings, capture_dir: String, vendors: [Vec<u16>; 3]) -> Self {
-        let [streamline, fidelityfx, xess] =
-            vendors.map(|dir| c_string(String::from_utf16_lossy(&dir)));
+    pub(super) fn admit(settings: Settings, capture_dir: String, vendors: VendorPaths) -> Self {
+        let VendorPaths {
+            streamline,
+            fidelityfx,
+            xess,
+            ..
+        } = vendors;
         let Frontend {
             enabled,
             backend,

@@ -99,9 +99,7 @@ foreach ($taskCopy in $taskCopies) {
             'EntryModule=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','EntryPoint=rsf_unity_start',
             '[UnitySR]',"Backend=$taskId","Quality=$Quality",
             "FrameGeneration=$taskFg","GeneratedFrames=$GeneratedFrames","GraphicsDebug=$([int]$GraphicsDebug.IsPresent)",
-            'Plugin=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','Log=ReScaleFrame/unity-sr.log',
-            'Streamline=ReScaleFrame/streamline','FSR2=ReScaleFrame/fidelityfx','FSR3=ReScaleFrame/fidelityfx',
-            'FSR4=ReScaleFrame/fidelityfx','XeSS=ReScaleFrame/xess'), [Text.Encoding]::Unicode)
+            'Plugin=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','Log=ReScaleFrame/unity-sr.log'), [Text.Encoding]::Unicode)
     }
     $taskFiles += @{ path=$taskCopy.path; sha256=(Get-FileHash -LiteralPath $taskDestination).Hash }
 }

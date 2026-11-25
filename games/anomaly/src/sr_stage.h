@@ -19,7 +19,7 @@
    3, 300; Stage 3 captures 8, at most 32, consecutive world frames). Stages 4 and 5: SRExposure (constant or auto),
    SRColourTransport (default 0: linear, HDR on), SRFirstPersonZero (default 1), SRCutDistance (metres, default 4),
    SRCutAngle (degrees, default 45), SRRequireSignature (default 0), SR/SRBackend/SRQuality/DLSSPreset (the shared
-   frontend keys, with Auto as the default SRBackend). SRStreamlineDir, SRFidelityFXDir and SRXeSSDir override the
+   frontend keys, with Auto as the default SRBackend). The vendor runtimes are the
    vendor package beside the INI (ReScaleFrame\streamline, fidelityfx, xess). The panel changes the live options and
    saves them.
 

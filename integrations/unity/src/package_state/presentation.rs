@@ -153,9 +153,9 @@ mod tests {
         let identity = Identity::new(b"C:/sdk", b"6000.0.1", b"p\0ignored");
         let pairs = [
             (&identity.root, "C:/sdk"),
-            (&identity.streamline, "C:/sdk/streamline"),
-            (&identity.fsr, "C:/sdk/fidelityfx"),
-            (&identity.xess, "C:/sdk/xess"),
+            (&identity.streamline, r"C:\sdk\streamline"),
+            (&identity.fsr, r"C:\sdk\fidelityfx"),
+            (&identity.xess, r"C:\sdk\xess"),
             (&identity.version, "6000.0.1"),
             (&identity.project, "p"),
         ];
@@ -165,7 +165,7 @@ mod tests {
         assert!(identity.installable());
         // An empty root still names its directories.
         let rootless = Identity::new(b"", b"1", b"p");
-        assert_eq!(rootless.fsr.to_str().unwrap(), "/fidelityfx");
+        assert_eq!(rootless.fsr.to_str().unwrap(), r"\fidelityfx");
         assert!(!rootless.installable());
         assert!(!Identity::new(b"r", b"", b"p").installable());
         assert!(!Identity::new(b"r", b"1", b"").installable());

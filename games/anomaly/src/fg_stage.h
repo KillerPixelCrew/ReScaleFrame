@@ -19,7 +19,7 @@
 //                         FGCaptureCount (default 3, max 16) fed frames from FGCaptureStart (default 600), every
 //                         FGCaptureInterval (default 300) engine frames, into FGCaptureDir
 //                         (default <ini directory>\RSF-FGCapture\<local time>)
-//   SRStreamlineDir / SRFidelityFXDir / SRXeSSDir   vendor runtimes, shared with SR
+//   Vendor runtimes: ReScaleFrame\streamline, fidelityfx and xess beside the INI, shared with SR
 // The shared frontend keys (FG, FGBackend, FGGeneratedFrames, Latency, FrameLimitUs) are also what the overlay saves.
 //
 // The native render and input callbacks run on the engine thread.

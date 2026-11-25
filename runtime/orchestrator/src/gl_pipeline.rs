@@ -28,6 +28,7 @@ use rsf_game_sys::{
     RSF_GAME_CPU_INPUT_UNFRAMED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_RENDER_WINDOW,
     rsf_game_cpu_event, rsf_game_render_pass as Pass,
 };
+use rsf_game_sys::vendor_paths::VendorPaths;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 #[cfg(test)]
 use std::mem::MaybeUninit;
@@ -100,10 +101,7 @@ struct Shared {
     logger: Mutex<(Log, usize)>,
     window: AtomicPtr<c_void>,
     root: CString,
-    fidelityfx: CString,
-    xess: CString,
-    streamline: CString,
-    interposer: CString,
+    vendors: VendorPaths,
     version: CString,
     project: CString,
 }
@@ -294,11 +292,6 @@ unsafe fn read_sized<T: Copy>(value: *const T) -> Option<T> {
     unsafe { has_capacity(value) }.then(|| unsafe { value.read() })
 }
 
-fn concat(base: &CStr, suffix: &str) -> CString {
-    let mut bytes = base.to_bytes().to_vec();
-    bytes.extend_from_slice(suffix.as_bytes());
-    CString::new(bytes).expect("paths built from C strings contain no NUL")
-}
 
 fn lock(pipeline: &Pipeline) -> Option<MutexGuard<'_, State>> {
     // Graphics-owner calls are serialized by contract. A concurrent or reentrant call is refused
@@ -330,15 +323,15 @@ impl Pipeline {
             output_width: width,
             output_height: height,
             inverted_depth: 0,
-            fsr2_directory_utf8: shared.fidelityfx.as_ptr(),
-            fsr3_directory_utf8: shared.fidelityfx.as_ptr(),
-            fsr4_directory_utf8: shared.fidelityfx.as_ptr(),
-            xess_directory_utf8: shared.xess.as_ptr(),
+            fsr2_directory_utf8: shared.vendors.fidelityfx.as_ptr(),
+            fsr3_directory_utf8: shared.vendors.fidelityfx.as_ptr(),
+            fsr4_directory_utf8: shared.vendors.fidelityfx.as_ptr(),
+            xess_directory_utf8: shared.vendors.xess.as_ptr(),
             dlss: rsf_dlss_setup {
                 struct_size: size_of::<rsf_dlss_setup>() as u32,
                 abi_version: RSF_DLSS_ABI_VERSION,
-                interposer_path_utf8: shared.interposer.as_ptr(),
-                plugin_directory_utf8: shared.streamline.as_ptr(),
+                interposer_path_utf8: shared.vendors.interposer.as_ptr(),
+                plugin_directory_utf8: shared.vendors.streamline.as_ptr(),
                 log_directory_utf8: shared.root.as_ptr(),
                 application_id: 0,
                 engine: DLSS_ENGINE_CUSTOM,
@@ -860,15 +853,11 @@ fn open(setup: &rsf_gl_pipeline_setup, cleanup: &mut Option<Pipeline>) -> Result
         *crate::sync::lock(&shared.logger) = (setup.log, setup.user as usize);
     }
     let guard = reused.is_none().then(|| {
-        let streamline = concat(root, "/streamline");
         SharedGuard(Box::into_raw(Box::new(Shared {
             logger: Mutex::new((setup.log, setup.user as usize)),
             window: AtomicPtr::new(ptr::null_mut()),
             root: root.to_owned(),
-            fidelityfx: concat(root, "/fidelityfx"),
-            xess: concat(root, "/xess"),
-            interposer: concat(&streamline, "/sl.interposer.dll"),
-            streamline,
+            vendors: VendorPaths::new(root),
             version: version.to_owned(),
             project: project.to_owned(),
         })))
@@ -899,7 +888,7 @@ fn open(setup: &rsf_gl_pipeline_setup, cleanup: &mut Option<Pipeline>) -> Result
         struct_size: size_of::<rsf_fg12_setup>() as u32,
         backend: 0,
         max_generated_frames: 15,
-        runtime_directory_utf8: shared.fidelityfx.as_ptr(),
+        runtime_directory_utf8: shared.vendors.fidelityfx.as_ptr(),
         options: rsf_native_fg_options {
             struct_size: size_of::<rsf_native_fg_options>() as u32,
             mode: RSF_FG_OFF,
@@ -916,10 +905,10 @@ fn open(setup: &rsf_gl_pipeline_setup, cleanup: &mut Option<Pipeline>) -> Result
         accept_window: Some(hook_accept),
         runtime_switching: 1,
         ui_mode: RSF_UI_MODE_BACKBUFFER_HUDLESS,
-        fsr3_directory_utf8: shared.fidelityfx.as_ptr(),
-        fsr4_directory_utf8: shared.fidelityfx.as_ptr(),
-        xess_directory_utf8: shared.xess.as_ptr(),
-        streamline_directory_utf8: shared.streamline.as_ptr(),
+        fsr3_directory_utf8: shared.vendors.fidelityfx.as_ptr(),
+        fsr4_directory_utf8: shared.vendors.fidelityfx.as_ptr(),
+        xess_directory_utf8: shared.vendors.xess.as_ptr(),
+        streamline_directory_utf8: shared.vendors.streamline.as_ptr(),
         engine_type: DLSS_ENGINE_CUSTOM,
         engine_version_utf8: shared.version.as_ptr(),
         project_id_utf8: shared.project.as_ptr(),

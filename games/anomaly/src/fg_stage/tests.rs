@@ -148,12 +148,7 @@ use std::cell::{Cell, RefCell};
 
 #[test]
 fn fg_settings_keep_option_bounds_and_normalize_only_vendor_paths() {
-    let vendors = [
-        r"\\?\D:\RSF/streamline\",
-        r"\\?\UNC\server\share/fidelityfx\",
-        "",
-    ]
-    .map(|path| crate::sr_stage::plain_directory(&path.encode_utf16().collect::<Vec<_>>()));
+    let vendors = rsf_game_sys::vendor_paths::VendorPaths::new(c"\\\\?\\UNC\\server\\share/");
     let options = Options::admit(
         options::Settings {
             debug: false,
@@ -184,7 +179,10 @@ fn fg_settings_keep_option_bounds_and_normalize_only_vendor_paths() {
         ),
         (RSF_REFLEX_BOOST, 1_000_000, 1)
     );
-    assert_eq!(options.streamline.as_c_str(), c"D:\\RSF\\streamline");
+    assert_eq!(
+        options.streamline.as_c_str(),
+        c"\\\\server\\share\\streamline"
+    );
     assert_eq!(
         options.fidelityfx.as_c_str(),
         c"\\\\server\\share\\fidelityfx"

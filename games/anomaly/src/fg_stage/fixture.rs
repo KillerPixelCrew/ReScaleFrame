@@ -46,7 +46,11 @@ const LOG: Log = Log {
     user: 0,
 };
 
-fn options(backend: Option<u32>, capture_dir: String, vendors: [Vec<u16>; 3]) -> Options {
+fn options(
+    backend: Option<u32>,
+    capture_dir: String,
+    vendors: rsf_game_sys::vendor_paths::VendorPaths,
+) -> Options {
     Options::admit(
         Settings {
             debug: false,
@@ -66,7 +70,7 @@ fn options(backend: Option<u32>, capture_dir: String, vendors: [Vec<u16>; 3]) ->
             },
         },
         capture_dir,
-        vendors.map(|path| crate::sr_stage::plain_directory(&path)),
+        vendors,
     )
 }
 
