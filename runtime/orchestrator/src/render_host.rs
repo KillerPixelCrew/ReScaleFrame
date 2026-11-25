@@ -1824,10 +1824,13 @@ unsafe extern "C" fn rsf_render_settings_get(output: *mut Settings) -> i32 {
     if unsafe { (*output).abi_version } != RSF_RENDER_FRONTEND_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    let Some(host) = frontend() else {
-        return NOT_READY;
+    // The adapter-retired entry serves the same settings when it is the published host.
+    let settings = match (callback::settings_get(), frontend()) {
+        (Some(settings), _) => Ok(settings),
+        (None, Some(host)) => host.settings_get(),
+        (None, None) => return NOT_READY,
     };
-    match host.settings_get() {
+    match settings {
         Ok(settings) => {
             unsafe { output.write(settings) };
             OK
@@ -1845,6 +1848,9 @@ unsafe extern "C" fn rsf_render_settings_apply(request: *const Settings) -> i32 
     };
     if request.abi_version != RSF_RENDER_FRONTEND_ABI_VERSION {
         return ABI_MISMATCH;
+    }
+    if let Some(result) = callback::settings_apply(request) {
+        return result;
     }
     match frontend() {
         Some(host) => host.settings_apply(request),

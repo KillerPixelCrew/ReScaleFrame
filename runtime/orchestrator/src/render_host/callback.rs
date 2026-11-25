@@ -24,15 +24,15 @@ use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening};
 use crate::plugin_session::Session;
 use crate::settings_store::{
     read_settings_and_fg_mode, rsf_settings_store_read_layout, rsf_settings_store_write,
-    rsf_settings_store_write_layout, set_sharpening,
+    rsf_settings_store_write_layout, set_sharpening, sharpening_of,
 };
 use crate::sharpening_policy;
 use crate::sr_choices::sr_quality;
 use crate::sync::lock;
 use crate::sys::rsf_sr12_setup as SrSetup;
 use crate::sys::{
-    RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_RENDER_FRONTEND_ABI_VERSION,
-    rsf_render_settings as Settings,
+    RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_REFLEX_OFF,
+    RSF_RENDER_FRONTEND_ABI_VERSION, rsf_render_settings as Settings,
 };
 use crate::sys::{
     RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,
@@ -47,12 +47,14 @@ use crate::wide::copy_nul as wide_copy;
 use rsf_game_sys::ffi_util::{checked, has_capacity};
 use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION as HOST_ABI_VERSION, RSF_CALLBACK_HOST_ABI_VERSION_V2,
-    RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE,
-    RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
-    RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW, recording_slots::RecordingSlots,
-    rsf_callback_host_setup as Setup, rsf_callback_host_setup_v2 as SetupV2,
-    rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services,
-    rsf_game_render_config as Config, rsf_game_render_pass as Pass,
+    RSF_CALLBACK_HOST_ABI_VERSION_V3, RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS,
+    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET,
+    RSF_GAME_RENDER_SR, RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW,
+    recording_slots::RecordingSlots, rsf_callback_host_setup as Setup,
+    rsf_callback_host_setup_v2 as SetupV2, rsf_callback_host_setup_v3 as SetupV3,
+    rsf_callback_host_status as HostStatus, rsf_game_cpu_event as CpuEvent,
+    rsf_game_host_services as Services, rsf_game_render_config as Config,
+    rsf_game_render_pass as Pass,
 };
 use rsf_game_sys::{
     RSF_PLUGIN_SESSION_ABI_VERSION as SESSION_ABI_VERSION,
@@ -93,10 +95,27 @@ use crate::render_host_native as leaf;
 #[cfg(test)]
 use tests as leaf;
 
-struct State {
-    // Vendor SR context, and the backend-zero context that normalizes generation inputs.
+// One engine view's vendor SR context. `serial` is its latest recording on `slot`, zero before one.
+struct View {
+    key: u64,
     sr: Handle,
+    seen: u64,
+    slot: u32,
+    serial: u64,
+}
+
+// A view unseen for this many source frames gives up its context once that context is retired.
+const IDLE_SOURCE_FRAMES: u64 = 120;
+
+struct State {
+    // A vendor SR context per engine view in first-use order, and the backend-zero context that
+    // normalizes generation inputs.
+    views: Vec<View>,
     inputs: Handle,
+    // Each recording slot's latest recording serial. The adapter retires a slot's previous
+    // recording before it records on that slot again, which retires every older recording too.
+    slot_serials: [u64; 3],
+    serial: u64,
     input_width: u32,
     input_height: u32,
     plan: Config,
@@ -298,8 +317,49 @@ impl Host {
             leaf::overlay_stop();
         }
         let mut state = self.lock();
-        self.destroy(&mut state.sr);
+        self.release_views(&mut state);
         self.destroy(&mut state.inputs);
+    }
+
+    // At a drained point only: reconfiguration, new output extents or stop.
+    fn release_views(&self, s: &mut State) {
+        for mut view in std::mem::take(&mut s.views) {
+            self.destroy(&mut view.sr);
+        }
+    }
+
+    // Views other than `current` unseen for IDLE_SOURCE_FRAMES whose last recording is retired.
+    fn reap(&self, s: &mut State, current: u64, source: u64) {
+        let slots = s.slot_serials;
+        let idle = |view: &View| {
+            view.key != current
+                && source.saturating_sub(view.seen) >= IDLE_SOURCE_FRAMES
+                && (view.serial == 0 || slots[view.slot as usize] > view.serial)
+        };
+        for mut view in s.views.extract_if(.., |view| idle(view)) {
+            self.destroy(&mut view.sr);
+        }
+    }
+
+    fn set_sharpening(&self, s: &State) {
+        for view in &s.views {
+            let _ = unsafe { leaf::sr12_set_sharpening(view.sr, &s.sharpening) };
+        }
+    }
+
+    // The vendor context setup for the planned backend and output.
+    fn vendor_setup(&self, s: &State, device: Handle, inverted: u32) -> SrSetup {
+        let mut setup = self.vendors.sr_setup(
+            device,
+            (s.backend, s.quality, s.preset),
+            Some(log),
+            self.user(),
+        );
+        // The host plans the render extents; the vendor context reports them.
+        (setup.output_width, setup.output_height) = (s.width, s.height);
+        setup.inverted_depth = inverted;
+        setup.streamline_host = leaf::present_host();
+        setup
     }
 
     fn render(&self, commands: Handle, pass: &Pass, begin: bool) {
@@ -537,9 +597,7 @@ impl Host {
             if sharpening_policy::valid(&requested) {
                 s.sharpening = requested;
                 set_sharpening(&mut s.settings, &requested);
-                if !s.sr.is_null() {
-                    let _ = unsafe { leaf::sr12_set_sharpening(s.sr, &s.sharpening) };
-                }
+                self.set_sharpening(s);
             } else {
                 self.log("Could not save sharpening settings; previous values retained.");
             }
@@ -634,7 +692,7 @@ impl Host {
             || s.height != camera.output_height
         {
             // The adapter's submission path joins its previous frame-fence values before this.
-            self.destroy(&mut s.sr);
+            self.release_views(s);
             self.destroy(&mut s.inputs);
             s.input_width = 0;
             s.input_height = 0;
@@ -697,24 +755,54 @@ impl Host {
                 s.input_width = setup.render_width;
                 s.input_height = setup.render_height;
             }
-            if let Some(slot) = s.command_lists.bind(commands) {
+            if let Some(slot) = self.record(s, commands) {
                 let _ = unsafe { leaf::sr12_evaluate(s.inputs, commands, pass, slot) };
             }
             return;
         }
-        if s.sr.is_null() || pass.camera_valid == 0 {
+        // The engine's scaler, native rendering and a refused plan have no vendor context.
+        if s.views.is_empty() || pass.camera_valid == 0 {
             return;
         }
-        let Some(slot) = s.command_lists.bind(commands) else {
+        // This recording proves its slot's previous one retired, before any view is reaped.
+        let Some(slot) = self.record(s, commands) else {
             return;
         };
+        self.reap(s, pass.view_key, pass.source_frame_id);
+        let index = match s.views.iter().position(|view| view.key == pass.view_key) {
+            Some(index) => index,
+            None => match self.create_view(s, commands, pass) {
+                Ok(index) => index,
+                Err(result) => {
+                    // Kept without a context, so the view is refused once until it is reaped.
+                    self.log(&format!(
+                        "SR context for view {} refused: {result}",
+                        pass.view_key
+                    ));
+                    s.views.push(View {
+                        key: pass.view_key,
+                        sr: null_mut(),
+                        seen: pass.source_frame_id,
+                        slot: 0,
+                        serial: 0,
+                    });
+                    return;
+                }
+            },
+        };
+        if s.views[index].sr.is_null() {
+            s.views[index].seen = pass.source_frame_id;
+            return;
+        }
         let now = unsafe { leaf::tick() };
         if now >= s.sharpening_poll {
             s.sharpening_poll = now.saturating_add(SHARPENING_POLL_MS);
             s.sharpening = self.read_sharpening();
-            let _ = unsafe { leaf::sr12_set_sharpening(s.sr, &s.sharpening) };
+            self.set_sharpening(s);
         }
-        let result = unsafe { leaf::sr12_evaluate(s.sr, commands, pass, slot) };
+        let view = &mut s.views[index];
+        (view.seen, view.slot, view.serial) = (pass.source_frame_id, slot, s.serial);
+        let result = unsafe { leaf::sr12_evaluate(view.sr, commands, pass, slot) };
         if result != BACKEND_OK && s.refused == 0 {
             let resources = [pass.color_input, pass.depth, pass.motion, pass.color_output];
             for (index, &resource) in resources.iter().enumerate() {
@@ -759,6 +847,36 @@ impl Host {
                 camera.jitter_pixels[1]
             ));
         }
+    }
+
+    // A recording on the slot bound to `commands`, which proves that slot's previous one retired.
+    fn record(&self, s: &mut State, commands: Handle) -> Option<u32> {
+        let slot = s.command_lists.bind(commands)?;
+        s.serial += 1;
+        s.slot_serials[slot as usize] = s.serial;
+        Some(slot)
+    }
+
+    // The pass's view's vendor context for the planned backend, or the creation's refusal.
+    fn create_view(&self, s: &mut State, commands: Handle, pass: &Pass) -> Result<usize, i32> {
+        let Some(device) = (unsafe { com_ref::owned(leaf::child_device(commands)) }) else {
+            return Err(BACKEND_NOT_SUPPORTED);
+        };
+        let setup = self.vendor_setup(s, device.as_raw(), pass.camera.depth_inverted);
+        let mut sr = null_mut();
+        let created = unsafe { leaf::sr12_create(&setup, &mut sr) };
+        if created != BACKEND_OK {
+            return Err(created);
+        }
+        let _ = unsafe { leaf::sr12_set_sharpening(sr, &s.sharpening) };
+        s.views.push(View {
+            key: pass.view_key,
+            sr,
+            seen: pass.source_frame_id,
+            slot: 0,
+            serial: 0,
+        });
+        Ok(s.views.len() - 1)
     }
 
     // The first SR pass after start or reconfiguration: resolve Auto, then plan the engine's
@@ -819,34 +937,26 @@ impl Host {
             self.log("Engine spatial upscaling plan accepted.");
             return true;
         }
-        let Some(device) = (unsafe { com_ref::owned(leaf::child_device(commands)) }) else {
+        if unsafe { com_ref::owned(leaf::child_device(commands)) }.is_none() {
             return false;
-        };
-        let mut setup = self.vendors.sr_setup(
-            device.as_raw(),
-            (s.backend, s.quality, s.preset),
-            Some(log),
-            self.user(),
-        );
-        // The host plans the render extents; the vendor context reports them.
-        (setup.output_width, setup.output_height) = (s.width, s.height);
-        setup.inverted_depth = pass.camera.depth_inverted;
-        setup.streamline_host = leaf::present_host();
-        let created = unsafe { leaf::sr12_create(&setup, &mut s.sr) };
-        drop(device);
-        s.last_result = created;
-        if created == BACKEND_OK {
-            let now = unsafe { leaf::tick() };
-            if now >= s.sharpening_poll {
-                s.sharpening = self.read_sharpening();
-                s.sharpening_poll = now.saturating_add(SHARPENING_POLL_MS);
-            }
-            let _ = unsafe { leaf::sr12_set_sharpening(s.sr, &s.sharpening) };
-            let _ = unsafe {
-                leaf::sr12_plan(s.sr, &mut s.plan.render_width, &mut s.plan.render_height)
-            };
-            s.plan.enabled = 1;
         }
+        let now = unsafe { leaf::tick() };
+        if now >= s.sharpening_poll {
+            s.sharpening = self.read_sharpening();
+            s.sharpening_poll = now.saturating_add(SHARPENING_POLL_MS);
+        }
+        let created = match self.create_view(s, commands, pass) {
+            Ok(index) => {
+                let sr = s.views[index].sr;
+                let _ = unsafe {
+                    leaf::sr12_plan(sr, &mut s.plan.render_width, &mut s.plan.render_height)
+                };
+                s.plan.enabled = 1;
+                BACKEND_OK
+            }
+            Err(result) => result,
+        };
+        s.last_result = created;
         self.log(&format!(
             "Native D3D12 provider {} preparation result {created}, {}x{} -> {}x{}",
             s.backend, s.plan.render_width, s.plan.render_height, s.width, s.height
@@ -890,6 +1000,14 @@ unsafe extern "C" fn cpu_event(_: *mut c_void, event: *const CpuEvent) {
     unsafe { leaf::fg_cpu(event) };
 }
 
+// The services an attaching adapter receives, from a full V3 setup.
+unsafe fn attached(setup: *const Setup) -> Option<*mut Services> {
+    let size = unsafe { setup.cast::<u32>().read() } as usize;
+    (size >= size_of::<SetupV3>())
+        .then(|| unsafe { (*setup.cast::<SetupV3>()).services })
+        .filter(|services| !services.is_null())
+}
+
 // Admission and host construction, before any plugin is loaded. Err is the public refusal code:
 // 1 incomplete or mismatched setup, 2 invalid choice, 4 log unavailable, 8 adapter policy refused.
 unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
@@ -911,12 +1029,15 @@ unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
                 spatial_name: unsafe { copy_c_string(extended.spatial_name_utf8, c"") },
             })
         }
+        RSF_CALLBACK_HOST_ABI_VERSION_V3 if unsafe { attached(setup_ptr) }.is_some() => None,
         _ => return Err(1),
     };
-    if setup.plugin_path.is_null()
+    // An attaching adapter owns its plugin lifecycle; a started one names the plugin to load.
+    let plugin = setup.abi_version != RSF_CALLBACK_HOST_ABI_VERSION_V3;
+    if setup.plugin_path.is_null() == plugin
+        || setup.probe.is_null() == plugin
         || setup.log_path.is_null()
         || setup.preferences_path.is_null()
-        || setup.probe.is_null()
         || setup.engine_version_utf8.is_null()
         || setup.project_id_utf8.is_null()
         || setup.sr_backend_choices == 0
@@ -951,8 +1072,10 @@ unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
     let ui_preferences = unsafe { rsf_settings_store_read_layout(preferences.as_ptr(), SECTION) };
     let host = Host {
         state: Mutex::new(State {
-            sr: null_mut(),
+            views: Vec::new(),
             inputs: null_mut(),
+            slot_serials: [0; 3],
+            serial: 0,
             input_width: 0,
             input_height: 0,
             plan: empty_plan(),
@@ -1092,6 +1215,7 @@ unsafe fn start(setup: *const Setup) -> u32 {
         Ok(host) => host,
         Err(code) => return code,
     };
+    let attach = unsafe { attached(setup) };
     let setup = unsafe { &*setup };
     // The plugin may keep the services' user address until its session stops.
     let raw = crate::allocate_handle(host);
@@ -1099,22 +1223,29 @@ unsafe fn start(setup: *const Setup) -> u32 {
         return 11;
     }
     let host = unsafe { &*raw };
+    let services = Services {
+        struct_size: size_of::<Services>() as u32,
+        abi_version: RSF_GAME_ABI_VERSION,
+        session_id: unsafe { leaf::tick() }.wrapping_add(1),
+        log: Some(log),
+        render_pass: Some(render),
+        render_config: Some(configuration),
+        user: raw.cast(),
+        cpu_event: Some(cpu_event),
+        ..unsafe { std::mem::zeroed() }
+    };
+    if let Some(output) = attach {
+        unsafe { output.write(services) };
+        host.log("Adapter attached; awaiting actual D3D12 render callback.");
+        published.0 = raw;
+        return 0;
+    }
     let options = SessionOptions {
         struct_size: size_of::<SessionOptions>() as u32,
         abi_version: SESSION_ABI_VERSION,
         plugin_path: setup.plugin_path,
         probe: setup.probe,
-        services: Services {
-            struct_size: size_of::<Services>() as u32,
-            abi_version: RSF_GAME_ABI_VERSION,
-            session_id: unsafe { leaf::tick() }.wrapping_add(1),
-            log: Some(log),
-            render_pass: Some(render),
-            render_config: Some(configuration),
-            user: raw.cast(),
-            cpu_event: Some(cpu_event),
-            ..unsafe { std::mem::zeroed() }
-        },
+        services,
     };
     let mut plugin = null_mut();
     let mut result = unsafe { leaf::session_prepare(&options, &mut plugin) };
@@ -1172,4 +1303,144 @@ unsafe extern "C" fn rsf_callback_host_start(setup: *const Setup) -> u32 {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_callback_host_stop() -> u32 {
     stop()
+}
+
+// The published host for a status or settings call. Start and stop hold it meanwhile.
+fn with_host<T>(call: impl FnOnce(&Host) -> T) -> Option<T> {
+    let published = try_lifecycle()?;
+    (!published.0.is_null()).then(|| call(unsafe { &*published.0 }))
+}
+
+/// # Safety
+/// `output` is null or readable for its leading `struct_size`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_callback_host_status_get(output: *mut HostStatus) -> u32 {
+    if !unsafe { has_capacity(output) } {
+        return 0;
+    }
+    with_host(|host| {
+        let s = host.lock();
+        let serving = s.plan.enabled != 0 && (s.backend == RSF_SR_SPATIAL || s.accepted != 0);
+        let status = HostStatus {
+            struct_size: size_of::<HostStatus>() as u32,
+            requested_backend: if s.automatic {
+                RSF_SR_AUTO
+            } else {
+                s.requested_backend
+            },
+            active_backend: if serving { s.backend } else { RSF_SR_NONE },
+            enabled: s.plan.enabled,
+            result: s.last_result,
+            render_width: s.plan.render_width,
+            render_height: s.plan.render_height,
+            output_width: s.width,
+            output_height: s.height,
+            evaluated_frames: s.accepted,
+            refused_frames: s.refused,
+        };
+        unsafe { output.write(status) };
+        1
+    })
+    .unwrap_or(0)
+}
+
+// rsf_render_settings_get and _apply for an attached or started host; None without one.
+pub(super) fn settings_get() -> Option<Settings> {
+    with_host(|host| host.lock().settings)
+}
+
+pub(super) fn settings_apply(request: &Settings) -> Option<i32> {
+    with_host(|host| host.settings_apply(request))
+}
+
+// A settings request as the panel change it amounts to against what is saved.
+fn settings_intent(saved: &Settings, request: &Settings) -> Intent {
+    let changed = |before: u32, after: u32| u32::from(before != after);
+    Intent {
+        struct_size: size_of::<Intent>() as u32,
+        backend_changed: changed(saved.sr_backend, request.sr_backend),
+        backend: request.sr_backend,
+        quality_changed: changed(saved.sr_quality, request.sr_quality),
+        quality: request.sr_quality,
+        enabled_changed: changed(saved.sr_enabled, request.sr_enabled),
+        enabled: request.sr_enabled,
+        dlss_preset_changed: changed(saved.dlss_preset, request.dlss_preset),
+        dlss_preset: request.dlss_preset,
+        fg_backend_changed: changed(saved.fg_backend, request.fg_backend),
+        fg_backend: request.fg_backend,
+        fg_changed: u32::from(
+            saved.fg_enabled != request.fg_enabled
+                || saved.generated_frames != request.generated_frames,
+        ),
+        fg_mode: request.fg_enabled,
+        fg_generated: request.generated_frames,
+        reflex_changed: changed(saved.latency, request.latency),
+        reflex_mode: request.latency,
+        frame_limit_changed: changed(saved.frame_limit_us, request.frame_limit_us),
+        frame_limit_us: request.frame_limit_us,
+        performance_hud_changed: changed(saved.status_overlay, request.status_overlay),
+        performance_hud: request.status_overlay,
+        sharpening_changed: 1,
+        sharpening_mode: request.sharpening_mode,
+        sharpening_sharpness: request.sharpening_sharpness,
+        sharpening_mas: request.sharpening_mas,
+        sharpening_motion_sharpness: request.sharpening_motion_sharpness,
+        sharpening_motion_threshold: request.sharpening_motion_threshold,
+        sharpening_motion_scale_limit: request.sharpening_motion_scale_limit,
+        sharpening_contrast_enabled: request.sharpening_contrast_enabled,
+        sharpening_contrast: request.sharpening_contrast,
+        sharpening_depth_scale: request.sharpening_depth_scale,
+        sharpening_depth_bias: request.sharpening_depth_bias,
+        sharpening_clamp_output: request.sharpening_clamp_output,
+        sharpening_debug: request.sharpening_debug,
+        ..Intent::default()
+    }
+}
+
+impl Host {
+    // A request from the adapter's own settings API: checked as the RDR2 entry checks one, then
+    // applied and saved exactly as the same change made in the panel. FG mode is fg_enabled's
+    // stored value (0 off, 1 fixed, 2 auto, 3 dynamic).
+    fn settings_apply(&self, request: &Settings) -> i32 {
+        const INVALID: i32 = -1;
+        let backend = if request.sr_backend == RSF_SR_AUTO {
+            RSF_SR_NONE
+        } else {
+            request.sr_backend
+        };
+        let sharpening = sharpening_of(request, &sharpening_policy::defaults());
+        if !sharpening_policy::valid(&sharpening)
+            || request.sr_enabled > 1
+            || request.status_overlay > 1
+            || request.latency > 2
+            || request.fg_enabled > 3
+            || !(1..=15).contains(&request.generated_frames)
+            || leaf::dlss_preset_valid(request.dlss_preset) == 0
+            || request.sr_backend > 31
+            || self.sr_choices & (1 << request.sr_backend) == 0
+            || !accepts_backend_quality(backend, request.sr_quality)
+            || !fg_choice::allowed(request.fg_backend, RSF_FG_BACKEND_ALL)
+        {
+            return INVALID;
+        }
+        let mut fg = FgStatus {
+            struct_size: size_of::<FgStatus>() as u32,
+            ..unsafe { std::mem::zeroed() }
+        };
+        let mut s = self.lock();
+        if unsafe { leaf::fg_status(&mut fg) } == 0 {
+            // No generation yet: the saved options stand for the ones it will report.
+            fg.requested = FgOptions {
+                struct_size: size_of::<FgOptions>() as u32,
+                mode: s.settings.fg_enabled,
+                generated_frames: s.settings.generated_frames,
+                reflex_mode: s.settings.latency,
+                frame_limit_us: s.settings.frame_limit_us,
+                debug: 0,
+            };
+        }
+        let intent = settings_intent(&s.settings, request);
+        self.apply_intent(&mut s, &intent, &mut fg.requested);
+        OK
+    }
 }

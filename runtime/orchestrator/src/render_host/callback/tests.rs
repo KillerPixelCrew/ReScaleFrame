@@ -576,6 +576,107 @@ fn admission_refuses_in_the_native_order() {
 }
 
 #[test]
+fn an_attached_adapter_gets_services_settings_and_status_without_a_plugin() {
+    let _serial = lock(&LIFECYCLE_TESTS);
+    let files = Files::new("attach");
+    reset();
+    let mut services: Services = unsafe { std::mem::zeroed() };
+    let mut attach = SetupV3 {
+        base: Setup {
+            struct_size: size_of::<SetupV3>() as u32,
+            abi_version: RSF_CALLBACK_HOST_ABI_VERSION_V3,
+            plugin_path: null(),
+            probe: null(),
+            ..setup(&files, 3, 1)
+        },
+        services: &mut services,
+    };
+    // A plugin to load, or nowhere to put the services, is refused.
+    let named = SetupV3 {
+        base: setup(&files, 3, 1),
+        ..attach
+    };
+    let named = SetupV3 {
+        base: Setup {
+            struct_size: size_of::<SetupV3>() as u32,
+            abi_version: RSF_CALLBACK_HOST_ABI_VERSION_V3,
+            ..named.base
+        },
+        ..named
+    };
+    assert_eq!(unsafe { start(&named.base) }, 1);
+    attach.services = null_mut();
+    assert_eq!(unsafe { start(&attach.base) }, 1);
+    attach.services = &mut services;
+    assert_eq!(unsafe { start(&attach.base) }, 0);
+    assert_eq!(events(), ["policy 0 1"], "no plugin session");
+    assert!(services.render_pass.is_some() && services.render_config.is_some());
+
+    let mut status: HostStatus = unsafe { std::mem::zeroed() };
+    status.struct_size = size_of::<HostStatus>() as u32;
+    let list = fake(fake(null_mut()));
+    unsafe { (services.render_pass.unwrap())(services.user, list, &sr((1920, 1080)), 1) };
+    assert_eq!(unsafe { rsf_callback_host_status_get(&mut status) }, 1);
+    assert_eq!(
+        (
+            status.requested_backend,
+            status.active_backend,
+            status.enabled
+        ),
+        (3, 3, 1)
+    );
+    assert_eq!((status.evaluated_frames, status.refused_frames), (1, 0));
+    assert_eq!((status.render_width, status.output_width), (1280, 1920));
+
+    // A settings request is applied and saved as the same panel change.
+    let mut request = settings_get().unwrap();
+    request.sr_backend = 5;
+    request.sr_quality = 2;
+    request.generated_frames = 2;
+    events();
+    assert_eq!(settings_apply(&request), Some(OK));
+    let applied = events();
+    assert!(applied.contains(&"policy 0 2".to_owned()), "{applied:?}");
+    assert!(applied.iter().any(|event| event.starts_with("fg options")));
+    assert_eq!(files.integer("SRBackend"), 5);
+    assert_eq!(settings_get().unwrap().generated_frames, 2);
+    request.generated_frames = 16;
+    assert_eq!(settings_apply(&request), Some(-1));
+
+    assert_eq!(stop(), 0);
+    assert_eq!(settings_get().map(|s| s.sr_backend), None);
+    assert_eq!(unsafe { rsf_callback_host_status_get(&mut status) }, 0);
+    events();
+}
+
+#[test]
+fn each_view_gets_a_context_and_an_idle_retired_one_is_released() {
+    let files = Files::new("views");
+    let host = host(&files, 1, 1);
+    let device = fake(null_mut());
+    let lists = [fake(device), fake(device), fake(device)];
+    let view = |key: u64, source: u64| {
+        let mut pass = sr((1920, 1080));
+        (pass.view_key, pass.source_frame_id) = (key, source);
+        pass
+    };
+    run(&host, lists[0], &view(3, 1), true);
+    assert!(events().iter().any(|event| event == "evaluate 1 slot=0"));
+    // A second camera gets its own context with the same plan.
+    run(&host, lists[1], &view(4, 2), true);
+    let second = events();
+    assert!(second[0].starts_with("create abi=1 backend=1 quality=1 0x0->1920x1080"));
+    assert_eq!(second.last().unwrap(), "evaluate 2 slot=1");
+    // View 4 is idle long enough, but its last recording (slot 1) has not been recorded again.
+    run(&host, lists[0], &view(3, 200), true);
+    assert_eq!(events(), ["evaluate 1 slot=0"]);
+    run(&host, lists[1], &view(3, 201), true);
+    assert_eq!(events(), ["destroy 2", "evaluate 1 slot=1"]);
+    assert_eq!(host.lock().views.len(), 1);
+    let _ = lists[2];
+}
+
+#[test]
 fn start_publishes_services_and_stop_retires_in_order() {
     let _serial = lock(&LIFECYCLE_TESTS);
     let files = Files::new("lifecycle");
