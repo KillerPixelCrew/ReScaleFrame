@@ -596,7 +596,8 @@ fn options_parse_like_the_native_reader() {
             ("SRCutAngle", "30deg"),
             ("SRStageCaptureCount", "99"),
             ("SRStageCaptureInterval", "0"),
-            ("SRBackend", "2"),
+            // Spatial is the engine's own scaler, which X-Ray has not.
+            ("SRBackend", "6"),
             ("SRQuality", "4"),
         ]
     });
@@ -1463,8 +1464,11 @@ mod win32 {
             ),
             (false, 5, 1, 6)
         );
-        set(w!("SRBackend"), w!("2"));
+        set(w!("SRBackend"), w!("6"));
         assert_eq!(read().settings.backend, BACKEND_AUTO);
+        // FSR2 is served like the other FidelityFX providers.
+        set(w!("SRBackend"), w!("2"));
+        assert_eq!(read().settings.backend, 2);
         set(w!("SRStage"), w!("4"));
         assert_eq!(read().stage, 4);
         assert!(selected());

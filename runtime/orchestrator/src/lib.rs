@@ -279,6 +279,8 @@ mod sharpening_policy;
 mod sr12;
 #[cfg(windows)]
 mod sr_bridge;
+#[cfg(windows)]
+mod sr_choices;
 mod sr_history;
 #[cfg(windows)]
 mod sr_legacy;

@@ -12,10 +12,9 @@ use rsf_game_sys::ffi_util::lock_or_recover;
 // The carrier already loaded the Runtime. The plugin target links its import library.
 use crate::sys::{
     RSF_DLSS_PRESET_MASK, RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_SR_AUTO,
-    RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_SPATIAL, RSF_SR_XESS,
-    rsf_backend_result, rsf_callback_host_start, rsf_callback_host_stop, rsf_fg_choice_get,
-    rsf_fg_choice_start, rsf_fg12_capture_outputs, rsf_fg12_install, rsf_fg12_setup,
-    rsf_native_fg_options, rsf_overlay_saved_options_unregister,
+    RSF_SR_CHOICES_ALL, rsf_backend_result, rsf_callback_host_start, rsf_callback_host_stop,
+    rsf_fg_choice_get, rsf_fg_choice_start, rsf_fg12_capture_outputs, rsf_fg12_install,
+    rsf_fg12_setup, rsf_native_fg_options, rsf_overlay_saved_options_unregister,
 };
 use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION_V2, rsf_callback_host_setup, rsf_callback_host_setup_v2,
@@ -55,13 +54,6 @@ mod code {
     pub(super) const STOP_REFUSED: u32 = 1;
 }
 
-/// The SR providers the Unity callback host offers.
-const SR_CHOICES: u32 = (1 << RSF_SR_DLSS)
-    | (1 << RSF_SR_FSR2)
-    | (1 << RSF_SR_FSR3)
-    | (1 << RSF_SR_FSR4)
-    | (1 << RSF_SR_XESS)
-    | (1 << RSF_SR_SPATIAL);
 const MAX_GENERATED_FRAMES: u32 = 15;
 const AMD64: u16 = 0x8664;
 const MONO: PCWSTR = w!("mono-2.0-bdwgc.dll");
@@ -366,7 +358,8 @@ fn sr_start(ini: *const u16, identity: &mut Option<Identity>) -> u32 {
             backend,
             quality,
             dlss_preset,
-            sr_backend_choices: SR_CHOICES,
+            // No limit of its own: the Runtime offers what the GPU, packages and URP's FSR1 serve.
+            sr_backend_choices: RSF_SR_CHOICES_ALL,
             engine_type: RSF_DLSS_ENGINE_UNITY,
             engine_version_utf8: identity.player.unity_version.as_ptr(),
             project_id_utf8: PROJECT_ID.as_ptr(),
@@ -458,8 +451,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sr_choices_cover_every_unity_provider() {
-        assert_eq!(SR_CHOICES, 0b111_1110);
+    fn unity_passes_no_provider_limit_of_its_own() {
+        // Every provider, URP's FSR1 and Auto: the Runtime narrows them to this machine, and the
+        // callback host's own test checks what it then offers.
+        assert_eq!(RSF_SR_CHOICES_ALL, 0b1111_1110);
     }
 
     #[test]

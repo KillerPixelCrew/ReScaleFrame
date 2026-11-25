@@ -18,6 +18,10 @@
 extern "C" {
 #endif
 void rsf_overlay_fill_fg_stats(rsf_overlay_stats* stats, const rsf_native_fg_status* fg);
+/* Request the provider a panel choice names on the presenting `chain`. Auto becomes the provider
+   this GPU prefers among those the bridge serves, so the caller needs no policy of its own. Returns
+   an rsf_backend_result; Auto with no provider to pick requests nothing and returns zero. */
+int rsf_overlay_request_fg_backend(void* chain, uint32_t backend);
 #ifdef __cplusplus
 }
 #endif

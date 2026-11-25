@@ -350,12 +350,10 @@ fn setup_translates_what_the_adapter_can_apply() {
         (1, 5, 2, 4)
     );
     assert_eq!(setup.dlss_preset_available, 1);
-    assert_eq!(
-        setup.fg_backend_choices,
-        RSF_FG_BACKEND_ALL | (1 << RSF_FG_BACKEND_AUTO)
-    );
+    // The same FG set, latency modes and generated-frame bound every other host offers.
+    assert_eq!(setup.fg_backend_choices, RSF_FG_CHOICES_ALL);
     assert_eq!(setup.latency_choices, 0b111);
-    assert_eq!(setup.max_generated_frames, 3);
+    assert_eq!(setup.max_generated_frames, RSF_OVERLAY_MAX_GENERATED_FRAMES);
     assert_eq!(
         (
             setup.defaults.fg_enabled,

@@ -521,6 +521,30 @@ fn run(pipeline: &Pipeline, frame: &Frame) -> i32 {
 }
 
 #[test]
+fn the_pipeline_reports_the_common_set_its_packages_serve() {
+    use crate::sr_choices::{COMMON, Packages};
+    let packages = Packages::all("pipeline");
+    let leaf =
+        |name: &str| std::ffi::CString::new(packages.0.join(name).to_str().unwrap()).unwrap();
+    let (streamline, fidelityfx, xess) = (leaf("streamline"), leaf("fidelityfx"), leaf("xess"));
+    let pipeline = Pipeline::new();
+    PIPE.set(&pipeline);
+    assert_eq!(
+        pipeline.backend_choices(),
+        0,
+        "nothing is known before a start"
+    );
+    let mut request = setup();
+    request.streamline_directory_utf8 = streamline.as_ptr();
+    request.fsr3_directory_utf8 = fidelityfx.as_ptr();
+    request.xess_directory_utf8 = xess.as_ptr();
+    let device = fake();
+    // Whether the start itself succeeds is not the question: the offer outlives a refusal.
+    unsafe { pipeline.start(device, &request) };
+    assert_eq!(pipeline.backend_choices(), COMMON);
+}
+
+#[test]
 fn start_validates_plans_and_stop_releases_every_lease() {
     let pipeline = Pipeline::new();
     let device = fake();

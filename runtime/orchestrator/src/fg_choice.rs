@@ -115,6 +115,18 @@ pub(crate) extern "C" fn rsf_fg_select_auto_backend(preferred: u32, choices: u32
         .unwrap_or(0)
 }
 
+/// The provider a requested one names. Auto becomes the adapter's `preferred` provider (or FSR3)
+/// among `choices`; with no preference and Off offered it stays Off, as the bridge starts.
+pub(crate) fn resolve(requested: u32, preferred: u32, choices: u32) -> u32 {
+    if requested != AUTO {
+        requested
+    } else if preferred == 0 && choices & 1 != 0 {
+        0
+    } else {
+        rsf_fg_select_auto_backend(preferred, choices)
+    }
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg_choice_start(path: PCWSTR, fallback: u32, choices: u32) -> u32 {
     let mut settings = SETTINGS.lock().unwrap();
@@ -198,6 +210,17 @@ mod tests {
 
     fn bits(ids: &[u32]) -> u32 {
         ids.iter().map(|&id| 1u32 << id).sum()
+    }
+
+    #[test]
+    fn resolve_keeps_a_named_provider_and_turns_auto_into_one() {
+        let all = bits(&[DLSS, FSR3, FSR4, XESS]) | 1;
+        assert_eq!(resolve(XESS, DLSS, all), XESS);
+        assert_eq!(resolve(AUTO, DLSS, all), DLSS);
+        assert_eq!(resolve(AUTO, DLSS, bits(&[FSR3]) | 1), FSR3);
+        // No preference and Off offered: the bridge starts Off, so Auto stays Off.
+        assert_eq!(resolve(AUTO, 0, all), 0);
+        assert_eq!(resolve(AUTO, 0, bits(&[FSR3])), FSR3);
     }
 
     #[test]

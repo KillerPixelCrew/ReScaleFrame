@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::sys::{
-    RSF_FG_OFF, RSF_FG_STAT_TOTAL_PRESENTED, RSF_SR_FSR2, RSF_SR_XESS,
+    RSF_FG_BACKEND_AUTO, RSF_FG_OFF, RSF_FG_STAT_TOTAL_PRESENTED, RSF_SR_FSR2, RSF_SR_XESS,
     rsf_native_fg_status as FgStatus, rsf_render_settings as Settings,
     rsf_sharpening_options as Sharpening,
 };
@@ -62,8 +62,10 @@ pub(super) unsafe extern "C" fn rsf_overlay_fill_fg_stats(stats: &mut Stats, fg:
         0
     };
     stats.fg_requested_backend = choice.backend;
-    stats.fg_backend_choices =
-        (choice.choices & rsf_d3d11_present_backend_choices()) | RSF_OVERLAY_FG_RUNTIME_SWITCH;
+    // Auto is always offered: `rsf_overlay_request_fg_backend` and the hosts resolve it per GPU.
+    stats.fg_backend_choices = (choice.choices & rsf_d3d11_present_backend_choices())
+        | RSF_OVERLAY_FG_RUNTIME_SWITCH
+        | (1 << RSF_FG_BACKEND_AUTO);
     stats.fg_selection_result = if choice.last_result != 0 {
         choice.last_result
     } else {
@@ -92,6 +94,29 @@ pub(super) unsafe extern "C" fn rsf_overlay_fill_fg_stats(stats: &mut Stats, fg:
         fg.available != 0 && fg.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED != 0,
     );
     stats.frame_limit_us = fg.requested.frame_limit_us;
+}
+
+/// Request the generation provider a panel choice names on the presenting `chain`: Auto becomes the
+/// one this GPU prefers among those the bridge serves, so a host that applies the choice itself
+/// needs no policy of its own. Zero results are not requested (the bridge keeps its provider).
+///
+/// # Safety
+/// `chain` is the live swap chain the panel drew on.
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_overlay_request_fg_backend(
+    chain: *mut std::ffi::c_void,
+    backend: u32,
+) -> i32 {
+    let vendor = unsafe { crate::overlay_service::owner_vendor(chain) };
+    let backend = crate::fg_choice::resolve(
+        backend,
+        crate::fg_choice::rsf_fg_default_backend(vendor, 0),
+        rsf_d3d11_present_backend_choices(),
+    );
+    if backend == 0 {
+        return 0;
+    }
+    crate::d3d11_present::rsf_d3d11_present_request(backend)
 }
 
 pub(super) fn sr_name(backend: u32) -> &'static CStr {
@@ -213,6 +238,14 @@ pub(super) fn apply_settings_intent(prefs: &mut Settings, intent: &Intent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_host_that_fills_fg_stats_offers_auto_and_runtime_switching() {
+        let mut stats = Stats::default();
+        unsafe { rsf_overlay_fill_fg_stats(&mut stats, std::ptr::null()) };
+        assert_ne!(stats.fg_backend_choices & (1 << RSF_FG_BACKEND_AUTO), 0);
+        assert_ne!(stats.fg_backend_choices & RSF_OVERLAY_FG_RUNTIME_SWITCH, 0);
+    }
 
     #[test]
     fn sharpening_stats_and_intent_preserve_all_fields() {

@@ -18,6 +18,7 @@ use crate::settings_store::{
     rsf_settings_store_write_layout, set_sharpening, sharpening_of,
 };
 use crate::sharpening_policy;
+use crate::sr_choices::{directory, package_has, sr_backends, sr_quality};
 use crate::sync::lock;
 use crate::sys::rsf_fg12_setup as FgSetup;
 use crate::sys::{
@@ -28,11 +29,10 @@ use crate::sys::{
 };
 use crate::sys::{
     RSF_OVERLAY_FG_RUNTIME_SWITCH, RSF_OVERLAY_HOST_OPTION_TOGGLE, RSF_OVERLAY_SR_CHANGE_APPLIED,
-    RSF_OVERLAY_SR_CHANGE_REFUSED, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK, RSF_REFLEX_ON,
-    rsf_overlay_host_option as HostOption, rsf_overlay_intent as Intent,
-    rsf_overlay_stats as Stats, rsf_render_status as Status,
+    RSF_OVERLAY_SR_CHANGE_REFUSED, RSF_REFLEX_ON, rsf_overlay_host_option as HostOption,
+    rsf_overlay_intent as Intent, rsf_overlay_stats as Stats, rsf_render_status as Status,
 };
-use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_XESS};
+use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_SPATIAL, RSF_SR_XESS};
 use crate::sys::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 use crate::wide::copy_nul as wide_copy;
 #[cfg(not(test))]
@@ -457,14 +457,11 @@ impl Host {
         let mut desired = values.fg_backend;
         if desired == RSF_FG_BACKEND_AUTO && s.device.is_some() {
             let vendor = self.adapter(s).map_or(0, |adapter| adapter.vendor);
-            let preferred = leaf::fg_default_backend(vendor, 0);
-            let choices = leaf::present_backend_choices();
-            // Honor the bridge's Off choice when the adapter has no preference.
-            desired = if preferred == 0 && has(choices, 0) {
-                0
-            } else {
-                fg_choice::rsf_fg_select_auto_backend(preferred, choices)
-            };
+            desired = fg_choice::resolve(
+                desired,
+                leaf::fg_default_backend(vendor, 0),
+                leaf::present_backend_choices(),
+            );
         }
         if desired != RSF_FG_BACKEND_AUTO
             && desired != s.fg_backend_requested
@@ -1156,19 +1153,29 @@ impl Host {
             backend_supported: u32::from(status.sr_effective_backend != 0),
             ..Stats::default()
         };
-        // Auto is shown as the provider it resolved to. Picking a provider in the panel saves it
-        // explicitly.
-        stats.backend = if prefs.sr_backend == RSF_SR_AUTO {
+        // Auto stays the selected choice and is named by the provider it resolved to.
+        let resolved = if prefs.sr_backend == RSF_SR_AUTO {
             self.automatic_backend.load(Ordering::Relaxed)
         } else {
             prefs.sr_backend
         };
-        stats.backend_name = sr_name(stats.backend).as_ptr();
+        stats.backend = prefs.sr_backend;
+        stats.backend_name = sr_name(resolved).as_ptr();
         stats.requested_backend = stats.backend;
         stats.enabled = prefs.sr_enabled;
         stats.quality = quality;
-        stats.sr_backend_choices = self.sr_choices;
-        stats.sr_quality_choices = RSF_OVERLAY_SR_QUALITY_STANDARD_MASK;
+        let mut adapter = Adapter::default();
+        let vendor = (unsafe { leaf::adapter(device.as_raw(), &mut adapter) } != 0)
+            .then_some(adapter.vendor);
+        let packages = [&self.streamline, &self.fsr, &self.xess].map(|text| directory(text));
+        stats.sr_backend_choices =
+            sr_backends(vendor, package_has(packages), false) & self.sr_choices;
+        // Until Auto has resolved, it offers the levels every provider it can pick accepts.
+        stats.sr_quality_choices = sr_quality(if resolved != 0 {
+            resolved
+        } else {
+            prefs.sr_backend
+        });
         [stats.sr_change_id, stats.sr_change_status] = SR_CHANGE.get();
         stats.sharpening_available = 1;
         fill_sharpening_stats(
@@ -1455,7 +1462,8 @@ unsafe fn describe(setup: &Setup, services: &Services) -> Host {
         ini,
         section,
         session: services.session_id,
-        sr_choices: setup.sr_backend_choices,
+        // This host hands the engine no plan for its own scaler, so Spatial is never its choice.
+        sr_choices: setup.sr_backend_choices & !(1 << RSF_SR_SPATIAL),
         engine_type: setup.engine_type,
         application_id: setup.application_id,
         engine_version: text(setup.engine_version_utf8),

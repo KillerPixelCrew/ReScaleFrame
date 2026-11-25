@@ -2,11 +2,13 @@
 //! The runtime DLL's shared overlay service. Graphics and callbacks stay on the caller's
 //! Present thread. Published settings and the last sampled frame can be read by any thread.
 use crate::d3d11_d3d12::borrow;
+use crate::d3d11_device_identity::device_vendor;
 use crate::d3d11_present::{
     rsf_d3d11_present_backend, rsf_d3d11_present_backend_choices, rsf_d3d11_present_has_owner,
     rsf_d3d11_present_request, rsf_d3d11_present_session, rsf_d3d11_present_switch_result,
 };
 use crate::dlss_pipeline::rsf_core_dlss_pipeline_apply_sharpening;
+use crate::fg_choice::{self, rsf_fg_default_backend};
 use crate::frame_limit::rsf_core_overlay_refresh_mhz;
 use crate::graphics_d3d11::rsf_call_native_log;
 use crate::native_fg::{rsf_native_fg_options_set, rsf_native_fg_status_get};
@@ -26,9 +28,11 @@ use crate::{
     sys::rsf_observer_present_event,
     sys::{RSF_OBSERVER_ABI_VERSION, rsf_observer_options},
 };
+use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 #[cfg(not(test))]
 use windows::Win32::Graphics::Dxgi::DXGI_PRESENT_TEST;
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
+use windows::core::Interface;
 use windows_sys::Win32::{
     System::{SystemInformation::GetTickCount64, Threading::GetCurrentProcessId},
     UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
@@ -68,7 +72,7 @@ use std::{
     ptr::{null, null_mut},
     sync::{
         LazyLock, Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering},
     },
 };
 
@@ -135,6 +139,8 @@ static LIFECYCLE: AtomicU8 = AtomicU8::new(COLD);
 static PANEL: Mutex<()> = Mutex::new(());
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::default()));
 static APPLY_ACTIVE: AtomicBool = AtomicBool::new(false);
+// The PCI vendor of the adapter the presented chain's device lives on; zero until a Present names it.
+static OWNER_VENDOR: AtomicU32 = AtomicU32::new(0);
 // Keep refusal accounting independent of the settings lock, which covers INI I/O.
 static APPLY_DIAGNOSTICS: Mutex<ApplyDiagnostics> = Mutex::new(ApplyDiagnostics {
     attempts: 0,
@@ -295,7 +301,7 @@ impl Config {
             || setup.fg_backend_choices & !(RSF_FG_BACKEND_ALL | AUTO_FG) != 0
             || !has(setup.latency_choices, RSF_REFLEX_OFF)
             || setup.latency_choices & !KNOWN_LATENCY != 0
-            || !(1..=15).contains(&setup.max_generated_frames)
+            || !(1..=RSF_OVERLAY_MAX_GENERATED_FRAMES).contains(&setup.max_generated_frames)
             || setup.defaults.struct_size < abi_size::<Settings>()
         {
             return Err(INVALID_ARGUMENT);
@@ -554,14 +560,39 @@ fn forward_fg(value: &Settings) -> i32 {
         ..current.requested
     };
     unsafe { rsf_native_fg_options_set(&options) };
-    if value.fg_enabled == 0
-        || value.fg_backend == RSF_FG_BACKEND_AUTO
-        || rsf_d3d11_present_has_owner() == 0
-        || rsf_d3d11_present_backend() == value.fg_backend
-    {
+    if value.fg_enabled == 0 || rsf_d3d11_present_has_owner() == 0 {
         return OK;
     }
-    rsf_d3d11_present_request(value.fg_backend)
+    // Auto is the provider this GPU prefers among those the bridge serves. Until the first Present
+    // names the GPU it keeps the bridge's own start.
+    let preferred = rsf_fg_default_backend(OWNER_VENDOR.load(Ordering::Relaxed), 0);
+    let backend = fg_choice::resolve(
+        value.fg_backend,
+        preferred,
+        rsf_d3d11_present_backend_choices(),
+    );
+    if backend == 0 || rsf_d3d11_present_backend() == backend {
+        return OK;
+    }
+    rsf_d3d11_present_request(backend)
+}
+
+/// The PCI vendor of the adapter a presented D3D11 chain's device lives on, zero when a D3D12
+/// chain or an unreadable one hides it. A readable vendor is kept.
+///
+/// # Safety
+/// `chain` is a live swap chain or null.
+pub(crate) unsafe fn owner_vendor(chain: *mut c_void) -> u32 {
+    let known = OWNER_VENDOR.load(Ordering::Relaxed);
+    if known != 0 || chain.is_null() {
+        return known;
+    }
+    let vendor = unsafe { borrow::<IDXGISwapChain>(&chain).GetDevice::<ID3D11Device>() }
+        .ok()
+        .and_then(|device| unsafe { device_vendor(device.as_raw()) })
+        .unwrap_or(0);
+    OWNER_VENDOR.store(vendor, Ordering::Relaxed);
+    vendor
 }
 
 unsafe extern "C" fn configure(setup: *const rsf_overlay_service_setup) -> i32 {
@@ -1167,6 +1198,7 @@ unsafe fn present_inner(
                 desc.BufferDesc.Height,
             )
         });
+    unsafe { owner_vendor(chain) };
     let window = if input_window.is_null() {
         chain_window
     } else {
@@ -1210,8 +1242,6 @@ unsafe fn present_inner(
             if state.settings.fg_enabled != 0 {
                 stats.fg_requested_backend = state.settings.fg_backend;
             }
-        } else {
-            stats.fg_backend_choices &= !AUTO_FG;
         }
         stats
     };

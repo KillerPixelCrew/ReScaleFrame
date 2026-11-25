@@ -172,6 +172,8 @@ struct Shared {
     backend: u32,
     requested_backend: u32,
     last_switch_result: i32,
+    // The SR backends this adapter and these packages serve, kept from the first start attempt.
+    choices: u32,
     dump: Option<Vec<u8>>,
     reset_pending: bool,
     given_up: bool,
@@ -207,6 +209,7 @@ impl Shared {
             backend: RSF_SR_DLSS,
             requested_backend: RSF_SR_DLSS,
             last_switch_result: 0,
+            choices: 0,
             dump: None,
             reset_pending: false,
             given_up: false,
@@ -862,6 +865,17 @@ impl Pipeline {
             require_signature: setup.require_signature,
         };
         owned.device = Some(unsafe { com_ref::retain(device) });
+        let packages = [
+            owned.dlss_settings.directory.as_deref(),
+            owned.directories.get(1).map(CString::as_c_str),
+            owned.directories.get(3).map(CString::as_c_str),
+        ]
+        .map(|text| text.and_then(crate::sr_choices::directory));
+        self.shared().choices = crate::sr_choices::sr_backends(
+            unsafe { crate::d3d11_device_identity::device_vendor(device) },
+            crate::sr_choices::package_has(packages),
+            false,
+        );
         let [width, height] = [setup.output_width, setup.output_height];
         let mut range = Range::alternate([width, height]);
         let result = if backend == RSF_SR_DLSS {
@@ -1701,6 +1715,11 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         1
     }
 
+    /// The SR backends this machine serves, zero before the first start.
+    pub(super) fn backend_choices(&self) -> u32 {
+        self.shared().choices
+    }
+
     pub(super) unsafe fn status(&self, status: *mut Status) -> i32 {
         if !unsafe { has_capacity(status) } {
             return INVALID;
@@ -2147,6 +2166,15 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         if o.device.is_none() || o.output.is_none() {
             return NOT_RUNNING;
         }
+        // Auto is the provider this adapter prefers among those the packages serve.
+        let backend = if backend == rsf_game_sys::RSF_SR_AUTO {
+            let vendor = o.device.as_ref().and_then(|device| unsafe {
+                crate::d3d11_device_identity::device_vendor(device.as_raw())
+            });
+            crate::rsf_gpu_select_sr_backend(vendor.unwrap_or(0), 0, self.shared().choices)
+        } else {
+            backend
+        };
         if !(RSF_SR_DLSS..=RSF_SR_XESS).contains(&backend) {
             return INVALID;
         }

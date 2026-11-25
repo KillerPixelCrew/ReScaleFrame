@@ -393,7 +393,7 @@ fn setup(files: &Files, backend: u32, quality: u32) -> Setup {
         backend,
         quality,
         dlss_preset: 6,
-        sr_backend_choices: (1 << 1) | (1 << 3) | (1 << 5) | (1 << 6),
+        sr_backend_choices: rsf_game_sys::RSF_SR_CHOICES_ALL,
         engine_type: 4,
         engine_version_utf8: c"6000.0".as_ptr(),
         project_id_utf8: c"project".as_ptr(),
@@ -1008,6 +1008,50 @@ fn intent() -> Intent {
 }
 
 #[test]
+fn the_overlay_offers_the_common_set_and_the_engine_scaler() {
+    use crate::sr_choices::{COMMON, Packages};
+    let packages = Packages::all("callback-host");
+    let directory = |leaf: &str| CString::new(packages.0.join(leaf).to_str().unwrap()).unwrap();
+    let (streamline, fidelityfx, xess) = (
+        directory("streamline"),
+        directory("fidelityfx"),
+        directory("xess"),
+    );
+    let files = Files::new("choices");
+    reset();
+    let mut start = setup(&files, 1, 1);
+    start.streamline_directory_utf8 = streamline.as_ptr();
+    start.fsr3_directory_utf8 = fidelityfx.as_ptr();
+    start.xess_directory_utf8 = xess.as_ptr();
+    let host = Box::new(unsafe { describe(&start) }.ok().unwrap());
+    let device = fake(null_mut());
+    let queue = fake(device);
+    // NVIDIA: the common set plus URP's scaler, and Auto is drawn as the selection once chosen.
+    with(|world| world.vendor = 0x10de);
+    let stats = window(&host, queue, None);
+    assert_eq!(stats.sr_backend_choices, COMMON | (1 << RSF_SR_SPATIAL));
+    // AMD: no DLSS, so the model selector is greyed with it.
+    with(|world| world.vendor = 0x1002);
+    let stats = window(&host, queue, None);
+    assert_eq!(
+        stats.sr_backend_choices,
+        (COMMON & !(1 << RSF_SR_DLSS)) | (1 << RSF_SR_SPATIAL)
+    );
+    // Choosing Auto is accepted and stays the selection.
+    window(
+        &host,
+        queue,
+        Some(Intent {
+            backend_changed: 1,
+            backend: RSF_SR_AUTO,
+            ..intent()
+        }),
+    );
+    assert!(host.lock().automatic);
+    assert_eq!(host.lock().requested_backend, RSF_SR_AUTO);
+}
+
+#[test]
 fn the_overlay_reports_host_state_and_persists_panel_intent() {
     let files = Files::new("overlay");
     files.write("DlssPreset", "6");
@@ -1041,10 +1085,8 @@ fn the_overlay_reports_host_state_and_persists_panel_intent() {
     assert_eq!((stats.output_width, stats.output_height), (2560, 1440));
     assert_eq!((stats.sharpening_available, stats.jitter_active), (1, 1));
     assert_eq!((stats.dlss_preset, stats.fg_available), (6, 0));
-    assert_eq!(
-        stats.sr_backend_choices,
-        (1 << 1) | (1 << 3) | (1 << 5) | (1 << 6)
-    );
+    // The fixture has no package files, so only the engine's own scaler is served.
+    assert_eq!(stats.sr_backend_choices, 1 << RSF_SR_SPATIAL);
     assert_eq!(refs(device), 1);
 
     // Generation options go to FG12 from the status the panel was drawn with.
@@ -1194,18 +1236,12 @@ fn provider_changes_respect_policy_and_wait_for_the_flagged_pass() {
     assert_eq!(events(), ["fg window 5", "overlay", "policy 1 1"]);
     assert_eq!(host.lock().requested_backend, 1);
     with(|world| world.policy_ok = true);
-    for refused in [
-        Intent {
-            backend_changed: 1,
-            backend: RSF_SR_AUTO,
-            ..intent()
-        },
-        Intent {
-            quality_changed: 1,
-            quality: 5,
-            ..intent()
-        },
-    ] {
+    // Ultra Quality is served by XeSS and the engine's scaler only, and DLSS here is not either.
+    for refused in [Intent {
+        quality_changed: 1,
+        quality: 5,
+        ..intent()
+    }] {
         window(&host, queue, Some(refused));
         assert_eq!(events(), ["fg window 5", "overlay"]);
     }

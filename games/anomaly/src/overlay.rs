@@ -334,10 +334,11 @@ fn make_setup(
         setup.defaults.generated_frames = fg.generated;
         setup.defaults.latency = fg.latency;
         setup.defaults.frame_limit_us = fg.frame_limit_us;
-        setup.fg_backend_choices = RSF_FG_BACKEND_ALL | (1 << RSF_FG_BACKEND_AUTO);
+        // The panel's own limits: the provider, GPU and bridge decide what is served.
+        setup.fg_backend_choices = RSF_FG_CHOICES_ALL;
         setup.latency_choices =
             (1 << RSF_REFLEX_OFF) | (1 << RSF_REFLEX_ON) | (1 << RSF_REFLEX_BOOST);
-        setup.max_generated_frames = 3;
+        setup.max_generated_frames = RSF_OVERLAY_MAX_GENERATED_FRAMES;
     } else {
         setup.fg_backend_choices = 0;
         setup.latency_choices = 1 << RSF_REFLEX_OFF;

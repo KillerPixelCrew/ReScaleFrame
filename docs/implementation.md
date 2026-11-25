@@ -18,6 +18,18 @@ not here.
 | Godot | Standard and .NET engines, Vulkan SR and FG provider fixtures | Controller and export fixtures | Not a shipped game path | Generated-image comparisons against independent midpoints; some FSR2/FSR3 object-motion cases fail | [Godot developer integration](#godot-developer-integration-in-progress-25-october-2026) |
 | Minecraft (OpenGL) | Java mod with SR and FG and motion producers | Java and offscreen OpenGL checks | World geometry confirmed in the 1.1.8-dev correction; shader-pack acceptance open | None recorded | [Minecraft OpenGL SR and FG](#minecraft-opengl-sr-and-fg-17-october-2026) |
 
+## Overlay parity across games, 25 November 2026
+
+Built and unit-tested, not game-run. Every game's overlay now offers the same controls and values, and a value
+the machine cannot serve is drawn greyed with its reason instead of being absent. One Runtime source decides the
+offer: `sr_choices.rs` (SR backends from the GPU vendor and the package files, quality per backend) and
+`fg_choice::resolve` (FG Auto per GPU). SR Auto, FSR2 and FG Auto are wired where they were missing (AC7, Skyrim
+SE, Fallout 4, RDR2, Unity Mono, Anomaly), the per-adapter lists are gone, and the panel always draws the Sharpen
+tab, Ultra Quality, the DLSS model and the empty-SR controls, greyed. Audit table, per-game results and the
+follow-ups that could not be finished (Runtime FSR1, Fallout 4 reduced frame, Wingman host, Anomaly bridge default)
+are in [overlay-parity-20261125.md](research/overlay-parity-20261125.md). `loader/proxy/src/dlss_bridge.c` changed
+and was not compiled.
+
 ## Anomaly signature discovery, 24 November 2026
 
 Built and synthetic-tested, not game-tested. The adapter no longer admits an executable by its SHA-256 or name or

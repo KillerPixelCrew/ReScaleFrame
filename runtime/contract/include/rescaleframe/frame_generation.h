@@ -20,6 +20,9 @@ uint32_t rsf_fg_default_backend(uint32_t vendor_id, uint32_t software_adapter);
 /* Choices mask of every implemented backend, bit n for backend id n. */
 #define RSF_FG_BACKEND_ALL ((1u << RSF_FG_BACKEND_DLSS) | (1u << RSF_FG_BACKEND_FSR3) | \
                             (1u << RSF_FG_BACKEND_FSR4) | (1u << RSF_FG_BACKEND_XESS))
+/* What a host passes as its overlay FG choices when it can generate frames at all: every provider
+   and Auto. The Runtime then offers what this GPU and package serve; hosts keep no list. */
+#define RSF_FG_CHOICES_ALL (RSF_FG_BACKEND_ALL | (1u << RSF_FG_BACKEND_AUTO))
 
 /* One row per backend. ini_key is the Unity ini path setting, env_var the override variable, and
    default_subdir the SDK folder beside the module (FSR3 and FSR4 share the FidelityFX one). */

@@ -191,7 +191,8 @@ fn setup(configuration: PCWSTR, directory: PCWSTR) -> rsf_render_host_setup {
         runtime_directory: directory,
         configuration_section: w!("RDR2"),
         presentation_owner: RSF_RENDER_HOST_OWNS_PRESENTATION,
-        sr_backend_choices: (1 << 1) | (1 << 3) | (1 << 4) | (1 << 5),
+        // No limit of its own: the Runtime offers what the GPU and the packages serve.
+        sr_backend_choices: rsf_game_sys::RSF_SR_CHOICES_ALL,
         engine_type: 0,
         application_id: 0x60e8ab7,
         engine_version_utf8: c"RAGE 1.0.1491.50".as_ptr(),

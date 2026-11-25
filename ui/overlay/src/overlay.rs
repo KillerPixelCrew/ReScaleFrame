@@ -818,12 +818,14 @@ mod tests {
     }
 
     #[test]
-    fn ultra_quality_is_offered_only_when_the_host_advertises_it() {
+    fn ultra_quality_is_greyed_until_the_host_advertises_it() {
         let mut overlay = Overlay::new();
         let mut stats = stats_with_backend();
         stats.backend = 5;
         settle(&mut overlay, &stats);
-        assert!(overlay.controls().quality[5].is_none());
+        let greyed = overlay.controls().quality[5].expect("Ultra Quality is drawn, greyed");
+        let [press, release] = click(&mut overlay, &stats, greyed);
+        assert!(!press.quality_changed && !release.quality_changed);
 
         stats.sr_quality_choices |= 1 << Quality::UltraQuality.to_abi();
         settle(&mut overlay, &stats);
@@ -1219,7 +1221,7 @@ mod tests {
     }
 
     #[test]
-    fn a_host_with_no_sr_choice_gets_no_upscaling_controls() {
+    fn a_host_with_no_sr_choice_shows_every_upscaling_control_disabled() {
         let mut overlay = Overlay::new();
         let stats = Stats {
             backend_loaded: true,
@@ -1227,13 +1229,77 @@ mod tests {
             ..Stats::default()
         };
         settle(&mut overlay, &stats);
-        let controls = overlay.controls();
-        assert!(controls.enabled.is_none(), "no checkbox without a backend");
-        assert!(controls.backend.iter().all(Option::is_none));
-        assert!(controls.quality.iter().all(Option::is_none));
-        // The rest of the panel still lays out and idling requests nothing.
+        let controls = *overlay.controls();
+        assert!(controls.enabled.is_some(), "the switch is drawn, greyed");
+        assert!(controls.backend.iter().all(Option::is_some));
+        assert!(controls.quality.iter().all(Option::is_some));
+        // The rest of the panel still lays out, and no greyed control asks for anything.
         assert!(!overlay.draw_calls().is_empty());
         assert!(idle_frame(&mut overlay, &stats).is_idle());
+        for target in [controls.enabled.unwrap(), controls.backend[0].unwrap()] {
+            let [press, release] = click(&mut overlay, &stats, target);
+            assert!(press.is_idle() && release.is_idle());
+        }
+        let target = quality_rect(&overlay, Quality::Balanced);
+        let [press, release] = click(&mut overlay, &stats, target);
+        assert!(press.is_idle() && release.is_idle());
+    }
+
+    #[test]
+    fn auto_and_unserved_backends_are_drawn_greyed_with_a_reason() {
+        let mut overlay = Overlay::new();
+        // The panel of a game on an AMD GPU: DLSS, FSR1 and Auto are not served.
+        let mut stats = Stats {
+            backend_loaded: true,
+            backend_choices: (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5),
+            backend: 3,
+            ..Stats::default()
+        };
+        settle(&mut overlay, &stats);
+        let controls = *overlay.controls();
+        assert!(
+            controls.backend.iter().all(Option::is_some),
+            "all seven backends are drawn, Auto and FSR1 included"
+        );
+        for index in [0, 5, 6] {
+            let [press, release] = click(&mut overlay, &stats, controls.backend[index].unwrap());
+            assert!(
+                !press.backend_changed && !release.backend_changed,
+                "{index}"
+            );
+        }
+        let [_, release] = click(&mut overlay, &stats, controls.backend[1].unwrap());
+        assert!(release.backend_changed);
+        assert_eq!(release.backend, 2);
+        // Auto becomes selectable as soon as the Runtime offers it.
+        stats.backend_choices |= 1 << 7;
+        settle(&mut overlay, &stats);
+        let auto = overlay.controls().backend[6].unwrap();
+        let [_, release] = click(&mut overlay, &stats, auto);
+        assert!(release.backend_changed);
+        assert_eq!(release.backend, 7);
+        let reasons = crate::panel::sr_reason;
+        assert!(reasons(1).contains("NVIDIA") && reasons(6).contains("engine"));
+    }
+
+    #[test]
+    fn auto_generation_is_drawn_greyed_until_the_runtime_offers_it() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.backend_choices = 0x3b;
+        stats.generation.available = true;
+        on_tab(&mut overlay, Tab::Frames);
+        settle(&mut overlay, &stats);
+        let auto = overlay.controls().fg_backend[5].expect("Auto is drawn without being offered");
+        let [press, release] = click(&mut overlay, &stats, auto);
+        assert!(!press.fg_backend_changed && !release.fg_backend_changed);
+        stats.generation.backend_choices |= 1 << 7;
+        settle(&mut overlay, &stats);
+        let auto = overlay.controls().fg_backend[5].unwrap();
+        let [_, release] = click(&mut overlay, &stats, auto);
+        assert!(release.fg_backend_changed);
+        assert_eq!(release.fg_backend, 7);
+        assert!(crate::panel::fg_reason(4).contains("RDNA 4"));
     }
 
     #[test]
@@ -1242,8 +1308,7 @@ mod tests {
         let stats = stats_with_backend();
         settle(&mut overlay, &stats);
         assert!(overlay.controls().enabled.is_some());
-        assert!(overlay.controls().quality[..5].iter().all(Option::is_some));
-        assert!(overlay.controls().quality[5].is_none());
+        assert!(overlay.controls().quality.iter().all(Option::is_some));
         let intent = idle_frame(&mut overlay, &stats);
         assert!(intent.is_idle());
     }
@@ -1425,17 +1490,13 @@ mod tests {
         on_tab(&mut overlay, Tab::Sharpen);
         settle(&mut overlay, &stats);
         assert!(
-            overlay.controls().tabs[Tab::Sharpen as usize].is_none(),
-            "no sharpening tab without host support"
+            overlay.controls().tabs[Tab::Sharpen as usize].is_some(),
+            "every game has the sharpening tab"
         );
-        on_tab(&mut overlay, Tab::Sharpen);
-        assert!(
-            overlay
-                .controls()
-                .sharpening_mode
-                .iter()
-                .all(Option::is_none)
-        );
+        // Without a running upscaler the controls are drawn but greyed: a tap changes nothing.
+        let rcas = overlay.controls().sharpening_mode[1].expect("RCAS is drawn, greyed");
+        let [press, release] = click(&mut overlay, &stats, rcas);
+        assert!(!press.sharpening_changed && !release.sharpening_changed);
         stats.sharpening_available = true;
         settle(&mut overlay, &stats);
         assert!(
@@ -1695,6 +1756,9 @@ mod tests {
         let mut overlay = Overlay::new();
         let mut stats = stats_with_backend();
         stats.generation.reflex_available = true;
+        // A host serving every provider: nothing greyed means no reason lines pushing the frame
+        // limit below the 720 px display.
+        stats.generation.backend_choices = 0x3b | (1 << 7);
         stats.generation.frame_limit_us = 25_000; // 40 fps
         on_tab(&mut overlay, Tab::Frames);
         settle(&mut overlay, &stats);

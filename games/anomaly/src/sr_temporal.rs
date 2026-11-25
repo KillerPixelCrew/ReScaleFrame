@@ -1382,10 +1382,10 @@ mod settings_tests {
                 RSF_ANOMALY_SR_ADAPTER_QUALITIES,
             )
         };
-        for backend in [DLSS, FSR3, FSR4, XESS, AUTO] {
+        for backend in [DLSS, 2, FSR3, FSR4, XESS, AUTO] {
             assert_eq!(admit(Settings { backend, ..current }).backend, backend);
         }
-        for backend in [0, 2, 6, 40] {
+        for backend in [0, 6, 40] {
             assert_eq!(admit(Settings { backend, ..current }).backend, XESS);
         }
         for quality in 0..5 {
@@ -1396,7 +1396,7 @@ mod settings_tests {
         }
         let actual = admit(Settings {
             enabled: false,
-            backend: 2,
+            backend: 6,
             quality: 5,
             preset: 3,
         });

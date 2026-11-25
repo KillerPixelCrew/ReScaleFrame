@@ -43,6 +43,27 @@ fn capture_sequence_waits_for_ready_identified_frames_and_can_restart() {
     assert!(budget.claim_source(8, 4, true, false));
 }
 
+#[test]
+fn the_panel_offers_the_common_set_and_greys_what_the_machine_lacks() {
+    use crate::sr_choices::{COMMON, Packages};
+    let packages = Packages::all("d3d11-host");
+    let fixture = Fixture::rooted(packages.0.to_str().unwrap());
+    // NVIDIA: every provider and Auto. AMD: the same minus DLSS, which needs the vendor.
+    assert_eq!(fixture.host.sr_offer(0x10de), COMMON);
+    assert_eq!(fixture.host.sr_offer(0x1002), COMMON & !(1 << RSF_SR_DLSS));
+    // A host feeding generation offers every provider and Auto; one without offers none.
+    assert_eq!(fg_choices(true, false), RSF_FG_CHOICES_ALL);
+    assert_eq!(fg_choices(false, false), 0);
+    assert_eq!(fg_choices(false, true), 0);
+    // The rendered-source fixtures have no input timeline, which DLSS-G and XeSS FG need.
+    assert_eq!(
+        fg_choices(true, true),
+        (1 << FG_BACKEND_FSR3) | (1 << FG_BACKEND_FSR4)
+    );
+    // No package files: nothing is offered, and Auto with it.
+    assert_eq!(Fixture::new().host.sr_offer(0x10de), 0);
+}
+
 thread_local! {
     static DEVICE: Cell<Raw> = const { Cell::new(null_mut()) };
     static CONTEXT: Cell<Raw> = const { Cell::new(null_mut()) };
@@ -382,10 +403,14 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::rooted("unused")
+    }
+
+    fn rooted(root: &str) -> Self {
         let (device, context) = (fake(), fake());
         DEVICE.set(raw(&device));
         CONTEXT.set(raw(&context));
-        let (path, section, root) = (wide("unused.ini"), wide("Test"), wide("unused"));
+        let (path, section, root) = (wide("unused.ini"), wide("Test"), wide(root));
         let mut motion: rsf_motion_decode_params = unsafe { std::mem::zeroed() };
         motion.struct_size = size_of::<rsf_motion_decode_params>() as u32;
         motion.scale_x = 1.0;

@@ -99,6 +99,8 @@ typedef struct rsf_overlay_sr_report {
 #define RSF_OVERLAY_SERVICE_OPTION_TOGGLE 0u /* value is 0 or 1 */
 #define RSF_OVERLAY_SERVICE_OPTION_NUMBER 1u /* minimum..maximum in steps, shown as value / divisor */
 #define RSF_OVERLAY_SERVICE_OPTION_LIMIT 40u
+/* The most generated frames per rendered frame a setup may allow. */
+#define RSF_OVERLAY_MAX_GENERATED_FRAMES 15u
 typedef struct rsf_overlay_service_option {
     const char* label_utf8; /* copied by configure */
     uint32_t kind;
@@ -133,7 +135,8 @@ typedef struct rsf_overlay_service_setup {
     uint32_t fg_backend_choices;
     /* Bit n: RSF_REFLEX_* latency mode n. Bit RSF_REFLEX_OFF must be set. */
     uint32_t latency_choices;
-    /* Upper bound for FGGeneratedFrames, at least 1. */
+    /* Upper bound for FGGeneratedFrames, 1 to RSF_OVERLAY_MAX_GENERATED_FRAMES. A host that can
+       generate frames passes the maximum: the provider reports what the GPU admits. */
     uint32_t max_generated_frames;
     /* Nonzero when the adapter applies DLSSPreset. */
     uint32_t dlss_preset_available;

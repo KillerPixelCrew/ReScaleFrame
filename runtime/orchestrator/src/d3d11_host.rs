@@ -10,6 +10,7 @@ use crate::d3d11_host_abi::*;
 use crate::d3d11_host_platform as native;
 use crate::d3d11_host_reduced::{MAX_RESERVED, Products, Raw, Ticket, zeroed_pass};
 use crate::native_cpu::{SourcePacket, decode_source_event};
+use crate::sr_choices::{directory, package_has, sr_backends};
 use crate::sync::lock;
 use crate::sys::RSF_SR_DLSS;
 use crate::sys::rsf_d3d11_present_setup;
@@ -24,6 +25,7 @@ use crate::sys::{
 use crate::sys::{rsf_native_present_record, rsf_observer_present_event};
 use crate::wide::copy_nul as wide_copy;
 use rsf_game_sys::ffi_util::{checked, has_capacity};
+use rsf_game_sys::{RSF_FG_CHOICES_ALL, RSF_OVERLAY_MAX_GENERATED_FRAMES, RSF_SR_AUTO};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_ABI_VERSION,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE,
@@ -50,16 +52,14 @@ const NOT_READY: i32 = -3;
 const BUSY: i32 = -4;
 const NATIVE_REFUSED: i32 = -5;
 const DLSS_OK: i32 = 0;
-const SR_BACKEND_CHOICES: u32 = 0x3e;
-const FG_BACKEND_DLSS: u32 = 1;
+const SOFTWARE_ADAPTER: u32 = 0x1414;
 const FG_BACKEND_FSR3: u32 = 3;
 const FG_BACKEND_FSR4: u32 = 4;
-const FG_BACKEND_XESS: u32 = 5;
 const FG_BACKEND_AUTO: u32 = 7;
 const REFLEX_OFF: u32 = 0;
 const REFLEX_ON: u32 = 1;
 const REFLEX_BOOST: u32 = 2;
-const MAX_GENERATED_FRAMES: u32 = 15;
+const MAX_GENERATED_FRAMES: u32 = RSF_OVERLAY_MAX_GENERATED_FRAMES;
 const UI_MODE_BACKBUFFER_HUDLESS: u32 = 4;
 const DXGI_PRESENT_TEST: u32 = 1;
 const SCENE_PRESENT_NONE: u32 = 0;
@@ -195,6 +195,8 @@ struct Graphics {
     present_pairs: u64,
     ownership_reports: u32,
     capture_refusal_terms: u32,
+    // What the SR Auto choice resolves to on this adapter and these packages.
+    auto_backend: u32,
 }
 
 impl Graphics {
@@ -234,6 +236,16 @@ impl Graphics {
             present_pairs: 0,
             ownership_reports: 0,
             capture_refusal_terms: 0,
+            auto_backend: 0,
+        }
+    }
+
+    // The provider a saved SR backend names: Auto is the one this adapter and package select.
+    fn concrete_backend(&self, requested: u32) -> u32 {
+        if requested == RSF_SR_AUTO {
+            self.auto_backend
+        } else {
+            requested
         }
     }
 
@@ -377,6 +389,17 @@ fn sr_inputs(pass: &Pass) -> (u32, [f32; 2]) {
     (bits, [0.0; 2])
 }
 
+// The FG providers the panel offers: all of them and Auto once the host feeds generation. A source
+// the engine renders has no input timeline, which DLSS-G and XeSS FG need for latency markers, so
+// only the FidelityFX providers stay (no shipped adapter declares one; fixtures do).
+fn fg_choices(generation: bool, rendered: bool) -> u32 {
+    match (generation, rendered) {
+        (false, _) => 0,
+        (true, false) => RSF_FG_CHOICES_ALL,
+        (true, true) => (1 << FG_BACKEND_FSR3) | (1 << FG_BACKEND_FSR4),
+    }
+}
+
 fn depth_infinite(setup: &rsf_d3d11_host_setup) -> u32 {
     if setup.struct_size as usize == offset_of!(rsf_d3d11_host_setup, depth_far_plane) {
         setup.depth_inverted
@@ -425,6 +448,14 @@ fn validate_setup(setup: &rsf_d3d11_host_setup, services: &rsf_game_host_service
 }
 
 impl Host {
+    // The SR backends the panel offers on `vendor`'s adapter: the Runtime's answer from the packages
+    // beside it. This host has no scaler of its own to add, and keeps no list.
+    fn sr_offer(&self, vendor: u32) -> u32 {
+        let text = &self.text;
+        let packages = [&text.streamline, &text.fidelityfx, &text.xess].map(|text| directory(text));
+        sr_backends(Some(vendor), package_has(packages), false)
+    }
+
     fn new(setup: &rsf_d3d11_host_setup, upstream: rsf_game_host_services) -> Option<Self> {
         let copy = |text: *const c_char| unsafe { CStr::from_ptr(text) }.to_owned();
         let runtime = unsafe { wide_copy(setup.runtime_directory) };
@@ -676,11 +707,12 @@ impl Host {
         {
             return false;
         }
-        let selected =
-            crate::rsf_gpu_select_sr_backend(vendor, (vendor == 0x1414) as u32, SR_BACKEND_CHOICES);
-        if selected == 0 {
+        if vendor == SOFTWARE_ADAPTER {
             return false;
         }
+        let sr_choices = self.sr_offer(vendor);
+        let selected = crate::rsf_gpu_select_sr_backend(vendor, 0, sr_choices);
+        g.auto_backend = selected;
         let caps = self.setup.capabilities;
         let timeline = bridge && caps & RSF_D3D11_HOST_CAP_INPUT_TIMELINE != 0;
         let rendered = bridge && caps & RSF_D3D11_HOST_CAP_RENDERED_SOURCE != 0;
@@ -688,7 +720,7 @@ impl Host {
         let mut defaults = rsf_render_settings {
             struct_size: size_of::<rsf_render_settings>() as u32,
             abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
-            sr_enabled: 1,
+            sr_enabled: u32::from(sr_choices != 0),
             sr_backend: selected,
             fg_backend: FG_BACKEND_AUTO,
             generated_frames: 1,
@@ -696,25 +728,8 @@ impl Host {
             status_overlay: 1,
             ..zeroed_settings()
         };
-        let mut fg_choices = if generation {
-            [
-                FG_BACKEND_AUTO,
-                FG_BACKEND_DLSS,
-                FG_BACKEND_FSR3,
-                FG_BACKEND_FSR4,
-                FG_BACKEND_XESS,
-            ]
-            .iter()
-            .fold(0, |mask, backend| mask | 1 << backend)
-        } else {
-            0
-        };
+        let fg_choices = fg_choices(generation, rendered);
         if rendered {
-            fg_choices = if generation {
-                (1 << FG_BACKEND_FSR3) | (1 << FG_BACKEND_FSR4)
-            } else {
-                0
-            };
             defaults.fg_backend = FG_BACKEND_FSR3;
         }
         if rendered {
@@ -755,8 +770,12 @@ impl Host {
             configuration_path: self.ini.as_ptr(),
             configuration_section: self.section.as_ptr(),
             defaults,
-            sr_backend_choices: SR_BACKEND_CHOICES,
-            sr_quality_choices: self.setup.quality_choices,
+            sr_backend_choices: sr_choices,
+            sr_quality_choices: if sr_choices != 0 {
+                self.setup.quality_choices
+            } else {
+                0
+            },
             fg_backend_choices: fg_choices,
             latency_choices: if timeline {
                 (1 << REFLEX_OFF) | (1 << REFLEX_ON) | (1 << REFLEX_BOOST)
@@ -882,6 +901,7 @@ impl Host {
         settings: &rsf_render_settings,
     ) -> bool {
         let (width, height) = (pass.camera.output_width, pass.camera.output_height);
+        let backend = g.concrete_backend(settings.sr_backend);
         if settings.sr_enabled != 0 {
             if !g.running && !g.attempted {
                 g.attempted = true;
@@ -908,10 +928,9 @@ impl Host {
                     view_space_to_meters: setup.units_to_meters,
                     standard_depth: u32::from(setup.depth_inverted == 0),
                 };
-                g.last_result =
-                    unsafe { native::pipeline_start(g.device_ptr(), &start, settings.sr_backend) };
+                g.last_result = unsafe { native::pipeline_start(g.device_ptr(), &start, backend) };
                 g.running = g.last_result == OK;
-                g.backend = settings.sr_backend;
+                g.backend = backend;
                 g.dlss_started = g.running && g.backend == RSF_SR_DLSS;
                 g.present_result = DLSS_OK;
                 g.quality = settings.sr_quality;
@@ -928,12 +947,11 @@ impl Host {
                         g.reset = true;
                     }
                 }
-                if g.backend != settings.sr_backend {
-                    g.last_result = unsafe {
-                        native::pipeline_select(settings.sr_backend, null_mut(), null_mut())
-                    };
+                if g.backend != backend {
+                    g.last_result =
+                        unsafe { native::pipeline_select(backend, null_mut(), null_mut()) };
                     if g.last_result == OK {
-                        g.backend = settings.sr_backend;
+                        g.backend = backend;
                         g.dlss_started |= g.backend == RSF_SR_DLSS;
                         g.reset = true;
                     }
@@ -968,7 +986,7 @@ impl Host {
             && status.output_width == width
             && status.output_height == height
             && g.quality == settings.sr_quality
-            && g.backend == settings.sr_backend
+            && g.backend == backend
             && g.present_result == DLSS_OK;
         self.shared().planned = rsf_game_render_config {
             struct_size: size_of::<rsf_game_render_config>() as u32,
@@ -1048,7 +1066,7 @@ impl Host {
         let unchanged_configuration = generation == g.applied_generation
             && g.running
             && settings.sr_enabled != 0
-            && g.backend == settings.sr_backend
+            && g.backend == g.concrete_backend(settings.sr_backend)
             && g.quality == settings.sr_quality
             && g.preset == settings.dlss_preset
             && g.output_width == pass.camera.output_width

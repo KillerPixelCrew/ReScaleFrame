@@ -89,6 +89,32 @@ const FG_PROVIDERS: [(u32, &str); 6] = [
     (FG_AUTO, "Auto"),
 ];
 
+/// Why a backend is greyed. Everything else is served in every game, so the cause is the GPU, the
+/// installed runtime files, or (FSR1) an engine without a scaler of its own.
+pub(crate) fn sr_reason(id: u32) -> &'static str {
+    match id {
+        1 => "needs an NVIDIA RTX GPU and the Streamline files",
+        2..=4 => "needs the FidelityFX upscaler files",
+        5 => "needs the XeSS runtime files",
+        6 => "the engine's own scaler; this game has none",
+        _ => "needs at least one upscaler",
+    }
+}
+
+/// Why a generation provider is greyed.
+pub(crate) fn fg_reason(id: u32) -> &'static str {
+    match id {
+        1 => "needs an NVIDIA RTX GPU and the Streamline files",
+        3 => "needs the FidelityFX frame generation files",
+        4 => "needs an AMD RDNA 4 GPU and the FidelityFX files",
+        5 => "needs the XeSS frame generation files",
+        _ => "needs at least one provider",
+    }
+}
+
+/// Every quality level's bit, Native to Ultra Quality.
+const QUALITY_ALL: u32 = (1 << Quality::ALL.len()) - 1;
+
 const DLSS_PRESETS: [(u32, &str); 7] = [
     (0, "Default"),
     (5, "E"),
@@ -369,7 +395,6 @@ pub(crate) fn show(
     let sheet = sheet_rect(screen, frame.preferences);
 
     let offered = Tab::ALL.map(|tab| match tab {
-        Tab::Sharpen => stats.backend_choices != 0 && stats.sharpening_available,
         Tab::Game => {
             stats.host_options.iter().any(Option::is_some)
                 || stats.saved_options.iter().any(Option::is_some)
@@ -582,8 +607,8 @@ fn upscaling_cell(frame: &Frame<'_, '_>) -> Cell {
     let selection = frame.selection;
     if stats.backend_choices == 0 {
         return Cell {
-            value: "Not offered".to_owned(),
-            sub: "No SR in this game".to_owned(),
+            value: "Unavailable".to_owned(),
+            sub: "No upscaler for this GPU and install".to_owned(),
             dot: GREY_DOT,
             sub_color: MUTED,
         };
@@ -838,15 +863,15 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             "The host declined this quality or enable change.",
         );
     }
-    // A zero mask means the host offers no super resolution backend: there is nothing to enable or
-    // choose, so the upscaling controls are not drawn rather than shown as a switch that cannot work.
-    if stats.backend_choices == 0 {
-        empty_card(
+    // A zero mask means no upscaler can run here. Every control is still drawn, greyed, so every
+    // game shows the same panel and says why.
+    let offers = stats.backend_choices != 0;
+    if !offers {
+        banner(
             ui,
-            "No upscaling in this game",
-            "Upscaling: none offered by this host. The other sections still apply.",
+            "No upscaler available",
+            "No DLSS, FSR or XeSS runtime could be used for this GPU and install.",
         );
-        return;
     }
 
     let detail = match selection.requested_enabled {
@@ -871,7 +896,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         "Upscaling",
         detail,
         selection.enabled,
-        true,
+        offers,
     );
     controls.enabled = Some(rect);
     if tapped {
@@ -881,16 +906,10 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
 
     heading(ui, "Backend");
     let shown_backend = selection.requested_backend.unwrap_or(stats.backend);
-    // Auto is a policy choice only for hosts which advertise it.
-    let count = if stats.backend_choices & (1 << SR_AUTO) != 0 {
-        SR_BACKENDS.len()
-    } else {
-        SR_BACKENDS.len() - 1
-    };
-    let choices = &SR_BACKENDS[..count];
+    // Every backend and Auto is drawn; one this GPU or install cannot serve is greyed.
+    let choices = &SR_BACKENDS[..];
     let items: Vec<Segment> = choices
         .iter()
-        .filter(|(id, _)| *id != 7 || stats.backend_choices & (1 << id) != 0)
         .map(|(id, name)| Segment {
             label: (*name).to_owned(),
             enabled: stats.backend_loaded && stats.backend_choices & (1 << id) != 0,
@@ -906,19 +925,15 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             intent.backend = backend;
         }
     }
-    let missing: Vec<&str> = choices
+    let missing: Vec<String> = choices
         .iter()
-        .filter(|(id, _)| *id != 7 && stats.backend_choices & (1 << id) == 0)
-        .map(|(_, name)| *name)
+        .filter(|(id, _)| stats.backend_choices & (1 << id) == 0)
+        .map(|(id, name)| format!("{name}: {}", sr_reason(*id)))
         .collect();
     if !stats.backend_loaded {
         note(ui, "No backend is loaded yet.", MUTED);
     } else if !missing.is_empty() {
-        note(
-            ui,
-            format!("Not offered here: {}.", missing.join(", ")),
-            MUTED,
-        );
+        note(ui, format!("Greyed out. {}", missing.join("\n")), MUTED);
     }
 
     // Presets can be saved while disabled; startup applies the selected level.
@@ -929,10 +944,8 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         "Quality".to_owned()
     };
     heading(ui, &title);
-    let offered: Vec<_> = Quality::ALL
-        .into_iter()
-        .filter(|quality| stats.sr_quality_choices & (1 << quality.to_abi()) != 0)
-        .collect();
+    // Every level is drawn; one the upscaler in use does not serve is greyed.
+    let offered: Vec<_> = Quality::ALL.into_iter().collect();
     let items: Vec<Segment> = offered
         .iter()
         .map(|level| Segment {
@@ -945,7 +958,9 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             } else {
                 level.label().to_owned()
             },
-            enabled: !stats.sr_quality_locked,
+            enabled: offers
+                && !stats.sr_quality_locked
+                && stats.sr_quality_choices & (1 << level.to_abi()) != 0,
             mark: Mark::of(
                 *level == selection.quality,
                 selection.requested_quality.is_some(),
@@ -965,6 +980,12 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
     }
     if stats.sr_quality_locked {
         note(ui, "Input resolution is controlled by the game", MUTED);
+    } else if offers && stats.sr_quality_choices & QUALITY_ALL != QUALITY_ALL {
+        note(
+            ui,
+            "Greyed out: Ultra Quality is served by XeSS and the engine's own scaler only.",
+            MUTED,
+        );
     }
     match (selection.requested_quality, stats.quality()) {
         (Some(requested), effect) => {
@@ -992,7 +1013,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         (None, Some(_)) => {}
     }
 
-    if stats.dlss_preset_available {
+    {
         heading(ui, "DLSS model");
         let dlss = stats.backend == 1;
         let items: Vec<Segment> = DLSS_PRESETS
@@ -1000,7 +1021,7 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
             .map(|(id, label)| {
                 choice(
                     label,
-                    dlss || stats.backend == SR_AUTO,
+                    stats.dlss_preset_available && (dlss || stats.backend == SR_AUTO),
                     *id == stats.dlss_preset,
                 )
             })
@@ -1016,7 +1037,9 @@ fn upscale_tab(ui: &mut Ui, frame: &Frame<'_, '_>, intent: &mut Intent, controls
         }
         note(
             ui,
-            if dlss {
+            if !stats.dlss_preset_available {
+                "Greyed out: DLSS needs an NVIDIA RTX GPU and the Streamline files."
+            } else if dlss {
                 "Requested model; NVIDIA driver overrides may apply. E/F are legacy presets."
             } else if stats.backend == SR_AUTO {
                 "Applies if Auto selects DLSS."
@@ -1045,9 +1068,9 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     heading(ui, "Provider");
     let pending = generation.requested_backend != FG_AUTO
         && generation.requested_backend != generation.backend;
+    // Every provider and Auto is drawn; one this GPU or install cannot serve is greyed.
     let items: Vec<Segment> = FG_PROVIDERS
         .iter()
-        .filter(|(id, _)| *id != FG_AUTO || generation.backend_choices & (1 << id) != 0)
         .map(|(id, name)| Segment {
             label: (*name).to_owned(),
             enabled: generation.backend_choices & (1 << id) != 0,
@@ -1077,10 +1100,10 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
             ),
         );
     }
-    let missing: Vec<&str> = FG_PROVIDERS
+    let missing: Vec<String> = FG_PROVIDERS
         .iter()
-        .filter(|(id, _)| *id != 0 && *id != FG_AUTO && generation.backend_choices & (1 << id) == 0)
-        .map(|(_, name)| *name)
+        .filter(|(id, _)| *id != 0 && generation.backend_choices & (1 << id) == 0)
+        .map(|(id, name)| format!("{name}: {}", fg_reason(*id)))
         .collect();
     let mut line = if runtime_switching {
         "Provider changes apply during play.".to_owned()
@@ -1088,7 +1111,7 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
         "GPU compatibility is checked at startup.".to_owned()
     };
     if !missing.is_empty() {
-        line.push_str(&format!(" Not offered here: {}.", missing.join(", ")));
+        line.push_str(&format!("\nGreyed out. {}", missing.join("\n")));
     }
     note(ui, line, MUTED);
     if generation.selection_result != 0 {
@@ -1438,7 +1461,23 @@ fn frame_limit(
     note(ui, line, MUTED);
 }
 
+/// Every game offers the same sharpening controls. They are greyed, with the reason, while no
+/// upscaler is running or the engine's own scaler is.
 fn sharpen_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mut Controls) {
+    let available = stats.backend_choices != 0 && stats.sharpening_available;
+    if !available {
+        note(
+            ui,
+            "Sharpening follows an upscaler: it is greyed while none is running or the engine's own scaler is selected.",
+            MUTED,
+        );
+    }
+    ui.add_enabled_ui(available, |ui| {
+        sharpen_controls(ui, stats, intent, controls)
+    });
+}
+
+fn sharpen_controls(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mut Controls) {
     let mut options = stats.sharpening;
     let mut changed = false;
     let vendor = matches!(stats.backend, 2..=4);
@@ -2278,19 +2317,6 @@ fn banner(ui: &mut Ui, title: &str, detail: &str) {
                 )
                 .wrap(),
             );
-        });
-}
-
-fn empty_card(ui: &mut Ui, title: &str, detail: &str) {
-    egui::Frame::new()
-        .stroke(Stroke::new(1.0, BUTTON_LINE))
-        .corner_radius(12.0)
-        .inner_margin(16.0)
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing.y = 6.0;
-            ui.label(RichText::new(title).size(15.0).strong().color(TEXT));
-            ui.add(Label::new(RichText::new(detail).size(13.0).color(MUTED)).wrap());
         });
 }
 

@@ -10,6 +10,7 @@
 //! upscales spatially itself, never the vendor.
 use crate::com_ref;
 use crate::copy_c_string;
+use crate::fg_choice;
 use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening, sr_name};
 #[cfg(not(test))]
 use crate::plugin_session::Session;
@@ -18,6 +19,7 @@ use crate::settings_store::{
     rsf_settings_store_read_layout, rsf_settings_store_write_layout,
     rsf_settings_store_write_sharpening, write_dlss_preset,
 };
+use crate::sr_choices::{directory, package_has, sr_backends, sr_quality};
 use crate::sync::lock;
 use crate::sys::{
     RSF_DLSS_ABI_VERSION, rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
@@ -25,7 +27,6 @@ use crate::sys::{
 };
 use crate::sys::{
     RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,
-    RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK, RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
     rsf_overlay_intent as Intent, rsf_overlay_stats as Stats,
 };
 use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_SPATIAL, RSF_SR_XESS};
@@ -118,6 +119,10 @@ struct State {
     // The chosen generation provider is saved for the next start only once the switch has landed.
     save_pending: bool,
     save_backend: u32,
+    // The provider a saved Auto turned into, which the switch must reach before Auto is saved.
+    save_target: u32,
+    // The owning adapter's PCI vendor, from the last panel frame; zero before one.
+    vendor: u32,
 }
 
 pub(crate) struct Host {
@@ -147,16 +152,8 @@ struct PolicyV2 {
     spatial_name: CString,
 }
 
-fn quality_choices(backend: u32) -> u32 {
-    match backend {
-        RSF_SR_DLSS => RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
-        0..=RSF_SR_SPATIAL => RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK,
-        _ => 0,
-    }
-}
-
 fn accepts_backend_quality(backend: u32, quality: u32) -> bool {
-    quality < 32 && quality_choices(backend) & (1 << quality) != 0
+    quality < 32 && sr_quality(backend) & (1 << quality) != 0
 }
 
 struct Published(*mut Host);
@@ -295,11 +292,16 @@ impl Host {
             if leaf::present_switch_result() != 0 {
                 s.save_pending = false;
                 self.log("Generation provider switch failed; the saved choice is unchanged.");
-            } else if leaf::present_backend() == s.save_backend {
+            } else if leaf::present_backend() == s.save_target {
                 s.save_pending = false;
                 let _ = leaf::fg_choice_save(s.save_backend);
             }
         }
+        let mut adapter = Adapter::default();
+        let vendor = (unsafe { leaf::adapter(device.as_raw(), &mut adapter) } != 0)
+            .then_some(adapter.vendor);
+        s.vendor = vendor.unwrap_or(0);
+        let packages = [&self.streamline, &self.fsr3, &self.xess].map(|text| directory(text));
         let mut stats = Stats {
             struct_size: size_of::<Stats>() as u32,
             backend_loaded: 1,
@@ -312,9 +314,11 @@ impl Host {
                     || sr_name(s.backend).as_ptr(),
                     |adapter| adapter.spatial_name.as_ptr(),
                 ),
-            backend: s.backend,
-            sr_backend_choices: self.sr_choices,
-            sr_quality_choices: quality_choices(s.backend),
+            // Auto stays the selected choice; the name above is the provider it resolved to.
+            backend: if s.automatic { RSF_SR_AUTO } else { s.backend },
+            // The engine's own scaler is the host's fact (`set_engine_spatial`), the rest the Runtime's.
+            sr_backend_choices: sr_backends(vendor, package_has(packages), true) & self.sr_choices,
+            sr_quality_choices: sr_quality(s.backend),
             sr_change_id: s.sr_change_id,
             sr_change_status: s.sr_change_status,
             requested_backend: s.requested_backend,
@@ -424,10 +428,25 @@ impl Host {
 
     fn apply_intent(&self, s: &mut State, intent: &Intent, fg: &mut FgOptions) {
         if intent.fg_backend_changed != 0 {
-            let applied = leaf::present_request(intent.fg_backend);
+            // Auto is the provider this GPU prefers among those the bridge serves.
+            let target = fg_choice::resolve(
+                intent.fg_backend,
+                fg_choice::rsf_fg_default_backend(s.vendor, 0),
+                crate::d3d11_present::rsf_d3d11_present_backend_choices(),
+            );
+            let applied = if target == 0 && intent.fg_backend != 0 {
+                BACKEND_OK
+            } else {
+                leaf::present_request(target)
+            };
             if applied == BACKEND_OK {
                 s.save_pending = true;
                 s.save_backend = intent.fg_backend;
+                s.save_target = if target == 0 && intent.fg_backend != 0 {
+                    leaf::present_backend()
+                } else {
+                    target
+                };
             }
             self.log(if applied == BACKEND_OK {
                 "Generation provider requested at the next drained Present."
@@ -527,7 +546,7 @@ impl Host {
             s.sr_change_status = RSF_OVERLAY_SR_CHANGE_PENDING;
         }
         if intent.backend_changed != 0 {
-            s.automatic = false;
+            s.automatic = backend == RSF_SR_AUTO;
         }
         if intent.enabled_changed != 0 {
             s.enabled = intent.enabled != 0;
@@ -924,6 +943,8 @@ unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
             refused: 0,
             save_pending: false,
             save_backend: 0,
+            save_target: 0,
+            vendor: 0,
         }),
         log_file: Mutex::new(log_file),
         plugin: AtomicPtr::new(null_mut()),

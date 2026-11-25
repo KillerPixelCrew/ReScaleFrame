@@ -362,7 +362,7 @@ fn setup(ini: &Temporary, owner: u32) -> Setup {
         runtime_directory: ini.directory.as_ptr(),
         configuration_section: SECTION.as_ptr(),
         presentation_owner: owner,
-        sr_backend_choices: (1 << 1) | (1 << 3) | (1 << 5),
+        sr_backend_choices: rsf_game_sys::RSF_SR_CHOICES_ALL,
         engine_type: 2,
         application_id: 9,
         engine_version_utf8: c"Fixture".as_ptr(),
@@ -739,7 +739,8 @@ fn settings_apply_validates_then_commits_one_section_write() {
         |s: &mut Settings| s.generated_frames = 0,
         |s: &mut Settings| s.generated_frames = 16,
         |s: &mut Settings| s.dlss_preset = 7,
-        |s: &mut Settings| s.sr_backend = 4,
+        // This host has no engine scaler to hand a spatial plan to.
+        |s: &mut Settings| s.sr_backend = 6,
         |s: &mut Settings| s.sr_backend = 40,
         |s: &mut Settings| s.fg_backend = 0,
         |s: &mut Settings| s.fg_backend = 2,
@@ -903,6 +904,40 @@ fn status_reports_renderer_refusals_and_rates() {
 }
 
 #[test]
+fn the_panel_offers_the_common_set_on_this_gpu_and_its_packages() {
+    use crate::sr_choices::{COMMON, Packages};
+    let packages = Packages::all("render-host");
+    let mut ini = Temporary::new("choices");
+    ini.directory = crate::settings_store::wide(packages.0.to_str().unwrap());
+    let host = host(&ini, 0);
+    with(|world| world.fg_status = Some(Host::empty_fg()));
+    let device = fake("device", null_mut());
+    let queue = fake("direct queue", device);
+    host.submit(queue, 1, 0, null(), true);
+    let shown = |vendor: u32| {
+        with(|world| world.vendor = vendor);
+        unsafe { present(host.user(), null_mut(), 1, 0, 1) };
+        with(|world| world.stats.take()).unwrap()
+    };
+    // Spatial is the engine's own scaler, which this host cannot hand a plan to.
+    let nvidia = shown(0x10de);
+    assert_eq!(nvidia.sr_backend_choices, COMMON);
+    assert_eq!(
+        shown(0x1002).sr_backend_choices,
+        COMMON & !(1 << RSF_SR_DLSS)
+    );
+    // Every provider and Auto are offered for generation, and Ultra Quality only with XeSS.
+    assert_eq!(
+        nvidia.fg_backend_choices & rsf_game_sys::RSF_FG_CHOICES_ALL,
+        rsf_game_sys::RSF_FG_CHOICES_ALL & (present_backend_choices() | (1 << 7))
+    );
+    assert_eq!(
+        nvidia.sr_quality_choices,
+        crate::sr_choices::sr_quality(RSF_SR_AUTO)
+    );
+}
+
+#[test]
 fn overlay_routes_the_panel_through_one_settings_commit() {
     let ini = Temporary::new("overlay");
     ini.write("FG", "1");
@@ -930,11 +965,16 @@ fn overlay_routes_the_panel_through_one_settings_commit() {
     unsafe { present(host.user(), null_mut(), 1, 0, 1) };
     assert!(events().contains(&"overlay direct queue".to_string()));
     let stats = with(|world| world.stats.take()).unwrap();
-    // SR Auto is shown as its resolved provider. FG Auto stays the selected panel choice, which
-    // the panel marks without a pending change beside the provider the bridge reports.
+    // SR Auto stays the selected choice and is named by the provider it resolved to. FG Auto
+    // stays the selected panel choice, which the panel marks without a pending change beside the
+    // provider the bridge reports.
     assert_eq!(
         (stats.backend, stats.requested_backend),
-        (RSF_SR_XESS, RSF_SR_XESS)
+        (RSF_SR_AUTO, RSF_SR_AUTO)
+    );
+    assert_eq!(
+        unsafe { std::ffi::CStr::from_ptr(stats.backend_name) },
+        c"XeSS"
     );
     assert_eq!(stats.fg_requested_backend, RSF_FG_BACKEND_AUTO);
     assert_eq!(stats.fg_requested_mode, RSF_FG_FIXED);

@@ -133,7 +133,9 @@ typedef struct rsf_anomaly_sr_reset_facts {
 #define RSF_ANOMALY_SR_ENGINE_VERSION "X-Ray Monolith 1.5.3 (S.T.A.L.K.E.R. Anomaly, DX11)"
 #define RSF_ANOMALY_SR_PROJECT_ID "8d3b6f52-1c4e-4f7a-b0d9-2e6a51c7f3a4"
 #define RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS 1.0f
-#define RSF_ANOMALY_SR_ADAPTER_BACKENDS 0x3au
+/* DLSS, FSR2, FSR3, FSR4 and XeSS: every provider id the Runtime's admission can offer. It narrows
+   them to this machine's packages and GPU. X-Ray has no scaler of its own to hand a spatial plan to. */
+#define RSF_ANOMALY_SR_ADAPTER_BACKENDS 0x3eu
 #define RSF_ANOMALY_SR_ADAPTER_QUALITIES 0x1fu
 
 typedef struct rsf_anomaly_sr_motion_target {

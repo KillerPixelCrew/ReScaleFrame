@@ -331,9 +331,13 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
         stats->frames_refused = (uint32_t)pipeline.frames_refused;
         stats->last_result = (int32_t)pipeline.last_result;
     }
-    /* Every super-resolution backend the pipeline can switch to, bit n for backend ID n. */
-    stats->sr_backend_choices = (1u << RSF_SR_DLSS) | (1u << RSF_SR_FSR2) | (1u << RSF_SR_FSR3) |
-                                (1u << RSF_SR_FSR4) | (1u << RSF_SR_XESS) | (1u << RSF_SR_SPATIAL);
+    /* Every super-resolution backend this machine serves, bit n for backend ID n, from the Runtime.
+       Before its first start it knows nothing yet, so every id the pipeline switches to is offered
+       (the engine has no spatial scaler of its own). */
+    stats->sr_backend_choices = rsf_dlss_pipeline_backend_choices();
+    if (!stats->sr_backend_choices) {
+        stats->sr_backend_choices = RSF_SR_CHOICES_ALL & ~(1u << RSF_SR_SPATIAL);
+    }
     stats->backend = pipeline.backend;
     stats->requested_backend = pipeline.requested_backend;
     stats->last_switch_result = pipeline.last_switch_result;
@@ -521,8 +525,14 @@ static void overlay_tick(void* swapchain)
         }
     }
     if (intent.fg_backend_changed) {
-        const rsf_backend_result result = rsf_d3d11_present_request(intent.fg_backend);
-        pending_fg_save = result == RSF_BACKEND_OK ? intent.fg_backend : UINT32_MAX;
+        const rsf_backend_result result = rsf_overlay_request_fg_backend(swapchain, intent.fg_backend);
+        /* Auto never becomes the active provider's id, so its choice is saved when it is requested. */
+        if (result == RSF_BACKEND_OK && intent.fg_backend == RSF_FG_BACKEND_AUTO) {
+            rsf_fg_choice_save(RSF_FG_BACKEND_AUTO);
+            pending_fg_save = UINT32_MAX;
+        } else {
+            pending_fg_save = result == RSF_BACKEND_OK ? intent.fg_backend : UINT32_MAX;
+        }
         say("FG provider requested at Present: backend=%u result=%d", intent.fg_backend, result);
     }
     if (intent.fg_changed || intent.reflex_changed || intent.frame_limit_changed) {
