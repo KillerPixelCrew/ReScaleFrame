@@ -147,7 +147,13 @@ established by static review; the fg-ac7 and fg-unity workers are changing that 
 | 96fcafe0 | F2 (parity item): Anomaly installs the presentation bridge whenever its FG stage runs; `FGBridge` and its panel option are gone. | `cargo test -p rsf-anomaly --lib` (171). |
 | b256fa81 | C1 for D3D11 (overlay-parity follow-up 1): the D3D11 SR pipeline serves FSR1 with the shared `sr12/easu.hlsl` kernel; the host and the D3D11 SR admission offer it, so AC7, Skyrim SE, Fallout 4 and Anomaly do. | `cargo test -p rsf-orchestrator --lib` (414), `-p rsf-anomaly --lib` (171). |
 | 30cc9a23 | The D3D11 host no longer ties SR and the overlay to the presentation bridge: with the bridge refused or its chain creation fallen back, it presents natively (SR, sharpening, overlay), reports FG and latency unavailable with the reason, and reaches Present through an observer listener when the game installed the observer itself. Every D3D11 host game. | `cargo test -p rsf-orchestrator --lib` (415), new host test. |
-| f46bb6f0 | FSR1's ratio table in one core module (`fsr1.rs`); the D3D12 SR path should switch to it. | `cargo test -p rsf-orchestrator --lib` (415). |## Follow-ups, ranked by user impact
+| f46bb6f0 | FSR1's ratio table in one core module (`fsr1.rs`); the D3D12 SR path should switch to it. | `cargo test -p rsf-orchestrator --lib` (415). |
+| 1bed8f5e | Unity Mono engine-FSR1 switch: the bridge delivers a pending SR policy change at the window event once its command ring is idle, so the switch no longer waits for a managed probe packet. | `cargo test -p rsf-orchestrator --lib callback_host` (18), `-p rsf-unity --lib bridge_state` (18). Not game-run. |
+| b67de62b | F4, first part: `callback_host.rs` folded into `render_host` (`render_host/callback.rs`); vendor packages, engine identity, SR context setup and the overlay SR card are one implementation for RDR2 and Unity Mono. Two C entries stay: RDR2 hands its recordings to the host's fence, Unity's bridge retires its own ring. | `cargo test -p rsf-orchestrator --lib render_host` (33), clippy. |
+| 81c2319c | Runtime FSR1 (overlay-parity follow-up 1) on D3D12: sr12 serves Spatial with an FSR1 EASU kernel where the engine has no scaler; RDR2 offers it. | `render_host sr12 sr_choices` (54), kernel compiled with d3dcompiler_47. Not device-tested. |
+| ffb75f75 | Rule 2 for Unity Mono: SR backend, quality, enable state, generation mode and frames saved as `rsf_render_settings` in the preferences `[Rendering]` section; unsaved keys keep the adapter's `[UnitySR]` start values. | `render_host` (36), `-p rsf-unity-mono`. |
+
+## Follow-ups, ranked by user impact
 
 **F1. AC7 onto the shared D3D11 host.** AC7 is the most-played integration and the one whose host
 is furthest from the core: `dlss_bridge.c` applies overlay intents, switches providers with its
@@ -227,7 +233,12 @@ which also removes A12.
 **F4. One D3D12 host.** `render_host.rs` (RDR2) and `callback_host.rs` (Unity Mono) both own
 admission, SR context lifetime, recording slots, settings and overlay routing for D3D12. Merge
 them so RDR2 and Unity games share one offered set and one settings path; the Unity package host
-(`integrations/unity/src`) then moves onto it as well.
+(`integrations/unity/src`) then moves onto it as well. *Status:* RDR2 and Unity Mono share one
+module, offered set and settings store (b67de62b, ffb75f75). The package host is open: it keeps
+its own SR views (one context per camera), settings from the developer's C# API
+(`rsfu_configure`), view creation that rebuilds the DLSS and vendor setup
+(`package_state/native.rs`), generation install and FG Auto without the host's offered set, and
+no shared overlay.
 
 **F5. Jitter phase count and LOD bias from the core.** Add to `rsf_game_render_config` (append,
 bump the ABI) the jitter phase count and the texture LOD bias for the active backend and current

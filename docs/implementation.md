@@ -18,6 +18,32 @@ not here.
 | Godot | Standard and .NET engines, Vulkan SR and FG provider fixtures | Controller and export fixtures | Not a shipped game path | Generated-image comparisons against independent midpoints; some FSR2/FSR3 object-motion cases fail | [Godot developer integration](#godot-developer-integration-in-progress-25-october-2026) |
 | Minecraft (OpenGL) | Java mod with SR and FG and motion producers | Java and offscreen OpenGL checks | World geometry confirmed in the 1.1.8-dev correction; shader-pack acceptance open | None recorded | [Minecraft OpenGL SR and FG](#minecraft-opengl-sr-and-fg-17-october-2026) |
 
+## One D3D12 host, Runtime FSR1 and Unity settings, 25 November 2026
+
+Built and unit-tested, not game-run or device-tested. Rule 5 audit F4 and overlay-parity follow-up 1, on
+`NightHammer1000/wave-d3d12`.
+
+- Drag'n Wash FSR1 switch: a change of SR provider waited for a scene packet flagged RECONFIGURE, which the managed
+  side records only as an inputs-only probe with depth and motion present, and the pre-UI frame-generation copy kept
+  admission busy every frame; with FG on, the switch to the engine's FSR1 never completed. The Mono bridge now
+  delivers the pending change at the window event once its command ring is idle, and the host applies it there.
+- One D3D12 host module: `callback_host.rs` is gone; the Unity entry is `render_host/callback.rs`. Vendor packages,
+  engine identity, SR context setup and the overlay's SR card are one implementation for RDR2 and Unity. Two C
+  entries remain because the integrations report different retirement facts (host-fenced recordings for RDR2,
+  adapter-retired command ring for Unity).
+- Runtime FSR1: sr12 serves Spatial itself with an FSR1 EASU kernel (`sr12/easu.hlsl`, after AMD's MIT
+  `ffx_fsr1.h`) where the engine has no spatial scaler, sampled at the jitter-free position. RDR2 now offers FSR1;
+  Unity keeps URP's own FSR1, which its adapter reports. D3D11 hosts do not have it yet.
+- Unity settings: SR backend, quality and enable state, generation mode, generated frames, latency, frame limit,
+  status overlay, DLSS model and sharpening are `rsf_render_settings` in the preferences `[Rendering]` section,
+  written on every accepted change. A key never saved keeps the adapter's `[UnitySR]` start value; the provider
+  keeps fg_choice's key.
+
+Game runs must confirm: Drag'n Wash FSR1 on and off at run time with FG on and off, and settings restored after a
+restart; RDR2 upscaling unchanged and its new FSR1 image stable (jitter sign) with sharpening; FG providers and
+the overlay in both. Rule 5 F9 (RDR2 screen class) and F10 (RDR2 masks) wait for a game run; the Unity package
+host is not on the shared host yet (see the audit's F4).
+
 ## Overlay parity across games, 25 November 2026
 
 Built and unit-tested, not game-run. Every game's overlay now offers the same controls and values, and a value
