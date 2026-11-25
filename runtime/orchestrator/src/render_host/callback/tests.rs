@@ -682,6 +682,17 @@ fn each_view_gets_a_context_and_an_idle_retired_one_is_released() {
 }
 
 #[test]
+fn a_v2_setup_is_never_read_as_an_attaching_v3_setup() {
+    // V2 extends the same base as V3 with more fields, so it is larger than V3. Its size alone
+    // must not make the host read its policy callback as the V3 services output and write there.
+    assert!(size_of::<SetupV2>() > size_of::<SetupV3>());
+    let files = Files::new("v2-not-attach");
+    let setup = setup_v2(&files, 3, 1);
+    assert_eq!(setup.base.abi_version, RSF_CALLBACK_HOST_ABI_VERSION_V2);
+    assert!(unsafe { attached((&raw const setup).cast()) }.is_none());
+}
+
+#[test]
 fn start_publishes_services_and_stop_retires_in_order() {
     let _serial = lock(&LIFECYCLE_TESTS);
     let files = Files::new("lifecycle");

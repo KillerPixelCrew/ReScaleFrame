@@ -991,12 +991,15 @@ unsafe extern "C" fn cpu_event(_: *mut c_void, event: *const CpuEvent) {
     unsafe { leaf::fg_cpu(event) };
 }
 
-// The services an attaching adapter receives, from a full V3 setup.
+// The services an attaching adapter receives, from a full V3 setup. The version decides the
+// layout: V2 extends the same base with more fields, so a V2 setup is larger than V3 and its
+// size alone would read its policy callback as the services output.
 unsafe fn attached(setup: *const Setup) -> Option<*mut Services> {
-    let size = unsafe { setup.cast::<u32>().read() } as usize;
-    (size >= size_of::<SetupV3>())
-        .then(|| unsafe { (*setup.cast::<SetupV3>()).services })
-        .filter(|services| !services.is_null())
+    let base = unsafe { &*setup };
+    (base.abi_version == RSF_CALLBACK_HOST_ABI_VERSION_V3
+        && base.struct_size as usize >= size_of::<SetupV3>())
+    .then(|| unsafe { (*setup.cast::<SetupV3>()).services })
+    .filter(|services| !services.is_null())
 }
 
 // Admission and host construction, before any plugin is loaded. Err is the public refusal code:
