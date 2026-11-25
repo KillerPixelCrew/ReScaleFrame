@@ -65,6 +65,8 @@ unsafe extern "C" {
         preview_scale: f32,
     ) -> i32;
     fn rsf_core_capture12_flush(owner: Handle, slot: u32, ready_only: u32) -> i32;
+    // The Runtime's FG Auto choice (runtime/orchestrator/src/fg_auto_choice.h).
+    fn rsf_fg_select_auto_backend(preferred: u32, choices: u32) -> u32;
 }
 
 /// The Runtime capture owner. It serializes its state internally; the Arc keeps it alive through
@@ -393,11 +395,21 @@ fn render(device: Handle, queue: Handle, commands: Handle, pass: &rsf_game_rende
         return 0;
     };
     let (settings, generation) = control::snapshot();
+    // Auto is the Runtime's choice among the providers the presentation bridge serves, as on the
+    // Runtime's Vulkan host.
     let fg = match settings.fg_backend {
-        RSF_FG_BACKEND_AUTO => unsafe { rsf_fg_default_backend(binding.vendor_id(), 0) },
+        RSF_FG_BACKEND_AUTO => unsafe {
+            rsf_fg_select_auto_backend(
+                rsf_fg_default_backend(binding.vendor_id(), 0),
+                rsf_d3d11_present_backend_choices(),
+            )
+        },
         backend => backend,
     };
-    if unsafe { rsf_d3d11_present_has_owner() } != 0 && fg != unsafe { rsf_d3d11_present_backend() }
+    // Auto with no served provider keeps the bridge's provider.
+    if fg != 0
+        && unsafe { rsf_d3d11_present_has_owner() } != 0
+        && fg != unsafe { rsf_d3d11_present_backend() }
     {
         unsafe { rsf_d3d11_present_request(fg) };
     }
