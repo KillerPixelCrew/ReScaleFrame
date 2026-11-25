@@ -199,9 +199,6 @@ struct SharedDevice {
     handles: DeviceHandles,
     pool: u64,
     slots: [CommandSlot; SLOTS],
-    epoch: u64,
-    #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
-    recordings: [u64; SLOTS],
 }
 
 impl SharedDevice {
@@ -210,9 +207,6 @@ impl SharedDevice {
             handles: DeviceHandles::EMPTY,
             pool: 0,
             slots: [CommandSlot::EMPTY; SLOTS],
-            epoch: 0,
-            #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
-            recordings: [0; SLOTS],
         }
     }
 
@@ -520,7 +514,6 @@ fn initialize_device(services: *const rsf_game_host_services) -> Device {
         lock().creation.rolled_back(false);
         return Device::Failed;
     }
-    device.epoch = ops::ring_begin();
     unsafe { ops::report_created(services) };
     let handles = device.handles;
     let previous = lock().creation.publish(device);
@@ -641,15 +634,13 @@ pub(super) fn record_image(index: u32) -> bool {
     lock().record_image(index as usize)
 }
 
-/// Called after the Vulkan slot fence completed and all command buffers and lists reset.
+/// Called after the Vulkan slot fence completed and all command buffers and lists reset. False
+/// without a device.
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
-pub(super) fn begin_recording(index: u32) -> Option<(u64, u64)> {
+pub(super) fn begin_recording() -> bool {
     let mut state = lock();
     state.recorded_images = 0;
-    let device = state.creation.device.as_mut()?;
-    let serial = device.recordings.get_mut(index as usize)?;
-    *serial = serial.checked_add(1)?;
-    (device.epoch != 0).then_some((device.epoch, *serial))
+    state.creation.device.is_some()
 }
 
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
@@ -712,9 +703,6 @@ fn release_closed() {
         )
     };
     if let Some(device) = &mut device {
-        if device.epoch != 0 {
-            ops::ring_retired(device.epoch);
-        }
         for image in images.into_iter().flatten() {
             unsafe { ops::destroy_image(&device.handles, &image.handles) };
         }
@@ -1134,10 +1122,6 @@ mod tests {
             0
         }
         pub(crate) unsafe fn report_created(_: *const rsf_game_host_services) {}
-        pub(crate) fn ring_begin() -> u64 {
-            0
-        }
-        pub(crate) fn ring_retired(_: u64) {}
         pub(crate) unsafe fn chain_create(
             _: *const DeviceHandles,
             _: *mut c_void,

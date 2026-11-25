@@ -7,8 +7,8 @@ use crate::bridge_state::{log, rsf_unity_frames_activate, rsf_unity_frames_activ
 use crate::d3d11_pass::{
     self, HANDBACK_FAILED, PassPlan, RETIRED, ROUTE_NONE, ROUTE_PREVIEW, ROUTE_WINDOW,
 };
+use crate::package_state::rsf_unity_package_bridge_failed;
 use crate::package_state::services::rsf_unity_package_log;
-use crate::package_state::{rsf_unity_package_bridge_failed, rsf_unity_package_sr_slot_reset};
 use crate::sys::rsf_unity_packet;
 use crate::sys::*;
 use crate::sys::{
@@ -442,7 +442,6 @@ impl Interop<'_> {
         if !d3d11_pass::apply_pending_change(&mut plan) {
             return None;
         }
-        rsf_unity_package_sr_slot_reset(11, slot.list, index as u32);
         self.pass(slot.list, &plan.pass, 1);
         for (raw, state) in resources.into_iter().zip(plan.states) {
             unsafe {

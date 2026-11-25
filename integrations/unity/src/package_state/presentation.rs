@@ -1,27 +1,24 @@
 // SPDX-License-Identifier: MIT
 //! The Unity package's presentation behind package.c: the package identity (the SDK root with
-//! its streamline, fidelityfx and xess directories and the Streamline interposer, Unity's version
-//! and the project id), the one generation install, and the provider request of every window
-//! pass. The identity comes from [UnitySR] when the plugin loads and from rsfu_initialize for each
-//! session. SR views read it for their contexts. Auto uses the Runtime's
-//! rsf_fg_default_backend with the current D3D12 adapter.
+//! its streamline, fidelityfx and xess directories, Unity's version
+//! and the project id) and the one generation install. The identity comes from [UnitySR] when
+//! the plugin loads and from rsfu_initialize for each session; the Runtime host each session
+//! attaches reads it for its SR contexts. Provider requests are the host's.
 use super::{Package, raw};
 use crate::generation::{self, Sources};
+use crate::sys::RSF_FG_OFF;
 use crate::sys::{RSF_FG_BACKEND_AUTO, RSF_REFLEX_OFF, rsf_fg12_setup, rsf_native_fg_options};
-use crate::sys::{RSF_FG_OFF, rsf_unity_package_view_setup};
 use rsf_game_sys::backend_result;
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::vendor_paths::VendorPaths;
 use std::ffi::CString;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
 
 /// The package's SDK directories and Streamline identity, as UTF-8 C strings.
 #[derive(Clone, Default)]
 pub(super) struct Identity {
     pub(super) root: CString,
     pub(super) streamline: CString,
-    pub(super) interposer: CString,
     pub(super) fsr: CString,
     pub(super) xess: CString,
     pub(super) version: CString,
@@ -43,7 +40,6 @@ impl Identity {
         let root = text(root);
         let vendors = VendorPaths::new(&root);
         Self {
-            interposer: vendors.interposer,
             fsr: vendors.fidelityfx,
             xess: vendors.xess,
             streamline: vendors.streamline,
@@ -57,17 +53,6 @@ impl Identity {
     fn installable(&self) -> bool {
         !self.root.is_empty() && !self.version.is_empty() && !self.project.is_empty()
     }
-
-    /// Lends the identity to a view's setup for one leaf call.
-    pub(super) fn lend(&self, setup: &mut rsf_unity_package_view_setup) {
-        setup.root_utf8 = self.root.as_ptr();
-        setup.streamline_utf8 = self.streamline.as_ptr();
-        setup.interposer_utf8 = self.interposer.as_ptr();
-        setup.fsr_utf8 = self.fsr.as_ptr();
-        setup.xess_utf8 = self.xess.as_ptr();
-        setup.engine_version_utf8 = self.version.as_ptr();
-        setup.project_id_utf8 = self.project.as_ptr();
-    }
 }
 
 pub(super) struct Presentation {
@@ -75,19 +60,13 @@ pub(super) struct Presentation {
     identity: Mutex<Option<Identity>>,
     /// Whether rsf_fg12_install accepted the setup; held across the install.
     installed: Mutex<bool>,
-    /// Auto's provider for Unity's adapter, kept for the process once it is non-zero.
-    default_backend: AtomicU32,
 }
 
 impl Presentation {
-    pub(super) fn device_retired(&self) {
-        self.default_backend.store(0, SeqCst);
-    }
     pub(super) const fn new() -> Self {
         Self {
             identity: Mutex::new(None),
             installed: Mutex::new(false),
-            default_backend: AtomicU32::new(0),
         }
     }
 
@@ -103,10 +82,10 @@ impl Presentation {
 impl Package {
     /// The one install: the Auto provider with generation off until rsfu_configure, switchable
     /// at run time, from the SDK root's fidelityfx, xess and streamline directories. A refusal
-    /// is retried by the next call. Its result is the generation result.
+    /// is retried by the next call.
     pub(super) fn install(&self) {
         let identity = self.presentation.identity();
-        let result = {
+        {
             let mut installed = lock_or_recover(&self.presentation.installed);
             if *installed || !identity.installable() {
                 return;
@@ -135,37 +114,8 @@ impl Package {
                 super::routing::accept_window,
                 super::services::backend_log,
             );
-            let result = unsafe { raw::fg_install(&setup) };
-            *installed = result == backend_result::OK;
-            result
-        };
-        self.lock().status.fg_result = result;
-    }
-
-    /// The window pass's request: nothing without a presentation owner, the
-    /// stored provider with Auto resolved for Unity's adapter (nothing while it cannot be read),
-    /// nothing while that provider is active, else the request, whose result is recorded.
-    pub(super) fn request_generation(&self) {
-        if unsafe { raw::present_has_owner() } == 0 {
-            return;
+            *installed = unsafe { raw::fg_install(&setup) } == backend_result::OK;
         }
-        let mut requested = self.lock().settings.fg_backend;
-        if requested == RSF_FG_BACKEND_AUTO {
-            requested = self.presentation.default_backend.load(SeqCst);
-            if requested == 0 {
-                // Auto's provider for Unity's adapter; None while it cannot be read.
-                let Some(resolved) = raw::fg_default_backend() else {
-                    return;
-                };
-                self.presentation.default_backend.store(resolved, SeqCst);
-                requested = resolved;
-            }
-        }
-        if requested == unsafe { raw::present_backend() } {
-            return;
-        }
-        let result = unsafe { raw::present_request(requested) };
-        self.lock().status.fg_result = result;
     }
 }
 
@@ -204,7 +154,6 @@ mod tests {
         let pairs = [
             (&identity.root, "C:/sdk"),
             (&identity.streamline, "C:/sdk/streamline"),
-            (&identity.interposer, "C:/sdk/streamline/sl.interposer.dll"),
             (&identity.fsr, "C:/sdk/fidelityfx"),
             (&identity.xess, "C:/sdk/xess"),
             (&identity.version, "6000.0.1"),
@@ -223,37 +172,5 @@ mod tests {
         // Before the plugin loads every string is empty.
         let unloaded = Presentation::new().identity();
         assert!(unloaded.streamline.is_empty() && !unloaded.installable());
-    }
-
-    #[test]
-    fn a_view_borrows_the_identity() {
-        let identity = Identity::new(b"R", b"6000", b"P");
-        let mut setup = rsf_unity_package_view_setup::default();
-        identity.lend(&mut setup);
-        let text = |pointer| {
-            unsafe { std::ffi::CStr::from_ptr(pointer) }
-                .to_str()
-                .unwrap()
-        };
-        assert_eq!(
-            [
-                text(setup.root_utf8),
-                text(setup.streamline_utf8),
-                text(setup.interposer_utf8),
-                text(setup.fsr_utf8),
-                text(setup.xess_utf8),
-                text(setup.engine_version_utf8),
-                text(setup.project_id_utf8),
-            ],
-            [
-                "R",
-                "R/streamline",
-                "R/streamline/sl.interposer.dll",
-                "R/fidelityfx",
-                "R/xess",
-                "6000",
-                "P"
-            ]
-        );
     }
 }

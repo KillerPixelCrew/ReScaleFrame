@@ -645,6 +645,11 @@ fn an_attached_adapter_gets_services_settings_and_status_without_a_plugin() {
 
     assert_eq!(stop(), 0);
     assert_eq!(settings_get().map(|s| s.sr_backend), None);
+    // Without a host a request is still checked for the host it waits for.
+    assert_eq!(settings_apply(&request), None);
+    assert!(!settings_acceptable(&request));
+    request.generated_frames = 2;
+    assert!(settings_acceptable(&request));
     assert_eq!(unsafe { rsf_callback_host_status_get(&mut status) }, 0);
     events();
 }

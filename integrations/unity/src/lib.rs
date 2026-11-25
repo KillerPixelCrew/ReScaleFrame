@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! The Unity package and render bridge: settings and status, session state, SR views,
+//! The Unity package and render bridge: settings and status translation, session state,
 //! presentation, the D3D11, D3D12 and Vulkan bridges, generation setup and the Editor preview,
 //! linked into `ReScaleFrame.Unity.Native.dll`. The Mono plugin (`games/unity-mono`) builds the
 //! `mono-plugin` subset (its D3D12 callbacks and the shared frame state) into its own DLL.
@@ -45,8 +45,6 @@ mod device_creation;
 pub mod generation;
 #[cfg(any(test, not(feature = "mono-plugin")))]
 mod package_state;
-#[cfg(any(test, not(feature = "mono-plugin")))]
-mod package_views;
 #[cfg(all(windows, not(feature = "mono-plugin")))]
 mod preview;
 pub mod runtime_config;

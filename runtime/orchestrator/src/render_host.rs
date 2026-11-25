@@ -1854,6 +1854,8 @@ unsafe extern "C" fn rsf_render_settings_apply(request: *const Settings) -> i32 
     }
     match frontend() {
         Some(host) => host.settings_apply(request),
-        None => NOT_READY,
+        // Without a host a request is still checked, so its caller can keep it for the next one.
+        None if callback::settings_acceptable(request) => NOT_READY,
+        None => INVALID,
     }
 }

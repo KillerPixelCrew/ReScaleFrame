@@ -304,8 +304,6 @@ mod d3d11 {
     }
 }
 
-#[cfg(test)]
-pub(crate) use d3d11::EVENT_WINDOW;
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(crate) use d3d11::{
     HANDBACK_FAILED, PassPlan, RETIRED, ROUTE_NONE, ROUTE_PREVIEW, ROUTE_WINDOW,

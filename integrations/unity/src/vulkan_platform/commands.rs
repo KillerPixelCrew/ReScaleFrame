@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use super::{DeviceHandles, Dispatch, SUCCESS, VULKAN, borrowed};
-use crate::package_state::rsf_unity_package_sr_recording;
 use crate::vulkan_state::{self, CommandSlot};
 use ash::vk::{self, Handle as _};
 use std::ffi::c_void;
@@ -9,11 +8,7 @@ use std::ptr::null;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
-pub(crate) unsafe fn rsf_uvk_gpu_begin(
-    shared: &DeviceHandles,
-    slot: &CommandSlot,
-    ring: u32,
-) -> bool {
+pub(crate) unsafe fn rsf_uvk_gpu_begin(shared: &DeviceHandles, slot: &CommandSlot) -> bool {
     let dispatch = unsafe { shared.dispatch() };
     let fence = vk::Fence::from_raw(slot.complete);
     if unsafe { (dispatch.wait_fences)(shared.vk_device(), 1, &fence, vk::TRUE, 10_000_000_000) }
@@ -42,11 +37,7 @@ pub(crate) unsafe fn rsf_uvk_gpu_begin(
     {
         return false;
     }
-    let Some((epoch, serial)) = vulkan_state::begin_recording(ring) else {
-        return false;
-    };
-    rsf_unity_package_sr_recording(slot.commands, epoch, ring, serial, serial - 1);
-    true
+    vulkan_state::begin_recording()
 }
 
 pub(crate) unsafe fn rsf_uvk_gpu_upload(

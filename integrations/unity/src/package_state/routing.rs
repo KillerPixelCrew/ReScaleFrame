@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Unity render-pass routing, window admission and device events.
-use super::{OPERATIONS, PACKAGE, Package, RECORDING, UNITY_GRAPHICS, UNITY_INTERFACES, raw};
+use super::{OPERATIONS, PACKAGE, Package, UNITY_GRAPHICS, UNITY_INTERFACES, raw};
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 use super::{presentation, services};
 use crate::sys::RSF_UNITY_PREVIEW_SOURCE_COMMON;
 use crate::sys::{RSF_UNITY_DEVICE_EVENT_INITIALIZE, RSF_UNITY_DEVICE_EVENT_SHUTDOWN};
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass};
+use rsf_game_sys::{RSF_SCREEN_FLIGHT, RSF_SCREEN_MENU};
 use std::ffi::{c_int, c_void};
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 use std::ptr::null_mut;
@@ -33,42 +34,47 @@ impl Package {
         self.services.editor.load(SeqCst)
     }
 
-    /// The render callback. An end reports every pass but the window's as
-    /// submitted. The window pass asks for the generation provider, then presents the Editor
-    /// preview or hands the pass to generation; the final scene is generation's HUD-less image.
-    /// Any other pass is SR: the Editor preview is prepared first and true runs the SR pass on
-    /// the original under the package operation lock.
+    /// The render callback, under the package operation lock so a session cannot retire its host
+    /// while a pass is in it. The Editor presents its preview at the window pass and prepares it
+    /// before an SR pass. Every other pass, the player's window pass included, goes to the Runtime
+    /// host, the SR passes with the screen class the developer reports.
     pub(super) fn route(
         &self,
         commands: *mut c_void,
         original: &rsf_game_render_pass,
         begin: bool,
-    ) -> bool {
-        let pass = *original;
-        if !begin {
-            if pass.role != RSF_GAME_RENDER_WINDOW {
-                unsafe { raw::fg_submitted(pass.session_id, pass.source_frame_id) };
-            }
-            return false;
-        }
-        if pass.role == RSF_GAME_RENDER_WINDOW {
-            self.request_generation();
-            if self.editor() {
+    ) {
+        let mut pass = *original;
+        let window = pass.role == RSF_GAME_RENDER_WINDOW;
+        let scene = !window && pass.role != RSF_GAME_RENDER_FINAL_SCENE;
+        if window && self.editor() {
+            if begin {
                 let common = pass.flags & RSF_UNITY_PREVIEW_SOURCE_COMMON != 0;
                 let shown = unsafe { raw::preview_present(pass.color_input, &pass, common) };
                 self.preview_refused(shown, &pass);
-            } else {
-                unsafe { raw::fg_window(&pass) };
             }
-            return false;
+            return;
         }
-        if pass.role == RSF_GAME_RENDER_FINAL_SCENE {
-            unsafe { raw::fg_hudless(commands, &pass) };
-            return false;
+        if begin
+            && scene
+            && self.editor()
+            && !raw::preview_prepare(pass.camera.output_width, pass.camera.output_height)
+        {
+            return;
         }
-        !self.editor() || raw::preview_prepare(pass.camera.output_width, pass.camera.output_height)
+        if scene {
+            pass.screen = if self.lock().settings.gameplay != 0 {
+                RSF_SCREEN_FLIGHT
+            } else {
+                RSF_SCREEN_MENU
+            };
+        }
+        if let Some(host) = self.host()
+            && let Some(render) = host.render_pass
+        {
+            unsafe { render(host.user, commands, &pass, u32::from(begin)) };
+        }
     }
-
     /// Every refusal counts toward the budget; one with a texture within
     /// the first four is logged with the texture's and camera's extents.
     fn preview_refused(&self, shown: bool, pass: &rsf_game_render_pass) {
@@ -125,7 +131,6 @@ impl Package {
             return;
         }
         raw::bridge_unload();
-        self.presentation.device_retired();
         self.device.store(DEVICE_WAITING, SeqCst);
     }
 
@@ -154,13 +159,8 @@ pub(super) unsafe extern "C" fn render_callback(
     if commands.is_null() || pass.is_null() {
         return;
     }
-    let pass = unsafe { &*pass };
-    if PACKAGE.route(commands, pass, begin != 0) {
-        let _operation = lock_or_recover(&OPERATIONS);
-        PACKAGE.render(commands, pass);
-    } else {
-        RECORDING.set(None);
-    }
+    let _operation = lock_or_recover(&OPERATIONS);
+    PACKAGE.route(commands, unsafe { &*pass }, begin != 0);
 }
 
 pub(super) extern "C" fn accept_window(_: *mut c_void, window: *mut c_void) -> c_int {

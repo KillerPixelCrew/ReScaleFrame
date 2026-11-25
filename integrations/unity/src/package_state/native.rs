@@ -1,25 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Package entry points backed by the linked Unity SDK and Runtime shims.
-use super::services::backend_log;
 use super::{PACKAGE, routing, services};
 use crate::bridge_native::package::*;
-use crate::generation::RSF_DLSS_ENGINE_UNITY;
 use crate::preview::*;
-use crate::sys::{
-    RSF_DLSS_ABI_VERSION, RSF_SR12_PLAN_ABI_VERSION, rsf_d3d11_present_host, rsf_dlss_setup,
-    rsf_fg_default_backend, rsf_sharpening_core_defaults, rsf_sharpening_core_valid,
-    rsf_sharpening_options, rsf_sr12, rsf_sr12_create_planned, rsf_sr12_plan_result,
-    rsf_sr12_setup, rsf_unity_package_view_setup,
-};
+use crate::sys::{rsf_sharpening_core_defaults, rsf_sharpening_options};
 use crate::vulkan_state::bridge::rsf_uvk_bridge_update_window;
-use rsf_game_sys::backend_result;
 use std::ffi::{c_int, c_void};
-use std::ptr::null_mut;
 use std::sync::atomic::Ordering::SeqCst;
-use windows::Win32::Graphics::{
-    Direct3D12::{ID3D12Device, ID3D12GraphicsCommandList, ID3D12Resource},
-    Dxgi::{CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter1, IDXGIFactory4},
-};
+use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
 use windows::core::Interface;
 
 unsafe extern "C" {
@@ -35,16 +23,13 @@ pub(super) mod raw {
         rsf_unity_package_local_app_data as local_app_data,
         rsf_unity_package_log_close as log_close, rsf_unity_package_log_open as log_open,
         rsf_unity_package_log_write as log_write, rsf_unity_package_player_window as player_window,
-        rsf_unity_package_restore as restore, rsf_unity_package_session_seed as session_seed,
-        rsf_unity_package_subclass as subclass, rsf_unity_package_timestamp as timestamp,
-        rsf_unity_package_window_class as window_class,
+        rsf_unity_package_restore as restore, rsf_unity_package_subclass as subclass,
+        rsf_unity_package_timestamp as timestamp, rsf_unity_package_window_class as window_class,
     };
     pub(in crate::package_state) use super::{
-        rsf_unity_package_create_view as sr_create,
-        rsf_unity_package_default_fg as fg_default_backend,
         rsf_unity_package_prepare_preview as preview_prepare,
         rsf_unity_package_renderer_vulkan as renderer_vulkan,
-        rsf_unity_package_texture_desc as texture_desc, sharpening_defaults, sharpening_valid,
+        rsf_unity_package_texture_desc as texture_desc, sharpening_defaults,
     };
     pub(in crate::package_state) use crate::bridge_native::package::{
         rsf_unity_package_bridge_finish_retirement as bridge_finish_retirement,
@@ -60,106 +45,20 @@ pub(super) mod raw {
         rsf_unity_preview_present as preview_present,
     };
     pub(in crate::package_state) use crate::sys::{
-        rsf_d3d11_present_backend as present_backend,
+        rsf_callback_host_start as host_start, rsf_callback_host_status_get as host_status,
+        rsf_callback_host_stop as host_stop, rsf_d3d11_present_backend as present_backend,
         rsf_d3d11_present_generation as present_generation,
-        rsf_d3d11_present_has_owner as present_has_owner,
-        rsf_d3d11_present_request as present_request,
         rsf_d3d11_present_switch_result as present_switch_result, rsf_fg12_cpu as cpu,
-        rsf_fg12_end_session as end_session, rsf_fg12_hudless as fg_hudless,
-        rsf_fg12_install as fg_install, rsf_fg12_options as fg_options,
-        rsf_fg12_status as fg_status, rsf_fg12_submitted as fg_submitted,
-        rsf_fg12_window as fg_window, rsf_native_latency_status_get as latency_status,
-        rsf_sr12_destroy as sr_destroy, rsf_sr12_evaluate as sr_evaluate,
-        rsf_sr12_quality_supported as sr_quality_supported,
-        rsf_sr12_set_sharpening as sr_set_sharpening,
+        rsf_fg12_end_session as end_session, rsf_fg12_install as fg_install,
+        rsf_fg12_status as fg_status, rsf_fg12_window as fg_window,
+        rsf_native_latency_status_get as latency_status,
+        rsf_render_settings_apply as settings_apply, rsf_render_settings_get as settings_get,
     };
     pub(in crate::package_state) use crate::vulkan_state::bridge::rsf_uvk_bridge_owns_window as vulkan_owns;
     pub(in crate::package_state) use rsf_windows::rsf_win32_input_kind as input_kind;
 }
-pub(super) fn sharpening_valid(options: &rsf_sharpening_options) -> bool {
-    options.struct_size as usize >= size_of::<rsf_sharpening_options>()
-        && unsafe { rsf_sharpening_core_valid(*options) } != 0
-}
-
 pub(super) fn sharpening_defaults() -> rsf_sharpening_options {
     unsafe { rsf_sharpening_core_defaults() }
-}
-
-/// Creates the view's SR context on the recording list's device: the creation result and the
-/// context, or None when the list has no device. Runs inside the bridge's admitted SR callback
-/// and borrows the recording list.
-pub(super) unsafe fn rsf_unity_package_create_view(
-    commands: *mut c_void,
-    view: &mut rsf_unity_package_view_setup,
-) -> Option<(i32, *mut rsf_sr12)> {
-    let commands = unsafe { ID3D12GraphicsCommandList::from_raw_borrowed(&commands) }?;
-    let mut device = None::<ID3D12Device>;
-    unsafe { commands.GetDevice(&mut device) }.ok()?;
-    let device = device?;
-    let setup = rsf_sr12_setup {
-        struct_size: size_of::<rsf_sr12_setup>() as u32,
-        abi_version: 1,
-        device: device.as_raw(),
-        backend: view.backend,
-        quality: view.quality,
-        output_width: view.output_width,
-        output_height: view.output_height,
-        render_width: view.render_width,
-        render_height: view.render_height,
-        inverted_depth: view.inverted_depth,
-        streamline_host: unsafe { rsf_d3d11_present_host() }.cast(),
-        fsr2_directory_utf8: view.fsr_utf8,
-        fsr3_directory_utf8: view.fsr_utf8,
-        fsr4_directory_utf8: view.fsr_utf8,
-        xess_directory_utf8: view.xess_utf8,
-        log: Some(backend_log),
-        dlss: rsf_dlss_setup {
-            struct_size: size_of::<rsf_dlss_setup>() as u32,
-            abi_version: RSF_DLSS_ABI_VERSION,
-            interposer_path_utf8: view.interposer_utf8,
-            plugin_directory_utf8: view.streamline_utf8,
-            log_directory_utf8: view.root_utf8,
-            engine: RSF_DLSS_ENGINE_UNITY,
-            engine_version_utf8: view.engine_version_utf8,
-            project_id_utf8: view.project_id_utf8,
-            require_signature: 1,
-            log: Some(backend_log),
-            preset: view.dlss_preset,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let mut plan = rsf_sr12_plan_result {
-        struct_size: size_of::<rsf_sr12_plan_result>() as u32,
-        abi_version: RSF_SR12_PLAN_ABI_VERSION,
-        ..Default::default()
-    };
-    let mut output = null_mut();
-    let created = unsafe { rsf_sr12_create_planned(&setup, &mut plan, &mut output) };
-    if created == backend_result::OK {
-        view.backend = plan.backend;
-        view.render_width = plan.render_width;
-        view.render_height = plan.render_height;
-    }
-    let result = if plan.requested_result != backend_result::OK {
-        plan.requested_result
-    } else {
-        created
-    };
-    Some((result, output))
-}
-
-/// Auto's generation provider for Unity's adapter; None when the device or adapter cannot be read.
-pub(super) fn rsf_unity_package_default_fg() -> Option<u32> {
-    let (device, _queue) = graphics()?;
-    let desc = unsafe {
-        CreateDXGIFactory1::<IDXGIFactory4>()
-            .and_then(|factory| factory.EnumAdapterByLuid::<IDXGIAdapter1>(device.GetAdapterLuid()))
-            .and_then(|adapter| adapter.GetDesc1())
-    }
-    .ok()?;
-    let software = desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0;
-    Some(unsafe { rsf_fg_default_backend(desc.VendorId, u32::from(software)) })
 }
 
 /// ID3D12Resource::GetDesc's width, height and format; zeros for a null resource.

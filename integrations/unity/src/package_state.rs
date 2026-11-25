@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: MIT
-//! The Unity package's state behind ReScaleFrame.Unity.Native.dll's rsfu_* exports
-//! (integrations/unity/native/package.c): the stored settings and their validation, the status
-//! snapshot, the render plan, temporal readiness, the pending reconfiguration, the session
-//! lifecycle with its result codes, the sequencing of the render callback's D3D12 SR views
-//! (their table and slot rules are package_views.rs), the presentation: the package identity,
-//! the generation install and the window pass's provider request (presentation.rs), and the
-//! session services: each session's host services and bridge API, the log, the input window and
-//! the routing of CPU events, window messages and rsfu_input (services.rs), and the render
-//! callback's routing, the generation window guard and Unity's device lifecycle (routing.rs).
-//! Rust serializes the session exports, Unity device events and SR evaluation with OPERATIONS.
-//! The inner state lock is released across leaf calls. The view and presentation locks
-//! precede the state lock. The log and input-window locks cover their own leaves only.
+//! The Unity package behind ReScaleFrame.Unity.Native.dll's rsfu_* exports
+//! (integrations/unity/native/package.c). The package is an integration: it prepares the engine's
+//! inputs (its D3D12, D3D11 and Vulkan renderer bridges), presents the output (the Editor preview)
+//! and reports its engine's facts (the gameplay screen class, received input, CPU frames). Every
+//! technique is the Runtime's D3D12 host, which each session attaches
+//! (`rsf_callback_host_start` with the V3 setup): SR contexts per view, the plan, settings, the
+//! provider requests and the shared overlay.
+//!
+//! This module keeps the developer's settings API as a translation onto that host:
+//! rsfu_configure and rsfu_settings are the Runtime's `rsf_render_settings`, so the developer's
+//! menu and the overlay read and write one store, and rsfu_status merges the host's SR status
+//! with the Runtime's generation and latency status. It also owns the session lifecycle with its
+//! result codes, the generation install (presentation.rs), the session services: the log, the
+//! input window and the routing of CPU events, window messages and rsfu_input (services.rs), and
+//! the render callback's routing, the generation window guard and Unity's device lifecycle
+//! (routing.rs). Rust serializes the session exports and Unity device events with OPERATIONS.
 #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 mod native;
 mod presentation;
@@ -21,29 +25,18 @@ mod windows;
 
 use self::presentation::{Identity, Presentation};
 use self::services::Services;
-use crate::package_views::{Recording, SLOTS, View, Views};
-use crate::sys::rsf_unity_native_api;
 use crate::sys::{
-    RSF_DLSS_PRESET_MASK, RSF_FG_STAT_TOTAL_PRESENTED, RSF_SR_NONE, RSF_UNITY_SETTINGS_ABI_VERSION,
-    rsf_native_fg_options, rsf_native_fg_status, rsf_native_latency_status, rsf_sharpening_options,
-    rsf_sr12, rsf_unity_frame_counters, rsf_unity_package_settings, rsf_unity_package_status,
-    rsf_unity_package_view_setup,
-};
-use crate::sys::{
-    RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
-    RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_SPATIAL,
+    RSF_FG_BACKEND_AUTO, RSF_FG_STAT_TOTAL_PRESENTED, RSF_RENDER_FRONTEND_ABI_VERSION, RSF_SR_AUTO,
+    RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_XESS, RSF_UNITY_SETTINGS_ABI_VERSION,
+    rsf_callback_host_status, rsf_native_fg_status, rsf_native_latency_status, rsf_render_settings,
+    rsf_sharpening_options, rsf_unity_frame_counters, rsf_unity_native_api,
+    rsf_unity_package_settings, rsf_unity_package_status,
 };
 use rsf_game_sys::ffi_util::lock_or_recover;
-use rsf_game_sys::{
-    RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_render_config, rsf_game_render_pass,
-};
-use rsf_game_sys::{RSF_SCREEN_FLIGHT, RSF_SCREEN_MENU, backend_result};
-use std::cell::Cell;
+use rsf_game_sys::{backend_result, rsf_game_host_services};
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::null_mut;
-use std::sync::atomic::{
-    AtomicBool, AtomicI32, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering::SeqCst,
-};
+use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU8, AtomicU32, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard};
 
 /// rsfu_initialize's results, part of the managed contract (ReScaleFrameRuntime.Apply).
@@ -57,22 +50,10 @@ mod code {
 const STATUS_ABI_VERSION: u32 = 1;
 const FRAME_COUNTERS_ABI_VERSION: u32 = 1;
 const LATENCY_STATUS_VERSION: u32 = 1;
-/// ReconstructionQuality.UltraQuality, the highest quality and one DLSS does not offer.
-const ULTRA_QUALITY: u32 = 5;
-const MAX_LATENCY_MODE: u32 = 2;
-const MAX_GENERATED_FRAMES: u32 = 15;
-/// The highest preset dlss_preset.h's mask names.
-const MAX_DLSS_PRESET: u32 = 13;
-const FG_BACKENDS: [u32; 5] = [
-    RSF_FG_BACKEND_DLSS,
-    RSF_FG_BACKEND_FSR3,
-    RSF_FG_BACKEND_FSR4,
-    RSF_FG_BACKEND_XESS,
-    RSF_FG_BACKEND_AUTO,
-];
 
-/// The settings before the first rsfu_configure. A zero sharpening struct_size selects
-/// rsf_sharpening_defaults at evaluation.
+/// The developer's settings before the first rsfu_configure, which are also the host's start
+/// values for keys the preferences never saved. A zero sharpening struct_size selects the
+/// Runtime's sharpening defaults.
 const DEFAULT_SETTINGS: rsf_unity_package_settings = rsf_unity_package_settings {
     struct_size: size_of::<rsf_unity_package_settings>() as u32,
     abi_version: RSF_UNITY_SETTINGS_ABI_VERSION,
@@ -101,14 +82,6 @@ const DEFAULT_SETTINGS: rsf_unity_package_settings = rsf_unity_package_settings 
         clamp_output: 0,
         debug: 0,
     },
-};
-const EMPTY_PLAN: rsf_game_render_config = rsf_game_render_config {
-    struct_size: size_of::<rsf_game_render_config>() as u32,
-    enabled: 0,
-    output_width: 0,
-    output_height: 0,
-    render_width: 0,
-    render_height: 0,
 };
 
 const fn fresh_status() -> rsf_unity_package_status {
@@ -150,8 +123,107 @@ fn latency_status() -> Option<rsf_native_latency_status> {
     (unsafe { raw::latency_status(&mut status) } != 0).then_some(status)
 }
 
-fn sr_destroy(sr: *mut rsf_sr12) {
-    unsafe { raw::sr_destroy(sr) }
+/// The attached host's SR status; None without a session.
+fn host_status() -> Option<rsf_callback_host_status> {
+    let mut status = rsf_callback_host_status {
+        struct_size: size_of::<rsf_callback_host_status>() as u32,
+        ..Default::default()
+    };
+    (unsafe { raw::host_status(&mut status) } != 0).then_some(status)
+}
+
+/// The attached host's settings; None without a session.
+fn host_settings() -> Option<rsf_render_settings> {
+    let mut settings = rsf_render_settings {
+        struct_size: size_of::<rsf_render_settings>() as u32,
+        abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
+        ..Default::default()
+    };
+    (unsafe { raw::settings_get(&mut settings) } == 0).then_some(settings)
+}
+
+/// The developer's request as the Runtime's settings over `saved`: no SR backend is SR off with
+/// the saved backend kept, and a zero sharpening size is the Runtime's defaults.
+fn render_settings(
+    input: &rsf_unity_package_settings,
+    saved: &rsf_render_settings,
+) -> rsf_render_settings {
+    let o = if input.sharpening.struct_size != 0 {
+        input.sharpening
+    } else {
+        raw::sharpening_defaults()
+    };
+    rsf_render_settings {
+        sr_enabled: u32::from(input.sr_backend != RSF_SR_NONE),
+        sr_backend: if input.sr_backend == RSF_SR_NONE {
+            saved.sr_backend
+        } else {
+            input.sr_backend
+        },
+        sr_quality: input.quality,
+        dlss_preset: input.dlss_preset,
+        fg_enabled: input.fg_mode,
+        fg_backend: input.fg_backend,
+        generated_frames: input.generated_frames,
+        latency: input.latency_mode,
+        frame_limit_us: input.frame_limit_us,
+        sharpening_mode: o.mode,
+        sharpening_sharpness: o.sharpness,
+        sharpening_mas: o.mas,
+        sharpening_motion_sharpness: o.motion_sharpness,
+        sharpening_motion_threshold: o.motion_threshold,
+        sharpening_motion_scale_limit: o.motion_scale_limit,
+        sharpening_contrast_enabled: o.contrast_enabled,
+        sharpening_contrast: o.contrast,
+        sharpening_depth_scale: o.depth_scale,
+        sharpening_depth_bias: o.depth_bias,
+        sharpening_clamp_output: o.clamp_output,
+        sharpening_debug: o.debug,
+        ..*saved
+    }
+}
+
+/// The Runtime's settings as the developer's API reads them. The gameplay flag is the
+/// developer's own, and so is a zero sharpening size, which keeps meaning the defaults.
+fn package_settings(
+    settings: &rsf_render_settings,
+    developer: &rsf_unity_package_settings,
+) -> rsf_unity_package_settings {
+    let sharpening = if developer.sharpening.struct_size == 0 {
+        developer.sharpening
+    } else {
+        rsf_sharpening_options {
+            mode: settings.sharpening_mode,
+            sharpness: settings.sharpening_sharpness,
+            mas: settings.sharpening_mas,
+            motion_sharpness: settings.sharpening_motion_sharpness,
+            motion_threshold: settings.sharpening_motion_threshold,
+            motion_scale_limit: settings.sharpening_motion_scale_limit,
+            contrast_enabled: settings.sharpening_contrast_enabled,
+            contrast: settings.sharpening_contrast,
+            depth_scale: settings.sharpening_depth_scale,
+            depth_bias: settings.sharpening_depth_bias,
+            clamp_output: settings.sharpening_clamp_output,
+            debug: settings.sharpening_debug,
+            ..developer.sharpening
+        }
+    };
+    rsf_unity_package_settings {
+        sr_backend: if settings.sr_enabled == 0 {
+            RSF_SR_NONE
+        } else {
+            settings.sr_backend
+        },
+        quality: settings.sr_quality,
+        dlss_preset: settings.dlss_preset,
+        fg_backend: settings.fg_backend,
+        fg_mode: settings.fg_enabled,
+        generated_frames: settings.generated_frames,
+        latency_mode: settings.latency,
+        frame_limit_us: settings.frame_limit_us,
+        sharpening,
+        ..*developer
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -163,21 +235,25 @@ enum Session {
     Started(u64),
 }
 
+/// The attached host's services, which the render callback forwards to.
+#[derive(Clone, Copy)]
+struct Host(rsf_game_host_services);
+// SAFETY: the Runtime's process-lifetime callbacks and its host address, never dereferenced here.
+unsafe impl Send for Host {}
+
 struct State {
+    /// The developer's last request, kept for the gameplay flag and for a session to come.
     settings: rsf_unity_package_settings,
-    status: rsf_unity_package_status,
-    plan: rsf_game_render_config,
-    /// A settings change waits for a reconfiguring pass; no evaluation until then.
+    /// A request made without a session, applied by the next session's host.
     pending: bool,
     session: Session,
 }
 
 struct Package {
     state: Mutex<State>,
-    views: Mutex<Views>,
+    host: Mutex<Option<Host>>,
     presentation: Presentation,
     services: Services,
-    temporal_ready: AtomicBool,
     /// A renderer bridge failure, reported as the SR result until the next session.
     bridge_result: AtomicI32,
     /// Unity's device (routing.rs), written only under the package operation lock.
@@ -187,153 +263,18 @@ struct Package {
 }
 
 static PACKAGE: Package = Package::new();
-static NEXT_RING_EPOCH: AtomicU64 = AtomicU64::new(1);
-// These bridge owners prove fence retirement or discard before reporting each reset.
-static D3D11_RECORDINGS: Mutex<ProducerRing> = Mutex::new(ProducerRing::new());
-static D3D12_RECORDINGS: Mutex<ProducerRing> = Mutex::new(ProducerRing::new());
-
-struct ProducerRing {
-    epoch: u64,
-    serials: [u64; SLOTS],
-}
-
-impl ProducerRing {
-    const fn new() -> Self {
-        Self {
-            epoch: 0,
-            serials: [0; SLOTS],
-        }
-    }
-
-    fn reset(&mut self, commands: *mut c_void, slot: u32) {
-        let Some(serial) = self.serials.get_mut(slot as usize) else {
-            RECORDING.set(None);
-            return;
-        };
-        if self.epoch == 0 {
-            self.epoch = rsf_unity_package_sr_ring_begin();
-        }
-        let retired = *serial;
-        let Some(next) = retired.checked_add(1) else {
-            RECORDING.set(None);
-            return;
-        };
-        *serial = next;
-        rsf_unity_package_sr_recording(commands, self.epoch, slot, next, retired);
-    }
-
-    fn released(&mut self) {
-        rsf_unity_package_sr_ring_retired(self.epoch);
-        *self = Self::new();
-    }
-}
-
-fn d3d_ring(bridge: u32) -> Option<MutexGuard<'static, ProducerRing>> {
-    let owner = match bridge {
-        11 => &D3D11_RECORDINGS,
-        12 => &D3D12_RECORDINGS,
-        _ => return None,
-    };
-    Some(lock_or_recover(owner))
-}
-
-pub(crate) fn rsf_unity_package_sr_slot_reset(bridge: u32, commands: *mut c_void, slot: u32) {
-    if let Some(mut ring) = d3d_ring(bridge) {
-        ring.reset(commands, slot);
-    }
-}
-
-pub(crate) fn rsf_unity_package_sr_slots_released(bridge: u32) {
-    if let Some(mut ring) = d3d_ring(bridge) {
-        ring.released();
-    }
-}
-
-thread_local! {
-    // A bridge publishes the reset on the render thread before it forwards the pass.
-    static RECORDING: Cell<Option<(*mut c_void, Recording)>> = const { Cell::new(None) };
-}
-
-pub(crate) fn rsf_unity_package_sr_ring_begin() -> u64 {
-    NEXT_RING_EPOCH
-        .fetch_update(SeqCst, SeqCst, |epoch| epoch.checked_add(1))
-        .unwrap_or(0)
-}
-
-pub(super) fn rsf_unity_package_sr_recording(
-    commands: *mut c_void,
-    epoch: u64,
-    slot: u32,
-    serial: u64,
-    retired_through: u64,
-) {
-    RECORDING.set(None);
-    if commands.is_null()
-        || epoch == 0
-        || slot as usize >= SLOTS
-        || serial == 0
-        || retired_through >= serial
-    {
-        return;
-    }
-    if retired_through != 0 {
-        PACKAGE
-            .lock_views()
-            .retire_slot(epoch, slot, retired_through);
-    }
-    RECORDING.set(Some((
-        commands,
-        Recording {
-            epoch,
-            slot,
-            serial,
-        },
-    )));
-}
-
-pub(crate) fn rsf_unity_package_sr_ring_retired(epoch: u64) {
-    if epoch != 0 {
-        PACKAGE.lock_views().retire_ring(epoch);
-        RECORDING.with(|record| {
-            if record
-                .get()
-                .is_some_and(|(_, recording)| recording.epoch == epoch)
-            {
-                record.set(None);
-            }
-        });
-    }
-}
-
-/// The settings range checks, in order: the sharpening leaf is only called once the fields
-/// before it passed.
-fn acceptable(input: &rsf_unity_package_settings) -> bool {
-    input.abi_version == RSF_UNITY_SETTINGS_ABI_VERSION
-        && input.sr_backend <= RSF_SR_AUTO
-        && (input.sharpening.struct_size == 0 || raw::sharpening_valid(&input.sharpening))
-        && input.quality <= ULTRA_QUALITY
-        && input.dlss_preset <= MAX_DLSS_PRESET
-        && RSF_DLSS_PRESET_MASK & (1 << input.dlss_preset) != 0
-        && input.fg_mode <= RSF_FG_FIXED
-        && input.latency_mode <= MAX_LATENCY_MODE
-        && (1..=MAX_GENERATED_FRAMES).contains(&input.generated_frames)
-        && FG_BACKENDS.contains(&input.fg_backend)
-}
 
 impl Package {
     const fn new() -> Self {
         Self {
             state: Mutex::new(State {
                 settings: DEFAULT_SETTINGS,
-                status: fresh_status(),
-                plan: EMPTY_PLAN,
                 pending: false,
                 session: Session::Unopened,
             }),
-            views: Mutex::new(Views::new()),
+            host: Mutex::new(None),
             presentation: Presentation::new(),
             services: Services::new(),
-            temporal_ready: AtomicBool::new(false),
             bridge_result: AtomicI32::new(0),
             device: AtomicU8::new(routing::DEVICE_WAITING),
             preview_reports: AtomicU32::new(0),
@@ -344,52 +285,41 @@ impl Package {
         lock_or_recover(&self.state)
     }
 
-    fn lock_views(&self) -> MutexGuard<'_, Views> {
-        lock_or_recover(&self.views)
+    fn host(&self) -> Option<rsf_game_host_services> {
+        lock_or_recover(&self.host).map(|host| host.0)
     }
 
-    /// Stores valid settings. A reconstruction change (backend, quality or DLSS model) sets the
-    /// engine policy, withdraws the plan and temporal readiness and waits for the bridge's
-    /// reconfiguring pass. Auto quality admission happens on the current graphics device.
+    /// The developer's request: the host checks, applies and saves it as the same change made in
+    /// the overlay. Without a session the Runtime still checks it, and an accepted request waits
+    /// for the next session's host.
     fn configure(&self, input: &rsf_unity_package_settings) -> bool {
-        if !acceptable(input)
-            || unsafe { raw::sr_quality_supported(input.sr_backend, input.quality) } == 0
-        {
+        const NOT_READY: i32 = backend_result::NOT_READY;
+        if input.abi_version != RSF_UNITY_SETTINGS_ABI_VERSION {
             return false;
         }
-        let reconstruction_changed = {
-            let state = self.lock();
-            state.settings.sr_backend != input.sr_backend
-                || state.settings.quality != input.quality
-                || state.settings.dlss_preset != input.dlss_preset
-        };
-        if reconstruction_changed {
-            raw::set_engine_spatial(u32::from(input.sr_backend == RSF_SR_SPATIAL), input.quality);
+        let saved = host_settings();
+        let base = saved.unwrap_or(rsf_render_settings {
+            struct_size: size_of::<rsf_render_settings>() as u32,
+            abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
+            sr_backend: RSF_SR_AUTO,
+            ..Default::default()
+        });
+        match unsafe { raw::settings_apply(&render_settings(input, &base)) } {
+            backend_result::OK => {}
+            NOT_READY if saved.is_none() => self.lock().pending = true,
+            _ => return false,
         }
-        {
-            let mut state = self.lock();
-            if reconstruction_changed {
-                state.pending = true;
-                state.plan.enabled = 0;
-                self.temporal_ready.store(false, SeqCst);
-            }
-            state.settings = *input;
-            state.status.requested_sr = input.sr_backend;
-        }
-        let options = rsf_native_fg_options {
-            struct_size: size_of::<rsf_native_fg_options>() as u32,
-            mode: input.fg_mode,
-            generated_frames: input.generated_frames,
-            reflex_mode: input.latency_mode,
-            frame_limit_us: input.frame_limit_us,
-            debug: 0,
-        };
-        unsafe { raw::fg_options(&options) };
+        self.lock().settings = *input;
         true
     }
+    /// The host's settings in the developer's form; the last request without a session.
+    fn settings(&self) -> rsf_unity_package_settings {
+        let developer = self.lock().settings;
+        host_settings().map_or(developer, |saved| package_settings(&saved, &developer))
+    }
 
-    /// The stored status merged with the Runtime's generation and latency status, read in order:
-    /// generation status, present backend, provider-switch result, latency status.
+    /// The host's SR status merged with the Runtime's generation and latency status, read in
+    /// order: generation status, present backend, provider-switch result, latency status.
     fn status(&self) -> rsf_unity_package_status {
         let fg = fg_status();
         let fg_backend = unsafe { raw::present_backend() };
@@ -399,8 +329,20 @@ impl Package {
         }
         .aggregate();
         let latency = latency_status().unwrap_or_default();
-        let mut state = self.lock();
-        let status = &mut state.status;
+        let sr = host_status().unwrap_or_default();
+        let mut status = fresh_status();
+        status.requested_sr = self.settings().sr_backend;
+        status.active_sr = sr.active_backend;
+        (status.render_width, status.render_height) = (sr.render_width, sr.render_height);
+        (status.output_width, status.output_height) = (sr.output_width, sr.output_height);
+        status.sr_result = sr.result;
+        status.evaluated_frames = sr.evaluated_frames;
+        status.refused_frames = sr.refused_frames;
+        let failure = self.bridge_result.load(SeqCst);
+        if failure != 0 {
+            status.sr_result = failure;
+            status.active_sr = 0;
+        }
         status.fg_backend = fg_backend;
         status.fg_available = fg.available;
         status.fg_active = fg.vendor.active;
@@ -409,11 +351,6 @@ impl Package {
         status.reason = fg.reason;
         status.tagged_frames = fg.tagged_frames;
         status.fg_result = fg_result;
-        let failure = self.bridge_result.load(SeqCst);
-        if failure != 0 {
-            status.sr_result = failure;
-            status.active_sr = 0;
-        }
         status.latency_available = latency.available;
         status.latency_mode = latency.effective_mode;
         status.sleep_calls = latency.paced_frames;
@@ -428,7 +365,15 @@ impl Package {
         status.input_substitutes = latency.events.substitutes;
         status.order_violations = latency.events.order_violations;
         status.derived_boundaries = latency.derived_boundaries;
-        *status
+        status
+    }
+
+    /// A temporal SR plan is enabled, so the managed adapter jitters and records its inputs.
+    fn temporal_ready(&self) -> bool {
+        self.bridge_result.load(SeqCst) == 0
+            && host_status().is_some_and(|sr| {
+                sr.enabled != 0 && (RSF_SR_DLSS..=RSF_SR_XESS).contains(&sr.active_backend)
+            })
     }
 
     fn frame_counters(&self) -> rsf_unity_frame_counters {
@@ -444,35 +389,33 @@ impl Package {
         }
     }
 
-    /// The session's identity replaces the loaded one before open, which may install from it.
-    /// The bridge's managed API is returned once the session has started.
+    /// The session's identity replaces the loaded one before open, which may install from it
+    /// and attaches the Runtime host. The bridge's managed API is returned once started.
     fn initialize(&self, identity: Identity) -> Result<rsf_unity_native_api, i32> {
         let session = self.lock().session;
         if matches!(session, Session::Opening | Session::Started(_)) && !self.retire() {
             return Err(code::BUSY);
         }
         self.bridge_result.store(0, SeqCst);
-        {
-            let mut state = self.lock();
-            state.plan = EMPTY_PLAN;
-            state.status = fresh_status();
-            state.status.requested_sr = state.settings.sr_backend;
-            state.session = Session::Opening;
-        }
+        self.lock().session = Session::Opening;
         self.presentation.set_identity(identity);
         if !self.open() {
             return Err(code::FAILED);
         }
-        let settings = self.lock().settings;
-        raw::set_engine_spatial(
-            u32::from(settings.sr_backend == RSF_SR_SPATIAL),
-            settings.quality,
-        );
+        let (pending, settings) = {
+            let mut state = self.lock();
+            (std::mem::take(&mut state.pending), state.settings)
+        };
+        if pending && !self.configure(&settings) {
+            self.log("The settings requested before the session were refused.");
+        }
         self.lock().session = Session::Started(self.services.session());
         raw::bridge_activate(1);
         Ok(self.services.api())
     }
 
+    /// Closes the bridge once its work is drained, ends generation's session, then stops the
+    /// host, whose SR contexts the drained work no longer uses.
     fn retire(&self) -> bool {
         let session = self.lock().session;
         if session == Session::Stopped {
@@ -488,197 +431,17 @@ impl Package {
             raw::bridge_finish_retirement(false);
             return false;
         }
-        self.views_released();
-        destroy_views(&mut self.lock_views());
+        if lock_or_recover(&self.host).take().is_some() {
+            let _ = unsafe { raw::host_stop() };
+        }
         raw::bridge_finish_retirement(true);
         self.services.retired();
         self.lock().session = Session::Stopped;
         true
     }
 
-    /// No view, so no temporal reconstruction is active or ready.
-    fn views_released(&self) {
-        self.temporal_ready.store(false, SeqCst);
-        self.lock().status.active_sr = 0;
-    }
-
-    fn reconfigured(&self) {
-        self.views_released();
-        self.lock().pending = false;
-    }
-
-    fn view_planned(&self, backend: u32, output: (u32, u32), render: (u32, u32)) {
-        let mut state = self.lock();
-        state.plan = rsf_game_render_config {
-            struct_size: size_of::<rsf_game_render_config>() as u32,
-            enabled: 1,
-            output_width: output.0,
-            output_height: output.1,
-            render_width: render.0,
-            render_height: render.1,
-        };
-        self.temporal_ready.store(backend != 0, SeqCst);
-        let status = &mut state.status;
-        (status.render_width, status.render_height) = render;
-        (status.output_width, status.output_height) = output;
-    }
-
-    /// The SR result follows the evaluation while a temporal backend, nothing or the engine's
-    /// spatial path was requested, and always on a refusal. A view without a temporal backend
-    /// that stands in for one keeps its creation result.
-    fn evaluated(&self, result: i32, view_backend: u32) {
-        let mut state = self.lock();
-        let requested = state.settings.sr_backend;
-        let status = &mut state.status;
-        let refused = result != backend_result::OK;
-        if refused || view_backend != 0 || matches!(requested, RSF_SR_NONE | RSF_SR_SPATIAL) {
-            status.sr_result = result;
-        }
-        if refused {
-            status.refused_frames = status.refused_frames.wrapping_add(1);
-        } else {
-            status.evaluated_frames = status.evaluated_frames.wrapping_add(1);
-            status.active_sr = if requested == RSF_SR_SPATIAL {
-                RSF_SR_SPATIAL
-            } else {
-                view_backend
-            };
-        }
-    }
-
     fn bridge_failed(&self, result: i32) {
         self.bridge_result.store(result, SeqCst);
-        self.temporal_ready.store(false, SeqCst);
-    }
-
-    /// The SR pass of the render callback: settings are read once,
-    /// a reconfiguring pass releases every view, a view whose extents no longer fit is
-    /// destroyed, a missing one is created, and evaluation waits for a valid camera, the end of
-    /// a pending reconfiguration and a recording slot.
-    fn render(&self, commands: *mut c_void, original: &rsf_game_render_pass) {
-        let recording = RECORDING
-            .take()
-            .filter(|(list, _)| *list == commands)
-            .map(|(_, recording)| recording);
-        let mut views = self.lock_views();
-        let settings = self.lock().settings;
-        let mut pass = *original;
-        pass.screen = if settings.gameplay != 0 {
-            RSF_SCREEN_FLIGHT
-        } else {
-            RSF_SCREEN_MENU
-        };
-        if pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0 {
-            self.reconfigured();
-            destroy_views(&mut views);
-        }
-        for sr in views.reap(pass.view_key, pass.source_frame_id) {
-            if !sr.is_null() {
-                sr_destroy(sr);
-            }
-        }
-        let camera = &pass.camera;
-        let view = views.entry(pass.view_key);
-        if view.stale(
-            (camera.output_width, camera.output_height),
-            (camera.render_width, camera.render_height),
-        ) {
-            sr_destroy(view.sr);
-            *view = View::EMPTY;
-        }
-        if view.sr.is_null() {
-            match self.create_view(commands, &settings, camera) {
-                Some(created) => *view = created,
-                None => {
-                    view.seen(pass.source_frame_id);
-                    return;
-                }
-            }
-        }
-        view.seen(pass.source_frame_id);
-        if pass.camera_valid == 0 || self.lock().pending {
-            return;
-        }
-        let Some(slot) = view.slot(commands) else {
-            return;
-        };
-        view.record(recording);
-        // A zero struct_size selects the Runtime defaults. The result is not read.
-        let sharpening = if settings.sharpening.struct_size != 0 {
-            settings.sharpening
-        } else {
-            raw::sharpening_defaults()
-        };
-        unsafe { raw::sr_set_sharpening(view.sr, &sharpening) };
-        let result = unsafe { raw::sr_evaluate(view.sr, commands, &pass, slot) };
-        self.evaluated(result, view.backend);
-    }
-
-    /// A new view's context: Auto resolved for the list's adapter, the engine's spatial path as
-    /// backend 0, and a vendor backend that created nothing retried once as backend 0. The first
-    /// creation's result is the SR result. None leaves the view empty for the next pass.
-    fn create_view(
-        &self,
-        commands: *mut c_void,
-        settings: &rsf_unity_package_settings,
-        camera: &rsf_camera_frame,
-    ) -> Option<View> {
-        let backend = if settings.sr_backend == RSF_SR_SPATIAL {
-            RSF_SR_NONE
-        } else {
-            settings.sr_backend
-        };
-        let output = (camera.output_width, camera.output_height);
-        let mut setup = rsf_unity_package_view_setup {
-            backend,
-            quality: settings.quality,
-            dlss_preset: settings.dlss_preset,
-            output_width: output.0,
-            output_height: output.1,
-            render_width: camera.render_width,
-            render_height: camera.render_height,
-            inverted_depth: camera.depth_inverted,
-            ..Default::default()
-        };
-        let identity = self.presentation.identity();
-        identity.lend(&mut setup);
-        let (created, sr) = unsafe { raw::sr_create(commands, &mut setup) }?;
-        self.lock().status.sr_result = created;
-        let backend = setup.backend;
-        let render = (setup.render_width, setup.render_height);
-        if sr.is_null()
-            || render.0 == 0
-            || render.1 == 0
-            || render.0 > output.0
-            || render.1 > output.1
-        {
-            self.temporal_ready.store(false, SeqCst);
-            let mut state = self.lock();
-            state.plan = EMPTY_PLAN;
-            state.status.active_sr = 0;
-            if !sr.is_null() {
-                state.status.sr_result = backend_result::FEATURE_FAILED;
-                drop(state);
-                sr_destroy(sr);
-            }
-            return None;
-        }
-        let mut view = View::created(sr, backend, output);
-        view.render = render;
-        self.view_planned(backend, output, view.render);
-        self.log(&format!(
-            "URP SR requested={} active={backend} result={created} {}x{} -> {}x{}",
-            settings.sr_backend, view.render.0, view.render.1, output.0, output.1
-        ));
-        Some(view)
-    }
-}
-
-/// Destroys every view's context. Their submissions are retired: a reconfiguring pass follows
-/// the bridge's wait for its command ring, and session retirement follows the bridge's drain.
-fn destroy_views(views: &mut Views) {
-    for sr in views.take() {
-        sr_destroy(sr);
     }
 }
 
@@ -708,7 +471,7 @@ unsafe extern "C" fn rsfu_settings(output: *mut rsf_unity_package_settings) -> c
     {
         return 0;
     }
-    unsafe { output.write(PACKAGE.lock().settings) };
+    unsafe { output.write(PACKAGE.settings()) };
     1
 }
 
@@ -737,7 +500,7 @@ unsafe extern "C" fn rsfu_frame_counters(output: *mut rsf_unity_frame_counters) 
 
 #[unsafe(no_mangle)]
 extern "C" fn rsfu_temporal_ready() -> c_int {
-    c_int::from(PACKAGE.temporal_ready.load(SeqCst))
+    c_int::from(PACKAGE.temporal_ready())
 }
 
 #[unsafe(no_mangle)]
@@ -768,16 +531,6 @@ unsafe extern "C" fn rsfu_initialize(
     }
 }
 
-unsafe extern "C" fn render_config(_: *mut c_void, output: *mut rsf_game_render_config) -> c_int {
-    if output.is_null()
-        || unsafe { struct_size(output) } < size_of::<rsf_game_render_config>() as u32
-    {
-        return 0;
-    }
-    unsafe { output.write(PACKAGE.lock().plan) };
-    1
-}
-
 pub(crate) fn rsf_unity_package_bridge_failed(result: i32) {
     PACKAGE.bridge_failed(result);
 }
@@ -785,18 +538,17 @@ pub(crate) fn rsf_unity_package_bridge_failed(result: i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sys::RSF_SR_DLSS;
     use crate::sys::rsf_fg_status;
     use crate::sys::rsf_fg12_setup;
-    use rsf_game_sys::{rsf_game_cpu_event, rsf_game_host_services};
+    use crate::sys::{RSF_SR_SPATIAL, rsf_callback_host_setup};
+    use rsf_game_sys::{RSF_SCREEN_FLIGHT, rsf_game_cpu_event, rsf_game_render_config};
+    use rsf_game_sys::{RSF_SCREEN_MENU, rsf_game_render_pass};
     use std::cell::{Cell, RefCell};
     use std::ffi::CStr;
     use std::ptr::without_provenance_mut;
 
     #[derive(Clone, Copy)]
     struct Fake {
-        sharpening_valid: bool,
-
         drained: bool,
         close_held: bool,
         ended: bool,
@@ -817,23 +569,14 @@ mod tests {
         last_result: i32,
         switch_result: i32,
         latency: bool,
-        /// Auto's backend for the adapter; zero when it cannot be read.
-        adapter: u32,
-        /// The command list has a device.
-        device: bool,
-        /// A vendor backend creates a context; backend 0 always does.
-        vendor_creates: bool,
-        create_result: i32,
-        evaluate_result: i32,
-        plan_result: i32,
-        /// A context's planned input extents.
-        plan: (u32, u32),
         install_result: i32,
-        /// The presentation host has an owner.
-        owner: bool,
-        /// Auto's generation provider for Unity's adapter; None when it cannot be read.
-        fg_adapter: Option<u32>,
-        request_result: i32,
+        /// The Runtime host attaches, and is attached.
+        host_accepts: bool,
+        attached: bool,
+        /// The host's answer to a settings request.
+        apply_result: i32,
+        /// The host's SR status.
+        sr: rsf_callback_host_status,
         /// The Editor preview presents, and is prepared, its window answers preview_owns.
         shown: bool,
         preview_ready: bool,
@@ -847,9 +590,21 @@ mod tests {
         registry: bool,
     }
 
-    const READY: Fake = Fake {
-        sharpening_valid: true,
+    const SERVING: rsf_callback_host_status = rsf_callback_host_status {
+        struct_size: 48,
+        requested_backend: RSF_SR_AUTO,
+        active_backend: 3,
+        enabled: 1,
+        result: 0,
+        render_width: 1280,
+        render_height: 720,
+        output_width: 1920,
+        output_height: 1080,
+        evaluated_frames: 12,
+        refused_frames: 2,
+    };
 
+    const READY: Fake = Fake {
         drained: true,
         close_held: false,
         ended: true,
@@ -864,17 +619,11 @@ mod tests {
         last_result: 0,
         switch_result: -7,
         latency: true,
-        adapter: 3,
-        device: true,
-        vendor_creates: true,
-        create_result: 0,
-        evaluate_result: 0,
-        plan_result: 0,
-        plan: (1280, 720),
         install_result: 0,
-        owner: true,
-        fg_adapter: Some(3),
-        request_result: 0,
+        host_accepts: true,
+        attached: false,
+        apply_result: 0,
+        sr: SERVING,
         shown: true,
         preview_ready: true,
         preview_owns: true,
@@ -883,12 +632,26 @@ mod tests {
         class: 1,
         registry: true,
     };
-    /// A fake context's address is 0x100 plus its backend.
-    const CONTEXT: usize = 0x100;
+    /// The fake host's services user.
+    const HOST_USER: usize = 0x77;
 
     thread_local! {
         static FAKE: Cell<Fake> = const { Cell::new(READY) };
         static CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static SAVED: Cell<rsf_render_settings> = Cell::new(saved_defaults());
+    }
+
+    fn saved_defaults() -> rsf_render_settings {
+        rsf_render_settings {
+            struct_size: size_of::<rsf_render_settings>() as u32,
+            abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
+            sr_enabled: 1,
+            sr_backend: RSF_SR_AUTO,
+            sr_quality: 1,
+            fg_backend: RSF_FG_BACKEND_AUTO,
+            generated_frames: 1,
+            ..Default::default()
+        }
     }
 
     fn fake() -> Fake {
@@ -905,23 +668,124 @@ mod tests {
     fn calls() -> Vec<String> {
         CALLS.with(|calls| calls.borrow_mut().drain(..).collect())
     }
-
-    pub(super) fn sharpening_valid(_: &rsf_sharpening_options) -> bool {
-        call("sharpening".into());
-        fake().sharpening_valid
+    fn wide(path: &[u16]) -> String {
+        String::from_utf16(path).unwrap()
+    }
+    fn terminated_text(path: *const u16) -> String {
+        let mut length = 0;
+        while unsafe { *path.add(length) } != 0 {
+            length += 1;
+        }
+        wide(unsafe { std::slice::from_raw_parts(path, length) })
+    }
+    fn handle(value: usize) -> *mut c_void {
+        without_provenance_mut(value)
     }
 
-    pub(super) fn set_engine_spatial(spatial: u32, quality: u32) -> c_int {
-        call(format!("spatial {spatial} {quality}"));
-        1
-    }
-    pub(super) unsafe fn fg_options(options: *const rsf_native_fg_options) {
-        let o = unsafe { *options };
+    // The Runtime host, as far as the package reaches it.
+    unsafe extern "C" fn host_render(
+        user: *mut c_void,
+        commands: *mut c_void,
+        pass: *const rsf_game_render_pass,
+        begin: u32,
+    ) {
+        assert_eq!(user as usize, HOST_USER);
+        let p = unsafe { &*pass };
         call(format!(
-            "options {} {} {} {} {} {}",
-            o.struct_size, o.mode, o.generated_frames, o.reflex_mode, o.frame_limit_us, o.debug
+            "host pass {:#x} {} {} {begin} {}",
+            commands as usize, p.role, p.view_key, p.screen
         ));
     }
+    unsafe extern "C" fn host_config(_: *mut c_void, _: *mut rsf_game_render_config) -> c_int {
+        1
+    }
+    pub(super) unsafe fn host_start(setup: *const rsf_callback_host_setup) -> u32 {
+        let v3 = unsafe { &*setup.cast::<crate::sys::rsf_callback_host_setup_v3>() };
+        let s = &v3.base;
+        assert_eq!((s.struct_size, s.abi_version), (size_of_val(v3) as u32, 3));
+        assert!(s.plugin_path.is_null() && s.probe.is_null() && s.set_engine_spatial.is_some());
+        assert_eq!((s.backend, s.quality, s.dlss_preset), (RSF_SR_AUTO, 1, 0));
+        let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_str().unwrap();
+        call(format!(
+            "host start {} {} {} {} {}",
+            terminated_text(s.log_path),
+            terminated_text(s.preferences_path),
+            text(s.streamline_directory_utf8),
+            text(s.fsr3_directory_utf8),
+            s.engine_type
+        ));
+        if !fake().host_accepts {
+            return 10;
+        }
+        unsafe {
+            v3.services.write(rsf_game_host_services {
+                struct_size: size_of::<rsf_game_host_services>() as u32,
+                abi_version: rsf_game_sys::RSF_GAME_ABI_VERSION,
+                session_id: 42,
+                user: handle(HOST_USER),
+                render_pass: Some(host_render),
+                render_config: Some(host_config),
+                ..Default::default()
+            })
+        };
+        set(|f| f.attached = true);
+        0
+    }
+    pub(super) unsafe fn host_stop() -> u32 {
+        call("host stop".into());
+        set(|f| f.attached = false);
+        0
+    }
+    pub(super) unsafe fn host_status(status: *mut rsf_callback_host_status) -> u32 {
+        if !fake().attached {
+            return 0;
+        }
+        unsafe { status.write(fake().sr) };
+        1
+    }
+    pub(super) unsafe fn settings_get(output: *mut rsf_render_settings) -> i32 {
+        if !fake().attached {
+            return -3;
+        }
+        unsafe { output.write(SAVED.with(Cell::get)) };
+        0
+    }
+    pub(super) unsafe fn settings_apply(request: *const rsf_render_settings) -> i32 {
+        let r = unsafe { *request };
+        call(format!(
+            "apply sr={}/{} q={} preset={} fg={}/{} frames={} latency={} limit={} sharpness={}",
+            r.sr_enabled,
+            r.sr_backend,
+            r.sr_quality,
+            r.dlss_preset,
+            r.fg_enabled,
+            r.fg_backend,
+            r.generated_frames,
+            r.latency,
+            r.frame_limit_us,
+            r.sharpening_sharpness
+        ));
+        let result = fake().apply_result;
+        if result != 0 {
+            return result;
+        }
+        if !fake().attached {
+            return backend_result::NOT_READY;
+        }
+        SAVED.with(|saved| saved.set(r));
+        0
+    }
+    pub(super) extern "C" fn set_engine_spatial(_: u32, _: u32) -> c_int {
+        1
+    }
+    pub(super) fn sharpening_defaults() -> rsf_sharpening_options {
+        rsf_sharpening_options {
+            struct_size: 56,
+            sharpness: 0.5,
+            ..Default::default()
+        }
+    }
+
     pub(super) unsafe fn fg_status(status: *mut rsf_native_fg_status) -> c_int {
         call("fg status".into());
         let status = unsafe { &mut *status };
@@ -984,100 +848,6 @@ mod tests {
         call(format!("end {session}"));
         fake().ended.into()
     }
-    pub(super) unsafe fn sr_quality_supported(backend: u32, quality: u32) -> u32 {
-        u32::from(backend != RSF_SR_DLSS || quality != ULTRA_QUALITY)
-    }
-    pub(super) unsafe fn sr_create(
-        _: *mut c_void,
-        setup: &mut rsf_unity_package_view_setup,
-    ) -> Option<(i32, *mut rsf_sr12)> {
-        let mut s = *setup;
-        let f = fake();
-        if s.backend == RSF_SR_AUTO {
-            call("default".into());
-            if f.adapter == 0 {
-                return None;
-            }
-            s.backend = f.adapter;
-        }
-        // The identity is always lent; a loaded one follows the depth flag.
-        let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_str().unwrap();
-        let identity = match text(s.root_utf8) {
-            "" => String::new(),
-            root => format!(
-                " {root} {} {} {} {} {} {}",
-                text(s.streamline_utf8),
-                text(s.interposer_utf8),
-                text(s.fsr_utf8),
-                text(s.xess_utf8),
-                text(s.engine_version_utf8),
-                text(s.project_id_utf8)
-            ),
-        };
-        let create = |backend| {
-            call(format!(
-                "create {backend} {} {} {}x{} {}x{} {}{identity}",
-                s.quality,
-                s.dlss_preset,
-                s.output_width,
-                s.output_height,
-                s.render_width,
-                s.render_height,
-                s.inverted_depth
-            ));
-        };
-        create(s.backend);
-        if !f.device {
-            return None;
-        }
-        if s.backend != 0 && !f.vendor_creates {
-            create(0);
-            s.backend = 0;
-        }
-        call("plan".into());
-        let context = without_provenance_mut(CONTEXT + s.backend as usize);
-        let result_code = if f.plan_result == 0 {
-            (s.render_width, s.render_height) = f.plan;
-            f.create_result
-        } else {
-            unsafe { sr_destroy(context) };
-            f.plan_result
-        };
-        let context = if f.plan_result == 0 {
-            context
-        } else {
-            null_mut()
-        };
-        *setup = s;
-        Some((result_code, context))
-    }
-    pub(super) fn sharpening_defaults() -> rsf_sharpening_options {
-        call("defaults".into());
-        rsf_sharpening_options {
-            struct_size: 56,
-            ..Default::default()
-        }
-    }
-    pub(super) unsafe fn sr_set_sharpening(
-        _: *mut rsf_sr12,
-        options: *const rsf_sharpening_options,
-    ) -> i32 {
-        call(format!("sharpen {}", unsafe { (*options).struct_size }));
-        -1
-    }
-    pub(super) unsafe fn sr_evaluate(
-        sr: *mut rsf_sr12,
-        _: *mut c_void,
-        pass: *const rsf_game_render_pass,
-        slot: u32,
-    ) -> i32 {
-        let screen = unsafe { (*pass).screen };
-        call(format!("evaluate {:#x} {slot} {screen}", sr as usize));
-        fake().evaluate_result
-    }
-    pub(super) unsafe fn sr_destroy(sr: *mut rsf_sr12) {
-        call(format!("destroy {:#x}", sr as usize));
-    }
     pub(super) fn bridge_finish_retirement(commit: bool) {
         assert!(fake().close_held);
         set(|f| f.close_held = false);
@@ -1120,18 +890,6 @@ mod tests {
         ));
         fake().install_result
     }
-    pub(super) unsafe fn present_has_owner() -> c_int {
-        call("owner".into());
-        fake().owner.into()
-    }
-    pub(super) unsafe fn present_request(backend: u32) -> i32 {
-        call(format!("request {backend}"));
-        fake().request_result
-    }
-    pub(super) fn fg_default_backend() -> Option<u32> {
-        call("fg default".into());
-        fake().fg_adapter
-    }
     pub(super) fn bridge_open(editor: bool) -> bool {
         assert!(!fake().close_held);
         if editor {
@@ -1140,11 +898,7 @@ mod tests {
         call("surface".into());
         fake().surface
     }
-    pub(super) fn session_seed() -> u64 {
-        call("seed".into());
-        41
-    }
-    /// Checks the host services and writes the API a bridge writes on success.
+    /// Checks the services the bridge gets and writes the API a bridge writes on success.
     pub(super) unsafe fn bridge_prepare(
         services: *const rsf_game_host_services,
         api: *mut rsf_unity_native_api,
@@ -1152,15 +906,15 @@ mod tests {
         let s = unsafe { *services };
         call(format!("prepare {}", s.session_id));
         assert_eq!((s.struct_size, s.abi_version), (104, 24));
-        assert!(s.user.is_null());
+        // Its passes and CPU events come to the package first; its plan is the host's own.
+        assert_eq!(s.user as usize, HOST_USER);
         assert!(
             s.render_pass.map(|f| f as usize)
                 == Some(routing::render_callback as *const () as usize)
         );
-        assert!(s.render_config.map(|f| f as usize) == Some(render_config as *const () as usize));
-        assert!(s.log.is_some() && s.cpu_event.is_some());
-        assert!(s.scope_state.is_none() && s.process_upscale.is_none() && s.submit.is_none());
-        assert!(s.present.is_none() && s.process_latency.is_none() && s.render_feedback.is_none());
+        assert!(s.render_config.map(|f| f as usize) == Some(host_config as *const () as usize));
+        assert!(s.log.map(|f| f as usize) == Some(services::backend_log as *const () as usize));
+        assert!(s.cpu_event.is_some());
         if !fake().prepared {
             return 0;
         }
@@ -1169,12 +923,6 @@ mod tests {
             (*api).session_id = s.session_id;
         }
         1
-    }
-    fn wide(path: &[u16]) -> String {
-        String::from_utf16(path).unwrap()
-    }
-    fn handle(value: usize) -> *mut c_void {
-        without_provenance_mut(value)
     }
     pub(super) fn local_app_data() -> Option<Vec<u16>> {
         call("local".into());
@@ -1237,17 +985,6 @@ mod tests {
             e.event_version
         ));
     }
-    pub(super) unsafe fn fg_submitted(session: u64, source_frame: u64) {
-        call(format!("submitted {session} {source_frame}"));
-    }
-    pub(super) unsafe fn fg_window(pass: *const rsf_game_render_pass) {
-        call(format!("window {}", unsafe { (*pass).view_key }));
-    }
-    pub(super) unsafe fn fg_hudless(commands: *mut c_void, pass: *const rsf_game_render_pass) {
-        call(format!("hudless {:#x} {}", commands as usize, unsafe {
-            (*pass).view_key
-        }));
-    }
     pub(super) unsafe fn preview_present(
         resource: *mut c_void,
         pass: *const rsf_game_render_pass,
@@ -1293,10 +1030,43 @@ mod tests {
         call("bridge unload".into());
     }
 
-    /// Fresh fakes and an empty call record for this test.
+    /// Fresh fakes, saved settings and an empty call record for this test.
     fn reset() {
         FAKE.with(|cell| cell.set(READY));
+        SAVED.with(|saved| saved.set(saved_defaults()));
         calls();
+    }
+
+    fn session() -> Identity {
+        Identity::new(b"R", b"6000", b"P")
+    }
+
+    /// open's calls in the player: the first session opens the process log and hooks the player
+    /// window; every session checks the Vulkan surface, attaches the host with that log and
+    /// the SDK root's preferences, and prepares the bridge.
+    fn opened(first: bool) -> Vec<String> {
+        let log = format!("L\\ReScaleFrame\\Unity\\{}.log", std::process::id());
+        let mut calls = Vec::new();
+        if first {
+            calls.extend([
+                "local".into(),
+                "mkdir L\\ReScaleFrame".into(),
+                "mkdir L\\ReScaleFrame\\Unity".into(),
+                format!("open {log}"),
+                "player".into(),
+                "subclass 0x20".into(),
+            ]);
+        }
+        calls.extend([
+            "surface".into(),
+            format!("host start {log} R\\preferences.ini R/streamline R/fidelityfx 2"),
+            "prepare 42".into(),
+        ]);
+        calls
+    }
+
+    fn started(package: &Package) -> Result<u64, i32> {
+        package.initialize(session()).map(|api| api.session_id)
     }
 
     #[test]
@@ -1314,153 +1084,85 @@ mod tests {
             (1, 0, 0)
         );
         assert_eq!((s.gameplay, s.sharpening.struct_size), (1, 0));
-        assert_eq!(
-            (state.status.struct_size, state.status.abi_version),
-            (184, 1)
-        );
-        assert_eq!((state.plan.struct_size, state.plan.enabled), (24, 0));
         assert!(!state.pending && state.session == Session::Unopened);
     }
 
     #[test]
-    fn configuration_is_range_checked_in_order() {
-        let package = Package::new();
-        reset();
-        let valid = DEFAULT_SETTINGS;
-        let refused: [fn(&mut rsf_unity_package_settings); 10] = [
-            |s| s.abi_version = 1,
-            |s| s.sr_backend = 8,
-            |s| s.quality = 6,
-            |s| s.fg_mode = 2,
-            |s| s.latency_mode = 3,
-            |s| s.generated_frames = 0,
-            |s| s.generated_frames = 16,
-            |s| s.fg_backend = 2,
-            |s| s.fg_backend = 6,
-            |s| s.fg_backend = 0,
-        ];
-        for change in refused {
-            let mut input = valid;
-            change(&mut input);
-            assert!(!package.configure(&input));
-        }
-        calls();
-        // A zero sharpening size skips its check; any other size is validated.
-        let mut input = valid;
-        input.sharpening.struct_size = 56;
-        set(|f| f.sharpening_valid = false);
-        assert!(!package.configure(&input));
-        assert_eq!(calls(), ["sharpening"]);
-        set(|f| f.sharpening_valid = true);
-        input.dlss_preset = MAX_DLSS_PRESET + 1;
-        assert!(!package.configure(&input));
-        assert_eq!(calls(), ["sharpening"]);
-        // Nothing was stored by the refusals.
-        assert_eq!(package.lock().settings.quality, 1);
-        for backend in FG_BACKENDS {
-            let mut input = valid;
-            input.fg_backend = backend;
-            assert!(package.configure(&input));
-        }
-    }
-
-    #[test]
-    fn runtime_admits_explicit_quality_and_defers_auto() {
+    fn a_request_is_the_hosts_settings_change() {
         let package = Package::new();
         reset();
         let mut input = DEFAULT_SETTINGS;
-        input.quality = ULTRA_QUALITY;
-        input.sr_backend = RSF_SR_DLSS;
+        input.abi_version = 1;
         assert!(!package.configure(&input));
-        input.sr_backend = RSF_SR_AUTO;
-        package.lock().status.active_sr = RSF_SR_DLSS;
+        // Without a session the request waits for the next session's host.
+        input.abi_version = RSF_UNITY_SETTINGS_ABI_VERSION;
+        input.quality = 2;
         assert!(package.configure(&input));
+        assert_eq!(
+            calls(),
+            ["apply sr=1/7 q=2 preset=0 fg=0/7 frames=1 latency=0 limit=0 sharpness=0.5"]
+        );
+        assert!(package.lock().pending);
+        // An invalid one is refused without a session as well.
+        set(|f| f.apply_result = -1);
+        input.quality = 9;
+        assert!(!package.configure(&input));
+        calls();
+        set(|f| f.apply_result = 0);
+        input.quality = 2;
+        assert_eq!(package.settings().quality, 2);
+        // With one the host checks, applies and saves it: no backend is SR off with the saved
+        // backend kept, and a zero sharpening size is the Runtime's defaults.
+        set(|f| f.attached = true);
+        input.sr_backend = RSF_SR_NONE;
+        (input.fg_mode, input.generated_frames, input.frame_limit_us) = (1, 3, 8000);
+        assert!(package.configure(&input));
+        assert_eq!(
+            calls(),
+            ["apply sr=0/7 q=2 preset=0 fg=1/7 frames=3 latency=0 limit=8000 sharpness=0.5"]
+        );
+        let read = package.settings();
+        assert_eq!(
+            (read.sr_backend, read.fg_mode, read.generated_frames),
+            (0, 1, 3)
+        );
+        assert_eq!(read.sharpening.struct_size, 0, "the developer's defaults");
+        // A refusal keeps the previous request.
+        set(|f| f.apply_result = -1);
+        input.generated_frames = 16;
+        assert!(!package.configure(&input));
+        assert_eq!(package.lock().settings.generated_frames, 3);
+        // Sharpening the developer sets is read back from the host.
+        set(|f| f.apply_result = 0);
+        input.generated_frames = 2;
+        input.sharpening = rsf_sharpening_options {
+            struct_size: 56,
+            abi_version: 1,
+            sharpness: 0.25,
+            ..Default::default()
+        };
+        assert!(package.configure(&input));
+        calls();
+        let read = package.settings();
+        assert_eq!(
+            (read.sharpening.struct_size, read.sharpening.sharpness),
+            (56, 0.25)
+        );
     }
 
     #[test]
-    fn a_reconstruction_change_waits_for_reconfiguration() {
+    fn status_merges_the_host_and_the_runtime_and_a_bridge_failure() {
         let package = Package::new();
         reset();
-        package.view_planned(3, (1920, 1080), (1280, 720));
-        assert!(package.temporal_ready.load(SeqCst));
-        calls();
-        // Generation settings alone leave the plan and readiness in place.
-        let mut input = DEFAULT_SETTINGS;
-        input.fg_mode = 1;
-        input.generated_frames = 3;
-        input.latency_mode = 2;
-        input.frame_limit_us = 16_666;
-        assert!(package.configure(&input));
-        assert_eq!(calls(), ["options 24 1 3 2 16666 0"]);
-        assert!(package.temporal_ready.load(SeqCst));
-        assert!(!package.lock().pending);
-        assert_eq!(package.lock().status.requested_sr, RSF_SR_AUTO);
-        // The engine's spatial path is a reconstruction change.
-        input.sr_backend = RSF_SR_SPATIAL;
-        input.quality = 3;
-        assert!(package.configure(&input));
-        assert_eq!(calls(), ["spatial 1 3", "options 24 1 3 2 16666 0"]);
-        assert!(!package.temporal_ready.load(SeqCst));
-        {
-            let state = package.lock();
-            assert!(state.pending);
-            assert_eq!(state.plan.enabled, 0);
-            assert_eq!(state.plan.render_width, 1280);
-            assert_eq!(state.status.requested_sr, RSF_SR_SPATIAL);
-            assert_eq!(state.settings.quality, 3);
-        }
-        input.dlss_preset = 10;
-        input.sr_backend = RSF_SR_DLSS;
-        assert!(package.configure(&input));
-        assert_eq!(calls(), ["spatial 0 3", "options 24 1 3 2 16666 0"]);
-        package.lock().status.active_sr = 3;
-        package.reconfigured();
-        assert!(!package.lock().pending);
-        assert_eq!(package.lock().status.active_sr, 0);
-    }
-
-    #[test]
-    fn evaluation_results_follow_the_requested_path() {
-        let package = Package::new();
-        package.lock().status.sr_result = 4;
-        // Auto fell back to a view without a temporal backend: the creation result stays.
-        package.evaluated(backend_result::OK, 0);
-        let status = package.lock().status;
-        assert_eq!(
-            (status.sr_result, status.active_sr, status.evaluated_frames),
-            (4, 0, 1)
-        );
-        package.evaluated(backend_result::OK, 3);
-        assert_eq!(package.lock().status.active_sr, 3);
-        assert_eq!(package.lock().status.sr_result, backend_result::OK);
-        package.evaluated(-2, 0);
-        let status = package.lock().status;
-        assert_eq!(
-            (status.sr_result, status.refused_frames, status.active_sr),
-            (-2, 1, 3)
-        );
-        package.lock().settings.sr_backend = RSF_SR_SPATIAL;
-        package.evaluated(backend_result::OK, 0);
-        let status = package.lock().status;
-        assert_eq!(
-            (status.sr_result, status.active_sr),
-            (backend_result::OK, RSF_SR_SPATIAL)
-        );
-        package.lock().settings.sr_backend = RSF_SR_NONE;
-        package.lock().status.sr_result = 4;
-        package.evaluated(backend_result::OK, 0);
-        assert_eq!(package.lock().status.sr_result, backend_result::OK);
-        assert_eq!(package.lock().status.evaluated_frames, 4);
-    }
-
-    #[test]
-    fn status_merges_the_runtime_and_a_bridge_failure() {
-        let package = Package::new();
-        reset();
-        package.lock().status.active_sr = 3;
-        calls();
+        set(|f| f.attached = true);
         let status = package.status();
         assert_eq!(calls(), ["fg status", "backend", "switch", "latency"]);
+        assert_eq!(
+            (status.requested_sr, status.active_sr, status.sr_result),
+            (RSF_SR_AUTO, 3, 0)
+        );
+        assert_eq!((status.render_width, status.output_height), (1280, 1080));
+        assert_eq!((status.evaluated_frames, status.refused_frames), (12, 2));
         assert_eq!(
             (status.fg_backend, status.fg_available, status.fg_active),
             (5, 1, 1)
@@ -1483,23 +1185,28 @@ mod tests {
             ),
             (4, 5, 6)
         );
-        assert_eq!((status.derived_boundaries, status.active_sr), (8, 3));
-        // The aggregate gives a provider-switch failure precedence over a session failure.
-        set(|f| f.last_result = -3);
+        assert_eq!(status.derived_boundaries, 8);
+        assert!(package.temporal_ready());
+        // A bridge failure is the SR result and ends temporal readiness.
         set(|f| f.latency = false);
         package.bridge_failed(-9);
-        package.lock().status.sleep_calls = 1;
         let status = package.status();
-        assert_eq!(calls(), ["fg status", "backend", "switch", "latency"]);
+        calls();
+        assert_eq!((status.sr_result, status.active_sr), (-9, 0));
+        assert_eq!((status.latency_available, status.keyboard_inputs), (0, 0));
+        assert!(!package.temporal_ready());
+        // The engine's scaler and a disabled plan are not temporal; without a host nothing is.
+        package.bridge_failed(0);
+        set(|f| f.sr.active_backend = RSF_SR_SPATIAL);
+        assert!(!package.temporal_ready());
+        set(|f| f.attached = false);
+        assert!(!package.temporal_ready());
+        let status = package.status();
+        calls();
         assert_eq!(
-            (status.fg_result, status.sr_result, status.active_sr),
-            (-7, -9, 0)
+            (status.requested_sr, status.evaluated_frames),
+            (RSF_SR_AUTO, 0)
         );
-        assert_eq!(status.sleep_calls, 0);
-        assert_eq!((status.latency_available, status.latency_mode), (0, 0));
-        assert_eq!((status.latency_owner, status.keyboard_inputs), (0, 0));
-        // The merge is stored.
-        assert_eq!(package.lock().status.fg_backend, 5);
         let counters = package.frame_counters();
         assert_eq!((counters.struct_size, counters.abi_version), (40, 1));
         assert_eq!((counters.valid, counters.active), (1, 1));
@@ -1513,273 +1220,86 @@ mod tests {
         );
     }
 
-    /// open's calls in the player: the first session opens the process log and hooks the player
-    /// window, every session checks the Vulkan surface and prepares the bridge.
-    fn opened(first: bool) -> Vec<String> {
-        let mut calls = Vec::new();
-        if first {
-            let log = format!("open L\\ReScaleFrame\\Unity\\{}.log", std::process::id());
-            calls.extend([
-                "local".into(),
-                "mkdir L\\ReScaleFrame".into(),
-                "mkdir L\\ReScaleFrame\\Unity".into(),
-                log,
-                "player".into(),
-                "subclass 0x20".into(),
-            ]);
-        }
-        calls.extend(["surface", "seed", "prepare 42"].map(String::from));
-        calls
-    }
-    fn started(package: &Package, identity: Identity) -> Result<u64, i32> {
-        package.initialize(identity).map(|api| api.session_id)
-    }
-
     #[test]
-    fn sessions_start_retire_and_refuse_while_busy() {
+    fn sessions_attach_the_host_retire_it_and_refuse_while_busy() {
         let package = Package::new();
         reset();
-        package.lock().settings.quality = 2;
         package.bridge_failed(-4);
-        let session = || Identity::new(b"R", b"6000", b"P");
-        // The bridge's API, with the session id of the host services, is handed out.
-        assert_eq!(started(&package, session()), Ok(42));
+        // A request before the session is applied by its host.
+        let mut input = DEFAULT_SETTINGS;
+        input.quality = 2;
+        assert!(package.configure(&input));
+        calls();
+        assert_eq!(started(&package), Ok(42));
         assert_eq!(
             calls(),
             [
                 opened(true),
-                vec!["spatial 0 2".into(), "activate 1".into()]
+                vec![
+                    "apply sr=1/7 q=2 preset=0 fg=0/7 frames=1 latency=0 limit=0 sharpness=0.5"
+                        .into(),
+                    "activate 1".into()
+                ]
             ]
             .concat()
         );
+        assert!(!package.lock().pending);
         assert_eq!(package.services.session(), 42);
         assert_eq!(package.bridge_result.load(SeqCst), 0);
         assert!(package.lock().session == Session::Started(42));
         assert_eq!(package.presentation.identity().xess.to_bytes(), b"R/xess");
         // A started session only restarts once drained and its own session ended.
-        package.view_planned(3, (8, 8), (4, 4));
-        package.lock_views().entry(1).sr = without_provenance_mut(0x300);
-        package.lock().status.evaluated_frames = 5;
         set(|f| f.drained = false);
-        // A busy restart keeps the running session's identity.
-        assert_eq!(
-            started(&package, Identity::new(b"Q", b"1", b"P")),
-            Err(code::BUSY)
-        );
+        assert_eq!(started(&package), Err(code::BUSY));
         assert_eq!(calls(), ["close"]);
-        assert_eq!(package.presentation.identity().root.to_bytes(), b"R");
         set(|f| f.drained = true);
         set(|f| f.ended = false);
-        assert_eq!(started(&package, session()), Err(code::BUSY));
+        assert_eq!(started(&package), Err(code::BUSY));
         assert_eq!(calls(), ["close", "end 42", "retain"]);
-        assert!(package.temporal_ready.load(SeqCst));
-        assert_eq!(package.services.session(), 42);
+        assert!(package.host().is_some(), "the host stays with the session");
         set(|f| f.ended = true);
+        // A refused bridge stops the host it attached.
         set(|f| f.prepared = false);
-        assert_eq!(started(&package, session()), Err(code::FAILED));
-        // The log and the input window outlive the session.
+        assert_eq!(started(&package), Err(code::FAILED));
         assert_eq!(
             calls(),
             [
                 vec![
                     "close".into(),
                     "end 42".into(),
-                    "destroy 0x300".into(),
+                    "host stop".into(),
                     "release".into()
                 ],
-                opened(false)
-            ]
-            .concat()
-        );
-        {
-            let state = package.lock();
-            assert!(state.session == Session::Opening);
-            assert_eq!((state.status.evaluated_frames, state.plan.enabled), (0, 0));
-        }
-        assert!(!package.temporal_ready.load(SeqCst));
-        assert_eq!(package.services.session(), 0);
-        set(|f| f.drained = false);
-        assert_eq!(started(&package, session()), Err(code::BUSY));
-        assert_eq!(calls(), ["close"]);
-        set(|f| f.drained = true);
-        set(|f| f.prepared = true);
-        package.lock().settings.sr_backend = RSF_SR_SPATIAL;
-        assert_eq!(started(&package, session()), Ok(42));
-        assert_eq!(
-            calls(),
-            [
-                vec!["close".into(), "release".into()],
                 opened(false),
-                vec!["spatial 1 2".into(), "activate 1".into()]
+                vec!["host stop".into()]
             ]
             .concat()
         );
-        assert_eq!(package.lock().status.requested_sr, RSF_SR_SPATIAL);
+        assert!(package.lock().session == Session::Opening);
+        assert!(package.host().is_none());
+        // A refused host attaches nothing.
+        set(|f| f.prepared = true);
+        set(|f| f.host_accepts = false);
+        assert_eq!(started(&package), Err(code::FAILED));
+        let refused = calls();
+        assert_eq!(
+            refused.last().unwrap(),
+            "log 0x10 The Runtime D3D12 host refused to attach; see its log."
+        );
+        set(|f| f.host_accepts = true);
+        assert_eq!(started(&package), Ok(42));
+        calls();
         // Shutdown and device shutdown use the same checked transaction as restart.
         set(|f| f.drained = false);
         assert!(!package.retire());
         assert_eq!(calls(), ["close"]);
         set(|f| f.drained = true);
         assert!(package.retire());
-        assert_eq!(calls(), ["close", "end 42", "release"]);
+        assert_eq!(calls(), ["close", "end 42", "host stop", "release"]);
         assert!(package.lock().session == Session::Stopped);
         set(|f| f.drained = false);
         assert!(package.retire());
         assert!(calls().is_empty());
-    }
-
-    fn list(address: usize) -> *mut c_void {
-        without_provenance_mut(address)
-    }
-    fn sr_pass(view_key: u64, output: (u32, u32), render: (u32, u32)) -> rsf_game_render_pass {
-        let mut pass = rsf_game_render_pass {
-            view_key,
-            camera_valid: 1,
-            screen: 7,
-            ..Default::default()
-        };
-        (pass.camera.output_width, pass.camera.output_height) = output;
-        (pass.camera.render_width, pass.camera.render_height) = render;
-        pass.camera.depth_inverted = 1;
-        pass
-    }
-
-    #[test]
-    fn a_view_is_created_once_and_evaluated_in_its_bound_slot() {
-        let package = Package::new();
-        reset();
-        let pass = sr_pass(5, (1920, 1080), (960, 540));
-        // Auto resolves for the adapter; the stored gameplay flag selects the flight screen.
-        package.render(list(0xa0), &pass);
-        assert_eq!(
-            calls(),
-            [
-                "default",
-                "create 3 1 0 1920x1080 960x540 1",
-                "plan",
-                "log URP SR requested=7 active=3 result=0 1280x720 -> 1920x1080",
-                "defaults",
-                "sharpen 56",
-                "evaluate 0x103 0 4",
-            ]
-        );
-        assert!(package.temporal_ready.load(SeqCst));
-        {
-            let state = package.lock();
-            assert_eq!((state.plan.enabled, state.plan.render_width), (1, 1280));
-            let status = state.status;
-            assert_eq!(
-                (status.sr_result, status.active_sr, status.evaluated_frames),
-                (0, 3, 1)
-            );
-            assert_eq!((status.render_width, status.output_height), (1280, 1080));
-        }
-        // The view keeps its context and its list's slot; another list binds the next slot.
-        package.render(list(0xa0), &pass);
-        assert_eq!(calls(), ["defaults", "sharpen 56", "evaluate 0x103 0 4"]);
-        package.render(list(0xb0), &pass);
-        assert_eq!(calls(), ["defaults", "sharpen 56", "evaluate 0x103 1 4"]);
-        // A temporal context keeps other engine render extents; stored sharpening is applied.
-        package.lock().settings.sharpening.struct_size = 99;
-        package.lock().settings.gameplay = 0;
-        package.render(list(0xb0), &sr_pass(5, (1920, 1080), (1000, 500)));
-        assert_eq!(calls(), ["sharpen 99", "evaluate 0x103 1 1"]);
-        // A refusal is counted and becomes the SR result.
-        set(|f| f.evaluate_result = -6);
-        package.render(list(0xb0), &pass);
-        calls();
-        let status = package.lock().status;
-        assert_eq!((status.refused_frames, status.sr_result), (1, -6));
-        // Other output extents replace the context, whose new slots start unbound.
-        set(|f| f.evaluate_result = 0);
-        package.lock().settings.sr_backend = RSF_SR_DLSS;
-        let wide = sr_pass(5, (2560, 1440), (960, 540));
-        package.render(list(0xc0), &wide);
-        assert_eq!(
-            calls(),
-            [
-                "destroy 0x103",
-                "create 1 1 0 2560x1440 960x540 1",
-                "plan",
-                "log URP SR requested=1 active=1 result=0 1280x720 -> 2560x1440",
-                "sharpen 99",
-                "evaluate 0x101 0 1",
-            ]
-        );
-        // A fourth list finds every slot of the view bound and is not evaluated.
-        package.render(list(0xd0), &wide);
-        package.render(list(0xe0), &wide);
-        assert_eq!(calls().last().unwrap(), "evaluate 0x101 2 1");
-        package.render(list(0xf0), &wide);
-        assert!(calls().is_empty());
-    }
-
-    #[test]
-    fn a_vendor_failure_falls_back_to_backend_zero() {
-        let package = Package::new();
-        reset();
-        package.lock().settings.sr_backend = RSF_SR_DLSS;
-        set(|f| f.vendor_creates = false);
-        set(|f| f.create_result = -5);
-        // Backend 0 plans the engine's render extents.
-        set(|f| f.plan = (960, 540));
-        let pass = sr_pass(1, (1920, 1080), (960, 540));
-        package.render(list(0xa0), &pass);
-        assert_eq!(
-            calls(),
-            [
-                "create 1 1 0 1920x1080 960x540 1",
-                "create 0 1 0 1920x1080 960x540 1",
-                "plan",
-                "log URP SR requested=1 active=0 result=-5 960x540 -> 1920x1080",
-                "defaults",
-                "sharpen 56",
-                "evaluate 0x100 0 4",
-            ]
-        );
-        // The stand-in keeps the creation result; nothing temporal is ready or active.
-        assert!(!package.temporal_ready.load(SeqCst));
-        let status = package.lock().status;
-        assert_eq!((status.sr_result, status.active_sr), (-5, 0));
-        package.render(list(0xa0), &pass);
-        assert_eq!(calls(), ["defaults", "sharpen 56", "evaluate 0x100 0 4"]);
-        // A backend-zero context is replaced for other engine render extents.
-        set(|f| f.plan = (1000, 500));
-        package.render(list(0xa0), &sr_pass(1, (1920, 1080), (1000, 500)));
-        assert_eq!(
-            calls(),
-            [
-                "destroy 0x100",
-                "create 1 1 0 1920x1080 1000x500 1",
-                "create 0 1 0 1920x1080 1000x500 1",
-                "plan",
-                "log URP SR requested=1 active=0 result=-5 1000x500 -> 1920x1080",
-                "defaults",
-                "sharpen 56",
-                "evaluate 0x100 0 4",
-            ]
-        );
-        // The engine's spatial path asks for backend 0 directly and reports itself active.
-        package.lock().settings.sr_backend = RSF_SR_SPATIAL;
-        set(|f| f.create_result = 0);
-        package.render(list(0xa0), &sr_pass(2, (1920, 1080), (960, 540)));
-        assert_eq!(calls()[0], "create 0 1 0 1920x1080 960x540 1");
-        assert_eq!(package.lock().status.active_sr, RSF_SR_SPATIAL);
-    }
-
-    #[test]
-    fn a_view_is_created_with_the_package_identity() {
-        let package = Package::new();
-        reset();
-        package
-            .presentation
-            .set_identity(Identity::new(b"R", b"6000", b"P"));
-        package.render(list(0xa0), &sr_pass(1, (8, 8), (4, 4)));
-        assert_eq!(
-            calls()[1],
-            "create 3 1 0 8x8 4x4 1 R R/streamline R/streamline/sl.interposer.dll R/fidelityfx \
-             R/xess 6000 P"
-        );
     }
 
     #[test]
@@ -1788,9 +1308,7 @@ mod tests {
         reset();
         package.install();
         assert!(calls().is_empty());
-        package
-            .presentation
-            .set_identity(Identity::new(b"R", b"6000", b"P"));
+        package.presentation.set_identity(session());
         set(|f| f.install_result = -4);
         package.install();
         // Auto, unlimited, generation off with Reflex off until rsfu_configure, inverted finite
@@ -1802,129 +1320,27 @@ mod tests {
                  R/fidelityfx R/fidelityfx R/xess R/streamline | 2 6000 P"
             ]
         );
-        assert_eq!(package.lock().status.fg_result, -4);
         // A refusal is retried; an accepted install is not repeated.
         set(|f| f.install_result = 0);
         package.install();
         assert_eq!(calls().len(), 1);
-        assert_eq!(package.lock().status.fg_result, 0);
-        package.lock().status.fg_result = 9;
         package.install();
         assert!(calls().is_empty());
-        assert_eq!(package.lock().status.fg_result, 9);
     }
 
-    #[test]
-    fn the_window_pass_requests_the_stored_provider() {
-        let package = Package::new();
-        reset();
-        set(|f| f.owner = false);
-        package.request_generation();
-        assert_eq!(calls(), ["owner"]);
-        set(|f| f.owner = true);
-        // Auto waits for a readable adapter.
-        set(|f| f.fg_adapter = None);
-        package.request_generation();
-        assert_eq!(calls(), ["owner", "fg default"]);
-        // Auto resolves once; the active provider (5) is not requested again.
-        set(|f| f.fg_adapter = Some(5));
-        package.request_generation();
-        assert_eq!(calls(), ["owner", "fg default", "backend"]);
-        set(|f| f.fg_adapter = Some(3));
-        package.request_generation();
-        assert_eq!(calls(), ["owner", "backend"]);
-        assert_eq!(package.lock().status.fg_result, 0);
-        package.device_event(true);
-        package.device_event(false);
-        package.device_event(true);
-        calls();
-        package.request_generation();
-        assert_eq!(calls(), ["owner", "fg default", "backend", "request 3"]);
-        // Another provider is requested and its result recorded.
-        package.lock().settings.fg_backend = RSF_FG_BACKEND_DLSS;
-        set(|f| f.request_result = -2);
-        package.request_generation();
-        assert_eq!(calls(), ["owner", "backend", "request 1"]);
-        assert_eq!(package.lock().status.fg_result, -2);
-        // An adapter without a provider resolves Auto to off, read again every pass.
-        let package = Package::new();
-        set(|f| f.fg_adapter = Some(0));
-        for _ in 0..2 {
-            package.request_generation();
-            assert_eq!(calls(), ["owner", "fg default", "backend", "request 0"]);
-        }
+    fn list(address: usize) -> *mut c_void {
+        without_provenance_mut(address)
     }
-
-    #[test]
-    fn a_refused_or_invalid_plan_releases_the_context_without_publishing() {
-        let package = Package::new();
-        reset();
-        let pass = sr_pass(1, (1920, 1080), (960, 540));
-        for (result, extent, expected) in [
-            (-4, (960, 540), -4),
-            (0, (0, 540), backend_result::FEATURE_FAILED),
-            (0, (1921, 540), backend_result::FEATURE_FAILED),
-        ] {
-            set(|f| {
-                f.plan_result = result;
-                f.plan = extent;
-            });
-            package.render(list(0xa0), &pass);
-            assert_eq!(&calls()[2..], ["plan", "destroy 0x103"]);
-            assert!(!package.temporal_ready.load(SeqCst));
-            let state = package.lock();
-            assert_eq!(state.plan.enabled, 0);
-            assert_eq!(state.status.sr_result, expected);
-        }
-    }
-
-    #[test]
-    fn creation_and_evaluation_wait_for_their_inputs() {
-        let package = Package::new();
-        reset();
-        package.lock().status.sr_result = 4;
-        let pass = sr_pass(1, (1920, 1080), (960, 540));
-        // An unreadable adapter or a list without a device leaves the view empty, unreported.
-        set(|f| f.adapter = 0);
-        package.render(list(0xa0), &pass);
-        assert_eq!(calls(), ["default"]);
-        package.lock().settings.sr_backend = RSF_SR_DLSS;
-        set(|f| f.device = false);
-        package.render(list(0xa0), &pass);
-        assert_eq!(calls(), ["create 1 1 0 1920x1080 960x540 1"]);
-        assert_eq!(package.lock().status.sr_result, 4);
-        assert!(package.lock_views().entry(1).sr.is_null());
-        // An invalid camera or a pending reconfiguration creates without evaluating.
-        set(|f| f.device = true);
-        let mut probe = pass;
-        probe.camera_valid = 0;
-        package.render(list(0xa0), &probe);
-        assert_eq!(
-            calls().last().unwrap(),
-            "log URP SR requested=1 active=1 result=0 1280x720 -> 1920x1080"
-        );
-        package.lock().pending = true;
-        package.render(list(0xa0), &pass);
-        assert!(calls().is_empty());
-        // A reconfiguring pass releases every view, then plans the new one without evaluating.
-        package.lock_views().entry(9);
-        package.lock().status.active_sr = 1;
-        probe.flags = RSF_GAME_RENDER_RECONFIGURE;
-        package.render(list(0xa0), &probe);
-        assert_eq!(
-            calls(),
-            [
-                "destroy 0x101",
-                "destroy 0x0",
-                "create 1 1 0 1920x1080 960x540 1",
-                "plan",
-                "log URP SR requested=1 active=1 result=0 1280x720 -> 1920x1080",
-            ]
-        );
-        assert!(!package.lock().pending);
-        assert!(package.temporal_ready.load(SeqCst));
-        package.render(list(0xa0), &pass);
-        assert_eq!(calls().last().unwrap(), "evaluate 0x101 0 4");
+    fn pass(role: u32, view_key: u64) -> rsf_game_render_pass {
+        let mut pass = rsf_game_render_pass {
+            role,
+            view_key,
+            camera_valid: 1,
+            screen: 7,
+            ..Default::default()
+        };
+        (pass.camera.output_width, pass.camera.output_height) = (8, 6);
+        pass
     }
 
     #[test]
@@ -1951,17 +1367,10 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(unsafe { rsfu_frame_counters(&mut counters) }, 0);
-        let mut plan = rsf_game_render_config {
-            struct_size: 23,
-            ..EMPTY_PLAN
-        };
-        assert_eq!(unsafe { render_config(null_mut(), &mut plan) }, 0);
-        plan.struct_size = 24;
-        assert_eq!(unsafe { render_config(null_mut(), &mut plan) }, 1);
         calls();
-        let pass = sr_pass(1, (8, 8), (4, 4));
+        let sr = pass(rsf_game_sys::RSF_GAME_RENDER_SR, 1);
         unsafe {
-            routing::render_callback(null_mut(), null_mut(), &pass, 1);
+            routing::render_callback(null_mut(), null_mut(), &sr, 1);
             routing::render_callback(null_mut(), list(1), std::ptr::null(), 1);
         }
         assert!(calls().is_empty());
@@ -1991,21 +1400,25 @@ mod tests {
     fn the_player_loads_its_log_and_installs_once() {
         let package = Package::new();
         reset();
-        package
-            .presentation
-            .set_identity(Identity::new(b"R", b"6000", b"P"));
+        package.presentation.set_identity(session());
         package.loaded(false, &wide_text("C:\\rsf.log"));
         let loaded = calls();
         assert_eq!(loaded[0], "open C:\\rsf.log");
         assert!(loaded[1].starts_with("install 152 7 "));
         assert_eq!(loaded.len(), 2);
-        // The configured log stands in for the process log; lines reach both outputs.
+        // The configured log stands in for the process log; the host appends to it too.
         package.log("hello");
         assert_eq!(calls(), ["log 0x10 hello"]);
         assert!(package.open());
         assert_eq!(
             calls(),
-            ["player", "subclass 0x20", "surface", "seed", "prepare 42"]
+            [
+                "player",
+                "subclass 0x20",
+                "surface",
+                "host start C:\\rsf.log R\\preferences.ini R/streamline R/fidelityfx 2",
+                "prepare 42"
+            ]
         );
         // Unload restores the procedure and closes the log; later lines reach the debugger only.
         package.unload();
@@ -2023,9 +1436,7 @@ mod tests {
     fn the_editor_installs_per_session_and_hooks_the_preview() {
         let package = Package::new();
         reset();
-        package
-            .presentation
-            .set_identity(Identity::new(b"R", b"6000", b"P"));
+        package.presentation.set_identity(session());
         package.loaded(true, &[]);
         assert!(calls().is_empty());
         // No player window and no Vulkan surface: the preview presents in the Editor.
@@ -2033,7 +1444,8 @@ mod tests {
         let opened = calls();
         assert_eq!(opened[0], "local");
         assert!(opened[4].starts_with("install 152 7 "));
-        assert_eq!(opened[5..], ["seed", "prepare 42"]);
+        assert!(opened[5].starts_with("host start "));
+        assert_eq!(opened[6..], ["prepare 42"]);
         // The preview's parent is hooked once it exists, then kept.
         set(|f| f.parent = 0);
         package.preview_input();
@@ -2043,8 +1455,6 @@ mod tests {
         assert_eq!(calls(), ["parent", "subclass 0x40"]);
         package.preview_input();
         assert!(calls().is_empty());
-        assert!(package.open());
-        assert_eq!(calls(), ["seed", "prepare 42"]);
     }
 
     #[test]
@@ -2069,6 +1479,7 @@ mod tests {
         set(|f| f.file = 0);
         package.loaded(false, &wide_text("C:\\rsf.log"));
         assert_eq!(calls(), ["open C:\\rsf.log"]);
+        package.presentation.set_identity(session());
         set(|f| f.surface = false);
         assert!(!package.open());
         let mut refused = opened(true);
@@ -2077,11 +1488,24 @@ mod tests {
             "log Unity graphics bridge or player presentation surface could not open.".into(),
         );
         assert_eq!(calls(), refused);
-        // Without %LOCALAPPDATA% there is no process log; the window stays hooked.
+        // Without %LOCALAPPDATA% there is no process log, and the host's lines are discarded.
         set(|f| f.surface = true);
         set(|f| f.local = None);
+        let package = Package::new();
+        package.loaded(false, &[]);
+        package.presentation.set_identity(session());
         assert!(package.open());
-        assert_eq!(calls(), ["local", "surface", "seed", "prepare 42"]);
+        assert_eq!(
+            calls(),
+            [
+                "local",
+                "player",
+                "subclass 0x20",
+                "surface",
+                "host start NUL R\\preferences.ini R/streamline R/fidelityfx 2",
+                "prepare 42"
+            ]
+        );
     }
 
     #[test]
@@ -2139,31 +1563,37 @@ mod tests {
     }
 
     #[test]
-    fn the_render_callback_routes_each_pass() {
+    fn the_player_hands_every_pass_to_the_host_with_its_screen_class() {
         use rsf_game_sys::{
             RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW,
         };
         let package = Package::new();
         reset();
-        set(|f| f.owner = false);
-        let mut pass = sr_pass(3, (8, 8), (4, 4));
-        (pass.role, pass.session_id, pass.source_frame_id) = (RSF_GAME_RENDER_SR, 42, 7);
-        // An end reports every pass but the window's as submitted.
-        assert!(!package.route(list(1), &pass, false));
-        assert_eq!(calls(), ["submitted 42 7"]);
-        pass.role = RSF_GAME_RENDER_WINDOW;
-        assert!(!package.route(list(1), &pass, false));
+        // Without a host nothing is forwarded.
+        package.route(list(1), &pass(RSF_GAME_RENDER_SR, 3), true);
         assert!(calls().is_empty());
-        // The player's window pass asks for the provider, then hands the pass to generation.
-        assert!(!package.route(list(1), &pass, true));
-        assert_eq!(calls(), ["owner", "window 3"]);
-        pass.role = RSF_GAME_RENDER_FINAL_SCENE;
-        assert!(!package.route(list(1), &pass, true));
-        assert_eq!(calls(), ["hudless 0x1 3"]);
-        // Any other pass goes to the SR pass; the player has no preview to prepare.
-        pass.role = RSF_GAME_RENDER_SR;
-        assert!(package.route(list(1), &pass, true));
-        assert!(calls().is_empty());
+        package.presentation.set_identity(session());
+        assert!(package.open());
+        calls();
+        // SR passes carry the developer's gameplay flag, begin and end alike.
+        let sr = pass(RSF_GAME_RENDER_SR, 3);
+        package.route(list(1), &sr, true);
+        package.route(list(1), &sr, false);
+        let flight = RSF_SCREEN_FLIGHT;
+        assert_eq!(
+            calls(),
+            [
+                format!("host pass 0x1 1 3 1 {flight}"),
+                format!("host pass 0x1 1 3 0 {flight}")
+            ]
+        );
+        package.lock().settings.gameplay = 0;
+        package.route(list(1), &sr, true);
+        assert_eq!(calls(), [format!("host pass 0x1 1 3 1 {RSF_SCREEN_MENU}")]);
+        // The window and final scene keep their own.
+        package.route(list(1), &pass(RSF_GAME_RENDER_WINDOW, 3), true);
+        package.route(list(1), &pass(RSF_GAME_RENDER_FINAL_SCENE, 3), true);
+        assert_eq!(calls(), ["host pass 0x1 9 3 1 7", "host pass 0x1 10 3 1 7"]);
     }
 
     #[test]
@@ -2172,43 +1602,44 @@ mod tests {
         let package = Package::new();
         reset();
         set(|f| {
-            f.owner = false;
             f.shown = false;
             f.preview_ready = false;
         });
-        package.services.editor.store(true, SeqCst);
-        let mut pass = sr_pass(3, (8, 6), (4, 3));
-        pass.role = RSF_GAME_RENDER_SR;
+        package.presentation.set_identity(session());
+        package.loaded(true, &[]);
+        assert!(package.open());
+        calls();
+        let sr = pass(RSF_GAME_RENDER_SR, 3);
         // The SR pass waits for the preview's resources.
-        assert!(!package.route(list(1), &pass, true));
+        package.route(list(1), &sr, true);
         assert_eq!(calls(), ["preview prepare 8x6"]);
         set(|f| f.preview_ready = true);
-        assert!(package.route(list(1), &pass, true));
-        assert_eq!(calls(), ["preview prepare 8x6"]);
-        // A refusal without a texture still spends the budget.
-        pass.role = RSF_GAME_RENDER_WINDOW;
-        assert!(!package.route(list(1), &pass, true));
-        assert_eq!(calls(), ["owner", "present 0x0 0"]);
-        // Route the D3D11 producer's real Editor plan after its native resource handoff.
-        use crate::{d3d11_pass, sys::rsf_unity_packet};
-        let packet = rsf_unity_packet {
-            camera: pass.camera,
-            color: without_provenance_mut(0x50),
-            ..Default::default()
-        };
-        let mut pass = d3d11_pass::plan(d3d11_pass::EVENT_WINDOW, &packet, true).pass;
-        pass.color_input = packet.color;
-        let logged = "log Editor presentation pending: texture=640x360 format=10 expected=8x6";
+        package.route(list(1), &sr, true);
+        assert_eq!(
+            calls(),
+            [
+                "preview prepare 8x6".into(),
+                format!("host pass 0x1 1 3 1 {RSF_SCREEN_FLIGHT}")
+            ]
+        );
+        // The preview presents the window pass; the host never sees it. A refusal without a
+        // texture still spends the budget.
+        let mut window = pass(RSF_GAME_RENDER_WINDOW, 3);
+        package.route(list(1), &window, true);
+        package.route(list(1), &window, false);
+        assert_eq!(calls(), ["present 0x0 0"]);
+        window.color_input = without_provenance_mut(0x50);
+        let logged = "log 0x10 Editor presentation pending: texture=640x360 format=10 expected=8x6";
         for _ in 0..3 {
-            package.route(list(1), &pass, true);
-            assert_eq!(calls(), ["owner", "present 0x50 1", "desc 0x50", logged]);
+            package.route(list(1), &window, true);
+            assert_eq!(calls(), ["present 0x50 0", "desc 0x50", logged]);
         }
-        package.route(list(1), &pass, true);
-        assert_eq!(calls(), ["owner", "present 0x50 1"]);
+        package.route(list(1), &window, true);
+        assert_eq!(calls(), ["present 0x50 0"]);
         // A shown preview neither logs nor counts.
         set(|f| f.shown = true);
-        package.route(list(1), &pass, true);
-        assert_eq!(calls(), ["owner", "present 0x50 1"]);
+        package.route(list(1), &window, true);
+        assert_eq!(calls(), ["present 0x50 0"]);
         assert_eq!(package.preview_reports.load(SeqCst), 5);
     }
 

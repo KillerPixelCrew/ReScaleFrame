@@ -318,7 +318,6 @@ impl State {
 
     /// The pending change once no ring slot is in flight. Only the ring records with the host's
     /// SR contexts; the pre-UI copies on Unity's own list do not, so they never hold it back.
-    #[cfg(any(test, feature = "mono-plugin"))]
     fn idle_change(&self, completed: u64) -> Option<u32> {
         let idle =
             !self.submission_unknown && completed != u64::MAX && !self.any_in_flight(completed);
@@ -743,8 +742,7 @@ pub(crate) fn rsf_unity_frames_settle_change(generation: u32) -> bool {
     lock().settle_change(generation)
 }
 
-/// The pending change the Mono host may apply at the window event, once Unity's ring is idle.
-#[cfg(feature = "mono-plugin")]
+/// The pending change the Runtime host may apply at the window event, once Unity's ring is idle.
 pub(crate) fn rsf_unity_frames_idle_change(completed: u64) -> Option<u32> {
     lock().idle_change(completed)
 }

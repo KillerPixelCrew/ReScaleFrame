@@ -200,9 +200,6 @@ unsafe fn reconstruct(
             .ok()?;
     }
     let list = commands.list.as_raw();
-    // A reset proves discard of any preceding recording that never reached Unity.
-    #[cfg(not(feature = "mono-plugin"))]
-    crate::package_state::rsf_unity_package_sr_slot_reset(12, list, admission.slot);
     let mut pass = build_d3d12_pass(packet);
     if hudless {
         pass.role = RSF_GAME_RENDER_FINAL_SCENE;
@@ -272,14 +269,11 @@ pub(crate) unsafe fn render_packet(
         let queue = unsafe { engine.queue.unwrap()() };
         // Unity synchronizes workers and flushes recorded lists before granting this event the queue.
         rsf_unity_frames_flush_sources(host, queue, &pass);
-        // A pending policy change reaches the Mono host here once the ring is idle. The managed
-        // adapter records scene packets only under the configuration it already has, so waiting
-        // for one can wait forever.
-        #[cfg(feature = "mono-plugin")]
+        // A pending policy change reaches the Runtime host here once the ring is idle. The
+        // managed adapter records scene packets only under the configuration it already has, so
+        // waiting for one can wait forever.
         let generation =
             crate::bridge_state::rsf_unity_frames_idle_change(completed()).unwrap_or(0);
-        #[cfg(not(feature = "mono-plugin"))]
-        let generation = 0;
         rsf_unity_frames_dispatch_d3d12(host, queue, &mut pass, generation);
     } else {
         let _ = unsafe { reconstruct(engine, host, device, packet, hudless) };

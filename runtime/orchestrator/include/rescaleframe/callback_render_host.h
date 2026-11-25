@@ -49,7 +49,8 @@ typedef struct rsf_callback_host_setup_v3 {
     rsf_game_host_services* services;
 } rsf_callback_host_setup_v3;
 /* The host's SR facts for an adapter's own status API. The backends are rsf_sr_backend ids:
-   requested is the selected one (Auto stays Auto), active the one serving accepted frames. */
+   requested is the selected one (Auto stays Auto), active the one the current plan serves
+   (none while no plan is enabled). */
 typedef struct rsf_callback_host_status {
     uint32_t struct_size;
     uint32_t requested_backend, active_backend, enabled;

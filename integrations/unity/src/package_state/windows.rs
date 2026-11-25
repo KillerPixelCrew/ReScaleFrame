@@ -22,7 +22,6 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetModuleHandleExW,
 };
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
-use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, EnumWindows, GWLP_WNDPROC, GetClassNameW, GetWindowLongPtrW,
@@ -53,10 +52,6 @@ pub(super) fn startup_paths() -> (bool, Vec<u16>) {
     ini.truncate(ini.len() - file_len);
     ini.extend("ReScaleFrame.Unity.ini".encode_utf16());
     (editor, terminated(ini))
-}
-
-pub(super) fn rsf_unity_package_session_seed() -> u64 {
-    unsafe { GetTickCount64() }
 }
 
 pub(super) fn rsf_unity_package_timestamp() -> (u64, u64) {

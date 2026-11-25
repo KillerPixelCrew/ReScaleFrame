@@ -16,16 +16,20 @@ use crate::bridge_state::{
     build_cpu_event, rsf_unity_frames_active, rsf_unity_frames_callback_enter,
     rsf_unity_frames_callback_leave,
 };
-use crate::sys::rsf_unity_native_api;
+use crate::generation::RSF_DLSS_ENGINE_UNITY;
+use crate::sys::{
+    RSF_CALLBACK_HOST_ABI_VERSION_V3, RSF_SR_CHOICES_ALL, rsf_callback_host_setup,
+    rsf_callback_host_setup_v3, rsf_unity_native_api,
+};
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
-    RSF_GAME_ABI_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END,
-    RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_UNFRAMED,
-    RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_INPUT_CONTROLLER, RSF_GAME_INPUT_KEYBOARD,
-    RSF_GAME_INPUT_MOUSE, backend_result, rsf_game_cpu_event, rsf_game_host_services,
+    RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END, RSF_GAME_CPU_INPUT_EVENT,
+    RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_UNFRAMED, RSF_GAME_CPU_WINDOW_MESSAGE,
+    RSF_GAME_INPUT_CONTROLLER, RSF_GAME_INPUT_KEYBOARD, RSF_GAME_INPUT_MOUSE, backend_result,
+    rsf_game_cpu_event, rsf_game_host_services,
 };
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
 
@@ -33,6 +37,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
 const INPUT_KINDS: u32 = RSF_GAME_INPUT_KEYBOARD | RSF_GAME_INPUT_MOUSE | RSF_GAME_INPUT_CONTROLLER;
 
 const BRIDGE_REFUSED: &str = "Unity graphics bridge or player presentation surface could not open.";
+const HOST_REFUSED: &str = "The Runtime D3D12 host refused to attach; see its log.";
 
 struct InputCallback;
 
@@ -90,6 +95,8 @@ pub(super) struct Services {
     pub(super) api: Mutex<Api>,
     /// That API's session id, read by the input paths without the lock.
     pub(super) session: AtomicU64,
+    /// The open log's path, which the Runtime host appends to as well; empty while none is open.
+    pub(super) log_path: Mutex<Vec<u16>>,
 }
 
 impl Services {
@@ -101,6 +108,7 @@ impl Services {
             input_frame: AtomicU64::new(0),
             api: Mutex::new(Api(empty_api())),
             session: AtomicU64::new(0),
+            log_path: Mutex::new(Vec::new()),
         }
     }
 
@@ -148,6 +156,7 @@ impl Package {
             let mut file = lock_or_recover(&self.services.log);
             if file.is_none() {
                 *file = Handle(raw::log_open(log));
+                self.opened_log(*file, log);
             }
         }
         if !editor {
@@ -171,6 +180,13 @@ impl Package {
         }
         path.extend(format!("\\{}.log", std::process::id()).encode_utf16());
         *file = Handle(raw::log_open(&path));
+        self.opened_log(*file, &path);
+    }
+
+    fn opened_log(&self, file: Handle, path: &[u16]) {
+        if !file.is_none() {
+            *lock_or_recover(&self.services.log_path) = path.to_vec();
+        }
     }
 
     /// One line to the debugger and the open log, serialized with its open and close.
@@ -200,30 +216,71 @@ impl Package {
             self.log(BRIDGE_REFUSED);
             return false;
         }
+        let Some(host) = self.attach() else {
+            self.log(HOST_REFUSED);
+            return false;
+        };
+        // The bridge's passes and CPU events come here first; its plan is the host's own.
         let services = rsf_game_host_services {
-            struct_size: size_of::<rsf_game_host_services>() as u32,
-            abi_version: RSF_GAME_ABI_VERSION,
-            session_id: raw::session_seed().wrapping_add(1),
             log: Some(backend_log),
             render_pass: Some(super::routing::render_callback),
-            user: null_mut(),
-            render_config: Some(super::render_config),
             cpu_event: Some(host_cpu_event),
-            scope_state: None,
-            process_upscale: None,
-            submit: None,
-            present: None,
-            process_latency: None,
-            render_feedback: None,
+            ..host
         };
         // The bridge writes into the stored API.
         let mut api = self.services.api();
         let prepared = unsafe { raw::bridge_prepare(&services, &mut api) } != 0;
         lock_or_recover(&self.services.api).0 = api;
         self.services.session.store(api.session_id, SeqCst);
+        if prepared {
+            *lock_or_recover(&self.host) = Some(super::Host(host));
+        } else {
+            let _ = unsafe { raw::host_stop() };
+        }
         prepared
     }
 
+    /// Attaches the Runtime host for this session: the package identity's SDK directories and
+    /// engine identity, its preferences beside the SDK, the package log, the developer's
+    /// defaults as start values, and URP's FSR1 as the engine's spatial scaler.
+    fn attach(&self) -> Option<rsf_game_host_services> {
+        let identity = self.presentation.identity();
+        let mut log = lock_or_recover(&self.services.log_path).clone();
+        if log.is_empty() {
+            // Without a package log the host's lines are discarded.
+            log = "NUL".encode_utf16().collect();
+        }
+        log.push(0);
+        let mut preferences: Vec<u16> = identity.root.to_string_lossy().encode_utf16().collect();
+        preferences.extend("\\preferences.ini\0".encode_utf16());
+        let mut host = rsf_game_host_services::default();
+        let defaults = super::DEFAULT_SETTINGS;
+        let setup = rsf_callback_host_setup_v3 {
+            base: rsf_callback_host_setup {
+                struct_size: size_of::<rsf_callback_host_setup_v3>() as u32,
+                abi_version: RSF_CALLBACK_HOST_ABI_VERSION_V3,
+                plugin_path: null(),
+                log_path: log.as_ptr(),
+                preferences_path: preferences.as_ptr(),
+                probe: null(),
+                backend: defaults.sr_backend,
+                quality: defaults.quality,
+                dlss_preset: defaults.dlss_preset,
+                sr_backend_choices: RSF_SR_CHOICES_ALL,
+                engine_type: RSF_DLSS_ENGINE_UNITY,
+                engine_version_utf8: identity.version.as_ptr(),
+                project_id_utf8: identity.project.as_ptr(),
+                streamline_directory_utf8: identity.streamline.as_ptr(),
+                fsr2_directory_utf8: identity.fsr.as_ptr(),
+                fsr3_directory_utf8: identity.fsr.as_ptr(),
+                fsr4_directory_utf8: identity.fsr.as_ptr(),
+                xess_directory_utf8: identity.xess.as_ptr(),
+                set_engine_spatial: Some(raw::set_engine_spatial),
+            },
+            services: &mut host,
+        };
+        (unsafe { raw::host_start(&setup.base) } == 0).then_some(host)
+    }
     /// Hooks the window `find` names while none is hooked. A window that is not found yet is
     /// looked for again by the next call.
     fn hook(&self, find: fn() -> *mut c_void) {

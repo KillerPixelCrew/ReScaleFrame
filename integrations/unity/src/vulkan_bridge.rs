@@ -136,10 +136,6 @@ pub(super) unsafe fn report_created(services: *const rsf_game_host_services) {
 /// The device and surface leaves vulkan_state calls; its tests bind fakes with the same names.
 pub(super) mod ops {
     pub(in crate::vulkan_state) use super::{create_device, report_created};
-    pub(in crate::vulkan_state) use crate::package_state::{
-        rsf_unity_package_sr_ring_begin as ring_begin,
-        rsf_unity_package_sr_ring_retired as ring_retired,
-    };
     pub(in crate::vulkan_state) use crate::vulkan_platform::surface::{
         rsf_uvk_gpu_chain_create as chain_create, rsf_uvk_gpu_chain_destroy as chain_destroy,
         rsf_uvk_gpu_chain_extent as chain_extent, rsf_uvk_gpu_chain_resize as chain_resize,
@@ -343,7 +339,7 @@ fn prepare_rgba(index: u32, width: u32, height: u32) -> Option<ImageHandles> {
 fn begin(graphics: &DeviceHandles) -> Option<(u32, CommandSlot)> {
     let ring = VULKAN.lock().slot().0 as u32;
     let slot = command_slot(ring)?;
-    unsafe { rsf_uvk_gpu_begin(graphics, &slot, ring) }.then_some((ring, slot))
+    unsafe { rsf_uvk_gpu_begin(graphics, &slot) }.then_some((ring, slot))
 }
 
 fn render(frame: &Frame, target: *mut c_void, pass: &rsf_game_render_pass, phase: u32) -> bool {

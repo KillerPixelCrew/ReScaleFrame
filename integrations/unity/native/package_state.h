@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
-/* Internal package ABI. Rust owns package state, routing, SR planning and the session
+/* Internal package ABI. Rust owns package state, routing and the session
    and Unity device lifecycles. The C11 leaf package.c supplies the Unity SDK calls; the rsfu_*
    exports are Rust (native/bridge.def). Settings, status and frame-counter layouts are also used by Runtime/Native.cs. */
 #include <rescaleframe/game_renderer.h>
@@ -37,23 +37,6 @@ typedef struct rsf_unity_frame_counters {
     uint64_t total_presented, generated_presented, provider_generation;
 } rsf_unity_frame_counters;
 
-/* The Runtime SR context a view asks for: its requested backend (0 is the spatial or native path),
-   the stored quality and DLSS model, the pass camera's extents and depth convention, and the
-   package identity as UTF-8, borrowed for the call: the SDK root, its streamline, fidelityfx and
-   xess directories, the Streamline interposer, Unity's version and the project id. The Rust
-   leaf adds the device, Streamline host and log. */
-typedef struct rsf_unity_package_view_setup {
-    uint32_t backend, quality, dlss_preset;
-    uint32_t output_width, output_height, render_width, render_height;
-    uint32_t inverted_depth;
-    const char* root_utf8;
-    const char* streamline_utf8;
-    const char* interposer_utf8;
-    const char* fsr_utf8;
-    const char* xess_utf8;
-    const char* engine_version_utf8;
-    const char* project_id_utf8;
-} rsf_unity_package_view_setup;
 #ifdef __cplusplus
 extern "C" {
 #endif

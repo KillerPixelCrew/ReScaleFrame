@@ -2,7 +2,7 @@
 //! Package renderer routing and bridge retirement.
 use super::*;
 use crate::d3d11_state::{self, graphics as d3d11};
-use crate::package_state::{rsf_unity_package_sr_slots_released, services::editor};
+use crate::package_state::services::editor;
 use crate::sys::*;
 use crate::{preview, vulkan_state};
 use std::sync::atomic::AtomicU32;
@@ -145,20 +145,17 @@ pub(crate) fn rsf_unity_package_bridge_finish_retirement(commit: bool) {
     }
     if matches!(route, Route::D3d12) {
         release_d3d12();
-        rsf_unity_package_sr_slots_released(12);
         return;
     }
     let mut locked = host_lock();
-    if !vulkan {
-        if d3d11_state::release() {
-            rsf_unity_package_sr_slots_released(11);
-        } else if let Some(host) = locked.as_ref()
-            && let Some(log) = host.0.log
-        {
-            unsafe {
-                rsf_game_sys::rsf_game_log_guarded(Some(log), host.0.user, c"Unity DX11 bridge release refused without a checked close; its graphics remain owned.".as_ptr())
-            };
-        }
+    if !vulkan
+        && !d3d11_state::release()
+        && let Some(host) = locked.as_ref()
+        && let Some(log) = host.0.log
+    {
+        unsafe {
+            rsf_game_sys::rsf_game_log_guarded(Some(log), host.0.user, c"Unity DX11 bridge release refused without a checked close; its graphics remain owned.".as_ptr())
+        };
     }
     *locked = None;
     rsf_unity_frames_release();

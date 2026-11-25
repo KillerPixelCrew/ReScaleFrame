@@ -1320,7 +1320,7 @@ unsafe extern "C" fn rsf_callback_host_status_get(output: *mut HostStatus) -> u3
     }
     with_host(|host| {
         let s = host.lock();
-        let serving = s.plan.enabled != 0 && (s.backend == RSF_SR_SPATIAL || s.accepted != 0);
+        let planned = s.plan.enabled != 0;
         let status = HostStatus {
             struct_size: size_of::<HostStatus>() as u32,
             requested_backend: if s.automatic {
@@ -1328,7 +1328,7 @@ unsafe extern "C" fn rsf_callback_host_status_get(output: *mut HostStatus) -> u3
             } else {
                 s.requested_backend
             },
-            active_backend: if serving { s.backend } else { RSF_SR_NONE },
+            active_backend: if planned { s.backend } else { RSF_SR_NONE },
             enabled: s.plan.enabled,
             result: s.last_result,
             render_width: s.plan.render_width,
@@ -1351,6 +1351,34 @@ pub(super) fn settings_get() -> Option<Settings> {
 
 pub(super) fn settings_apply(request: &Settings) -> Option<i32> {
     with_host(|host| host.settings_apply(request))
+}
+
+// The checks a settings request passes, as the RDR2 entry checks one, for a host offering
+// `sr_choices`.
+fn settings_valid(request: &Settings, sr_choices: u32) -> bool {
+    let backend = if request.sr_backend == RSF_SR_AUTO {
+        RSF_SR_NONE
+    } else {
+        request.sr_backend
+    };
+    let sharpening = sharpening_of(request, &sharpening_policy::defaults());
+    sharpening_policy::valid(&sharpening)
+        && request.sr_enabled <= 1
+        && request.status_overlay <= 1
+        && request.latency <= 2
+        && request.fg_enabled <= 3
+        && (1..=15).contains(&request.generated_frames)
+        && leaf::dlss_preset_valid(request.dlss_preset) != 0
+        && request.sr_backend <= 31
+        && sr_choices & (1 << request.sr_backend) != 0
+        && accepts_backend_quality(backend, request.sr_quality)
+        && fg_choice::allowed(request.fg_backend, RSF_FG_BACKEND_ALL)
+}
+
+// Whether a request without a host would pass any host's checks, so an adapter can refuse it
+// before the host it will be applied by exists.
+pub(super) fn settings_acceptable(request: &Settings) -> bool {
+    settings_valid(request, rsf_game_sys::RSF_SR_CHOICES_ALL)
 }
 
 // A settings request as the panel change it amounts to against what is saved.
@@ -1402,26 +1430,8 @@ impl Host {
     // applied and saved exactly as the same change made in the panel. FG mode is fg_enabled's
     // stored value (0 off, 1 fixed, 2 auto, 3 dynamic).
     fn settings_apply(&self, request: &Settings) -> i32 {
-        const INVALID: i32 = -1;
-        let backend = if request.sr_backend == RSF_SR_AUTO {
-            RSF_SR_NONE
-        } else {
-            request.sr_backend
-        };
-        let sharpening = sharpening_of(request, &sharpening_policy::defaults());
-        if !sharpening_policy::valid(&sharpening)
-            || request.sr_enabled > 1
-            || request.status_overlay > 1
-            || request.latency > 2
-            || request.fg_enabled > 3
-            || !(1..=15).contains(&request.generated_frames)
-            || leaf::dlss_preset_valid(request.dlss_preset) == 0
-            || request.sr_backend > 31
-            || self.sr_choices & (1 << request.sr_backend) == 0
-            || !accepts_backend_quality(backend, request.sr_quality)
-            || !fg_choice::allowed(request.fg_backend, RSF_FG_BACKEND_ALL)
-        {
-            return INVALID;
+        if !settings_valid(request, self.sr_choices) {
+            return -1;
         }
         let mut fg = FgStatus {
             struct_size: size_of::<FgStatus>() as u32,
