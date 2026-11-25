@@ -23,12 +23,12 @@ use crate::sys::{
 use rsf_game_sys::backend_result::{
     FEATURE_FAILED, INIT_FAILED, INVALID_ARGUMENT, NEEDS_RESTART, NOT_READY, OK,
 };
+use rsf_game_sys::vendor_paths::VendorPaths;
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
     RSF_GAME_CPU_INPUT_UNFRAMED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_RENDER_WINDOW,
     rsf_game_cpu_event, rsf_game_render_pass as Pass,
 };
-use rsf_game_sys::vendor_paths::VendorPaths;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 #[cfg(test)]
 use std::mem::MaybeUninit;
@@ -291,7 +291,6 @@ fn session_seed() -> u64 {
 unsafe fn read_sized<T: Copy>(value: *const T) -> Option<T> {
     unsafe { has_capacity(value) }.then(|| unsafe { value.read() })
 }
-
 
 fn lock(pipeline: &Pipeline) -> Option<MutexGuard<'_, State>> {
     // Graphics-owner calls are serialized by contract. A concurrent or reentrant call is refused

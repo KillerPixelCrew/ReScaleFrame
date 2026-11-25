@@ -10,9 +10,9 @@ use rsf_game_sys::ffi_util::lock_or_recover;
 // The carrier already loaded the Runtime. The plugin target links its import library.
 use crate::sys::{
     RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_SR_AUTO, RSF_SR_CHOICES_ALL,
-    rsf_backend_result, rsf_callback_host_start, rsf_callback_host_stop,
-    rsf_fg_choice_get, rsf_fg_choice_start, rsf_fg12_capture_outputs, rsf_fg12_install,
-    rsf_fg12_setup, rsf_native_fg_options, rsf_overlay_saved_options_unregister,
+    rsf_backend_result, rsf_callback_host_start, rsf_callback_host_stop, rsf_fg_choice_get,
+    rsf_fg_choice_start, rsf_fg12_capture_outputs, rsf_fg12_install, rsf_fg12_setup,
+    rsf_native_fg_options, rsf_overlay_saved_options_unregister,
 };
 use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION_V2, RSF_RENDER_FRONTEND_ABI_VERSION,
@@ -203,7 +203,6 @@ unsafe extern "C" fn accept_window(_: *mut c_void, window: *mut c_void) -> c_int
     let length = unsafe { GetClassNameW(window, name.as_mut_ptr(), name.len() as i32) };
     c_int::from(length > 0 && unity_window_class(&name[..length as usize]))
 }
-
 
 /// Backend for the next start: the saved preference, else [UnitySR] FrameGeneration, offering
 /// every implemented provider. 0 is Off.

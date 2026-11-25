@@ -84,10 +84,7 @@ mod tests {
 
     #[test]
     fn long_path_prefixes_are_removed() {
-        assert_eq!(
-            xess(c"\\\\?\\D:\\RSF\\").as_c_str(),
-            c"D:\\RSF\\xess"
-        );
+        assert_eq!(xess(c"\\\\?\\D:\\RSF\\").as_c_str(), c"D:\\RSF\\xess");
         assert_eq!(
             xess(c"\\\\?\\UNC\\server\\share/rsf").as_c_str(),
             c"\\\\server\\share\\rsf\\xess"

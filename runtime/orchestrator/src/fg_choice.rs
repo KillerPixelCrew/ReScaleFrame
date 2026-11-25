@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 use crate::settings_store::{rsf_settings_store_read_integer, rsf_settings_store_write_integer};
+#[cfg(test)]
+use crate::sys::RSF_FG_BACKEND_FSR4 as FSR4;
 use crate::sys::{
     RSF_FG_BACKEND_ALL as PROVIDERS, RSF_FG_BACKEND_AUTO as AUTO, rsf_fg_choice as Choice,
 };
-#[cfg(test)]
-use crate::sys::RSF_FG_BACKEND_FSR4 as FSR4;
 use crate::sys::{
     RSF_FG_BACKEND_DLSS as DLSS, RSF_FG_BACKEND_FSR3 as FSR3, RSF_FG_BACKEND_XESS as XESS,
 };

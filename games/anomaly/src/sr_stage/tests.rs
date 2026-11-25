@@ -1224,7 +1224,6 @@ fn vendor_directories_sit_beside_the_ini() {
     );
 }
 
-
 #[test]
 fn a_device_reset_rereads_srscale_from_the_kept_ini() {
     let driver = Stage::new();

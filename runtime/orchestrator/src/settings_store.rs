@@ -692,8 +692,8 @@ pub(crate) fn refused(request: &Settings, sr_choices: u32) -> u32 {
         RSF_RENDER_SETTINGS_REFUSED_LATENCY as LATENCY,
         RSF_RENDER_SETTINGS_REFUSED_OVERLAY as OVERLAY,
         RSF_RENDER_SETTINGS_REFUSED_PRESET as PRESET,
-        RSF_RENDER_SETTINGS_REFUSED_QUALITY as QUALITY, RSF_RENDER_SETTINGS_REFUSED_SR as SR,
-        RSF_RENDER_SETTINGS_REFUSED_SHARPENING as SHARPENING,
+        RSF_RENDER_SETTINGS_REFUSED_QUALITY as QUALITY,
+        RSF_RENDER_SETTINGS_REFUSED_SHARPENING as SHARPENING, RSF_RENDER_SETTINGS_REFUSED_SR as SR,
     };
     use rsf_game_sys::{RSF_OVERLAY_MAX_GENERATED_FRAMES, RSF_SR_AUTO};
     let has = |mask: u32, bit: u32| bit < u32::BITS && mask & (1 << bit) != 0;
@@ -704,9 +704,18 @@ pub(crate) fn refused(request: &Settings, sr_choices: u32) -> u32 {
     };
     let sharpening = sharpening_of(request, &sharpening_policy::defaults());
     [
-        (request.sr_enabled <= 1 && has(sr_choices, request.sr_backend), SR),
-        (has(crate::sr_choices::sr_quality(backend), request.sr_quality), QUALITY),
-        (crate::streamline_sr::preset_valid(request.dlss_preset), PRESET),
+        (
+            request.sr_enabled <= 1 && has(sr_choices, request.sr_backend),
+            SR,
+        ),
+        (
+            has(crate::sr_choices::sr_quality(backend), request.sr_quality),
+            QUALITY,
+        ),
+        (
+            crate::streamline_sr::preset_valid(request.dlss_preset),
+            PRESET,
+        ),
         (
             request.fg_enabled <= RSF_FG_DYNAMIC
                 && crate::fg_choice::allowed(request.fg_backend, RSF_FG_BACKEND_ALL),
@@ -782,17 +791,35 @@ mod tests {
         for backend in [RSF_SR_XESS, RSF_SR_SPATIAL, RSF_SR_AUTO] {
             assert_eq!(ultra(backend), 0);
         }
-        assert_eq!(check(|s| s.sr_quality = 6), RSF_RENDER_SETTINGS_REFUSED_QUALITY);
-        assert_eq!(check(|s| s.dlss_preset = 1), RSF_RENDER_SETTINGS_REFUSED_PRESET);
+        assert_eq!(
+            check(|s| s.sr_quality = 6),
+            RSF_RENDER_SETTINGS_REFUSED_QUALITY
+        );
+        assert_eq!(
+            check(|s| s.dlss_preset = 1),
+            RSF_RENDER_SETTINGS_REFUSED_PRESET
+        );
         assert_eq!(check(|s| s.dlss_preset = 13), 0);
         assert_eq!(check(|s| s.fg_enabled = 4), RSF_RENDER_SETTINGS_REFUSED_FG);
         assert_eq!(check(|s| s.fg_backend = 2), RSF_RENDER_SETTINGS_REFUSED_FG);
         assert_eq!(check(|s| s.fg_backend = 0), RSF_RENDER_SETTINGS_REFUSED_FG);
-        assert_eq!(check(|s| s.generated_frames = 0), RSF_RENDER_SETTINGS_REFUSED_GENERATED);
-        assert_eq!(check(|s| s.generated_frames = 16), RSF_RENDER_SETTINGS_REFUSED_GENERATED);
+        assert_eq!(
+            check(|s| s.generated_frames = 0),
+            RSF_RENDER_SETTINGS_REFUSED_GENERATED
+        );
+        assert_eq!(
+            check(|s| s.generated_frames = 16),
+            RSF_RENDER_SETTINGS_REFUSED_GENERATED
+        );
         assert_eq!(check(|s| s.generated_frames = 15), 0);
-        assert_eq!(check(|s| s.latency = 3), RSF_RENDER_SETTINGS_REFUSED_LATENCY);
-        assert_eq!(check(|s| s.status_overlay = 2), RSF_RENDER_SETTINGS_REFUSED_OVERLAY);
+        assert_eq!(
+            check(|s| s.latency = 3),
+            RSF_RENDER_SETTINGS_REFUSED_LATENCY
+        );
+        assert_eq!(
+            check(|s| s.status_overlay = 2),
+            RSF_RENDER_SETTINGS_REFUSED_OVERLAY
+        );
         assert_eq!(
             check(|s| s.sharpening_sharpness = f32::NAN),
             RSF_RENDER_SETTINGS_REFUSED_SHARPENING
@@ -804,7 +831,10 @@ mod tests {
         // A host's own SR limit narrows what is offered.
         let mut xess = valid;
         xess.sr_backend = RSF_SR_XESS;
-        assert_eq!(unsafe { rsf_render_settings_check(&xess, 1 << RSF_SR_DLSS) }, 1);
+        assert_eq!(
+            unsafe { rsf_render_settings_check(&xess, 1 << RSF_SR_DLSS) },
+            1
+        );
         assert_eq!(
             unsafe { rsf_render_settings_check(std::ptr::null(), RSF_SR_CHOICES_ALL) },
             u32::MAX

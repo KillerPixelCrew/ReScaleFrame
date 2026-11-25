@@ -1127,7 +1127,10 @@ fn frames_tab(ui: &mut Ui, stats: &Stats<'_>, intent: &mut Intent, controls: &mu
     }
 
     let usable = generation.available && !pending;
-    let status = if let Some(reason) = stats.fg_unavailable_reason.filter(|_| !generation.available) {
+    let status = if let Some(reason) = stats
+        .fg_unavailable_reason
+        .filter(|_| !generation.available)
+    {
         (reason.to_owned(), AMBER)
     } else if !generation.available {
         (

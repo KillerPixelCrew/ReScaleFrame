@@ -1598,7 +1598,13 @@ mod tests {
         for backend in [RSF_SR_XESS, RSF_SR_SPATIAL] {
             assert_ne!(offered(backend) & ULTRA_QUALITY, 0);
         }
-        for backend in [RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_AUTO] {
+        for backend in [
+            RSF_SR_DLSS,
+            RSF_SR_FSR2,
+            RSF_SR_FSR3,
+            RSF_SR_FSR4,
+            RSF_SR_AUTO,
+        ] {
             assert_eq!(offered(backend), RSF_OVERLAY_SR_QUALITY_STANDARD_MASK);
         }
     }
