@@ -65,7 +65,7 @@ FSR4 FG off RDNA 4 (`rsf_generation_fsr4_supported`, already present), any provi
 
 ## Follow-ups that could not be finished here
 
-1. Runtime-owned FSR1 for every D3D11 and D3D12 host. The engine scaler exists only in Unity (URP) and Godot.
+1. Done for D3D11 on `NightHammer1000/wave-d3d11` (b256fa81, the shared `sr12/easu.hlsl`) and for D3D12 on `NightHammer1000/wave-d3d12` (81c2319c). Original note: Runtime-owned FSR1 for every D3D11 and D3D12 host. The engine scaler exists only in Unity (URP) and Godot.
    Design: a spatial provider (EASU then the shared RCAS) beside the FSR/XeSS providers. It needs colour and
    output size only, no depth, motion or jitter, so every host already supplies its input. Anchors:
    `sr_session.rs:235` and `dlss_pipeline.rs` `select_backend` accept ids 1..5 only; `sr_bridge`/`d3d12_sr/*` need
