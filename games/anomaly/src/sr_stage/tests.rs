@@ -596,8 +596,8 @@ fn options_parse_like_the_native_reader() {
             ("SRCutAngle", "30deg"),
             ("SRStageCaptureCount", "99"),
             ("SRStageCaptureInterval", "0"),
-            // Spatial is the engine's own scaler, which X-Ray has not.
-            ("SRBackend", "6"),
+            // No backend has id 8.
+            ("SRBackend", "8"),
             ("SRQuality", "4"),
         ]
     });
@@ -1464,8 +1464,11 @@ mod win32 {
             ),
             (false, 5, 1, 6)
         );
-        set(w!("SRBackend"), w!("6"));
+        set(w!("SRBackend"), w!("8"));
         assert_eq!(read().settings.backend, BACKEND_AUTO);
+        // FSR1 is the Runtime's own EASU pass.
+        set(w!("SRBackend"), w!("6"));
+        assert_eq!(read().settings.backend, 6);
         // FSR2 is served like the other FidelityFX providers.
         set(w!("SRBackend"), w!("2"));
         assert_eq!(read().settings.backend, 2);

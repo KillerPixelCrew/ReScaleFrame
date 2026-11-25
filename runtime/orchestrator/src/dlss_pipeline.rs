@@ -31,7 +31,7 @@ use crate::sys::{
     RSF_D3D11_FORMAT_RG32_FLOAT, RSF_D3D11_FORMAT_RGBA16_FLOAT, RSF_D3D11_USAGE_DEFAULT,
     rsf_d3d11_texture_desc as TextureDesc,
 };
-use crate::sys::{RSF_DLSS_ABI_VERSION, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_XESS};
+use crate::sys::{RSF_DLSS_ABI_VERSION, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_SPATIAL, RSF_SR_XESS};
 use crate::sys::{
     RSF_DLSS_PIPELINE_ABI_VERSION as ABI, rsf_dlss_pipeline_frame as Frame,
     rsf_motion_decode_params as DecodeParams,
@@ -154,6 +154,21 @@ impl Range {
             max: output,
         }
     }
+
+    /// FSR1 accepts the same and plans its published ratios.
+    fn spatial(output: [u32; 2], quality: u32) -> Self {
+        let [width, height] = crate::spatial_d3d11::plan(output, quality);
+        Self {
+            width,
+            height,
+            ..Self::alternate(output)
+        }
+    }
+}
+
+/// The backends this pipeline serves: the vendors' and the Runtime's own FSR1.
+fn served(backend: u32) -> bool {
+    matches!(backend, RSF_SR_DLSS..=RSF_SR_XESS | RSF_SR_SPATIAL)
 }
 
 /// Fields read or written from other threads.
@@ -272,6 +287,8 @@ struct Owned {
     clouds_reported: bool,
     fidelity: Raw,
     fidelity_failed: bool,
+    // The Runtime's FSR1 pass, built when Spatial is selected.
+    spatial: Raw,
     transport: Raw,
     transport_failed: bool,
     transport_reported: bool,
@@ -319,6 +336,7 @@ impl Owned {
             clouds_reported: false,
             fidelity: null_mut(),
             fidelity_failed: false,
+            spatial: null_mut(),
             transport: null_mut(),
             transport_failed: false,
             transport_reported: false,
@@ -747,10 +765,14 @@ impl Pipeline {
             if !owned.fidelity.is_null() {
                 leaf::fidelity_destroy(owned.fidelity);
             }
+            if !owned.spatial.is_null() {
+                leaf::spatial_destroy(owned.spatial);
+            }
             if !owned.transport.is_null() {
                 leaf::transport_destroy(owned.transport);
             }
             owned.fidelity = null_mut();
+            owned.spatial = null_mut();
             owned.transport = null_mut();
             owned.transport_failed = false;
             owned.transport_reported = false;
@@ -801,7 +823,7 @@ impl Pipeline {
             return INVALID;
         }
         let setup = unsafe { &*setup };
-        if !(RSF_SR_DLSS..=RSF_SR_XESS).contains(&backend)
+        if !served(backend)
             || (backend == RSF_SR_DLSS
                 && (setup.streamline_directory_utf8.is_null()
                     || unsafe { *setup.streamline_directory_utf8 } == 0))
@@ -873,7 +895,7 @@ impl Pipeline {
         self.shared().choices = crate::sr_choices::sr_backends(
             unsafe { crate::d3d11_device_identity::device_vendor(device) },
             crate::sr_choices::package_has(packages),
-            false,
+            true,
         );
         let [width, height] = [setup.output_width, setup.output_height];
         let mut range = Range::alternate([width, height]);
@@ -885,6 +907,9 @@ impl Pipeline {
                 }
                 Err(result) => result,
             }
+        } else if backend == RSF_SR_SPATIAL {
+            range = Range::spatial([width, height], setup.quality);
+            self.prepare_spatial(owned)
         } else {
             unsafe {
                 self.select_alternate(owned, backend, [width, height], setup.quality, &mut range)
@@ -1220,6 +1245,17 @@ impl Pipeline {
         let evaluated = if backend == RSF_SR_DLSS {
             o.dlss_evaluation_attempted = true;
             unsafe { leaf::fg_evaluate(context, &dlss) }
+        } else if backend == RSF_SR_SPATIAL {
+            let jitter = camera.jitter_pixels.map(f32::to_bits);
+            unsafe {
+                leaf::spatial_run(
+                    o.spatial,
+                    context,
+                    frame.scene_color,
+                    o.output(),
+                    [render, [ow, oh], jitter],
+                )
+            }
         } else {
             // The legacy adapter takes canonical UV. The decode's own output, with no scale from
             // the caller, is current-minus-previous NDC with y up.
@@ -1242,6 +1278,7 @@ impl Pipeline {
         if evaluated == 0 {
             let mut generation = dlss;
             if backend != RSF_SR_DLSS
+                && backend != RSF_SR_SPATIAL
                 && unsafe {
                     rsf_sr_legacy_fg_inputs(
                         o.alternate,
@@ -1962,7 +1999,9 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             }
             (shared.backend, shared.output)
         };
-        let range = if backend != RSF_SR_DLSS {
+        let range = if backend == RSF_SR_SPATIAL {
+            Range::spatial(output, quality)
+        } else if backend != RSF_SR_DLSS {
             let mut range = Range::alternate(output);
             if unsafe {
                 rsf_sr_legacy_select(
@@ -2028,6 +2067,8 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
                 Ok(plan) => plan,
                 Err(result) => return result,
             };
+        } else if backend == RSF_SR_SPATIAL {
+            range = Range::spatial([width, height], quality);
         } else {
             let (mut result, created) = unsafe { self.create_alternate(o, width, height) };
             next_alternate = created.cast();
@@ -2080,6 +2121,18 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             "output resized to {width}x{height}; backend {backend} plans {}x{}",
             range.width, range.height
         ));
+        OK
+    }
+
+    // Builds the FSR1 pass once; a device without the shader compiler refuses Spatial.
+    fn prepare_spatial(&self, o: &mut Owned) -> i32 {
+        if o.spatial.is_null() {
+            o.spatial = unsafe { leaf::spatial_create(o.device()) };
+        }
+        if o.spatial.is_null() {
+            self.say("FSR1 could not build its EASU pass; keeping the active backend");
+            return RESOURCE_FAILED;
+        }
         OK
     }
 
@@ -2160,7 +2213,7 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         } else {
             backend
         };
-        if !(RSF_SR_DLSS..=RSF_SR_XESS).contains(&backend) {
+        if !served(backend) {
             return INVALID;
         }
         let (output, quality) = {
@@ -2187,6 +2240,9 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
                 unsafe { self.close_dlss(o) };
             }
             result
+        } else if backend == RSF_SR_SPATIAL {
+            range = Range::spatial(output, quality);
+            self.prepare_spatial(o)
         } else {
             unsafe { self.select_alternate(o, backend, output, quality, &mut range) }
         };

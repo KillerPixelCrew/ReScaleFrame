@@ -468,11 +468,11 @@ fn validate_setup(setup: &rsf_d3d11_host_setup, services: &rsf_game_host_service
 
 impl Host {
     // The SR backends the panel offers on `vendor`'s adapter: the Runtime's answer from the packages
-    // beside it. This host has no scaler of its own to add, and keeps no list.
+    // beside it, and FSR1, which the pipeline serves itself. This host keeps no list.
     fn sr_offer(&self, vendor: u32) -> u32 {
         let text = &self.text;
         let packages = [&text.streamline, &text.fidelityfx, &text.xess].map(|text| directory(text));
-        sr_backends(Some(vendor), package_has(packages), false)
+        sr_backends(Some(vendor), package_has(packages), true)
     }
 
     fn new(setup: &rsf_d3d11_host_setup, upstream: rsf_game_host_services) -> Option<Self> {
@@ -744,7 +744,8 @@ impl Host {
         let mut defaults = rsf_render_settings {
             struct_size: size_of::<rsf_render_settings>() as u32,
             abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
-            sr_enabled: u32::from(sr_choices != 0),
+            // On by default only where Auto finds a vendor provider; FSR1 is a choice, not a default.
+            sr_enabled: u32::from(selected != 0),
             sr_backend: selected,
             fg_backend: FG_BACKEND_AUTO,
             generated_frames: 1,

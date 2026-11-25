@@ -3,7 +3,8 @@
 use crate::d3d11_device_identity::device_vendor;
 use crate::sr_choices::{directory, package_has, sr_backends};
 use rsf_game_sys::{
-    RSF_D3D11_SR_ADMISSION_ABI_VERSION, RSF_SR_AUTO as AUTO, rsf_d3d11_sr_admission as Admission,
+    RSF_D3D11_SR_ADMISSION_ABI_VERSION, RSF_SR_AUTO as AUTO, RSF_SR_SPATIAL as SPATIAL,
+    rsf_d3d11_sr_admission as Admission,
 };
 use std::ffi::CStr;
 
@@ -41,13 +42,15 @@ unsafe extern "C" fn rsf_d3d11_sr_admit(request: *mut Admission) -> i32 {
         };
         Some(vendor)
     };
-    // The adapter's limit applies to providers; Auto follows whatever provider is left.
-    let concrete = sr_backends(vendor, package_has(directories), false)
+    // The adapter's limit applies to providers and the pipeline's own FSR1; Auto follows
+    // whatever vendor provider is left and never picks FSR1.
+    let concrete = sr_backends(vendor, package_has(directories), true)
         & !(1 << AUTO)
         & request.backend_choices;
-    request.offered_backends = concrete | (u32::from(concrete != 0) << AUTO);
+    let providers = concrete & !(1 << SPATIAL) != 0;
+    request.offered_backends = concrete | (u32::from(providers) << AUTO);
     request.selected_backend = match vendor {
-        None if concrete != 0 => AUTO,
+        None if providers => AUTO,
         None => 0,
         Some(vendor) => select(vendor, request.requested_backend, concrete),
     };
@@ -82,8 +85,14 @@ mod tests {
         };
         // An adapter that passes the contract's "no limit" gets the common set before any device.
         let open = admit(rsf_game_sys::RSF_SR_CHOICES_ALL);
-        assert_eq!(open.offered_backends, COMMON);
+        assert_eq!(open.offered_backends, COMMON | (1 << SPATIAL));
         assert_eq!(open.selected_backend, AUTO);
+        // FSR1 alone is offered without Auto, which would find no provider.
+        let fsr1 = admit(1 << SPATIAL);
+        assert_eq!(
+            (fsr1.offered_backends, fsr1.selected_backend),
+            (1 << SPATIAL, 0)
+        );
         // A limit of its own narrows it, Auto with it only when a provider is left.
         assert_eq!(
             admit(1 << RSF_SR_XESS).offered_backends,

@@ -48,9 +48,13 @@ fn the_panel_offers_the_common_set_and_greys_what_the_machine_lacks() {
     use crate::sr_choices::{COMMON, Packages};
     let packages = Packages::all("d3d11-host");
     let fixture = Fixture::rooted(packages.0.to_str().unwrap());
-    // NVIDIA: every provider and Auto. AMD: the same minus DLSS, which needs the vendor.
-    assert_eq!(fixture.host.sr_offer(0x10de), COMMON);
-    assert_eq!(fixture.host.sr_offer(0x1002), COMMON & !(1 << RSF_SR_DLSS));
+    // NVIDIA: every provider, Auto and the pipeline's FSR1. AMD: the same minus DLSS.
+    let fsr1 = 1 << rsf_game_sys::RSF_SR_SPATIAL;
+    assert_eq!(fixture.host.sr_offer(0x10de), COMMON | fsr1);
+    assert_eq!(
+        fixture.host.sr_offer(0x1002),
+        (COMMON | fsr1) & !(1 << RSF_SR_DLSS)
+    );
     // A host feeding generation offers every provider and Auto; one without offers none.
     assert_eq!(fg_choices(true, false), RSF_FG_CHOICES_ALL);
     assert_eq!(fg_choices(false, false), 0);
@@ -60,8 +64,8 @@ fn the_panel_offers_the_common_set_and_greys_what_the_machine_lacks() {
         fg_choices(true, true),
         (1 << FG_BACKEND_FSR3) | (1 << FG_BACKEND_FSR4)
     );
-    // No package files: nothing is offered, and Auto with it.
-    assert_eq!(Fixture::new().host.sr_offer(0x10de), 0);
+    // No package files: only FSR1, which needs none; no Auto.
+    assert_eq!(Fixture::new().host.sr_offer(0x10de), fsr1);
 }
 
 thread_local! {

@@ -196,6 +196,33 @@ pub(super) unsafe fn fidelity_run(
     unsafe { rsf_colour_fidelity_run(pass.cast(), context, scene, output, depth, inverted, jitter) }
 }
 
+pub(super) unsafe fn spatial_create(device: Raw) -> Raw {
+    unsafe { ID3D11Device::from_raw_borrowed(&device) }
+        .and_then(crate::spatial_d3d11::Spatial::new)
+        .map_or(null_mut(), |pass| Box::into_raw(Box::new(pass)).cast())
+}
+
+pub(super) unsafe fn spatial_run(
+    pass: Raw,
+    context: Raw,
+    source: Raw,
+    target: Raw,
+    extents: [[u32; 2]; 3],
+) -> i32 {
+    let Some(pass) = (unsafe { pass.cast::<crate::spatial_d3d11::Spatial>().as_ref() }) else {
+        return INVALID;
+    };
+    if unsafe { pass.run(context, source, target, extents) } {
+        0
+    } else {
+        RESOURCE_FAILED
+    }
+}
+
+pub(super) unsafe fn spatial_destroy(pass: Raw) {
+    drop(unsafe { Box::from_raw(pass.cast::<crate::spatial_d3d11::Spatial>()) });
+}
+
 pub(super) unsafe fn fidelity_destroy(pass: Raw) {
     unsafe { rsf_colour_fidelity_destroy(pass.cast()) };
 }

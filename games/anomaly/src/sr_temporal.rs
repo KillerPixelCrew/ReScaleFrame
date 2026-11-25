@@ -48,6 +48,7 @@ fn backend_name(backend: u32) -> &'static str {
         FSR3 => "FSR3",
         FSR4 => "FSR4",
         XESS => "XeSS",
+        6 => "FSR1",
         AUTO => "Auto",
         _ => "none",
     }
@@ -1382,10 +1383,10 @@ mod settings_tests {
                 RSF_ANOMALY_SR_ADAPTER_QUALITIES,
             )
         };
-        for backend in [DLSS, 2, FSR3, FSR4, XESS, AUTO] {
+        for backend in [DLSS, 2, FSR3, FSR4, XESS, 6, AUTO] {
             assert_eq!(admit(Settings { backend, ..current }).backend, backend);
         }
-        for backend in [0, 6, 40] {
+        for backend in [0, 8, 40] {
             assert_eq!(admit(Settings { backend, ..current }).backend, XESS);
         }
         for quality in 0..5 {
@@ -1396,7 +1397,7 @@ mod settings_tests {
         }
         let actual = admit(Settings {
             enabled: false,
-            backend: 6,
+            backend: 8,
             quality: 5,
             preset: 3,
         });

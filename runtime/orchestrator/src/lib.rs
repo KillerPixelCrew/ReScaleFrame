@@ -267,6 +267,8 @@ mod sampler_bias;
 mod sdk_module;
 #[cfg(windows)]
 mod settings_store;
+#[cfg(windows)]
+mod spatial_d3d11;
 #[cfg(all(windows, any(test, feature = "test-fixtures")))]
 use rsf_game_sys::shader_hash;
 #[cfg(windows)]

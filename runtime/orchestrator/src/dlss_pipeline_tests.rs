@@ -319,6 +319,27 @@ pub(super) unsafe extern "C" fn fidelity_run(
     1
 }
 pub(super) unsafe extern "C" fn fidelity_destroy(_: Raw) {}
+pub(super) unsafe fn spatial_create(_: Raw) -> Raw {
+    call("spatial_create");
+    handle(0x4400)
+}
+pub(super) unsafe fn spatial_run(
+    pass: Raw,
+    _: Raw,
+    source: Raw,
+    target: Raw,
+    [input, output, jitter]: [[u32; 2]; 3],
+) -> i32 {
+    let [x, y] = jitter.map(f32::from_bits);
+    call(format!(
+        "spatial {:x} {:x}->{:x} {}x{}->{}x{} jitter {x},{y}",
+        pass as usize, source as usize, target as usize, input[0], input[1], output[0], output[1]
+    ));
+    0
+}
+pub(super) unsafe fn spatial_destroy(_: Raw) {
+    call("spatial_destroy");
+}
 pub(super) unsafe extern "C" fn sharpen_destroy(_: Raw) {}
 pub(super) unsafe extern "C" fn transport_create(_: Raw) -> Raw {
     if with(|world| world.transport) {
@@ -528,7 +549,11 @@ fn the_pipeline_resolves_auto_among_the_common_set_its_packages_serve() {
     let device = fake();
     // Whether the start itself succeeds is not the question: the offer outlives a refusal.
     unsafe { pipeline.start(device, &request) };
-    assert_eq!(pipeline.shared().choices, COMMON);
+    // The pipeline serves FSR1 itself, beside the packages' providers.
+    assert_eq!(
+        pipeline.shared().choices,
+        COMMON | (1 << rsf_game_sys::RSF_SR_SPATIAL)
+    );
 }
 
 #[test]
@@ -1238,4 +1263,54 @@ fn dlss_motion_scale_reaches_the_previous_feature_location() {
         assert!((dense - previous).abs() < 1e-6);
     }
     assert_eq!(dlss_motion_scale(0.5, false, false), 0.5);
+}
+
+#[test]
+fn spatial_serves_fsr1_from_the_runtime_kernel() {
+    let pipeline = Pipeline::new();
+    PIPE.set(&pipeline);
+    let device = fake();
+    assert_eq!(
+        unsafe { pipeline.start_backend(device, &setup(), RSF_SR_SPATIAL) },
+        OK
+    );
+    let state = status(&pipeline);
+    // Balanced is FSR1's 1.7 at 1280x720.
+    assert_eq!(
+        (state.backend, state.render_width, state.render_height),
+        (RSF_SR_SPATIAL, 752, 423)
+    );
+    assert_eq!(calls("spatial_create"), 1);
+    let camera = camera();
+    with(|world| world.calls.clear());
+    assert_eq!(run(&pipeline, &frame(&camera, [752, 423])), OK);
+    let output = pipeline.output_texture() as usize;
+    let spatial = format!("spatial 4400 {SCENE:x}->{output:x} 752x423->1280x720 jitter 0.25,-0.25");
+    let order = with(|world| {
+        let at = |name: &str| world.calls.iter().position(|call| call.starts_with(name));
+        (at("decode_create"), at(&spatial))
+    });
+    assert!(
+        matches!(order, (Some(decode), Some(easu)) if decode < easu),
+        "{order:?}"
+    );
+    // No vendor evaluates; FG still receives the frame's inputs.
+    assert_eq!(
+        with(|world| (world.frames.len(), world.captures.len())),
+        (0, 1)
+    );
+    let (mut width, mut height) = (0, 0);
+    assert_eq!(
+        unsafe { pipeline.set_quality(4, &mut width, &mut height) },
+        OK
+    );
+    assert_eq!((width, height), (426, 240));
+    assert_eq!(
+        unsafe { pipeline.select_backend(RSF_SR_SPATIAL, &mut width, &mut height) },
+        OK
+    );
+    assert_eq!(calls("spatial_create"), 0, "the pass is built once");
+    assert_eq!(unsafe { pipeline.stop() }, OK);
+    assert_eq!(calls("spatial_destroy"), 1);
+    PIPE.set(ptr::null());
 }
