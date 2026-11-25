@@ -90,16 +90,20 @@ the FSR4 lease admission are unchanged.
   servable providers (SR FSR3 always, DLSS with Streamline, XeSS with a device created with the XeSS
   requirements, FSR4 with its build, graph handoff and interop device; FG FSR3 always, XeSS with its
   build, interop device and primary window), so Auto never picks a provider admission refuses.
-- DLSS-G is not offered to FG Auto. Its presenter's retirement after native secondary-window use
-  still ends in `0xc0000005` in driver queue destruction
-  ([DLSS lifecycle investigation](../../docs/research/godot-vulkan-dlss-fg.md)), and the presenter for the
-  resolved provider exists even with FG mode off, so offering it would make the fault reachable from
-  default settings. It stays an explicit opt-in until secondary-window retirement is proven safe.
-  FSR4 FG is not offered either (its admission asks a provider probe).
+- DLSS-G (with the Streamline session) is offered to FG Auto only while no native secondary window
+  can be in use, a fact the engine reports: the boot capability `RSF_VKHOST_EMBEDDED_WINDOWS` (the
+  module sends it when `display/window/subwindows/embed_subwindows` is on) and, for a Window that
+  forces a native one, `rsf_vkhost_secondary_window` from `rsfg_vk_foreign_call`, which holds for the
+  session. A DLSS-G presenter that coexisted with a native secondary window still ends the process in
+  `vkDestroyDevice` with `0xc0000005` ([DLSS lifecycle investigation](../../docs/research/godot-vulkan-dlss-fg.md)),
+  and Auto's presenter exists with FG off, so the core host decides this, not the integration.
+  While Auto passes over DLSS-G on an adapter that prefers it, the status `reason` is
+  `RSF_VKHOST_REASON_AUTO_WITHOUT_DLSSG`. An explicit DLSS-G request is unchanged. FSR4 FG is not
+  offered to Auto (its admission asks a provider probe).
 
 | Adapter and facts | SR Auto | FG Auto |
 | --- | --- | --- |
-| NVIDIA, Streamline session started | DLSS | FSR3 (DLSS-G not offered) |
+| NVIDIA, Streamline session started | DLSS | DLSS-G with embedded windows and none native reported, else FSR3 |
 | Intel, XeSS device | XeSS | FSR3, then XeSS once interop and the primary window exist |
 | CPU device type | none: spatial fallback and a refused frame | FSR3 |
 | AMD, unknown, no facts | FSR3 | FSR3 |
@@ -138,7 +142,7 @@ What still has to be C++, and why:
 | --- | --- |
 | Engine module `motion.cpp`, `graph.cpp`, `d3d12.cpp`, `vulkan.cpp`, `bridge.cpp` | Godot camera matrix math (a Rust port would have to reproduce Godot's `Projection` and `Transform3D` inverses bit for bit) and the previous camera transform, projection and jump distance; native texture handles, packets and Vulkan image descriptions; the motion resolve pass and shader; the Vulkan graph scope; the D3D12 and Vulkan driver patches; and the singleton's Dictionary parser (kept separate from `gdextension/runtime.rs`'s checked parser pending a compatibility review, because Variant conversions differ in integer type and range checks). |
 
-Residuals: DLSS-G stays out of Vulkan FG Auto (above); the Godot D3D12 leaves still pass software as
+Residuals: DLSS-G leaves Vulkan FG Auto while native secondary windows can be in use (above); the Godot D3D12 leaves still pass software as
 false; the motion readback's extent check against a velocity override; D3D12 fixed SR context inputs
 (setup ABI 1 planning, inverted depth, the custom DLSS engine identity and its flag) and the capture
 record mapping from the pass could move into the owner's request records; the addon (`settings.gd`,

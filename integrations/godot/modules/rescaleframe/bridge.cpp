@@ -258,7 +258,8 @@ void configure_apply_scaling(void *context, uint32_t mode, float scale) {
 bool configure_viewport(RID viewport, const Dictionary *options, const rsf_godot_settings *typed) {
     ConfigureContext context{options, typed, viewport};
     const rsf_godot_configure_facts facts{uint32_t(viewport.is_valid()),
-        uint32_t(OS::get_singleton()->get_current_rendering_driver_name() == "vulkan")};
+        uint32_t(OS::get_singleton()->get_current_rendering_driver_name() == "vulkan"),
+        uint32_t(bool(GLOBAL_GET("display/window/subwindows/embed_subwindows")))};
     const rsf_godot_configure_callbacks callbacks{&context, configure_is_root, configure_parse,
         configure_report_window, configure_native, configure_queue_primary, configure_apply_scaling};
     return rsf_godot_host_configure(&facts, &callbacks) != 0;
@@ -338,7 +339,8 @@ namespace RSFGodot {
 void boot(bool headless) {
     const bool enabled_setting = GLOBAL_DEF("rescaleframe/enabled", false);
     const rsf_godot_boot_facts facts{uint32_t(enabled_setting), uint32_t(headless), uint32_t(Engine::get_singleton()->is_editor_hint()),
-        uint32_t(OS::get_singleton()->get_current_rendering_driver_name() == "vulkan")};
+        uint32_t(OS::get_singleton()->get_current_rendering_driver_name() == "vulkan"),
+        uint32_t(bool(GLOBAL_GET("display/window/subwindows/embed_subwindows")))};
     const rsf_godot_boot_callbacks callbacks{boot_load, rsf_godot_native_capabilities, boot_start, boot_rejected, boot_attach, boot_session, shutdown_native};
     rsf_godot_host_boot(&facts, &callbacks);
 }

@@ -107,6 +107,10 @@ struct State {
     graphics: rsf_srvk_setup,
     shutdown_pending: bool,
     graph_handoff: bool,
+    /// The engine opens no native secondary window unless it reports one.
+    embedded_windows: bool,
+    /// The engine reported a native secondary window's WSI this session.
+    secondary_window: bool,
     streamline_ready: bool,
     capture: capture::Capture,
     /// The Runtime SR session and the request it was opened for.
@@ -175,13 +179,23 @@ impl State {
             | choice(fsr4, RSF_SR_FSR4)
     }
 
-    /// The FG providers offered to Auto: FSR3, and XeSS with its build, the interop device and the
-    /// primary window. DLSS-G stays an explicit opt-in (its presenter's retirement after native
-    /// secondary window use still ends in an access violation, integrations/godot/NATIVE.md) and
-    /// FSR4 FG needs a provider probe that Auto does not trigger.
+    /// The FG providers offered to Auto: FSR3; XeSS with its build, the interop device and the
+    /// primary window; DLSS-G with the Streamline session while no native secondary window can be
+    /// in use (`auto_without_dlssg`). FSR4 FG needs a provider probe that Auto does not trigger.
     fn fg_choices(&self, receipt: &DeviceReceipt) -> u32 {
         let xess = cfg!(feature = "xess-fg-vk") && receipt.interop && !self.primary_window.is_null();
-        choice(true, RSF_FG_BACKEND_FSR3) | choice(xess, RSF_FG_BACKEND_XESS)
+        let dlss = self.streamline_ready && !self.auto_without_dlssg();
+        choice(true, RSF_FG_BACKEND_FSR3)
+            | choice(xess, RSF_FG_BACKEND_XESS)
+            | choice(dlss, RSF_FG_BACKEND_DLSS)
+    }
+
+    /// A DLSS-G presenter that coexisted with a native secondary window ends the process with an
+    /// access violation in vkDestroyDevice (docs/research/godot-vulkan-dlss-fg.md, root cause
+    /// open), and Auto's presenter exists with FG off, so Auto passes over DLSS-G unless the engine
+    /// embeds its secondary windows and has reported none. An explicit DLSS-G request stands.
+    fn auto_without_dlssg(&self) -> bool {
+        !self.embedded_windows || self.secondary_window
     }
 
     /// `settings`' SR and FG providers with Auto resolved by the Runtime's adapter policy among
@@ -382,11 +396,19 @@ extern "C" fn rsf_vkhost_resolver() -> Option<VkProc> {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_vkhost_capabilities(flags: u32) -> i32 {
     let mut state = state();
-    if booted() || flags & !RSF_VKHOST_GRAPH_HANDOFF != 0 {
+    if booted() || flags & !(RSF_VKHOST_GRAPH_HANDOFF | RSF_VKHOST_EMBEDDED_WINDOWS) != 0 {
         return 0;
     }
     state.graph_handoff = flags & RSF_VKHOST_GRAPH_HANDOFF != 0;
+    state.embedded_windows = flags & RSF_VKHOST_EMBEDDED_WINDOWS != 0;
     1
+}
+
+/// From then on in this session FG Auto passes over DLSS-G; a presenter it resolved to DLSS-G is
+/// recreated at its next acquire.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_vkhost_secondary_window() {
+    state().secondary_window = true;
 }
 
 /// The directories, Streamline and XeSS initialization and the creation resolver of a new
@@ -416,6 +438,7 @@ unsafe extern "C" fn rsf_vkhost_boot(setup: *const rsf_vkhost_setup) -> i32 {
     state.status.fg_result = backend_result::NOT_SUPPORTED;
     state.diagnostics = 0;
     state.primary_window = ptr::null_mut();
+    state.secondary_window = false;
     state.frame = 0;
     state.explicit = false;
     state.streamline_ready = false;
@@ -552,7 +575,20 @@ unsafe extern "C" fn rsf_vkhost_status_get(output: *mut Status) -> c_int {
     if output.is_null() {
         return 0;
     }
-    let mut value = state().status;
+    let mut value = {
+        let state = state();
+        let mut value = state.status;
+        // The overlay's FG reason when Auto would have chosen DLSS-G.
+        let adapter = creation::render_receipt().adapter.unwrap_or_default();
+        if state.settings.fg_backend == RSF_FG_BACKEND_AUTO
+            && state.streamline_ready
+            && state.auto_without_dlssg()
+            && rsf_fg_default_backend(adapter.vendor, adapter.software) == RSF_FG_BACKEND_DLSS
+        {
+            value.reason = RSF_VKHOST_REASON_AUTO_WITHOUT_DLSSG;
+        }
+        value
+    };
     let mut latency = rsf_latencyvk_status {
         struct_size: size_of::<rsf_latencyvk_status>() as u32,
         abi_version: RSF_LATENCYVK_ABI_VERSION,
@@ -1202,5 +1238,49 @@ impl Sr<'_> {
             record.camera.far_plane,
             record.camera.vertical_fov_radians,
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use creation::Adapter;
+
+    const NVIDIA: u32 = 0x10de;
+
+    fn resolved(state: &State, fg_backend: u32) -> u32 {
+        let receipt = DeviceReceipt {
+            adapter: Some(Adapter {
+                vendor: NVIDIA,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let settings = Settings {
+            fg_backend,
+            ..default_settings()
+        };
+        state.providers(&settings, &receipt).1
+    }
+
+    #[test]
+    fn auto_passes_over_dlssg_only_while_native_secondary_windows_can_be_in_use() {
+        let mut state = State {
+            streamline_ready: true,
+            ..Default::default()
+        };
+        // An engine that did not report embedded windows: today's Godot module and any other.
+        assert_eq!(resolved(&state, RSF_FG_BACKEND_AUTO), RSF_FG_BACKEND_FSR3);
+        assert!(state.auto_without_dlssg());
+        state.embedded_windows = true;
+        assert_eq!(resolved(&state, RSF_FG_BACKEND_AUTO), RSF_FG_BACKEND_DLSS);
+        state.secondary_window = true;
+        assert_eq!(resolved(&state, RSF_FG_BACKEND_AUTO), RSF_FG_BACKEND_FSR3);
+        // DLSS-G stays an explicit choice in every case.
+        assert_eq!(resolved(&state, RSF_FG_BACKEND_DLSS), RSF_FG_BACKEND_DLSS);
+        // Without the Streamline session Auto never offers DLSS-G.
+        state.secondary_window = false;
+        state.streamline_ready = false;
+        assert_eq!(resolved(&state, RSF_FG_BACKEND_AUTO), RSF_FG_BACKEND_FSR3);
     }
 }

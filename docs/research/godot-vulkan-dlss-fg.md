@@ -687,3 +687,49 @@ in. No owned GPU, debugger, REA or process handle remains live. The useful secon
 debugger minidump is 266,556 bytes; its redundant first dump was removed after
 extracting the fault metadata. The conditional full current-package lifecycle
 pair was not run because the preserved-E2EE candidate pair failed.
+
+## FG Auto while the secondary-window fault is open (25 November 2026)
+
+The exclusion moved from the Godot integration into the Runtime's Vulkan host
+(`runtime/orchestrator/src/vulkan_host.rs`, `auto_without_dlssg`) and narrowed to the fact the
+evidence above names: FG Auto passes over DLSS-G while a native secondary window can be in use in
+the session. The engine reports that fact. `RSF_VKHOST_EMBEDDED_WINDOWS` at boot says it draws its
+subwindows into the primary window (the Godot module sends it when
+`display/window/subwindows/embed_subwindows` is on); `rsf_vkhost_secondary_window` says a native
+secondary swapchain was created or destroyed anyway (Godot reports it from `rsfg_vk_foreign_call`)
+and holds for the session. An explicit DLSS-G request is unchanged, and while Auto passes over
+DLSS-G on an adapter that prefers it the host status carries
+`RSF_VKHOST_REASON_AUTO_WITHOUT_DLSSG` for the overlay's FG reason. Unverified on a device: a Window
+that forces a native secondary while an Auto DLSS-G presenter exists coexists with it until the next
+acquire recreates the primary as FSR3, which is the pattern the fault needs.
+
+### Follow-up: the native-secondary Streamline scope
+
+Candidate fix, not implemented or device-tested; the root cause in the driver is still unknown.
+
+1. `runtime/vulkan/streamline/sdk-fixes/prepare.py`, in the `wrapper.cpp` section that adds
+   `rsfSlVulkanWithoutDlssGCall`: add a second thread-local flag (`rsfSuppressReflex`) with the same
+   nested RAII scope, a new export `rsfSlVulkanNativeSecondaryCall(callback, user)` that sets both
+   flags, and in each of the seven WSI hook loops a second skip line,
+   `if (rsfSuppressReflex && feature == sl::kFeatureReflex) continue;`, beside the DLSS-G one (the
+   recipe's count check of seven loops stays). Common hooks stay active. The scope must not take
+   `rsfLatencySwapchainMutex`: Reflex's own create/destroy notifications are the ones skipped, and
+   acquire and Present through the broker keep their existing lock.
+2. The lifecycle bridge (`runtime/vulkan/streamline/lifecycle/src/win32/bridge.rs`) resolves the new
+   export beside `rsfSlVulkanWithoutDlssGCall`; the Runtime gets `rsf_slvk_native_secondary` beside
+   `rsf_slvk_without_dlssg` (`vulkan_latency.rs`, `vulkan_fg_wsi.rs`), and Godot's
+   `rsfg_vk_foreign_call`, `rsfg_vk_wsi_call` and `rsfg_vk_native_present` use it for windows without
+   a presenter. `eng/patch-godot.py` then attaches `VkSwapchainLatencyCreateInfoNV` to the primary
+   only: with Reflex's before-create hook skipped for secondaries, its absence no longer makes Reflex
+   take the secondary as primary (the failure of the primary-only candidate above).
+3. Rebuild the SDK with `runtime/vulkan/streamline/build-sdk.ps1` (its Python steps under `py -3`), which
+   rewrites `streamline-sdk-build.json`; the receipt digest CMake checks
+   (`RSF_STREAMLINE_VK_DIGEST`, `verify-receipt.cmake`) and the release packaging inputs move to the
+   new build together, in one commit.
+4. Device proof, standard and Mono editors, strict API and synchronization validation: the
+   `dlss-secondary-shutdown` control (DLSS-G presenter, one visible native secondary window, quit at
+   source 265) and the full `fg_lifecycle` fixture (`eng/test-godot.ps1 -Scenario fg_lifecycle`) both
+   exit zero through `vkDestroyDevice` with clean validation, the Reflex log shows the primary kept
+   and no secondary notification, and PCL and Reflex counters on the primary are unchanged. Only
+   then delete `auto_without_dlssg`, `RSF_VKHOST_EMBEDDED_WINDOWS`'s use in Auto, the reason code and
+   this section's exclusion text.

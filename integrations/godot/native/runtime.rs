@@ -135,8 +135,13 @@ unsafe extern "C" fn rsfg_vk_wsi_call(callback: rsf_vk_wsi_call, user: Handle) -
     unsafe { rsf_slvk_without_dlssg(Some(wsi_call), std::ptr::from_mut(&mut call).cast()) }
 }
 
+/// The engine's own swapchain create or destroy for a window without a Runtime presenter: a native
+/// secondary window (or a primary whose presenter was refused, which needs no DLSS-G either).
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsfg_vk_foreign_call(callback: rsf_vk_wsi_call, user: Handle) -> i32 {
+    if vulkan_booted() {
+        unsafe { rsf_vkhost_secondary_window() };
+    }
     unsafe { rsf_slvk_without_dlssg(callback, user) }
 }
 

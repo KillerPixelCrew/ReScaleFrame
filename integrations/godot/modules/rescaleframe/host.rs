@@ -15,8 +15,9 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::{frame, primary};
 
-// api.h: RSF_GODOT_VK_GRAPH_HANDOFF. host.h checks the value.
+// api.h: RSF_GODOT_VK_GRAPH_HANDOFF and RSF_VKHOST_EMBEDDED_WINDOWS. host.h checks the values.
 const VK_GRAPH_HANDOFF: u32 = 1;
+const VK_EMBEDDED_WINDOWS: u32 = 2;
 // The requested SR before the first accepted `configure`, as the module's global started.
 const INITIAL_SR: u32 = 7;
 
@@ -27,6 +28,9 @@ pub struct BootFacts {
     headless: u32,
     editor: u32,
     vulkan: u32,
+    /// Godot draws its subwindows into the main window; a Window may still force a native one,
+    /// which the native DLL reports at its swapchain creation.
+    embedded_windows: u32,
 }
 
 /// Module loader and driver leaves for boot.
@@ -115,7 +119,7 @@ pub struct RenderCallbacks {
 }
 
 const _: () = {
-    assert!(size_of::<BootFacts>() == 16 && align_of::<BootFacts>() == 4);
+    assert!(size_of::<BootFacts>() == 20 && align_of::<BootFacts>() == 4);
     assert!(size_of::<BootCallbacks>() == 7 * size_of::<usize>());
     assert!(offset_of!(SettingsHead, sr_backend) == 8);
     assert!(offset_of!(SettingsHead, quality) == 12);
@@ -182,7 +186,12 @@ pub unsafe extern "C" fn rsf_godot_host_boot(
         if (callbacks.load)() == 0 {
             return;
         }
-        (callbacks.capabilities)(VK_GRAPH_HANDOFF);
+        let embedded = if facts.embedded_windows != 0 {
+            VK_EMBEDDED_WINDOWS
+        } else {
+            0
+        };
+        (callbacks.capabilities)(VK_GRAPH_HANDOFF | embedded);
         if (callbacks.start)(facts.vulkan) == 0 {
             (callbacks.rejected)();
             return;

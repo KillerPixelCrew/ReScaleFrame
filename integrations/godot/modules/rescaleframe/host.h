@@ -14,6 +14,7 @@ struct rsf_godot_boot_facts {
     uint32_t headless;        // the null display driver
     uint32_t editor;
     uint32_t vulkan;          // the OS rendering driver is vulkan
+    uint32_t embedded_windows; // display/window/subwindows/embed_subwindows
 };
 
 struct rsf_godot_boot_callbacks {
@@ -74,10 +75,10 @@ extern "C" void rsf_godot_host_render_begin(uint64_t source_frame_id, uint32_t g
 extern "C" void rsf_godot_host_render_size(uint64_t target, int32_t output_width, int32_t output_height,
     int32_t *internal, uint32_t (*status_extent)(rsf_godot_extent *out));
 
-static_assert(RSF_GODOT_VK_GRAPH_HANDOFF == 1, "host.rs mirrors the graph handoff capability");
+static_assert(RSF_GODOT_VK_GRAPH_HANDOFF == 1 && RSF_VKHOST_EMBEDDED_WINDOWS == 2, "host.rs mirrors the host capabilities");
 static_assert(offsetof(rsf_godot_settings, sr_backend) == 8 && offsetof(rsf_godot_settings, quality) == 12,
     "host.rs reads the settings prefix");
-static_assert(sizeof(rsf_godot_boot_facts) == 16 && alignof(rsf_godot_boot_facts) == 4,
+static_assert(sizeof(rsf_godot_boot_facts) == 20 && alignof(rsf_godot_boot_facts) == 4,
     "host.rs mirrors the boot facts");
 static_assert(sizeof(rsf_godot_boot_callbacks) == 7 * sizeof(void *), "host.rs mirrors the boot callbacks");
 static_assert(sizeof(rsf_godot_configure_facts) == 8 && alignof(rsf_godot_configure_facts) == 4,

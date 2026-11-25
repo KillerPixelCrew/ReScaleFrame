@@ -18,6 +18,14 @@
 #define RSF_VKHOST_SETTINGS_ABI_VERSION 2u
 /* rsf_vkhost_capabilities: the engine can split its graph recording (rsf_fsr4vk_handoff). */
 #define RSF_VKHOST_GRAPH_HANDOFF 1u
+/* rsf_vkhost_capabilities: the engine draws its secondary windows into the primary one and opens
+   no native secondary window unless it reports one (rsf_vkhost_secondary_window). */
+#define RSF_VKHOST_EMBEDDED_WINDOWS 2u
+/* rsf_vkhost_status.reason while FG Auto passes over DLSS-G because native secondary windows may
+   be in use: a DLSS-G presenter that coexisted with one ends the process in vkDestroyDevice
+   (docs/research/godot-vulkan-dlss-fg.md). DLSS-G stays selectable explicitly. Other values are
+   RSF_NATIVE_FG_REASON_*. */
+#define RSF_VKHOST_REASON_AUTO_WITHOUT_DLSSG 64u
 
 typedef struct rsf_vkhost_setup {
     uint32_t struct_size, abi_version;
@@ -89,6 +97,8 @@ int32_t rsf_vkhost_booted(void);
 rsf_vk_get_proc rsf_vkhost_resolver(void);
 /* The engine's primary window: the FG presenter's host window. */
 void rsf_vkhost_window(void* window);
+/* The engine created or destroyed a native secondary window's swapchain; holds for the session. */
+void rsf_vkhost_secondary_window(void);
 /* Admission, then the request; zero refuses and keeps the previous settings. */
 int32_t rsf_vkhost_configure(const rsf_vkhost_settings* settings);
 /* Writes the current settings; returns booted. */
