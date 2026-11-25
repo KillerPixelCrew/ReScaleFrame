@@ -8,7 +8,7 @@ pub const RSF_GODOT_ABI_VERSION: u32 = 3;
 pub const RSF_UNITY_SETTINGS_ABI_VERSION: u32 = 2;
 #[repr(C)]
 #[derive(PartialEq)]
-pub struct rsf_godot_settings {
+pub struct rsf_vkhost_settings {
     pub struct_size: u32,
     pub abi_version: u32,
     pub sr_backend: u32,
@@ -24,34 +24,34 @@ pub struct rsf_godot_settings {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_godot_settings"][::core::mem::size_of::<rsf_godot_settings>() - 100usize];
-    ["Alignment of rsf_godot_settings"][::core::mem::align_of::<rsf_godot_settings>() - 4usize];
-    ["Offset of field: rsf_godot_settings::struct_size"]
-        [::core::mem::offset_of!(rsf_godot_settings, struct_size) - 0usize];
-    ["Offset of field: rsf_godot_settings::abi_version"]
-        [::core::mem::offset_of!(rsf_godot_settings, abi_version) - 4usize];
-    ["Offset of field: rsf_godot_settings::sr_backend"]
-        [::core::mem::offset_of!(rsf_godot_settings, sr_backend) - 8usize];
-    ["Offset of field: rsf_godot_settings::quality"]
-        [::core::mem::offset_of!(rsf_godot_settings, quality) - 12usize];
-    ["Offset of field: rsf_godot_settings::dlss_preset"]
-        [::core::mem::offset_of!(rsf_godot_settings, dlss_preset) - 16usize];
-    ["Offset of field: rsf_godot_settings::fg_backend"]
-        [::core::mem::offset_of!(rsf_godot_settings, fg_backend) - 20usize];
-    ["Offset of field: rsf_godot_settings::fg_mode"]
-        [::core::mem::offset_of!(rsf_godot_settings, fg_mode) - 24usize];
-    ["Offset of field: rsf_godot_settings::generated_frames"]
-        [::core::mem::offset_of!(rsf_godot_settings, generated_frames) - 28usize];
-    ["Offset of field: rsf_godot_settings::latency_mode"]
-        [::core::mem::offset_of!(rsf_godot_settings, latency_mode) - 32usize];
-    ["Offset of field: rsf_godot_settings::frame_limit_us"]
-        [::core::mem::offset_of!(rsf_godot_settings, frame_limit_us) - 36usize];
-    ["Offset of field: rsf_godot_settings::gameplay"]
-        [::core::mem::offset_of!(rsf_godot_settings, gameplay) - 40usize];
-    ["Offset of field: rsf_godot_settings::sharpening"]
-        [::core::mem::offset_of!(rsf_godot_settings, sharpening) - 44usize];
+    ["Size of rsf_vkhost_settings"][::core::mem::size_of::<rsf_vkhost_settings>() - 100usize];
+    ["Alignment of rsf_vkhost_settings"][::core::mem::align_of::<rsf_vkhost_settings>() - 4usize];
+    ["Offset of field: rsf_vkhost_settings::struct_size"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, struct_size) - 0usize];
+    ["Offset of field: rsf_vkhost_settings::abi_version"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, abi_version) - 4usize];
+    ["Offset of field: rsf_vkhost_settings::sr_backend"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, sr_backend) - 8usize];
+    ["Offset of field: rsf_vkhost_settings::quality"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, quality) - 12usize];
+    ["Offset of field: rsf_vkhost_settings::dlss_preset"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, dlss_preset) - 16usize];
+    ["Offset of field: rsf_vkhost_settings::fg_backend"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, fg_backend) - 20usize];
+    ["Offset of field: rsf_vkhost_settings::fg_mode"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, fg_mode) - 24usize];
+    ["Offset of field: rsf_vkhost_settings::generated_frames"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, generated_frames) - 28usize];
+    ["Offset of field: rsf_vkhost_settings::latency_mode"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, latency_mode) - 32usize];
+    ["Offset of field: rsf_vkhost_settings::frame_limit_us"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, frame_limit_us) - 36usize];
+    ["Offset of field: rsf_vkhost_settings::gameplay"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, gameplay) - 40usize];
+    ["Offset of field: rsf_vkhost_settings::sharpening"]
+        [::core::mem::offset_of!(rsf_vkhost_settings, sharpening) - 44usize];
 };
-impl Default for rsf_godot_settings {
+impl Default for rsf_vkhost_settings {
     fn default() -> Self {
         let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
         unsafe {
@@ -60,6 +60,7 @@ impl Default for rsf_godot_settings {
         }
     }
 }
+pub type rsf_godot_settings = rsf_vkhost_settings;
 #[repr(C)]
 #[derive(PartialEq)]
 pub struct rsf_unity_package_settings {

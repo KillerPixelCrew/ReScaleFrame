@@ -47,14 +47,14 @@ generate("tests/ac7_graph_replay_abi.rs", "tests/ac7_graph_replay.h",
 # linked there (their C imports would come along), so it keeps these two settings records; the
 # shared records come from rsf_game_sys.
 generate("tests/engine_sharpening_abi.rs", "integrations/unity/native/package_state.h",
-         "rsf_(godot_settings|unity_package_settings)",
+         "rsf_(godot_settings|vkhost_settings|unity_package_settings)",
          "RSF_(GODOT_ABI_VERSION|GODOT_SETTINGS_ABI_VERSION|UNITY_SETTINGS_ABI_VERSION)",
          ["-include", "integrations/godot/native/api.h", "-Iruntime/orchestrator/include",
           "-Iruntime/contract/include", "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
           "-Iruntime/presentation/include", "-Isdk/game/include", "-Iintegrations/unity/include"],
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use rsf_game_sys::rsf_sharpening_options;",
-          "--with-derive-custom-struct", "rsf_(godot_settings|unity_package_settings)=PartialEq"])
+          "--with-derive-custom-struct", "rsf_(vkhost_settings|unity_package_settings)=PartialEq"])
 
 # hde64.h comes from the MinHook checkout CMake fetches (third_party/minhook/minhook.lock.json pins v1.3.4).
 hde = args.minhook / "src/hde/hde64.h"
