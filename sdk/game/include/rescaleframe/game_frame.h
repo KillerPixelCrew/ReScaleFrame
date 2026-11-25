@@ -53,7 +53,12 @@ typedef uint32_t rsf_frame_phase;
    a smeared menu, and reconstructing a video produces a soft one.
  *
  * UNKNOWN is not a failure and not a default to act on. A policy that treats unknown as flight will
- * eventually interpolate a cutscene, so the safe reading of unknown is the conservative one. */
+ * eventually interpolate a cutscene, so the safe reading of unknown is the conservative one.
+ *
+ * FLIGHT and GAMEPLAY are the same fact, interactive in-game rendering; FLIGHT keeps the name of the
+ * first game that reported it. The core treats them identically and new integrations report
+ * GAMEPLAY. BRIEFING, HANGAR and REPLAY are likewise one game's names: a game may report them, the
+ * core gives them no meaning beyond not being MENU, VIDEO, LOADING or UNKNOWN. */
 typedef uint32_t rsf_screen_class;
 #define RSF_SCREEN_UNKNOWN 0u
 #define RSF_SCREEN_MENU 1u

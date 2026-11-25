@@ -30,7 +30,8 @@ use rsf_game_sys::{
     RSF_GAME_CPU_SOURCE_ABORT, RSF_GAME_CPU_SOURCE_RESERVE, RSF_GAME_FRAME_ABI_VERSION,
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_FRAME,
     RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
-    RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW, rsf_camera_frame, rsf_frame_record,
+    RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW, RSF_SCREEN_FLIGHT, RSF_SCREEN_GAMEPLAY,
+    rsf_camera_frame, rsf_frame_record,
     rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_config, rsf_game_render_feedback,
 };
 use std::ffi::{CStr, CString, c_char, c_int};
@@ -60,7 +61,6 @@ const REFLEX_ON: u32 = 1;
 const REFLEX_BOOST: u32 = 2;
 const MAX_GENERATED_FRAMES: u32 = 15;
 const UI_MODE_BACKBUFFER_HUDLESS: u32 = 4;
-const SCREEN_GAMEPLAY: u32 = 8;
 const DXGI_PRESENT_TEST: u32 = 1;
 const SCENE_PRESENT_NONE: u32 = 0;
 const AUX_DEPTH_STENCIL: u32 = 0;
@@ -1082,7 +1082,7 @@ impl Host {
             let ready = unchanged_configuration
                 && pipeline_ready
                 && pass.camera_valid != 0
-                && pass.screen == SCREEN_GAMEPLAY;
+                && matches!(pass.screen, RSF_SCREEN_FLIGHT | RSF_SCREEN_GAMEPLAY);
             let pending =
                 self.capture.load(Ordering::Acquire) || unsafe { native::dump_requested() } != 0;
             g.capture_budget
