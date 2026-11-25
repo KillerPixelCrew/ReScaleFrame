@@ -163,17 +163,6 @@ pub(super) unsafe extern "C" fn hooked_temporal_sample_index(state: *mut c_void)
 
 static LAST_PHASES: AtomicU32 = AtomicU32::new(0);
 
-/// The rounded phase count clamped to 8..=255. A NaN from an empty rectangle keeps the stock
-/// eight phases.
-fn sample_phases(value: f64) -> u32 {
-    let rounded = value.round();
-    if rounded.is_nan() {
-        8
-    } else {
-        rounded.clamp(8.0, 255.0) as u32
-    }
-}
-
 pub(super) unsafe extern "C" fn hooked_visibility(
     renderer: *mut c_void,
     list: *mut c_void,
@@ -232,16 +221,15 @@ pub(super) unsafe extern "C" fn hooked_visibility(
             views[selected] = view;
             selected += 1;
             let (mut temporal_state, mut family, mut frame) = (0u64, 0u64, 0u32);
-            if read(view, 0x1410, &mut temporal_state)
+            // The plan's vendor phase count, within the engine's byte. One phase is a scaler that
+            // takes no jitter; the view keeps the engine's own sampling then.
+            let phases = config.jitter_phases.min(255);
+            if phases > 1
+                && read(view, 0x1410, &mut temporal_state)
                 && temporal_state != 0
                 && read(view, 0, &mut family)
                 && read(family, 0x68, &mut frame)
             {
-                let phases = sample_phases(
-                    8.0 * f64::from(config.output_width) * f64::from(config.output_height)
-                        / (f64::from(render[2].wrapping_sub(render[0]))
-                            * f64::from(render[3].wrapping_sub(render[1]))),
-                );
                 let mut owners = TEMPORAL_SAMPLE_OWNERS.get();
                 owners[selected - 1] = TemporalSampleOwner {
                     state: temporal_state,

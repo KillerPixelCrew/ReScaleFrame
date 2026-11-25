@@ -48,11 +48,12 @@ pub(crate) fn primary_renderer(renderer: u64, width: u32, height: u32) -> bool {
 }
 
 /// Fills the native view, family, frame, rectangles and mip bias of an initialized scope from a
-/// primary renderer.
+/// primary renderer. `mip_bias` is the plan's vendor texture LOD bias.
 pub(crate) fn primary_facts(
     renderer: u64,
     width: u32,
     height: u32,
+    mip_bias: f32,
     scope: &mut rsf_ac7_render_scope,
 ) -> Option<()> {
     let view = single_view(renderer)?;
@@ -69,12 +70,11 @@ pub(crate) fn primary_facts(
     scope.native_frame = u64::from(frame);
     scope.render_rect = render;
     scope.output_rect = output;
-    // UE4.18 lacks the temporal-upscale material mip policy.
+    // UE4.18 lacks the temporal-upscale material mip policy; the plan's vendor bias stands in.
     let render_width = i64::from(render[2]) - i64::from(render[0]);
     let output_width = i64::from(output[2]) - i64::from(output[0]);
     if render_width > 0 && render_width <= output_width {
-        scope.material_texture_mip_bias =
-            ((render_width as f32 / output_width as f32).log2() - 0.3).max(-2.0);
+        scope.material_texture_mip_bias = mip_bias;
     }
     Some(())
 }

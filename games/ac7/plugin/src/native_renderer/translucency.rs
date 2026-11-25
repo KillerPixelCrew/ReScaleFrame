@@ -317,6 +317,7 @@ fn primary_scope(
         key(renderer),
         config.output_width,
         config.output_height,
+        config.lod_bias,
         out,
     )
     .is_some()

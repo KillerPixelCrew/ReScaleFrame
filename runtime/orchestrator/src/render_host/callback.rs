@@ -200,14 +200,7 @@ fn host_from<'a>(user: *mut c_void) -> &'a Host {
 }
 
 fn empty_plan() -> Config {
-    Config {
-        struct_size: 0,
-        enabled: 0,
-        output_width: 0,
-        output_height: 0,
-        render_width: 0,
-        render_height: 0,
-    }
+    Config::plan(false, 0, [0, 0], [0, 0])
 }
 
 impl Host {
@@ -884,14 +877,7 @@ impl Host {
     // spatial path or prepare the vendor context. False ends this pass.
     fn prepare(&self, s: &mut State, commands: Handle, pass: &Pass) -> bool {
         s.attempted = true;
-        s.plan = Config {
-            struct_size: size_of::<Config>() as u32,
-            enabled: 0,
-            output_width: s.width,
-            output_height: s.height,
-            render_width: 0,
-            render_height: 0,
-        };
+        s.plan = Config::plan(false, 0, [s.width, s.height], [0, 0]);
         if s.automatic {
             let mut adapter = Adapter::default();
             let identified = unsafe { com_ref::owned(leaf::child_device(commands)) }
@@ -978,13 +964,16 @@ unsafe extern "C" fn configuration(owner: *mut c_void, output: *mut Config) -> c
     if !unsafe { has_capacity(output) } {
         return 0;
     }
-    let plan = host_from(owner).lock().plan;
-    unsafe {
-        output.write(Config {
-            struct_size: size_of::<Config>() as u32,
-            ..plan
-        })
+    let (plan, backend) = {
+        let s = host_from(owner).lock();
+        (s.plan, s.backend)
     };
+    // The plan with its backend's vendor sampling for the planned ratio.
+    let enabled = plan.enabled != 0;
+    let output_extent = [plan.output_width, plan.output_height];
+    let render_extent = [plan.render_width, plan.render_height];
+    let backend = if enabled { backend } else { 0 };
+    unsafe { output.write(Config::plan(enabled, backend, output_extent, render_extent)) };
     1
 }
 

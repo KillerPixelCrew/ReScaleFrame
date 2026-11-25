@@ -718,6 +718,14 @@ fn start_publishes_services_and_stop_retires_in_order() {
         1
     );
     assert_eq!((plan.enabled, plan.render_width), (1, 1280));
+    // The plan names its backend and that vendor's sampling for 1280 -> 1920.
+    let sampling = rsf_game_sys::sampling::vendor_sampling(plan.sr_backend, 1280, 1920);
+    assert_ne!(plan.sr_backend, 0);
+    assert_eq!(
+        (plan.jitter_phases, plan.lod_bias),
+        (sampling.phases, sampling.lod_bias)
+    );
+    assert_eq!(plan.jitter_phases, 18);
     let short = &mut plan as *mut Config;
     unsafe { short.cast::<u32>().write(8) };
     assert_eq!(

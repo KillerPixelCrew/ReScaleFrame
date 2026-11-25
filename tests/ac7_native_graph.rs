@@ -1133,6 +1133,7 @@ fn replay_graph(calls: &Calls, device: &ID3D11Device, immediate: &ID3D11DeviceCo
         output_height: 16,
         render_width: 7,
         render_height: 5,
+        ..rsf_game_render_config::request()
     };
     prepare_owned_views(owned_renderer.as_mut_ptr().cast(), &desired);
     let adjusted = rect(views.wrapping_add(0x70));

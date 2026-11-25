@@ -535,14 +535,7 @@ impl Host {
                     abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
                     ..zeroed_settings()
                 },
-                planned: rsf_game_render_config {
-                    struct_size: size_of::<rsf_game_render_config>() as u32,
-                    enabled: 0,
-                    output_width: 0,
-                    output_height: 0,
-                    render_width: 0,
-                    render_height: 0,
-                },
+                planned: rsf_game_render_config::request(),
                 report: fresh_report(),
             }),
             graphics: Mutex::new(Graphics::new()),
@@ -1059,13 +1052,15 @@ impl Host {
             && g.quality == settings.sr_quality
             && g.backend == backend
             && g.present_result == DLSS_OK;
-        self.shared().planned = rsf_game_render_config {
-            struct_size: size_of::<rsf_game_render_config>() as u32,
-            enabled: (ready && settings.sr_enabled != 0) as u32,
-            output_width: width,
-            output_height: height,
-            render_width: if ready { status.render_width } else { width },
-            render_height: if ready { status.render_height } else { height },
+        self.shared().planned = if ready {
+            rsf_game_render_config::plan(
+                settings.sr_enabled != 0,
+                backend,
+                [width, height],
+                [status.render_width, status.render_height],
+            )
+        } else {
+            rsf_game_render_config::plan(false, 0, [width, height], [width, height])
         };
         ready
     }

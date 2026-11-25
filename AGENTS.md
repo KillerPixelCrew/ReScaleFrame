@@ -280,7 +280,7 @@ Mechanics that the header and `tests/game-sdk/src/contract.rs` jointly enforce:
 - Extend structs by appending fields and bumping `RSF_GAME_ABI_VERSION`, never by reordering.
 - Plugin-returned strings are immutable, plugin-owned, and valid until the DLL unloads. Probe strings
   are borrowed for the duration of the call.
-- Current game ABI is 24. `game_renderer.h` defines leased rendering passes, CPU events and host
+- Current game ABI is 25. `game_renderer.h` defines leased rendering passes, CPU events and host
   services; `game_frame.h` defines frame/camera ABI 1. The older ABI 2 sketches in the representation
   plan are historical design, not the current contract. Native resource pointers cross under explicit
   callback leases; frame identity alone does not establish final Present ownership.

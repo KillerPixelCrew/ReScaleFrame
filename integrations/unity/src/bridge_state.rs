@@ -659,14 +659,7 @@ pub(crate) unsafe fn rsf_unity_frames_config(
     let Some(render_config) = services.render_config else {
         return 0;
     };
-    let mut host = rsf_game_render_config {
-        struct_size: size_of::<rsf_game_render_config>() as u32,
-        enabled: 0,
-        output_width: 0,
-        output_height: 0,
-        render_width: 0,
-        render_height: 0,
-    };
+    let mut host = rsf_game_render_config::request();
     // The host call runs without the state lock.
     if unsafe { render_config(services.user, &mut host) } == 0 {
         return 0;
@@ -1363,6 +1356,7 @@ mod tests {
             output_height: 1440,
             render_width: 1280,
             render_height: 720,
+            ..rsf_game_render_config::request()
         };
         let config = state.config(true, &host, 2560, 1440);
         assert_eq!(config.enabled, 1);

@@ -32,6 +32,8 @@ struct Owner {
     saved_ratios: [f32; 4],
     saved_lock: u32,
     last_ratios: [f32; 2],
+    /// The plan's vendor texture LOD bias for the sampler slots.
+    lod_bias: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -86,7 +88,7 @@ fn reconfigure(
     base: usize,
     output: [u32; 2],
     host: &rsf_game_host_services,
-) -> Option<[u32; 2]> {
+) -> Option<([u32; 2], rsf_game_render_config)> {
     if renderer_thread() != thread()
         || host.process_upscale.is_none()
         || host.render_config.is_none()
@@ -120,7 +122,9 @@ fn reconfigure(
     }
     let mut config = rsf_game_render_config::request();
     call_render_config(host, &mut config);
-    config.checked_render_extent(output)
+    config
+        .checked_render_extent(output)
+        .map(|render| (render, config))
 }
 
 pub(crate) fn configure(
@@ -135,7 +139,7 @@ pub(crate) fn configure(
     }
     let output = words::<2>(platform, pointer + 0x24)?;
     let previous = state().owner;
-    let Some(render) = reconfigure(platform, base, output, host) else {
+    let Some((render, plan)) = reconfigure(platform, base, output, host) else {
         if let Some(previous) = previous {
             // After restoring the saved fields, the native resolver can resume ownership.
             unsafe {
@@ -157,14 +161,17 @@ pub(crate) fn configure(
         render[0] as f32 / output[0] as f32,
         render[1] as f32 / output[1] as f32,
     ];
-    let phases = ((8.0 * f64::from(output[0]) * f64::from(output[0])
-        / (f64::from(render[0]) * f64::from(render[0]))) as u32)
-        .clamp(8, 256);
+    // The backend vendor's phase count; one phase is a scaler that takes no jitter.
+    let phases = plan.jitter_phases.max(1);
     let sample = frame % phases + 1;
-    let jitter = [
-        -2.0 * (halton(sample, 2) - 0.5) / render[0] as f32,
-        2.0 * (halton(sample, 3) - 0.5) / render[1] as f32,
-    ];
+    let jitter = if phases > 1 {
+        [
+            -2.0 * (halton(sample, 2) - 0.5) / render[0] as f32,
+            2.0 * (halton(sample, 3) - 0.5) / render[1] as f32,
+        ]
+    } else {
+        [0.0; 2]
+    };
     let (saved_ratios, saved_lock, prior) = if let Some(previous) = previous {
         (
             previous.saved_ratios,
@@ -194,6 +201,7 @@ pub(crate) fn configure(
         saved_ratios,
         saved_lock,
         last_ratios: ratios,
+        lod_bias: plan.lod_bias,
     });
     if changed {
         let _ = reset_history(platform, base);
@@ -245,6 +253,11 @@ pub(crate) fn extent(width: u32, height: u32) -> Option<[u32; 2]> {
         .owner
         .filter(|owner| owner.output == [width, height])
         .map(|owner| owner.render)
+}
+
+/// The texture LOD bias of the plan this adapter applies, or none while it applies none.
+pub(crate) fn lod_bias() -> f32 {
+    state().owner.map_or(0.0, |owner| owner.lod_bias)
 }
 
 pub(crate) fn record_per_frame_flags(session: u64, frame: u32, flags: u8) {

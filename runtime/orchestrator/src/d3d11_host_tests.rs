@@ -583,6 +583,14 @@ fn first_scene_lease_configures_and_evaluates() {
         (planned.enabled, planned.render_width, planned.output_width),
         (1, 32, 64)
     );
+    // The plan carries the running backend's vendor sampling at 2x: 32 phases.
+    let sampling = rsf_game_sys::sampling::vendor_sampling(planned.sr_backend, 32, 64);
+    assert_ne!(planned.sr_backend, 0);
+    assert_eq!(
+        (planned.jitter_phases, planned.lod_bias),
+        (sampling.phases, sampling.lod_bias)
+    );
+    assert_eq!(planned.jitter_phases, 32);
 }
 
 #[test]

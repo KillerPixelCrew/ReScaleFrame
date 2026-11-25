@@ -114,8 +114,8 @@ impl Binding {
             return None;
         }
         let mut request = self.sampler_request()?;
-        if let Some((rw, _)) = scene {
-            request.bias = (rw as f32 / width as f32).log2();
+        if scene.is_some() {
+            request.bias = resolution::lod_bias();
         } else {
             request.slot_mask = 0;
         }

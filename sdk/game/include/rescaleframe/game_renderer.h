@@ -189,6 +189,13 @@ typedef struct rsf_game_render_config {
     uint32_t output_height;
     uint32_t render_width;
     uint32_t render_height;
+    /* Game ABI 25. The SR backend the plan serves (RSF_SR_*, 0 for none) and its vendor's
+       sampling rule at this ratio (rsf_game_sys::sampling::vendor_sampling): the Halton(2,3)
+       jitter phases (1 means no jitter) and the texture LOD bias the engine's samplers add. The
+       integration applies both; it does not choose them. */
+    uint32_t sr_backend;
+    uint32_t jitter_phases;
+    float lod_bias;
 } rsf_game_render_config;
 /* Read on the engine producer thread. The host publishes a consistent settings snapshot. */
 typedef int (*rsf_game_render_config_fn)(void* user, rsf_game_render_config* config);

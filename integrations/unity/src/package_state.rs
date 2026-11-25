@@ -905,7 +905,10 @@ mod tests {
     ) -> u32 {
         let s = unsafe { *services };
         call(format!("prepare {}", s.session_id));
-        assert_eq!((s.struct_size, s.abi_version), (104, 24));
+        assert_eq!(
+            (s.struct_size, s.abi_version),
+            (104, rsf_game_sys::RSF_GAME_ABI_VERSION)
+        );
         // Its passes and CPU events come to the package first; its plan is the host's own.
         assert_eq!(s.user as usize, HOST_USER);
         assert!(
