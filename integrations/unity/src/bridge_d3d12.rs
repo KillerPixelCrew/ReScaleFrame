@@ -272,7 +272,15 @@ pub(crate) unsafe fn render_packet(
         let queue = unsafe { engine.queue.unwrap()() };
         // Unity synchronizes workers and flushes recorded lists before granting this event the queue.
         rsf_unity_frames_flush_sources(host, queue, &pass);
-        unsafe { host.render_pass.unwrap()(host.user, queue, &pass, 1) };
+        // A pending policy change reaches the Mono host here once the ring is idle. The managed
+        // adapter records scene packets only under the configuration it already has, so waiting
+        // for one can wait forever.
+        #[cfg(feature = "mono-plugin")]
+        let generation =
+            crate::bridge_state::rsf_unity_frames_idle_change(completed()).unwrap_or(0);
+        #[cfg(not(feature = "mono-plugin"))]
+        let generation = 0;
+        rsf_unity_frames_dispatch_d3d12(host, queue, &mut pass, generation);
     } else {
         let _ = unsafe { reconstruct(engine, host, device, packet, hudless) };
     }

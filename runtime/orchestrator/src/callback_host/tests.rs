@@ -831,6 +831,42 @@ fn preset_change_waits_for_its_drain_even_during_resize() {
 }
 
 #[test]
+fn a_spatial_switch_completes_on_the_drained_window_pass() {
+    reset();
+    let files = Files::new("spatial-window");
+    let setup = setup_v2(&files, RSF_SR_DLSS, 2);
+    let host = unsafe { describe(&setup.base) }.ok().unwrap();
+    let device = fake(null_mut());
+    let queue = fake(device);
+    let list = fake(device);
+    run(&host, list, &sr((1920, 1080)), true);
+    events();
+    window(
+        &host,
+        queue,
+        Some(Intent {
+            backend_changed: 1,
+            backend: RSF_SR_SPATIAL,
+            ..intent()
+        }),
+    );
+    assert_eq!(events(), ["fg window 5", "overlay", "policy 1 2"]);
+    assert_eq!(config(&host).enabled, 0);
+    // No scene pass follows: the engine records none while the plan is disabled.
+    with(|world| world.drained_generation = 42);
+    let mut drained = pass(RSF_GAME_RENDER_WINDOW, (1920, 1080), (0, 0));
+    drained.flags = RSF_GAME_RENDER_RECONFIGURE;
+    run(&host, queue, &drained, true);
+    assert_eq!(events(), ["destroy 1", "fg window 5", "overlay"]);
+    let plan = config(&host);
+    assert_eq!(
+        (plan.enabled, plan.render_width, plan.render_height),
+        (1, 902, 502)
+    );
+    assert_eq!(host.lock().backend, RSF_SR_SPATIAL);
+}
+
+#[test]
 fn quality_five_spatial_accepts_an_enable_only_change() {
     reset();
     let files = Files::new("spatial-enable");

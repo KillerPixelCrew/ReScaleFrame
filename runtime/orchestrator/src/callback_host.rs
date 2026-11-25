@@ -271,7 +271,14 @@ impl Host {
         }
         match pass.role {
             RSF_GAME_RENDER_FINAL_SCENE => unsafe { leaf::fg_hudless(commands, pass) },
-            RSF_GAME_RENDER_WINDOW => self.window(commands, pass),
+            RSF_GAME_RENDER_WINDOW => {
+                // The adapter delivers a drained change here too, so a switch never waits for a
+                // scene pass the engine only records under the old configuration.
+                if pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0 {
+                    self.reconfigure(&mut self.lock(), commands, pass);
+                }
+                self.window(commands, pass)
+            }
             RSF_GAME_RENDER_SR | RSF_GAME_RENDER_FG_INPUTS => {
                 let mut state = self.lock();
                 self.scene(&mut state, commands, pass);
@@ -562,8 +569,9 @@ impl Host {
         }
     }
 
-    // SR and generation-input passes on the adapter's recording thread.
-    fn scene(&self, s: &mut State, commands: Handle, pass: &Pass) {
+    // Applies a requested change on the pass that proves the earlier GPU work retired, and new
+    // output extents, then prepares the first pass after either. False ends this pass.
+    fn reconfigure(&self, s: &mut State, commands: Handle, pass: &Pass) -> bool {
         let camera = &pass.camera;
         let mut drained = pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0;
         if let (Some(adapter), Some(expected)) = (&self.policy_v2, s.requested_generation) {
@@ -572,7 +580,7 @@ impl Host {
                 && unsafe { (adapter.drained)(&mut generation) } != 0
                 && generation == expected;
             if !drained {
-                return;
+                return false;
             }
         }
         if (s.dirty && drained)
@@ -605,9 +613,16 @@ impl Host {
                     RSF_OVERLAY_SR_CHANGE_REFUSED
                 };
             }
-            if !prepared {
-                return;
-            }
+            return prepared;
+        }
+        true
+    }
+
+    // SR and generation-input passes on the adapter's recording thread.
+    fn scene(&self, s: &mut State, commands: Handle, pass: &Pass) {
+        let camera = &pass.camera;
+        if !self.reconfigure(s, commands, pass) {
+            return;
         }
         if pass.role == RSF_GAME_RENDER_FG_INPUTS && pass.camera_valid != 0 {
             if s.inputs.is_null()

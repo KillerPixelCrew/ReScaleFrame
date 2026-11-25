@@ -316,6 +316,15 @@ impl State {
         self.policy.pending.then_some(self.policy.generation)
     }
 
+    /// The pending change once no ring slot is in flight. Only the ring records with the host's
+    /// SR contexts; the pre-UI copies on Unity's own list do not, so they never hold it back.
+    #[cfg(any(test, feature = "mono-plugin"))]
+    fn idle_change(&self, completed: u64) -> Option<u32> {
+        let idle =
+            !self.submission_unknown && completed != u64::MAX && !self.any_in_flight(completed);
+        self.pending_change().filter(|_| idle)
+    }
+
     /// Clears the pending change once its generation is applied. A newer change stays pending.
     fn settle_change(&mut self, generation: u32) -> bool {
         let settled = self.policy.pending && self.policy.generation == generation;
@@ -732,6 +741,12 @@ pub(crate) fn rsf_unity_frames_pending_change() -> Option<u32> {
 #[cfg(not(feature = "mono-plugin"))]
 pub(crate) fn rsf_unity_frames_settle_change(generation: u32) -> bool {
     lock().settle_change(generation)
+}
+
+/// The pending change the Mono host may apply at the window event, once Unity's ring is idle.
+#[cfg(feature = "mono-plugin")]
+pub(crate) fn rsf_unity_frames_idle_change(completed: u64) -> Option<u32> {
+    lock().idle_change(completed)
 }
 
 pub(crate) fn rsf_unity_frames_admit_frame(
@@ -1189,6 +1204,24 @@ mod tests {
         assert!(state.settle_change(3));
         assert_eq!(state.pending_change(), None);
         assert!(!state.settle_change(3));
+    }
+
+    #[test]
+    fn a_change_is_idle_once_the_ring_retires_whatever_the_pre_ui_copies_do() {
+        let mut state = State::new();
+        let first = state.admit_frame(&packet(1), 0).unwrap();
+        assert!(state.submitted(&first, 10, &source(1)));
+        assert_eq!(state.idle_change(10), None, "nothing pending");
+        assert!(state.set_policy(1, 1, true));
+        let pending = state.pending_change();
+        assert_eq!(state.idle_change(9), None, "the ring slot is in flight");
+        // A pre-UI copy recorded every frame keeps a scene packet busy, not the window delivery.
+        assert!(state.record_source(&source(2), 20));
+        assert!(state.admit_frame(&packet(2), 10).is_none());
+        assert_eq!(state.idle_change(10), pending);
+        assert_eq!(state.idle_change(u64::MAX), None, "device removed");
+        state.submission_unknown = true;
+        assert_eq!(state.idle_change(10), None);
     }
 
     #[test]
