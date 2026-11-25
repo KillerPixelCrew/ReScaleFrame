@@ -23,6 +23,10 @@ static SLOT: AtomicUsize = AtomicUsize::new(0);
 /// The import the gate displaced.
 static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static ARMED: AtomicU8 = AtomicU8::new(NO_IMPORT);
+/// The gate's continuation, stored by `arm`. The naked gate is kept in every binary that links this
+/// archive, so it calls through this pointer: a direct reference would keep the plugin start, and
+/// with it the executable hash, in carriers that never arm the gate.
+static RESOLVE: AtomicUsize = AtomicUsize::new(0);
 
 const NO_IMPORT: u8 = 0;
 const HELD: u8 = 1;
@@ -104,6 +108,7 @@ pub(super) fn arm() {
         return;
     };
     let slot = base + rva;
+    RESOLVE.store(resolve as usize, Ordering::Release);
     let held = writable(slot, |cell| take(cell, gate_address())).flatten();
     if let Some(original) = held {
         ORIGINAL.store(original, Ordering::Release);
@@ -183,7 +188,7 @@ unsafe extern "system" fn gate() {
         "movdqu xmmword ptr [rsp + 0x50], xmm1",
         "movdqu xmmword ptr [rsp + 0x60], xmm2",
         "movdqu xmmword ptr [rsp + 0x70], xmm3",
-        "call {resolve}",
+        "call qword ptr [rip + {resolve}]",
         "mov rcx, [rsp + 0x20]",
         "mov rdx, [rsp + 0x28]",
         "mov r8, [rsp + 0x30]",
@@ -194,7 +199,7 @@ unsafe extern "system" fn gate() {
         "movdqu xmm3, xmmword ptr [rsp + 0x70]",
         "add rsp, 0x88",
         "jmp rax",
-        resolve = sym resolve,
+        resolve = sym RESOLVE,
     );
 }
 
