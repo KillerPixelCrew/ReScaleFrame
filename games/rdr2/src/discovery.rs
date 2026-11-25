@@ -2,9 +2,13 @@
 //! Signature discovery of every RDR2.exe site this adapter hooks, patches, calls or reads, and of
 //! the Social Club renderer's backbuffer gate.
 //!
-//! The first owner that needs a site (the ASI at attach, or the game plugin at prepare) copies the
-//! decrypted executable's code once and resolves each site from a pattern that is unique in its
-//! executable sections (rel32 branches and RIP displacements are wildcards). Globals resolve
+//! The ASI resolves the sites at attach, before it hooks anything. It copies the decrypted
+//! executable's code once and resolves each site from a pattern that is unique in its executable
+//! sections (rel32 branches and RIP displacements are wildcards). The game plugin, a separate module
+//! with its own table, takes the ASI's table through the ASI's `rsf_rdr2_asi_sites` export instead of
+//! scanning: by prepare the ASI has replaced the first bytes of the entries it hooks, so a scan of
+//! live code would no longer match them. Only without an ASI of the same site list (the research
+//! attach DLL, the fixtures) does the plugin scan itself. Globals resolve
 //! through the RIP-relative operand of an instruction that uses them; the API parameter must be the
 //! target of all four of its discovered reads. The FSR2 import slot comes from the import directory and the
 //! native-texture accessor from the renderer table. A missing or ambiguous site refuses by name,
@@ -425,8 +429,46 @@ fn refused(name: &'static str) -> impl Fn(Miss) -> String {
 
 static DISCOVERY: OnceLock<Result<[usize; SITES], String>> = OnceLock::new();
 
+/// The ASI's file name, fixed by its CMake output name.
+#[cfg(windows)]
+const ASI_MODULE: windows_sys::core::PCWSTR = windows_sys::core::w!("ReScaleFrame.RDR2.asi");
+
+#[cfg(windows)]
+type AsiSites = unsafe extern "C" fn(*mut usize, usize) -> usize;
+
+/// Copies the table this module resolved into `sites` (`capacity` entries) and returns its length;
+/// zero when nothing resolved yet or it does not fit. Every ASI hook is installed after
+/// [`admit`] resolved, so a table here was resolved from unhooked code. The plugin calls it through
+/// the export of the ASI's module definition (`asi.def`).
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_asi_sites(sites: *mut usize, capacity: usize) -> usize {
+    match DISCOVERY.get() {
+        Some(Ok(found)) if found.len() <= capacity => {
+            unsafe { std::ptr::copy_nonoverlapping(found.as_ptr(), sites, found.len()) };
+            found.len()
+        }
+        _ => 0,
+    }
+}
+
+/// The ASI's table, when it has the same site list as this module (the `research` feature adds
+/// sites).
+#[cfg(windows)]
+fn from_asi(export: AsiSites) -> Option<[usize; SITES]> {
+    let mut sites = [0; SITES];
+    (unsafe { export(sites.as_mut_ptr(), SITES) } == SITES).then_some(sites)
+}
+
 #[cfg(windows)]
 fn discover() -> Result<[usize; SITES], String> {
+    // The ASI asks its own export while it is still resolving, which answers nothing.
+    let asi = unsafe { windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ASI_MODULE) };
+    if let Some(sites) =
+        unsafe { rsf_game_sys::win32::typed_export(asi, c"rsf_rdr2_asi_sites") }.and_then(from_asi)
+    {
+        return Ok(sites);
+    }
     let base = unsafe { crate::platform::main_module() };
     let code =
         signature::mapped_sections(base, crate::platform::read_process_memory, |_, flags| {

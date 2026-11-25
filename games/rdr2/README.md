@@ -27,10 +27,15 @@ The engine resolution producer, complete HUD modes and native graphics-menu repl
 
 Detection requires the executable basename (ASCII case-insensitive) and the x64 PE machine; the
 hash is logged, not compared. Whether a build is usable is decided by site discovery
-(`src/discovery.rs`): the first owner that needs a site (the ASI at attach, the plugin at prepare)
-scans the decrypted executable once and resolves every hooked function, return address, called
-engine function and read global from a pattern that is unique in its code sections, with
-relocations and displacements as wildcards. The API parameter must be the target of all four of
+(`src/discovery.rs`): the ASI scans the decrypted executable once at attach, before it hooks
+anything, and resolves every hooked function, return address, called engine function and read
+global from a pattern that is unique in its code sections, with relocations and displacements as
+wildcards. The plugin does not scan live code, because the ASI has by then replaced the first
+bytes of the entries it hooks: it takes the ASI's table through the `rsf_rdr2_asi_sites` export
+(`src/asi.def`, found by the ASI's file name) when its length matches the plugin's site list, and
+scans itself only without an ASI (the research attach DLL, the fixtures). Every ASI hook is
+installed after the ASI resolved, so the exported table always comes from unhooked code; the sites
+the plugin hooks and verifies are ones the ASI leaves alone. The API parameter must be the target of all four of
 its reads, the FSR2 import slot comes from the import directory and the native-texture accessor
 from the renderer table. Each site re-matches its pattern in live memory before it is hooked,
 patched or called. A missing, ambiguous or changed site refuses and the log names it; ForceD3D12,

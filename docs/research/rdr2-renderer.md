@@ -1201,10 +1201,10 @@ Question: can the ASI and the game plugin find every RDR2.exe site without accep
 build 13773296, so an update that moves code keeps working and a real change still refuses?
 
 Approach: `games/rdr2/src/discovery.rs` holds one byte pattern per site, unique in the
-executable sections, with rel32 branches and RIP displacements as `??`. The first owner that needs
-a site (ForceD3D12 at ASI attach, or `renderer::prepare` in the plugin) copies the decrypted code
-sections of the loaded image once (unreadable pages stay zero) and resolves every pattern in one
-pass with the `rsf_game_sys::signature` scanner. Each site's pattern is matched again in live
+executable sections, with rel32 branches and RIP displacements as `??`. The ASI (ForceD3D12 at
+attach) copies the decrypted code sections of the loaded image once (unreadable pages stay zero)
+and resolves every pattern in one pass with the `rsf_game_sys::signature` scanner; the plugin takes
+that table (see the 25 November correction below). Each site's pattern is matched again in live
 memory before it is hooked, patched or called. The PE timestamp, SizeOfImage and file SHA-256 are
 logged and gate nothing; detection matches `RDR2.exe` by name. A missing, ambiguous or changed
 site refuses with its name ("RDR2 native sites refused: site 'scene blit' was not found."), and
@@ -1247,6 +1247,17 @@ without the `research` feature, to the RVAs recorded for 1.0.1491.50. It checks 
 pattern at its site, that the three postfx calls target the discovered output, and that the
 installed RDR2.exe is the dump's build. `social_club_sites_resolve_in_the_installed_renderer`
 finds `+4b70` and `+4b89` in the installed 2.4.0.240 renderer.
+
+Correction, 25 November 2026: the first game run refused at prepare ("site 'Social Club
+dispatcher' was not found", result -5) although the ASI had resolved every site. The plugin
+DLL has its own copy of the discovery table and scanned live code, but the ASI had by then
+replaced the first bytes of the seven settings entries and the Social Club dispatcher with
+MinHook's `jmp`, so their patterns no longer matched. The plugin now takes the ASI's table
+through the ASI's `rsf_rdr2_asi_sites` export (module definition `src/asi.def`) when its length
+equals the plugin's site list, and scans only without an ASI. `discovery::tests::
+the_plugin_takes_the_asi_table_over_hooked_entries` overwrites the eight hooked entries of the
+dump with a `jmp rel32`, shows the scan refusing by name, and checks the exported table and the
+plugin's verification of the sites it hooks itself.
 
 Startup cost and the loader lock: ForceD3D12 at ASI attach is the first owner that needs a site,
 so discovery runs in `DllMain` (`rsf_rdr2_asi_process_attach` -> `attach` -> `force_d3d12` ->
