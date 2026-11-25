@@ -295,10 +295,12 @@ extern "C" fn rsf_test_render_frontend() -> i32 {
         configuration_path: ini.as_ptr(),
         runtime_directory: directory.as_ptr(),
         configuration_section: section,
+        // Auto is a choice bit like every provider (RSF_SR_CHOICES_ALL); this host limits the rest.
         sr_backend_choices: (1 << RSF_SR_DLSS)
             | (1 << RSF_SR_FSR3)
             | (1 << RSF_SR_FSR4)
-            | (1 << RSF_SR_XESS),
+            | (1 << RSF_SR_XESS)
+            | (1 << RSF_SR_AUTO),
         engine_version_utf8: c"Fixture".as_ptr(),
         units_to_meters: 1.0,
         depth_inverted: 1,
