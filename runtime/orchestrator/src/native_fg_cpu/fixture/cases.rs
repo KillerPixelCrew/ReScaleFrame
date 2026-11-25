@@ -168,6 +168,41 @@ pub(super) fn run() -> i32 {
     submission(8, 0);
     assert!(send(fact(8, RSF_GAME_CPU_FRAME_END)));
     assert!(delivered(8).is_empty());
+
+    // Unity and Godot close a source's CPU frame on the producer thread before their render
+    // thread reaches it. A full token ring at the next begin cannot retire that source; only a
+    // newer source the render path reported proves an older one abandoned.
+    let closed = |source: u64| {
+        for stage in [
+            RSF_GAME_CPU_FRAME_BEGIN,
+            RSF_GAME_CPU_INPUT_SAMPLE,
+            RSF_GAME_CPU_SIMULATION_BEGIN,
+            RSF_GAME_CPU_SIMULATION_END,
+            RSF_GAME_CPU_FRAME_END,
+        ] {
+            assert!(send(fact(source, stage)));
+        }
+    };
+    let begin_with_full_ring = |source: u64| {
+        RETIRE_HOST.store(true, Relaxed);
+        TOKENS_FULL.store(true, Relaxed);
+        assert!(send(fact(source, RSF_GAME_CPU_FRAME_BEGIN)));
+        RETIRE_HOST.store(false, Relaxed);
+        TOKENS_FULL.store(false, Relaxed);
+    };
+    closed(20);
+    begin_with_full_ring(21);
+    assert!(HOST_ABORTS.lock().unwrap().is_empty());
+    assert!(snapshot(20).failed == 0 && snapshot(21).failed != 0);
+    assert!(send(fact(21, RSF_GAME_CPU_FRAME_END)));
+    latency_render(20, 1);
+    closed(22);
+    closed(23);
+    latency_render(23, 1);
+    begin_with_full_ring(24);
+    assert_eq!(*HOST_ABORTS.lock().unwrap(), [22]);
+    assert!(snapshot(22).failed != 0 && snapshot(20).failed == 0 && snapshot(24).failed == 0);
+    assert!(send(fact(24, RSF_GAME_CPU_FRAME_END)));
     platform::rsf_native_fg_reflex_ordering_set(1);
 
     latency_end_session(SESSION + 1);

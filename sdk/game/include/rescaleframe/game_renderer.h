@@ -202,6 +202,11 @@ typedef void (*rsf_game_render_pass_fn)(void* user, void* native_command_list,
 #define RSF_GAME_CPU_INPUT_SAMPLE 1u
 #define RSF_GAME_CPU_SIMULATION_BEGIN 2u
 #define RSF_GAME_CPU_SIMULATION_END 3u
+/* The producer thread has finished its work for the source, including recording and queueing its
+   rendering. It says nothing about submission or Present: a render thread that runs behind the
+   producer submits and presents the source later, and the Runtime observes both itself. The
+   Runtime retires an ended source as abandoned only when the engine flags RENDER_SKIPPED or the
+   render path has reported a newer source. */
 #define RSF_GAME_CPU_FRAME_END 4u
 #define RSF_GAME_CPU_INPUT_EVENT 5u
 /* After native BeginFrame was queued, before the engine's time update and input handling. */

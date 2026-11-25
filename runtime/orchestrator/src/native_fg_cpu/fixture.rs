@@ -30,6 +30,9 @@ static FAILURES: AtomicU32 = AtomicU32::new(0);
 static REBIND: AtomicBool = AtomicBool::new(false);
 static FAIL_MARKER: AtomicBool = AtomicBool::new(false);
 static RETIRE_HOST: AtomicBool = AtomicBool::new(false);
+// A full Streamline token ring: acquire refuses until a host abort frees a token.
+static TOKENS_FULL: AtomicBool = AtomicBool::new(false);
+static HOST_ABORTS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 
 struct State {
     blocked_source: u64,
@@ -227,7 +230,24 @@ pub(super) unsafe extern "C" fn status(out: *mut rsf_d3d11_present_status) -> i3
     0
 }
 pub(super) extern "C" fn acquire(_: u64) -> i32 {
+    if TOKENS_FULL.load(Relaxed) {
+        NOT_READY
+    } else {
+        0
+    }
+}
+// The fixture host is a stand-in address: its token ring is TOKENS_FULL and it reports no
+// latency status.
+pub(super) unsafe fn host_abort(host: *mut c_void, source: u64) -> i32 {
+    if host.is_null() {
+        return INVALID;
+    }
+    HOST_ABORTS.lock().unwrap().push(source);
+    TOKENS_FULL.store(false, Relaxed);
     0
+}
+pub(super) unsafe fn host_status(_: *mut c_void, _: *mut rsf_streamline_latency_status) -> i32 {
+    NOT_READY
 }
 pub(super) extern "C" fn pace(source: u64, owner: u32, expected: u64) -> i32 {
     verify(owner == XELL && expected == generation());
@@ -289,12 +309,11 @@ pub(super) extern "C" fn owned_window_thread(key: u64) -> u32 {
 /// presentation bridge, and the production Streamline host and Anti-Lag leaves.
 pub(super) mod leaf {
     pub(in crate::native_fg_cpu) use super::super::platform::leaf::{
-        allows_fg, create_antilag, host_abort, host_presented, host_reflex, host_reset,
-        host_status, host_token, input,
+        allows_fg, create_antilag, host_presented, host_reflex, host_reset, host_token, input,
     };
     pub(in crate::native_fg_cpu) use super::{
-        abort, acquire, backend, device, generation, has_owner, host, host_retire, marker, pace,
-        route_receipt as receipt, status, vendor as adapter_vendor,
+        abort, acquire, backend, device, generation, has_owner, host, host_abort, host_retire,
+        host_status, marker, pace, route_receipt as receipt, status, vendor as adapter_vendor,
     };
 
     pub(in crate::native_fg_cpu) const FIXTURE_OWNED_WINDOW_THREAD: Option<

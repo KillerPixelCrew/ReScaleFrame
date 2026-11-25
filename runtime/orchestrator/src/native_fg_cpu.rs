@@ -135,6 +135,8 @@ pub(crate) struct Frame {
     pub(crate) first_submission: u64,
     pub(crate) first_view: u64,
     pub(crate) submitted: bool,
+    // The render path reported this source: a render callback or its Present.
+    rendered: bool,
     pub(crate) render_complete: bool,
     pub(crate) paced: bool,
     pub(crate) prospective: bool,
@@ -180,12 +182,18 @@ impl Frame {
         self.markers[marker as usize] != Attempt::Idle
     }
 
-    fn unsubmitted_before(self, source: Source) -> bool {
+    /// Whether `proof`, a newer source of this session whose submission or Present the render
+    /// path reported, proves this source abandoned. FRAME_END closes only the producer's CPU
+    /// frame: a render thread that runs behind it submits and presents ended sources later, in
+    /// source order. So an ended source is retired only behind a newer reported one, never
+    /// because a newer source began on the producer thread.
+    fn unsubmitted_before(self, proof: Source) -> bool {
         self.id != 0
-            && self.id < source.id
-            && self.session == source.session
+            && self.id < proof.id
+            && self.session == proof.session
             && !self.failed
             && !self.submitted
+            && !self.rendered
             && !self.attempted(SUBMIT_START)
             && !self.pacing_in_flight()
     }
@@ -236,6 +244,24 @@ impl Ledger {
     fn exact(&mut self, source: Source) -> Option<&mut Frame> {
         self.frame(source.id)
             .filter(|frame| frame.session == source.session)
+    }
+
+    /// The newest source of `session` that the render path reported, the proof an older
+    /// unreported source will not be submitted; 0 when none was reported.
+    fn newest_rendered(&self, session: u64) -> u64 {
+        self.frames
+            .iter()
+            .filter(|frame| frame.session == session && (frame.rendered || frame.submitted))
+            .map(|frame| frame.id)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Records that the render path reported `id`.
+    fn render_reported(&mut self, id: u64) {
+        if let Some(frame) = self.frame(id) {
+            frame.rendered = true;
+        }
     }
 
     fn claim_pace(&mut self, source: Source) -> Option<Frame> {
@@ -365,14 +391,24 @@ fn frame_acquire(source: Source) -> i32 {
     if result != NOT_READY || host.is_null() {
         return result;
     }
-    let oldest = lock(&LEDGER)
-        .frames
-        .iter()
-        .copied()
-        .filter(|f| {
-            f.unsubmitted_before(source) && f.source().facts().is_some_and(|facts| facts.ended != 0)
-        })
-        .min_by_key(|f| f.id);
+    // Only a source behind the newest rendered one is abandoned; the acquiring source began on
+    // the producer thread and proves nothing about sources its render thread has not reached.
+    let oldest = {
+        let ledger = lock(&LEDGER);
+        let proof = Source {
+            session: source.session,
+            id: ledger.newest_rendered(source.session),
+        };
+        ledger
+            .frames
+            .iter()
+            .copied()
+            .filter(|f| {
+                f.unsubmitted_before(proof)
+                    && f.source().facts().is_some_and(|facts| facts.ended != 0)
+            })
+            .min_by_key(|f| f.id)
+    };
     if let Some(oldest) = oldest
         && call!(host_abort, host, oldest.id) == OK
     {
@@ -1272,6 +1308,7 @@ pub(crate) fn latency_present(id: u64, chain: Handle, begin: bool) {
         return;
     }
     if begin {
+        lock(&LEDGER).render_reported(id);
         let threaded = THREADED.load(Ordering::Relaxed);
         if !threaded {
             end_render_marker(id, "render submission end before present");
@@ -1462,6 +1499,7 @@ unsafe fn fg_submission(pass: *const Pass, begin: u32) {
 }
 
 fn latency_render(id: u64, begin: u32) {
+    lock(&LEDGER).render_reported(id);
     if begin != 0 {
         start_render_marker(id);
     } else {
