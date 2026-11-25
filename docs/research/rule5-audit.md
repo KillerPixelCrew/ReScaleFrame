@@ -158,6 +158,10 @@ established by static review; the fg-ac7 and fg-unity workers are changing that 
 | 6b788cb5 | F3a, A9: the Godot Vulkan session is the Runtime's Vulkan host (`vulkan_host.rs`, `rescaleframe/native_vulkan_host.h`): SDK lifetime and shutdown order, the creation resolver (XeSS, interop and latency device stages), provider admission and Auto, the FG presenter, the SR session, capture and status. Godot's `api.h` names the host's records (layouts and versions unchanged), `exports.def` publishes the host's presenter and pass entries as `rsfg_vk_*`; Godot keeps its boot wrapper, window admission and WSI plumbing. The CMake features table in `runtime_platform.c` is gone (cargo features carry the facts); the SR session's linked route table is in-crate. Unity's Vulkan path calls no Vulkan provider (it bridges into the D3D12 host), so it is not a parallel Vulkan host. | `cargo test -p rsf-orchestrator --lib vulkan_` (61, the creation fixture among them), `-p rsf-godot` (3), clippy both. C and the engine module's `native.h` not compiled here; no Godot run. |
 | 346446d9 | A12: Godot D3D12 FG Auto is `rsf_fg_select_auto_backend` over the bridge's served providers, as on the Vulkan host. | `cargo clippy -p rsf-godot`. No Godot run. |
 | 54afb11f | A10, C4 narrowed: the Vulkan host passes over DLSS-G in FG Auto only while native secondary windows can be in use, as the engine reports (`RSF_VKHOST_EMBEDDED_WINDOWS`, `rsf_vkhost_secondary_window`); explicit DLSS-G unchanged; status reason `RSF_VKHOST_REASON_AUTO_WITHOUT_DLSSG`. Godot games with embedded subwindows (Godot's default) on NVIDIA now get DLSS-G from Auto. | `cargo test -p rsf-orchestrator --lib vulkan_host` (3, one new policy test), the engine module object compiled with rustc as the graph fixture does; `bridge.cpp` not compiled; no Godot run. |
+| 315399aa | F7, F8 for the core hosts: the D3D11 host, `render_host` and its callback host, and the Vulkan host resolve vendor folders through `VendorPaths` (now with the Vulkan `fidelityfx-vulkan`/`streamline-vulkan` folders and `from_folders`); the D3D12 hosts check settings with `settings_store::refused`. RDR2's settings API now accepts FG Auto/Dynamic and Ultra Quality for XeSS, FSR1 and Auto. | `rsf-game-sys vendor_paths` (2), `rsf-orchestrator --lib` (429). |
+| 986b98c2 | Overlay FG-unavailable reason (ABI 21) filled by the D3D11 host (bridge refused, chain fallback, no bridge, no input timeline, no FG inputs) and by the D3D12 hosts through `rsf_overlay_fill_fg_stats`. The Vulkan host reports `RSF_VKHOST_REASON_AUTO_WITHOUT_DLSSG` in its status; Godot draws no shared overlay. | `rsf-orchestrator --lib` (429). |
+| d23a4ff1 | F5: `rsf_game_render_config` carries `sr_backend`, `jitter_phases` and `lod_bias` (game ABI 25) from `vendor_sampling`; the D3D11 host and the D3D12 callback host publish them; Skyrim SE and AC7 apply them instead of their own rules. The commit lists every changed value. | `rsf-game-sys` (30), `rsf-orchestrator --lib` (429), `rsf-skyrim-se`, `rsf-ac7-plugin`, `rsf-fallout4`, `rsf-unity`. No game run. |
+| 0f21e303 | SR Auto on D3D12 (RDR2, Unity Mono, Unity package, Godot D3D12) resolves among the offered providers (packages, RTX query, limit) instead of the adapter limit or vendor id alone. | `render_host` (38), `rsf-godot`. |
 
 ## Follow-ups, ranked by user impact
 
@@ -255,6 +259,7 @@ bump the ABI) the jitter phase count and the texture LOD bias for the active bac
 ratio. The core fills them from the vendor's published rule; integrations apply them to the
 projection and the engine's samplers. Replaces A18's seven copies. Needs a run per affected game
 because the values change.
+*Status (d23a4ff1):* the plan carries the values and the D3D11 and D3D12 callback hosts fill them; Skyrim SE and AC7 apply them. Open: Fallout 4 applies the engine's own TAA jitter and no LOD bias (it should take both from the plan); Anomaly's SR stage keeps `ceil(8 r^2)` capped at 64 and its adapter mip offset option (with F2); Minecraft's `NativeRenderer.phaseCount` (Java) and the Unity package's `CalculateJitter` (C#) need the values through their own status records; RDR2 and Godot use their engines' jitter.
 
 **F6. One D3D11 sampler-bias mechanism.** Keep `sampler_bias.rs` or the frame tap's live rebind,
 not both, and drive it from F5's value for every D3D11 host.
@@ -279,3 +284,21 @@ per game, each needing research into the engine's producer.
 
 **F13. Drop `dlss_bridge.c:340-341`** (dead `backend_name`), with the overlay-parity worker's
 change to the same function.
+
+**F14. Latency on the D3D11 native-present path.** With the bridge refused or its chain fallen
+back (30cc9a23), the D3D11 host offers latency Off only. The Direct3D latency owner
+(`native_fg_cpu.rs` `select_pacer`) reaches the device through the bridge's graphics
+(`native_fg_cpu/platform.rs` `native_device`, `rsf_d3d11_present_graphics`), its vendor through
+a D3D12 device query (`adapter_vendor`), and Reflex through the bridge's D3D12 Streamline host
+(`rsf_d3d11_present_host`); the host forwards CPU facts and the FRAME and SUBMISSION scopes to
+it only while a facade is bound (`d3d11_host.rs` `cpu`, `passes`). Without the bridge the
+pacing, marker and acquire calls already succeed (no host, no provider). Design: the host
+registers the engine's D3D11 device with the latency owner when it presents natively, the
+owner queries the vendor of either device type, the host routes CPU facts, scopes and the
+native Present begin/end to the owner, and offers the latency choices from the input timeline
+capability rather than from the facade. Anti-Lag 2 then works (its DX11 context binds the
+game's device). Reflex needs a D3D11 Reflex path the core lacks: the Streamline host is D3D12
+only; NVAPI's `NvAPI_D3D_SetSleepMode`/`Sleep`/`SetLatencyMarker` take a D3D11 device (the
+records are already bound in `reflex_nvapi_abi.rs`). The core's XeLL runs inside XeSS FG's D3D12
+presentation (`d3d12_generation/xess.rs`); until a standalone XeLL context exists, grey it with that reason.
+Not implemented: it changes pacing on a working path and needs device checks.
