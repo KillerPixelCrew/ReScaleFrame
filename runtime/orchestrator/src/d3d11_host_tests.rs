@@ -1171,13 +1171,14 @@ fn sr_and_the_overlay_never_depend_on_the_frame_generation_bridge() {
         );
         let report = fixture.host.shared().report;
         assert_eq!(report.effective_backend, RSF_SR_DLSS);
-        let reason = unsafe { CStr::from_ptr(report.reason.as_ptr()) };
+        let text = |field: &[c_char]| unsafe { CStr::from_ptr(field.as_ptr()) }.to_owned();
         let expected = if installed {
-            "Frame generation unavailable: the presentation bridge could not create its chain"
+            c"Frame generation unavailable: the presentation bridge could not create its chain"
         } else {
-            "Frame generation unavailable: the presentation bridge was refused"
+            c"Frame generation unavailable: the presentation bridge was refused"
         };
-        assert_eq!(reason.to_str().unwrap(), expected);
+        assert_eq!(text(&report.fg_unavailable).as_c_str(), expected);
+        assert_eq!(text(&report.reason).as_c_str(), c"", "SR itself is fine");
         assert!(fixture.host.native_presentation.load(Ordering::SeqCst));
         assert!(!fixture.host.bridge_bound.load(Ordering::SeqCst));
     }

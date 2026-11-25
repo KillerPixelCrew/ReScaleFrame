@@ -71,9 +71,16 @@ pub(super) unsafe extern "C" fn rsf_overlay_fill_fg_stats(stats: &mut Stats, fg:
     } else {
         rsf_d3d11_present_switch_result()
     };
+    // Why generation is not offered; the panel shows it while no provider is available.
     let Some(fg) = (unsafe { fg.as_ref() }) else {
+        stats.fg_unavailable_reason =
+            c"Frame generation unavailable: no frame generation presentation is installed".as_ptr();
         return;
     };
+    if fg.available == 0 {
+        stats.fg_unavailable_reason =
+            c"Frame generation unavailable: no provider started on this device".as_ptr();
+    }
     stats.fg_available = fg.available;
     stats.fg_requested_mode = fg.requested.mode;
     stats.fg_requested_generated = fg.requested.generated_frames;
@@ -208,6 +215,29 @@ mod tests {
         unsafe { rsf_overlay_fill_fg_stats(&mut stats, std::ptr::null()) };
         assert_ne!(stats.fg_backend_choices & (1 << RSF_FG_BACKEND_AUTO), 0);
         assert_ne!(stats.fg_backend_choices & RSF_OVERLAY_FG_RUNTIME_SWITCH, 0);
+        let reason = |stats: &Stats| {
+            (!stats.fg_unavailable_reason.is_null())
+                .then(|| unsafe { std::ffi::CStr::from_ptr(stats.fg_unavailable_reason) })
+        };
+        assert_eq!(
+            reason(&stats),
+            Some(c"Frame generation unavailable: no frame generation presentation is installed")
+        );
+        let mut fg: FgStatus = unsafe { std::mem::zeroed() };
+        let mut stats = Stats::default();
+        unsafe { rsf_overlay_fill_fg_stats(&mut stats, &fg) };
+        assert_eq!(
+            reason(&stats),
+            Some(c"Frame generation unavailable: no provider started on this device")
+        );
+        fg.available = 1;
+        let mut stats = Stats::default();
+        unsafe { rsf_overlay_fill_fg_stats(&mut stats, &fg) };
+        assert_eq!(
+            reason(&stats),
+            None,
+            "an available provider needs no reason"
+        );
     }
 
     #[test]

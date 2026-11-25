@@ -80,6 +80,11 @@ fn set_reason(report: &mut rsf_overlay_sr_report, text: &str) {
     crate::write_c_text(&mut report.reason, text.as_bytes());
 }
 
+/// Why frame generation is not offered, or nothing while it is.
+fn set_fg_unavailable(report: &mut rsf_overlay_sr_report, reason: Option<&str>) {
+    crate::write_c_text(&mut report.fg_unavailable, reason.unwrap_or("").as_bytes());
+}
+
 fn fresh_report() -> rsf_overlay_sr_report {
     rsf_overlay_sr_report {
         struct_size: size_of::<rsf_overlay_sr_report>() as u32,
@@ -770,6 +775,16 @@ impl Host {
         if rendered {
             defaults.fg_backend = FG_BACKEND_FSR3;
         }
+        // The overlay's frame generation status while no provider is offered.
+        g.fg_unavailable = fg_unavailable.or_else(|| {
+            (!generation).then_some(if self.setup.presentation_bridge == 0 {
+                "Frame generation unavailable: the game presents without the presentation bridge"
+            } else if !timeline && !rendered {
+                "Frame generation unavailable: the game reports no input timeline"
+            } else {
+                "Frame generation unavailable: the game supplies no frame generation inputs"
+            })
+        });
         if let Some(reason) = fg_unavailable {
             self.log(&format!(
                 "{reason}; native presentation keeps SR, sharpening and the overlay, latency Off."
@@ -851,7 +866,6 @@ impl Host {
         g.execution_thread = current_thread();
         g.chain = Some(unsafe { com_ref::retain(swapchain) });
         g.facade = facade;
-        g.fg_unavailable = fg_unavailable;
         if facade {
             g.observer = true;
             self.log(
@@ -878,10 +892,11 @@ impl Host {
                 self.user(),
             )
         };
-        set_reason(
-            &mut self.shared().report,
-            "Waiting for verified scene inputs",
-        );
+        {
+            let report = &mut self.shared().report;
+            set_reason(report, "Waiting for verified scene inputs");
+            set_fg_unavailable(report, g.fg_unavailable);
+        }
         let window = unsafe { native::chain_window(swapchain) };
         if !window.is_null() {
             native::latency_window_bind(self.upstream.session_id, window);
@@ -1383,10 +1398,8 @@ impl Host {
                     report,
                     &format!("SR result {result}; native temporal processing retained"),
                 );
-            } else if let Some(reason) = g.fg_unavailable {
-                // The overlay's status line carries why generation is not offered.
-                set_reason(report, reason);
             }
+            set_fg_unavailable(report, g.fg_unavailable);
         }
         if result != g.last_result || g.logged < 3 {
             g.logged += 1;
