@@ -325,12 +325,12 @@ fn gpu(warp: &Device) -> TestResult {
     }
     facts.hdr = 0;
     let oversized = pixels(|_| [2.0, 1.0, 0.5]);
-    let clamped = pixels(|_| [1.0, 0.5, 0.25]);
+    let clamped = pixels(|_| [1.0, 1.0, 0.5]);
     for mode in DEPTH_FILTERS {
         let (_, actual) = fixture.run(&oversized, mode, 0.4, true, &facts)?;
         check(
             actual == clamped,
-            "depth clamp keeps positive channel ratios and alpha",
+            "depth clamp clips each channel and keeps alpha",
         )?;
     }
     let white = pixels(|_| [1.0; 3]);

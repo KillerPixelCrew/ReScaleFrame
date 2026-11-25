@@ -282,8 +282,8 @@ The shared depth-shader output step now decodes the filter candidate,
 uses its luminance as the target and applies one gain to the original
 linear RGB. The same synthetic calculation restores both ratios while
 preserving the candidate's luminance. The gain respects the original
-local HDR channel ranges. Explicit output clamping scales positive
-channels together. The shader retains alpha, and Debug View still shows
+local HDR channel ranges. Explicit output clamping clips each decoded
+channel, as the C++ shaders did. The shader retains alpha, and Debug View still shows
 the selected diagnostics. The source preamble is shared by the D3D11 and
 D3D12 builds and by the Vulkan SPIR-V generator.
 
@@ -306,3 +306,10 @@ view at sharpness 0.75, with Clamp Output enabled for the depth modes
 and Debug View off. The observed view showed no visible warm shift
 between modes. The panel saved all three changes while DLSS-G stayed
 active. The device ramp supplies the channel-ratio measurement.
+
+That indoor view had no channel above one. Outdoors, with Clamp Output
+on, the depth modes turned blue sky grey. The clamp then scaled each
+pixel by its brightest channel, so a sky pixel with blue at 2.5 kept 40%
+of its luminance. The output step clips each channel again, as the C++
+shaders did. Clamp Output still clips HDR highlights by design, so it
+stays off by default.
