@@ -1,0 +1,208 @@
+# Rule 5 audit: inputs and output in the integration, the technique in the core
+
+Audit of every integration and host against AGENTS.md Rule 5 (commit 5b24c866) and the top of
+`.agents/skills/game-render-analysis/SKILL.md`, done on 25 November 2026 on
+`NightHammer1000/rule5-audit` (branched from `rust/orchestrator-anomaly` at 5b24c866).
+
+## Question and method
+
+Where does ReScaleFrame break "one integration, every feature": technique living in an
+integration, game knowledge living in the core, features some games have and others lack, and
+inputs an integration could supply but does not?
+
+Static source review only. No game, device fixture or visible window was started. Each finding
+was located by search (game and engine names in `runtime/` and `loader/`; vendor calls, choice
+masks, generated-frame limits, jitter and bias rules, settings validation and backend tables in
+`games/`, `integrations/` and `loader/proxy`) and then read at the cited lines, including the
+callers that decide whether it matters. Findings name what the code does, not what a run showed.
+Where a claim rests on a field never being assigned (category D) it is a search result and says so.
+
+The shape that explains most findings: there are eight places that host the technique, and only
+four of them are in the core.
+
+| Host | Where | Used by |
+| --- | --- | --- |
+| `rsf_d3d11_host_*` (`runtime/orchestrator/src/d3d11_host.rs`) | core | Skyrim SE, Fallout 4 |
+| `rsf_render_host_*` (`render_host.rs`, D3D12) | core | RDR2 |
+| `rsf_callback_host_*` (`callback_host.rs`, D3D12) | core | Unity Mono (Drag'n Wash) |
+| `rsf_gl_*` (`gl_pipeline.rs`) | core | Minecraft |
+| AC7 bridge (`loader/proxy/src/dlss_bridge.c`, `dinput8_proxy.c`) | AC7 carrier | AC7 |
+| Anomaly stages (`games/anomaly/src/sr_temporal.rs`, `fg_stage.rs`, `overlay.rs`, `overlay_hooks.rs`) | adapter | Anomaly |
+| Godot hosts (`integrations/godot/native/vulkan.rs`, `d3d12.rs`, `control.rs`) | engine integration | Godot games |
+| Unity package host (`integrations/unity/src/package_state.rs` and siblings) | engine integration | Unity package games |
+
+Every host keeps its own choice list, its own settings validation and its own idea of which
+provider Auto means. That is where the parity gaps in category C come from. The overlay-parity
+worker (`NightHammer1000/overlay-parity`, new `runtime/orchestrator/src/sr_choices.rs`) is unifying
+what the overlay offers; this audit lists the masks as findings for it and does not edit them.
+
+## A. Technique in an integration
+
+| # | Location | What it is | Why it violates Rule 5 | Fix |
+| --- | --- | --- | --- | --- |
+| A1 | `loader/proxy/src/dlss_bridge.c:479-606` (`overlay_tick`), `:402-446`, `:718-825` | The AC7 carrier applies every overlay intent itself: SR backend switch with its own restore on refusal (`:583-593`), quality and resize (`:418-446`), DLSS preset (`:410-416`), sharpening (`:402-408`), FG mode, generated frames, Reflex and frame limit (`:528-544`), FG provider request and deferred save (`:503-527`), and starts the D3D11 SR pipeline and frame tap (`:718-825`). | Provider switching, fallbacks, settings application and the overlay belong to the core. The same work exists generically in `d3d11_host.rs`; AC7 is a second D3D11 host. | Follow-up F1. |
+| A2 | `loader/proxy/src/dlss_bridge.c:314-400` | `fill_overlay_stats` writes a DLSS-centred refusal text (`:344-354`), a backend name table that names Spatial "DLSS" (`:340-341`; the panel ignores `backend_name`, so it is dead), and the overlay stats the core fills for other hosts. | Status and refusal wording is the core's; a per-host copy drifts (the Spatial name already did). | Part of F1; until then drop the dead `backend_name` line. |
+| A3 | `loader/proxy/src/dlss_bridge.c:292-310` | `display_refresh_mhz` reads the refresh of the foreground window's monitor for the VRR frame cap. | Duplicates `runtime/orchestrator/src/frame_limit.rs:31-85`, which samples the presenting chain's own output; using the foreground window can pick the wrong display. | Part of F1 (export the core value, delete the copy). |
+| A4 | `loader/proxy/src/dinput8_proxy.c:660-700` | `backend_directory` resolves each vendor's runtime folder (env override, `RSF_FFX_BIN`, default subfolder) and `start_generation` reads FG mode, generated frames, Reflex mode and frame limit from environment variables and writes the present setup (`max_generated_frames = UINT32_MAX`, `runtime_switching`). | Vendor SDK ownership and FG/latency settings are core. `rsf_game_sys::vendor_paths::VendorPaths` already exists for the first, the settings store for the second. | Follow-up F7 (directories), F1 (settings). `dinput8_proxy.c` is being changed by the fsr4-crash worker. |
+| A5 | `games/anomaly/src/sr_temporal.rs` (whole), `fg_stage.rs:1-120` | Anomaly drives the Runtime's D3D11 SR API and binds the `rsf_d3d11_present` table itself: backend switching and its result handling, FG enable, provider, generated frames and latency application. | The sequencing of SR and FG is technique. It is the D3D11 host's job, done a third time. | Follow-up F2. |
+| A6 | `games/anomaly/src/fg_policy.rs:91-157` | FG history-reset and skip rules: reset on first frame, after any unfed frame, on extent change, after a scope hold, on a cut; skip during a scope hold. | History resets are technique (Rule 5 names them). The facts (cut, scope, level, device reset) are Anomaly's to report; the rule turning them into resets is generic and every FG host needs it. | Follow-up F2: report scope, cut and level as frame facts; move the reset rules into the core FG path (`d3d11_present.rs`, held for the Fallout 4 and Anomaly commits). |
+| A7 | `games/anomaly/src/overlay.rs:290-356` | Anomaly builds the overlay setup: SR choices from `RSF_ANOMALY_SR_ADAPTER_BACKENDS` (`0x3a`, `sr_stage_platform.h:136`), FG choices, latency choices and `max_generated_frames = 3` (`:340`). | An adapter-owned offered set and generated-frame cap. | Overlay-parity worker (masks); F2 for the rest. |
+| A8 | `games/anomaly/src/overlay_hooks.rs` (DXGI `Present`/`Present1`/`ResizeBuffers`/`ResizeTarget` detours `:589-651`, DirectInput detours `:507-588`) | Anomaly hooks the generic DXGI swap chain and DirectInput to draw and gate the overlay. | Presentation mechanism and overlay input gating are core; the core's `overlay_host` and `d3d11_host` already present the overlay for other D3D11 games. Only the sites that are Anomaly's own belong in the adapter. | Follow-up F2. |
+| A9 | `integrations/godot/native/vulkan.rs:386-510` | The Godot integration initialises Streamline Vulkan and XeSS, sets latency options, orders shutdown (presenter drain, SR retire, XeSS, latency SDK) and runs the FG presenter lifecycle (`:546-762`). | Vendor SDK lifetime and presentation are core. | Follow-up F3. |
+| A10 | `integrations/godot/native/vulkan.rs:144-163`, `integrations/godot/NATIVE.md:82-91` | `fg_choices` leaves DLSS-G out of FG Auto because "its presenter's retirement after native secondary window use still ends in an access violation". | An adapter hiding a core defect. Any engine with a secondary window would hit it. | Follow-up F3: fix presenter retirement in the core Vulkan FG presenter; then Auto offers DLSS-G. |
+| A11 | `integrations/godot/native/vulkan.rs:194-254`, `control.rs:71-87` | Godot refuses settings by vendor rules: FSR3 and FSR4 FG only with one generated frame, FSR4 FG only after a provider probe, no DLSS at Ultra Quality, generated frames 1..=15, preset mask, latency mode range. | Vendor capabilities and limits are core facts; the integration repeats them. | Follow-up F8: one core settings check that returns the refusal and its reason. |
+| A12 | `integrations/godot/native/d3d12.rs:397` | D3D12 FG Auto is `rsf_fg_default_backend(vendor, 0)` without the served choices; the Vulkan path in the same integration uses `rsf_fg_select_auto_backend` with them. | Auto resolution is core policy and differs even within one integration. | F3. |
+| A13 | `integrations/unity/src/package_state.rs:62-65, 310-320`, `package_state/presentation.rs:150-160` | The Unity package validates settings against its own `MAX_GENERATED_FRAMES = 15`, `MAX_DLSS_PRESET = 13`, `MAX_LATENCY_MODE = 2`, and resolves FG Auto from the adapter vendor itself. | Same as A11. | F8. `package_state.rs` is being changed by the fsr4-crash worker. |
+| A14 | `games/unity-mono/src/runtime_setup.rs:59-65, 229-256, 346-369` | Unity Mono keeps `SR_CHOICES`, reads FG and SR settings from its INI, caps generated frames at 15 and checks the DLSS preset mask (`:355`). | Adapter-owned choices and settings validation. | Overlay-parity worker (mask); F8. File is being changed by the fsr4-crash worker. |
+| A15 | `games/minecraft/src/main/java/org/kpc/rescaleframecraft/client/TaaSettings.java:17-38, 75` | Minecraft keeps its own enum of SR backends, qualities, FG backends, DLSS presets, Reflex modes and sharpeners, and clamps generated frames to 1..15. | An adapter-owned option list duplicating the Runtime's. | F8: the mod's settings screen reads choices and limits from the Runtime through `jni.rs`. |
+| A16 | `integrations/godot/addons/rescaleframe/settings.gd:5-27`, `integrations/unity/com.kpc.rescaleframe/Runtime/ReScaleFrameOptions.cs:48` | Engine-integration settings resources enumerate backends, qualities, preset range and generated-frame range. | Same as A15. | F8. The C# file is outside the Drag'n Wash worker's `Runtime/Engine/*`. |
+| A17 | `games/rdr2/src/runtime_worker.rs:194`, `games/fallout4/src/session.rs:36-37, 148-151`, `games/skyrim-se/src/session.rs:40, 437` | RDR2 passes its own SR mask; Fallout 4 and Skyrim pass quality choices (`0x1f`, or native only when reduction is unavailable). | Adapter-owned choice masks. Fallout 4's case is really a fact (can the engine render reduced?) expressed as a mask. | Overlay-parity worker; report "reduced resolution available" as a fact. |
+| A18 | `games/anomaly/src/sr_stage/math.rs:76-92`, `games/skyrim-se/src/resolution.rs:160-167`, `games/skyrim-se/src/sampling.rs:118`, `games/ac7/plugin/src/native_renderer/views.rs:240-244`, `games/ac7/plugin/src/scope_facts.rs:72-78`, `games/minecraft/.../temporal/TemporalCamera.java`, `integrations/unity/com.kpc.rescaleframe/Runtime/ReScaleFrameUpscaler.cs` | Each integration decides the jitter phase count and the texture LOD bias. The rules differ: Anomaly `ceil(8 r^2)` clamped 8..64 and `log2(render/output) + offset` clamped -3..1; Skyrim `floor(8 r^2)` clamped 8..256 and plain `log2`; AC7 an area ratio and `log2 - 0.3` floored at -2. | Phase count and LOD bias are vendor guidance that depends on the active backend (FSR, DLSS and XeSS publish different bias rules). Applying a jitter and a bias in the engine is input work; choosing their values is technique. | Follow-up F5. Not moved here: unifying the rule changes the pattern or bias in at least two working games, which needs a run. |
+| A19 | `games/anomaly/src/sr_temporal.rs:44-55`, `games/anomaly/src/fg_stage/options.rs:221` | Backend name tables for logs. | Minor duplication of `overlay_settings.rs:97` and the panel's FG names. | With F2. |
+
+## B. Game knowledge in the core
+
+| # | Location | What it is | Why it violates Rule 5 | Fix |
+| --- | --- | --- | --- | --- |
+| B1 | `sdk/game/include/rescaleframe/game_frame.h:58-66`, `runtime/orchestrator/src/d3d11_host.rs:63, 1085` (lines before fe05f948) | The screen classes carry AC7's vocabulary (BRIEFING, HANGAR, FLIGHT, REPLAY) beside a later GAMEPLAY. Six integrations report gameplay as FLIGHT, two as GAMEPLAY, and the D3D11 host's capture-sequence readiness accepted only GAMEPLAY. | A core rule keyed to the value one pair of games reports. | **Fixed in fe05f948**: the host reads both as the gameplay fact through the SDK constants; the header says they are one fact and new integrations report GAMEPLAY. |
+| B2 | `runtime/contract/include/rescaleframe/frame_generation.h:24-30`, `runtime/orchestrator/src/fg_choice.rs:52-63` | `rsf_fg_backend_info.ini_key`, documented as "the Unity ini path setting". No caller reads it (the only user, `dinput8_proxy.c:662-666`, reads `env_var` and `default_subdir`). | One engine's configuration key in the core contract. | Follow-up F11: drop the field when the overlay-parity worker's change to `frame_generation.h` lands. |
+| B3 | `loader/proxy/src/dinput8_proxy.c` (`AC7.ini` `:300`, Unreal velocity format `:421`, jitter revival `:471-493`, `accept_ac7_window` `:645`), `dlss_bridge.c`, `dlss_bridge.h:21-26, 50` | The AC7 carrier lives in the shared loader tree. Its input work (jitter revival, Unreal motion encoding) is correctly integration work, but in the wrong directory. | `loader/` is core; AC7 knowledge there reads as shared. | Follow-up F12: move to `games/ac7/carrier/` with its CMake target; the technique part goes to the core under F1. |
+| B4 | `runtime/orchestrator/src/native_translucency.rs:735-748` with `runtime/graphics/rust/src/frame_tap.rs:1085-1111`, and `runtime/orchestrator/src/sampler_bias.rs:33-47` with `d3d11_host.rs:2697-2700` | Two core implementations of texture LOD bias on D3D11: the frame tap's sampler rewrite (AC7 only) and `sampler_bias.rs` (Skyrim, Fallout 4). | Not game knowledge, but one technique twice, each reachable by one host. Every D3D11 game should get the same one. | Follow-up F6. |
+| B5 | `runtime/orchestrator/include/rescaleframe/dlss_pipeline.h:148-155` | The scene-colour field of the core pipeline contract described AC7's role table and a "slot 0 of the bound set" caller rule no code uses any more. | One game's selection rule in a core contract. | **Fixed in 91325d70** (comment only). |
+| B6 | Single-user core hosts: `render_host.rs` (RDR2), `callback_host.rs` (Unity Mono), `gl_pipeline.rs` (Minecraft); `dlss_pipeline`, `native_sr`, `native_translucency`, `native_composition`, `native_window` and the frame tap (AC7 carrier only; Anomaly also uses `dlss_pipeline` through `rsf_get_d3d11_sr_api`) | No per-game branches inside, but each was grown for one game and offers that game's subset. | "Host variants that only one game uses" are where parity drifts (category C). | F1-F4 converge on one host per graphics API. |
+
+Reviewed and kept: `runtime/graphics/include/rescaleframe/colour_transport.h:11-16` (the knee was
+measured on AC7, the technique is general and on for every game; another engine with dark linear
+HDR would band the same way), `runtime/orchestrator/src/streamline_policy.rs:3-8` (Streamline's
+own engine enumerant, which Rule 1 allows as adapter metadata), and the Unreal examples in
+`motion_decode.h`, `frame_tap.h`, `d3d11_observer.h` and `frame_assembly.h`, which document
+parameters the integration supplies rather than assumptions the core makes.
+
+## C. Parity gaps
+
+The overlay-parity worker owns the offered set; this table records the structural reason for
+each gap rather than repeating its table.
+
+| # | Gap | Technical reason | Fix |
+| --- | --- | --- | --- |
+| C1 | SR providers differ: Skyrim and Fallout 4 lack Spatial and Auto (`d3d11_host.rs:53`, `0x3e`); AC7 lacks Auto (`dlss_bridge.c:335`); Anomaly and RDR2 lack FSR2, Spatial and Auto (`0x3a`); Unity Mono lacks Auto in its mask; Minecraft and Godot offer Auto. | Each host keeps a constant mask instead of asking the Runtime what it can serve on this device. | Overlay-parity worker (`sr_choices.rs`). |
+| C2 | Generated frames: Anomaly caps at 3 (`overlay.rs:340`), every other host at 15 or the provider maximum. | Adapter constant. | Overlay-parity worker; F2. |
+| C3 | SR quality: AC7 and RDR2 offer the standard mask only (`dlss_bridge.c:493`, `render_host.rs:1171`); others the extended one. | Host constants. | Overlay-parity worker. |
+| C4 | DLSS-G is never chosen by FG Auto on Godot Vulkan (A10). | A core presenter defect hidden in the integration. | F3. |
+| C5 | Auxiliary-target upscaling (`rsf_d3d11_host_upscale_auxiliaries`), reduced-frame recovery and the `sampler_bias.rs` bias exist only behind the D3D11 host (Skyrim, Fallout 4). AC7 and Anomaly do not get them. | They are reachable only from that host's entry points. | F1, F2, F6. |
+| C6 | Steam overlay forwarding (`integrations/steam`, "shared by the Skyrim SE and Fallout 4 adapters") is wired only into those two. AC7 is a Steam game with FG on a D3D11 facade. | Only those two adapters install it (`games/fallout4/src/creation.rs`, `games/skyrim-se/src/creation.rs`), though what a forwarded call means is already the Runtime's (`rsf_d3d11_host_dispatch_chain`). | Install it from the shared D3D11 host start once AC7 is on that host (F1). |
+| C7 | The VRR frame cap reads the display differently in AC7 (A3) than in the core hosts. | Duplicated implementation. | F1. |
+| C8 | Skyrim and Fallout 4 status text still says FG and latency ownership are incomplete (`games/skyrim-se/src/session.rs:50-62`). | Their CPU event reporting is not finished; the core features exist. | Their integration work (Skyrim creation gate worker), not a core change. |
+
+## D. Inputs and output
+
+Assignment search over non-test sources for the optional `rsf_game_render_pass` inputs. A zero
+means no assignment was found, not that the engine lacks the data.
+
+| Integration | `exposure` | `temporal_mask` (reactive/transparency) | `ui_input` | `depth_domains` |
+| --- | --- | --- | --- | --- |
+| AC7 | yes | through `native_translucency` hints | yes | no |
+| Anomaly | yes | no | no | no |
+| Skyrim SE | no | yes | no | no |
+| Fallout 4 | no | no | no | yes |
+| RDR2 | yes | no | no | no |
+| Unity Mono | not in Rust; managed code not searched in depth (Drag'n Wash worker) | | | |
+| Unity package | no | no | no | no |
+| Godot | yes | yes | yes | yes |
+| Minecraft (GL record) | no | no | no | no |
+
+| # | Location | What is missing or wrong | Effect | Fix |
+| --- | --- | --- | --- | --- |
+| D1 | Skyrim SE, Fallout 4, Unity package, Minecraft | No exposure. Creation Engine computes eye adaptation; URP and Minecraft shader packs have exposure or none. | Backends run auto-exposure, which AC7 showed bands in dark HDR. | Lease the engine's adaptation value (Creation: the luminance target after adaptation) and tag it. |
+| D2 | Anomaly, Fallout 4, RDR2, Unity, Minecraft | No reactive or transparency mask. | Ghosting on particles and transparent surfaces the backend cannot see. | Produce a mask from each engine's translucent pass (Skyrim and Godot show the field is usable). |
+| D3 | All but AC7 and Godot | No `ui_input`, so FG falls back to whatever HUD-less handling the host has. | UI smearing in generated frames where the HUD-less capture is late or absent. | Supply the UI layer or a HUD-less frame at the UI boundary. |
+| D4 | `games/rdr2/src/renderer.rs:427-431` | Every frame with a source is reported as FLIGHT (gameplay), menus and pause included. | FG may interpolate menus. | Report the screen from RAGE's pause and menu state. |
+| D5 | `games/unity-mono`, `integrations/unity/src/package_state.rs:566-570`, `integrations/godot/native/d3d12.rs:326-331` | Screen class comes from a developer or INI "gameplay" switch, not the engine's state. | Correct only if the developer keeps it current. | Acceptable for an engine integration's API; document that the switch is the fact. |
+
+Event timing (Rule 3, "reports an engine event at a moment other than when it happens") is not
+established by static review; the fg-ac7 and fg-unity workers are changing that path now.
+
+## Documentation and skills
+
+- `integrations/godot/NATIVE.md:82-91` documents A10 as policy ("DLSS-G is not offered to FG
+  Auto"). It is accurate about the code and should change with F3.
+- AGENTS.md's Architecture table lists `rsf_proxy_ac7` as "dedicated AC7 carrier" but not that it
+  hosts SR, FG and overlay application (A1); it lists none of the four core hosts. Update with F1.
+- The skills (`game-render-analysis`, `ue418-render-integration`, `unreal4-render-integration`,
+  `truesky-render-integration`) put no technique in an integration. The ue418 skill's "registered
+  pre-tonemap SR/fallback graph node" is output placement plus the native fallback, which Rule 5
+  leaves to the integration.
+- Game READMEs and `engine.json` files describe refusals and inputs, not technique ownership; no
+  contradiction found.
+
+## Fixes committed
+
+| Commit | What moved | Checks |
+| --- | --- | --- |
+| fe05f948 | B1: the D3D11 host reads FLIGHT and GAMEPLAY as one reported fact; `game_frame.h` states the equivalence. | `cargo test -p rsf-orchestrator --lib d3d11_host`, 16 passed. |
+| 91325d70 | B5: one game's caller rule removed from the core pipeline contract. | Comment only; no runtime code selects scene colour by slot. |
+
+## Follow-ups, ranked by user impact
+
+**F1. AC7 onto the shared D3D11 host.** AC7 is the most-played integration and the one whose host
+is furthest from the core: `dlss_bridge.c` applies overlay intents, switches providers with its
+own restore, keeps its own stats and VRR display read, and `dinput8_proxy.c` resolves vendor
+folders and FG settings. Design: AC7 starts `rsf_d3d11_host_create` like Skyrim and Fallout 4,
+reports its native passes (already `rsf_game_render_pass` with roles) through the host services,
+and keeps only input work: the native renderer plugin, motion capture, the velocity pass, jitter
+revival, the window class and the Unreal motion encoding as setup data. The host gains what AC7
+has and it lacks: the native translucency hints, UI composition capture and the frame tap's
+sampler bias (F6), behind the existing pass roles. Size: several thousand lines across C and Rust
+and a CMake target; not attempted here. Gains: Auto SR, auxiliaries, Steam overlay forwarding,
+one VRR read.
+
+**F2. Anomaly onto the shared D3D11 host.** Same design. Anomaly keeps discovery, the world-window
+swap (`sr_swap.rs`), motion production, the twin targets, its jitter application and its facts:
+scope, cut, level, device reset as `rsf_frame_record` fields. The host takes the SR stage driving
+(`sr_temporal.rs`), the FG binding (`fg_stage.rs`), the overlay setup and DXGI/DirectInput overlay
+hooks, and the FG reset rules of `fg_policy.rs`, which become core rules any FG host applies
+(reset after an unfed frame, on extent change, on reported cut). Blocked until the held
+`d3d11_present*.rs` commits are integrated. Gains: FSR2, Spatial, Auto, 15 generated frames.
+
+**F3. A core Vulkan host for Godot.** Move `integrations/godot/native/vulkan.rs` session logic
+(SDK init and shutdown order, provider resolution, admission, presenter lifecycle) into
+`runtime/orchestrator` beside `vulkan_sr.rs` and `vulkan_fg.rs`, entered through a versioned
+setup the engine module fills with its device, queue, window and graph-lease capability. Fix the
+DLSS-G presenter retirement after secondary-window use there, then drop the Auto exclusion and
+the NATIVE.md paragraph. Do the same for `d3d12.rs` against `render_host` or `callback_host`,
+which also removes A12.
+
+**F4. One D3D12 host.** `render_host.rs` (RDR2) and `callback_host.rs` (Unity Mono) both own
+admission, SR context lifetime, recording slots, settings and overlay routing for D3D12. Merge
+them so RDR2 and Unity games share one offered set and one settings path; the Unity package host
+(`integrations/unity/src`) then moves onto it as well.
+
+**F5. Jitter phase count and LOD bias from the core.** Add to `rsf_game_render_config` (append,
+bump the ABI) the jitter phase count and the texture LOD bias for the active backend and current
+ratio. The core fills them from the vendor's published rule; integrations apply them to the
+projection and the engine's samplers. Replaces A18's seven copies. Needs a run per affected game
+because the values change.
+
+**F6. One D3D11 sampler-bias mechanism.** Keep `sampler_bias.rs` or the frame tap's live rebind,
+not both, and drive it from F5's value for every D3D11 host.
+
+**F7. Vendor runtime folders in the core.** Every host resolves vendor folders through
+`rsf_game_sys::vendor_paths::VendorPaths` or one Runtime export; delete `dinput8_proxy.c:660-667`
+and Godot's `runtime_path` suffixes (`vulkan.rs:405-418`).
+
+**F8. One settings check.** Export a Runtime function that validates an `rsf_render_settings`
+request (provider known, quality served by that provider, preset valid, generated frames within
+the provider maximum, latency mode served) and returns a reason. Godot `control.rs`, the Unity
+package, Unity Mono and the Minecraft JNI layer call it and drop their constants; the Godot
+settings resource, the Unity options and Minecraft's settings screen read their choices from it.
+
+**F9. RDR2 screen class (D4)**, **F10. exposure and reactive masks (D1, D2)**: integration work
+per game, each needing research into the engine's producer.
+
+**F11. Remove `rsf_fg_backend_info.ini_key` (B2)** after the overlay-parity change to
+`frame_generation.h` lands.
+
+**F12. Move the AC7 carrier out of `loader/proxy` (B3)** into `games/ac7`, with or after F1.
+
+**F13. Drop `dlss_bridge.c:340-341`** (dead `backend_name`), with the overlay-parity worker's
+change to the same function.
