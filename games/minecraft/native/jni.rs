@@ -111,6 +111,8 @@ fn pipeline(handle: jlong) -> *mut rsf_gl_pipeline {
 
 #[unsafe(export_name = "Java_org_kpc_rescaleframecraft_render_NativeBridge_createSurface")]
 unsafe extern "system" fn create_surface(_: *mut JNIEnv, _: jclass, parent: jlong) -> jlong {
+    // NativeRenderer's first native call.
+    rsf_game_sys::panic_record::install();
     let parent = parent as usize as *mut c_void;
     let surface = unsafe { rsf_gl_window_create(parent) };
     if !surface.is_null() && !observer::install(parent, surface, Some(report_message)) {

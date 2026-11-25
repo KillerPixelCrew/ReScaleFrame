@@ -254,6 +254,8 @@ unsafe extern "system" fn rsf_thin_create(
     output: *mut *mut c_void,
     outer: *mut c_void,
 ) -> HRESULT {
+    // This carrier's DllMain stays empty; its first Rust runs here.
+    rsf_game_sys::panic_record::install();
     // A same-thread create from the adapter entry must skip the in-progress startup.
     if STARTING_THREAD.load(Ordering::Relaxed) != unsafe { GetCurrentThreadId() } {
         STARTUP.run(Some(start_once));

@@ -49,6 +49,9 @@ pub struct RsfOverlay {
 /// Returns null on an ABI mismatch, or if construction panicked or could not allocate.
 #[unsafe(no_mangle)]
 pub extern "C" fn rsf_overlay_create(abi_version: u32) -> *mut RsfOverlay {
+    // A caught panic still leaves its record.
+    #[cfg(windows)]
+    rsf_game_sys::panic_record::install();
     if abi_version != RSF_OVERLAY_ABI_VERSION {
         return null_mut();
     }

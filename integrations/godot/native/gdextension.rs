@@ -27,6 +27,7 @@ unsafe extern "C" fn rsf_godot_initialize(
     library: *mut c_void,
     initialization: *mut Initialization,
 ) -> GdBool {
+    rsf_game_sys::panic_record::install();
     let (Some(get), Some(initialization)) = (get_proc_address, unsafe { initialization.as_mut() })
     else {
         return 0;

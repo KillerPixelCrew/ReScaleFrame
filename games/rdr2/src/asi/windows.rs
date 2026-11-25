@@ -39,6 +39,7 @@ unsafe extern "C" fn rsf_rdr2_asi_process_attach(
     module: HMODULE,
     services: &rsf_rdr2_asi_services,
 ) {
+    rsf_game_sys::panic_record::install();
     let startup = Startup {
         module: module as usize,
         services: *services,

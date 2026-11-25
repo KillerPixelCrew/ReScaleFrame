@@ -411,6 +411,7 @@ extern "C" fn rsf_rdr2_attach_start_runtime(
     module: HMODULE,
     fingerprint: rsf_rdr2_fingerprint_fn,
 ) -> u32 {
+    rsf_game_sys::panic_record::install();
     let Some(fingerprint) = fingerprint else {
         return 1;
     };

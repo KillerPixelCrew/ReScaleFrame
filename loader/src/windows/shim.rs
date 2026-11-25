@@ -125,6 +125,7 @@ unsafe extern "C" fn rsf_shim_attach(instance: HMODULE, event: u32) -> BOOL {
     if event != DLL_PROCESS_ATTACH {
         return 1;
     }
+    rsf_game_sys::panic_record::install();
     let storage = unsafe { &mut *EXECUTABLE.0.get() };
     if let Some(path) = unsafe { module_path_in(null_mut(), storage) } {
         let leaf = path

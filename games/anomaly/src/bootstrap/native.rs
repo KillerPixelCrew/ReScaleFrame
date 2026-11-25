@@ -220,6 +220,7 @@ unsafe fn enter(configuration: *const u16) -> u32 {
 
 #[unsafe(no_mangle)]
 unsafe extern "system" fn rsf_anomaly_start(configuration: *const u16) -> u32 {
+    rsf_game_sys::panic_record::install();
     catch_unwind(AssertUnwindSafe(|| unsafe { enter(configuration) })).unwrap_or_else(|_| {
         write_log(b"Anomaly startup refused after a contained panic.");
         FAULT

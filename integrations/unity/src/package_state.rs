@@ -747,6 +747,7 @@ unsafe extern "C" fn rsfu_initialize(
     project: *const c_char,
     output: *mut rsf_unity_native_api,
 ) -> c_int {
+    rsf_game_sys::panic_record::install();
     let _operation = lock_or_recover(&OPERATIONS);
     if runtime.is_null() || engine.is_null() || project.is_null() || output.is_null() {
         return code::FAILED;

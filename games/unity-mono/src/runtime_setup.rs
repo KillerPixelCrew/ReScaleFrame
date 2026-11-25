@@ -142,6 +142,8 @@ fn register_diagnostics(ini: &Ini) {
 }
 
 fn guarded(failure: u32, body: impl FnOnce() -> u32) -> u32 {
+    // Every loader entry starts here.
+    rsf_game_sys::panic_record::install();
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(failure)
 }
 

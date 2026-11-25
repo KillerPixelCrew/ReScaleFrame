@@ -36,6 +36,8 @@ pub mod dxbc_chunks;
 pub mod ffi_util;
 pub mod fg_reasons;
 mod frame_policy;
+#[cfg(windows)]
+pub mod panic_record;
 pub mod pe32_plus;
 pub use frame_policy::*;
 mod renderer_policy;

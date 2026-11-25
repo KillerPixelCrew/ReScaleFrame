@@ -121,6 +121,7 @@ unsafe extern "system" fn startup(module: *mut c_void) -> u32 {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_plugin_carrier_attach(instance: HMODULE, event: u32) -> BOOL {
     if event == DLL_PROCESS_ATTACH {
+        rsf_game_sys::panic_record::install();
         spawn_startup(instance, Some(startup));
     }
     1

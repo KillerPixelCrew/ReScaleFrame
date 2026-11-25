@@ -1228,6 +1228,9 @@ static LONG CALLBACK on_fatal_exception(EXCEPTION_POINTERS* info)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+/* Rust (runtime/orchestrator/src/lib.rs). */
+void rsf_core_install_panic_record(void);
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
     (void)reserved;
@@ -1235,6 +1238,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         DisableThreadLibraryCalls(instance);
         /* First, before anything that could fault. */
         AddVectoredExceptionHandler(1, on_fatal_exception);
+        /* A Rust panic aborts through __fastfail, which the handler above never sees. */
+        rsf_core_install_panic_record();
 #if RSF_HAVE_FRAME_CAPTURE
         /* Loading a library is allowed here and the timing requirement leaves no alternative:
            RenderDoc must be in before the game creates its device. */

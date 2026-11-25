@@ -407,6 +407,14 @@ pub extern "C" fn rsf_get_runtime_version() -> *const std::ffi::c_char {
     concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr().cast()
 }
 
+/// For the C DllMain of each binary that carries this archive (the Runtime DLL, the AC7 carrier):
+/// from then on a Rust panic in that binary leaves a record (rsf_game_sys::panic_record).
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub extern "C" fn rsf_core_install_panic_record() {
+    rsf_game_sys::panic_record::install();
+}
+
 // C callers can recover from allocation failure. A successful handle is
 // released with Box::from_raw after its owner has retired outstanding users.
 fn allocate_handle<T>(value: T) -> *mut T {

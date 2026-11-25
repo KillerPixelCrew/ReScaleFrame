@@ -81,6 +81,9 @@ pub unsafe fn publish_api(
     detect: unsafe extern "C" fn(*const rsf_game_probe) -> rsf_detection,
     hooks: rsf_game_hooks_api,
 ) -> rsf_result {
+    // The adapter's first entry: from here a panic in it leaves a record.
+    #[cfg(windows)]
+    crate::panic_record::install();
     if !unsafe { has_capacity(out.cast_const()) } {
         return RSF_ERROR_INVALID_ARGUMENT;
     }
