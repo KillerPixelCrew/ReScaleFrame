@@ -1273,6 +1273,30 @@ and the stack argument are never read) and the swapchain is no longer at `+20`. 
 index 0; the old gate cannot repair it because the game's index no longer reaches this function.
 Only 2.4.0.302 is installed here; no 2.4.0.240 copy exists to cross-check.
 
+Static follow-up on a 2.4.0.302 replacement for the gate (no code was written; the evidence stops
+short). Established from the installed files and the decrypted RDR2 dump:
+
+- RDR2's dispatcher (`RDR2+27f09e8`) passes nothing to Social Club: it tests `[this+8]` and calls
+  `(*[this+8])->vtable[1]()` with no arguments. Any index therefore reaches Social Club through a
+  callback Social Club makes into the game, not through the dispatcher.
+- The renderer object has no index state: the only writers in its vtable are the mode setters
+  (`+59f0` exchanges `[rcx+1a0]`, `+5a30` stores a byte at `[rcx+1a4]`, both only when
+  `[rcx+1bc]` is set), `+4b10` and `+4d50` are initializers, and `+56a0` reads no index
+  argument. So the single `call [rax+120]` at `+56e9` is the only place the index is chosen, and
+  a substitute value would have to come from RDR2 itself.
+- In socialclub.dll 2.4.0.302 the call into renderer slot `+48` sits in a command interpreter
+  (`+1e4888`, switch on the command byte at `[node+10]`) that passes `rdx = [node+8] + base` and
+  `r8` = the interpreter's own third argument, or zero when a process-wide byte is not one. So
+  the list reaches the renderer as r8; no index travels with it.
+
+Not established, and needed before a substitution can be built: (1) which socialclub.dll
+function receives the game's command list for external mode and whether it still calls the game's
+index callback (the 2.4.0.240 caller at `+d9390` read the list and index through game callbacks at
+vtable `+50` and `+58`); (2) RDR2's implementation of that index callback, that is the field or
+function holding the recording index at the moment the renderer runs, which is what a hook at
+`+56e9` would return; (3) whether that value is the same one the 2.4.0.240 relay used (run T saw
+supplied 1 against current 0). Without (2) a hook at `+56e9` has nothing correct to return.
+
 Startup cost and the loader lock: ForceD3D12 at ASI attach is the first owner that needs a site,
 so discovery runs in `DllMain` (`rsf_rdr2_asi_process_attach` -> `attach` -> `force_d3d12` ->
 `discovery::admit`) while the loader lock is held. Measured on the dump in a release build, it takes
