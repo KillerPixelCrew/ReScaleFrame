@@ -9,8 +9,10 @@ use crate::sys::*;
 use crate::{checked, checked_output, d3d12, window};
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
-    RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF, RSF_FG_STAT_TOTAL_PRESENTED, RSF_REFLEX_BOOST,
-    RSF_REFLEX_OFF, RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_SPATIAL, RSF_UI_MODE_BACKBUFFER_HUDLESS,
+    RSF_FG_BACKEND_AUTO, RSF_FG_OFF, RSF_FG_STAT_TOTAL_PRESENTED, RSF_REFLEX_OFF,
+    RSF_RENDER_FRONTEND_ABI_VERSION, RSF_RENDER_SETTINGS_REFUSED_SHARPENING, RSF_SR_AUTO,
+    RSF_SR_CHOICES_ALL, RSF_SR_SPATIAL, RSF_UI_MODE_BACKBUFFER_HUDLESS, rsf_render_settings,
+    rsf_render_settings_check,
 };
 use rsf_game_sys::{
     backend_result, presentation_result::PresentationResult, rsf_game_log_fn,
@@ -24,8 +26,6 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 pub(crate) type Settings = rsf_godot_settings;
 pub(crate) type Status = rsf_godot_status;
 
-const QUALITY_ULTRA_QUALITY: u32 = 5;
-const MAX_GENERATED_FRAMES: u32 = 15;
 const DLSS_ENGINE_CUSTOM: u32 = 0;
 
 /// The settings the D3D12 session and the GDExtension defaults start from, as the Runtime Vulkan
@@ -69,23 +69,35 @@ pub(crate) fn sharpening(settings: &Settings) -> rsf_sharpening_options {
     }
 }
 
-/// The refusal rules of `rsfg_configure`, applied before either backend sees the settings.
+/// The refusal rules of `rsfg_configure`, applied before either backend sees the settings: the
+/// Runtime's settings check (no SR backend is SR off), its sharpening check for a request that
+/// carries one, and Godot's own gameplay flag.
 fn settings_valid(value: &Settings) -> bool {
     let sharpening = &value.sharpening;
-    value.sr_backend <= RSF_SR_AUTO
-        && value.quality <= QUALITY_ULTRA_QUALITY
-        && value.dlss_preset <= 13
-        && RSF_DLSS_PRESET_MASK & (1 << value.dlss_preset) != 0
+    let request = rsf_render_settings {
+        struct_size: size_of::<rsf_render_settings>() as u32,
+        abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
+        sr_enabled: u32::from(value.sr_backend != 0),
+        sr_backend: if value.sr_backend == 0 {
+            RSF_SR_AUTO
+        } else {
+            value.sr_backend
+        },
+        sr_quality: value.quality,
+        dlss_preset: value.dlss_preset,
+        fg_enabled: value.fg_mode,
+        fg_backend: value.fg_backend,
+        generated_frames: value.generated_frames,
+        latency: value.latency_mode,
+        frame_limit_us: value.frame_limit_us,
+        ..Default::default()
+    };
+    let refused = unsafe { rsf_render_settings_check(&request, RSF_SR_CHOICES_ALL) };
+    refused & !RSF_RENDER_SETTINGS_REFUSED_SHARPENING == 0
         && (sharpening.struct_size == 0
             || (sharpening.struct_size as usize >= size_of::<rsf_sharpening_options>()
                 && unsafe { rsf_sharpening_core_valid(*sharpening) } != 0))
-        && value.fg_mode <= RSF_FG_FIXED
-        && value.latency_mode <= RSF_REFLEX_BOOST
-        && (1..=MAX_GENERATED_FRAMES).contains(&value.generated_frames)
         && value.gameplay <= 1
-        && (value.fg_backend == RSF_FG_BACKEND_AUTO
-            || unsafe { rsf_fg_backend_known(value.fg_backend) } != 0)
-        && !(value.sr_backend == RSF_SR_DLSS && value.quality == QUALITY_ULTRA_QUALITY)
 }
 
 /// Owner-held UTF-8 paths. Each boot attempt leaks one set so a Runtime that kept the previous

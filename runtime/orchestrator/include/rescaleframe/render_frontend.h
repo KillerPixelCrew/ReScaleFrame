@@ -41,6 +41,22 @@ typedef struct rsf_render_status {
     uint64_t native_frame, source_frame, tagged_frames, application_presents, output_presents;
     char reason[160];
 } rsf_render_status;
+/* The fields rsf_render_settings_check refuses, the reason a request is invalid. */
+#define RSF_RENDER_SETTINGS_REFUSED_SR 0x1u         /* sr_enabled, or sr_backend not offered */
+#define RSF_RENDER_SETTINGS_REFUSED_QUALITY 0x2u    /* sr_quality the backend does not serve */
+#define RSF_RENDER_SETTINGS_REFUSED_PRESET 0x4u     /* dlss_preset */
+#define RSF_RENDER_SETTINGS_REFUSED_FG 0x8u         /* fg_enabled (a mode) or fg_backend */
+#define RSF_RENDER_SETTINGS_REFUSED_GENERATED 0x10u /* generated_frames outside 1..15 */
+#define RSF_RENDER_SETTINGS_REFUSED_LATENCY 0x20u   /* latency above Boost */
+#define RSF_RENDER_SETTINGS_REFUSED_OVERLAY 0x40u   /* status_overlay */
+#define RSF_RENDER_SETTINGS_REFUSED_SHARPENING 0x80u
+/* The Runtime's one check of a settings request, for every host and engine integration:
+   provider offered (sr_backend_choices, bit n for backend n; RSF_SR_CHOICES_ALL without a limit
+   of its own), quality served by that provider, a valid DLSS preset, a known FG provider and
+   mode, generated frames and latency in range, valid sharpening. Returns 0 when accepted,
+   otherwise the RSF_RENDER_SETTINGS_REFUSED_* bits; a short or null request refuses every bit. */
+RSF_RUNTIME_API uint32_t rsf_render_settings_check(const rsf_render_settings*,
+                                                   uint32_t sr_backend_choices);
 /* Snapshots contain no borrowed strings or GPU objects. Safe from non-render threads. */
 RSF_RUNTIME_API int32_t rsf_render_status_get(rsf_render_status*);
 RSF_RUNTIME_API int32_t rsf_render_settings_get(rsf_render_settings*);

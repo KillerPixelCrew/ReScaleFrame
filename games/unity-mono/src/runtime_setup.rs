@@ -9,14 +9,16 @@ use crate::startup_policy::{self, MONO_DEADLINE, wait_for_sr};
 use rsf_game_sys::ffi_util::lock_or_recover;
 // The carrier already loaded the Runtime. The plugin target links its import library.
 use crate::sys::{
-    RSF_DLSS_PRESET_MASK, RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_SR_AUTO,
-    RSF_SR_CHOICES_ALL, rsf_backend_result, rsf_callback_host_start, rsf_callback_host_stop,
+    RSF_FG_BACKEND_ALL, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_SR_AUTO, RSF_SR_CHOICES_ALL,
+    rsf_backend_result, rsf_callback_host_start, rsf_callback_host_stop,
     rsf_fg_choice_get, rsf_fg_choice_start, rsf_fg12_capture_outputs, rsf_fg12_install,
     rsf_fg12_setup, rsf_native_fg_options, rsf_overlay_saved_options_unregister,
 };
 use rsf_game_sys::{
-    RSF_CALLBACK_HOST_ABI_VERSION_V2, rsf_callback_host_setup, rsf_callback_host_setup_v2,
-    rsf_game_probe,
+    RSF_CALLBACK_HOST_ABI_VERSION_V2, RSF_RENDER_FRONTEND_ABI_VERSION,
+    RSF_RENDER_SETTINGS_REFUSED_GENERATED, RSF_RENDER_SETTINGS_REFUSED_PRESET,
+    rsf_callback_host_setup, rsf_callback_host_setup_v2, rsf_game_probe, rsf_render_settings,
+    rsf_render_settings_check,
 };
 use rsf_unity::bridge_native::rsf_unity_set_engine_spatial;
 use std::ffi::{CStr, CString, OsString, c_char, c_int, c_void};
@@ -52,7 +54,6 @@ mod code {
     pub(super) const STOP_REFUSED: u32 = 1;
 }
 
-const MAX_GENERATED_FRAMES: u32 = 15;
 const AMD64: u16 = 0x8664;
 const MONO: PCWSTR = w!("mono-2.0-bdwgc.dll");
 
@@ -129,6 +130,17 @@ fn register_diagnostics(ini: &Ini) {
             )
         };
     }
+}
+
+/// The fields of [UnitySR] start values the Runtime's settings check refuses; the caller reads
+/// only the bits of the values it set.
+fn refused(start: rsf_render_settings) -> u32 {
+    let request = rsf_render_settings {
+        struct_size: size_of::<rsf_render_settings>() as u32,
+        abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
+        ..start
+    };
+    unsafe { rsf_render_settings_check(&request, RSF_SR_CHOICES_ALL) }
 }
 
 fn guarded(failure: u32, body: impl FnOnce() -> u32) -> u32 {
@@ -227,7 +239,11 @@ fn fg_start(ini: *const u16) -> u32 {
         }
     }
     let generated_frames = setting(&ini, w!("GeneratedFrames"), 1);
-    if generated_frames == 0 || generated_frames > MAX_GENERATED_FRAMES {
+    let start = rsf_render_settings {
+        generated_frames,
+        ..Default::default()
+    };
+    if refused(start) & RSF_RENDER_SETTINGS_REFUSED_GENERATED != 0 {
         return code::FG_FRAMES_REFUSED;
     }
     let limit = setting(&ini, w!("FrameLimitFPS"), 0);
@@ -327,7 +343,11 @@ fn sr_start(ini: *const u16, identity: &mut Option<Identity>) -> u32 {
     let backend = setting(&ini, w!("Backend"), RSF_SR_AUTO);
     let quality = setting(&ini, w!("Quality"), 1);
     let mut dlss_preset = setting(&ini, w!("DlssPreset"), 0);
-    if dlss_preset > 13 || RSF_DLSS_PRESET_MASK & (1 << dlss_preset) == 0 {
+    let start = rsf_render_settings {
+        dlss_preset,
+        ..Default::default()
+    };
+    if refused(start) & RSF_RENDER_SETTINGS_REFUSED_PRESET != 0 {
         dlss_preset = 0;
     }
     let setup = rsf_callback_host_setup_v2 {
@@ -438,6 +458,33 @@ mod tests {
         // Every provider, URP's FSR1 and Auto: the Runtime narrows them to this machine, and the
         // callback host's own test checks what it then offers.
         assert_eq!(RSF_SR_CHOICES_ALL, 0b1111_1110);
+    }
+
+    #[test]
+    fn start_values_are_checked_by_the_runtime() {
+        let generated = |generated_frames| {
+            refused(rsf_render_settings {
+                generated_frames,
+                ..Default::default()
+            }) & RSF_RENDER_SETTINGS_REFUSED_GENERATED
+        };
+        assert_eq!(
+            (generated(0), generated(1), generated(15)),
+            (RSF_RENDER_SETTINGS_REFUSED_GENERATED, 0, 0)
+        );
+        assert_ne!(generated(16), 0);
+        let preset = |dlss_preset| {
+            refused(rsf_render_settings {
+                dlss_preset,
+                ..Default::default()
+            }) & RSF_RENDER_SETTINGS_REFUSED_PRESET
+        };
+        for valid in [0, 5, 6, 10, 11, 12, 13] {
+            assert_eq!(preset(valid), 0);
+        }
+        for invalid in [1, 2, 3, 4, 7, 8, 9, 14, 40] {
+            assert_ne!(preset(invalid), 0);
+        }
     }
 
     #[test]

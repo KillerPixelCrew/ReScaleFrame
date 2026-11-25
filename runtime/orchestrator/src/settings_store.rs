@@ -681,10 +681,135 @@ pub(crate) unsafe extern "C" fn rsf_settings_store_write_integer(
         .map_or(INVALID_ARGUMENT, |key| file.write_integer(key, value))
 }
 
+/// The fields of `request` the Runtime refuses when its host offers `sr_choices` (bit n for SR
+/// backend n), as RSF_RENDER_SETTINGS_REFUSED_* bits; zero accepts it. One rule set for every
+/// host and engine integration. Auto's quality is checked as no backend's, because it resolves
+/// to a provider only on the device.
+pub(crate) fn refused(request: &Settings, sr_choices: u32) -> u32 {
+    use crate::sys::{
+        RSF_FG_BACKEND_ALL, RSF_FG_DYNAMIC, RSF_REFLEX_BOOST, RSF_RENDER_SETTINGS_REFUSED_FG as FG,
+        RSF_RENDER_SETTINGS_REFUSED_GENERATED as GENERATED,
+        RSF_RENDER_SETTINGS_REFUSED_LATENCY as LATENCY,
+        RSF_RENDER_SETTINGS_REFUSED_OVERLAY as OVERLAY,
+        RSF_RENDER_SETTINGS_REFUSED_PRESET as PRESET,
+        RSF_RENDER_SETTINGS_REFUSED_QUALITY as QUALITY, RSF_RENDER_SETTINGS_REFUSED_SR as SR,
+        RSF_RENDER_SETTINGS_REFUSED_SHARPENING as SHARPENING,
+    };
+    use rsf_game_sys::{RSF_OVERLAY_MAX_GENERATED_FRAMES, RSF_SR_AUTO};
+    let has = |mask: u32, bit: u32| bit < u32::BITS && mask & (1 << bit) != 0;
+    let backend = if request.sr_backend == RSF_SR_AUTO {
+        0
+    } else {
+        request.sr_backend
+    };
+    let sharpening = sharpening_of(request, &sharpening_policy::defaults());
+    [
+        (request.sr_enabled <= 1 && has(sr_choices, request.sr_backend), SR),
+        (has(crate::sr_choices::sr_quality(backend), request.sr_quality), QUALITY),
+        (crate::streamline_sr::preset_valid(request.dlss_preset), PRESET),
+        (
+            request.fg_enabled <= RSF_FG_DYNAMIC
+                && crate::fg_choice::allowed(request.fg_backend, RSF_FG_BACKEND_ALL),
+            FG,
+        ),
+        (
+            (1..=RSF_OVERLAY_MAX_GENERATED_FRAMES).contains(&request.generated_frames),
+            GENERATED,
+        ),
+        (request.latency <= RSF_REFLEX_BOOST, LATENCY),
+        (request.status_overlay <= 1, OVERLAY),
+        (sharpening_policy::valid(&sharpening), SHARPENING),
+    ]
+    .into_iter()
+    .filter(|(valid, _)| !valid)
+    .fold(0, |bits, (_, bit)| bits | bit)
+}
+
+/// # Safety
+/// `request` is null or readable for its leading `struct_size`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_render_settings_check(request: *const Settings, sr_choices: u32) -> u32 {
+    unsafe { checked(request) }.map_or(u32::MAX, |request| refused(request, sr_choices))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::temporary_ini::TemporaryIni;
+
+    #[test]
+    fn one_check_refuses_each_field_and_names_it() {
+        use crate::sys::*;
+        use rsf_game_sys::{RSF_SR_AUTO, RSF_SR_CHOICES_ALL};
+        let mut valid = Settings {
+            struct_size: size_of::<Settings>() as u32,
+            abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
+            sr_enabled: 1,
+            sr_backend: RSF_SR_AUTO,
+            sr_quality: 1,
+            fg_backend: RSF_FG_BACKEND_AUTO,
+            generated_frames: 1,
+            ..Default::default()
+        };
+        // All-zero sharpening fields are not a valid request.
+        assert_eq!(
+            refused(&valid, RSF_SR_CHOICES_ALL),
+            RSF_RENDER_SETTINGS_REFUSED_SHARPENING
+        );
+        set_sharpening(&mut valid, &sharpening_policy::defaults());
+        let check = |change: fn(&mut Settings)| {
+            let mut request = valid;
+            change(&mut request);
+            unsafe { rsf_render_settings_check(&request, RSF_SR_CHOICES_ALL) }
+        };
+        assert_eq!(check(|_| {}), 0);
+        assert_eq!(check(|s| s.sr_enabled = 2), RSF_RENDER_SETTINGS_REFUSED_SR);
+        assert_eq!(check(|s| s.sr_backend = 0), RSF_RENDER_SETTINGS_REFUSED_SR);
+        // An unknown backend serves no quality either.
+        assert_eq!(
+            check(|s| s.sr_backend = 40),
+            RSF_RENDER_SETTINGS_REFUSED_SR | RSF_RENDER_SETTINGS_REFUSED_QUALITY
+        );
+        // Ultra Quality is XeSS's and FSR1's, and Auto's until it resolves.
+        let ultra = |backend| {
+            let mut request = valid;
+            (request.sr_backend, request.sr_quality) = (backend, 5);
+            unsafe { rsf_render_settings_check(&request, RSF_SR_CHOICES_ALL) }
+        };
+        for backend in [RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4] {
+            assert_eq!(ultra(backend), RSF_RENDER_SETTINGS_REFUSED_QUALITY);
+        }
+        for backend in [RSF_SR_XESS, RSF_SR_SPATIAL, RSF_SR_AUTO] {
+            assert_eq!(ultra(backend), 0);
+        }
+        assert_eq!(check(|s| s.sr_quality = 6), RSF_RENDER_SETTINGS_REFUSED_QUALITY);
+        assert_eq!(check(|s| s.dlss_preset = 1), RSF_RENDER_SETTINGS_REFUSED_PRESET);
+        assert_eq!(check(|s| s.dlss_preset = 13), 0);
+        assert_eq!(check(|s| s.fg_enabled = 4), RSF_RENDER_SETTINGS_REFUSED_FG);
+        assert_eq!(check(|s| s.fg_backend = 2), RSF_RENDER_SETTINGS_REFUSED_FG);
+        assert_eq!(check(|s| s.fg_backend = 0), RSF_RENDER_SETTINGS_REFUSED_FG);
+        assert_eq!(check(|s| s.generated_frames = 0), RSF_RENDER_SETTINGS_REFUSED_GENERATED);
+        assert_eq!(check(|s| s.generated_frames = 16), RSF_RENDER_SETTINGS_REFUSED_GENERATED);
+        assert_eq!(check(|s| s.generated_frames = 15), 0);
+        assert_eq!(check(|s| s.latency = 3), RSF_RENDER_SETTINGS_REFUSED_LATENCY);
+        assert_eq!(check(|s| s.status_overlay = 2), RSF_RENDER_SETTINGS_REFUSED_OVERLAY);
+        assert_eq!(
+            check(|s| s.sharpening_sharpness = f32::NAN),
+            RSF_RENDER_SETTINGS_REFUSED_SHARPENING
+        );
+        assert_eq!(
+            check(|s| (s.latency, s.dlss_preset) = (9, 2)),
+            RSF_RENDER_SETTINGS_REFUSED_LATENCY | RSF_RENDER_SETTINGS_REFUSED_PRESET
+        );
+        // A host's own SR limit narrows what is offered.
+        let mut xess = valid;
+        xess.sr_backend = RSF_SR_XESS;
+        assert_eq!(unsafe { rsf_render_settings_check(&xess, 1 << RSF_SR_DLSS) }, 1);
+        assert_eq!(
+            unsafe { rsf_render_settings_check(std::ptr::null(), RSF_SR_CHOICES_ALL) },
+            u32::MAX
+        );
+    }
 
     #[test]
     fn saved_unicode_text_round_trips_through_an_existing_ascii_profile() {
