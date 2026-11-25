@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The leaves render_host and callback_host call. Production compiles this module; each host's
-// unit tests supply fakes with the same names instead.
+// The leaves both render_host entries call. Production compiles this module; each entry's unit
+// tests supply fakes with the same names instead.
 use super::render_host::{Adapter, ResourceDesc};
 use crate::com_ref;
 pub(super) use crate::d3d11_d3d12::{create_fence, fence_completed, queue_signal};

@@ -23,7 +23,6 @@ use rsf_runtime_common as _;
 #[cfg(windows)]
 mod auxiliary_sr;
 #[cfg(windows)]
-mod callback_host;
 mod capture_metadata;
 use rsf_graphics::capture_names;
 use rsf_graphics::capture_pixels;

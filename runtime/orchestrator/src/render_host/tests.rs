@@ -548,7 +548,10 @@ fn install_reads_one_shot_requests_and_owns_fg_or_observer() {
         installed.lock().capture_directory.to_str().unwrap(),
         "C:\\captures"
     );
-    assert!(installed.fsr.to_str().unwrap().ends_with("/fidelityfx"));
+    let vendors = &installed.vendors;
+    for fsr in [&vendors.fsr2, &vendors.fsr3, &vendors.fsr4] {
+        assert!(fsr.to_str().unwrap().ends_with("/fidelityfx"));
+    }
 
     let engine = host(&ini, ENGINE_PRESENTATION);
     let log = events();

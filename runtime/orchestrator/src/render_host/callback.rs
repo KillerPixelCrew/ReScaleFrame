@@ -1,36 +1,37 @@
 // SPDX-License-Identifier: MIT
-//! The shared callback render host behind callback_render_host.h.
+//! The D3D12 host entry behind callback_render_host.h, for an adapter whose render callbacks
+//! guarantee command-slot retirement and that may report its engine's own spatial scaler.
 //!
-//! An adapter whose render callbacks guarantee command-slot retirement starts this host with its
-//! plugin, probe, saved SR choice and engine identity. Rust owns admission, the refusal codes,
-//! the plugin lifecycle order, host state, renderer configuration, scene and submission
-//! matching, SR context lifetime, callback recording slots, settings and overlay control.
-//! Settings keys belong to settings_store.rs, SR vendor selection to rsf_gpu_select_sr_backend.
-//! The adapter's only policy input is `set_engine_spatial`, which learns whether the engine
-//! upscales spatially itself, never the vendor.
+//! The adapter starts it with its plugin, probe, saved SR choice and engine identity. Rust owns
+//! admission, the refusal codes, the plugin lifecycle order, host state, renderer configuration,
+//! scene and submission matching, SR context lifetime, callback recording slots, settings and
+//! overlay control. The vendor packages, SR context setup and the overlay's SR card are the
+//! parent module's, shared with every D3D12 integration. The adapter's only policy input is
+//! `set_engine_spatial`, which learns whether the engine upscales spatially itself, never the
+//! vendor; the Runtime decides when the engine's scaler runs.
+use super::{Adapter, ResourceDesc, Vendors, sr_card};
 use crate::com_ref;
 use crate::copy_c_string;
 use crate::fg_choice;
-use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening, sr_name};
+use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening};
 #[cfg(not(test))]
 use crate::plugin_session::Session;
-use crate::render_host::{Adapter, ResourceDesc};
 use crate::settings_store::{
     rsf_settings_store_read_layout, rsf_settings_store_write_layout,
     rsf_settings_store_write_sharpening, write_dlss_preset,
 };
-use crate::sr_choices::{directory, package_has, sr_backends, sr_quality};
+use crate::sr_choices::sr_quality;
 use crate::sync::lock;
-use crate::sys::{
-    RSF_DLSS_ABI_VERSION, rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
-    rsf_sharpening_options as Sharpening,
-};
+use crate::sys::rsf_sr12_setup as SrSetup;
 use crate::sys::{
     RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,
     rsf_overlay_intent as Intent, rsf_overlay_stats as Stats,
 };
 use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_SPATIAL, RSF_SR_XESS};
-use crate::sys::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
+use crate::sys::{
+    rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
+    rsf_sharpening_options as Sharpening,
+};
 use crate::wide::copy_nul as wide_copy;
 use rsf_game_sys::ffi_util::{checked, has_capacity};
 use rsf_game_sys::{
@@ -131,16 +132,8 @@ pub(crate) struct Host {
     // Written only under the lifecycle lock; read by stop.
     plugin: AtomicPtr<Session>,
     preferences: Vec<u16>,
-    streamline: CString,
-    interposer: CString,
-    fsr2: CString,
-    fsr3: CString,
-    fsr4: CString,
-    xess: CString,
     sr_choices: u32,
-    engine_type: u32,
-    engine_version: CString,
-    project_id: CString,
+    vendors: Vendors,
     set_engine_spatial: SpatialFn,
     policy_v2: Option<PolicyV2>,
 }
@@ -308,31 +301,16 @@ impl Host {
         let vendor = (unsafe { leaf::adapter(device.as_raw(), &mut adapter) } != 0)
             .then_some(adapter.vendor);
         s.vendor = vendor.unwrap_or(0);
-        let packages = [&self.streamline, &self.fsr3, &self.xess].map(|text| directory(text));
         let mut stats = Stats {
             struct_size: size_of::<Stats>() as u32,
             backend_loaded: 1,
             backend_supported: s.plan.enabled,
-            backend_name: self
-                .policy_v2
-                .as_ref()
-                .filter(|adapter| s.backend == RSF_SR_SPATIAL && !adapter.spatial_name.is_empty())
-                .map_or_else(
-                    || sr_name(s.backend).as_ptr(),
-                    |adapter| adapter.spatial_name.as_ptr(),
-                ),
-            // Auto stays the selected choice; the name above is the provider it resolved to.
-            backend: if s.automatic { RSF_SR_AUTO } else { s.backend },
-            // The engine's own scaler is the host's fact (`set_engine_spatial`), the rest the Runtime's.
-            sr_backend_choices: sr_backends(vendor, package_has(packages), true) & self.sr_choices,
-            sr_quality_choices: sr_quality(s.backend),
             sr_change_id: s.sr_change_id,
             sr_change_status: s.sr_change_status,
             requested_backend: s.requested_backend,
             quality: s.quality,
             sharpening_available: u32::from((RSF_SR_DLSS..=RSF_SR_XESS).contains(&s.backend)),
             dlss_preset: s.preset,
-            dlss_preset_available: 1,
             enabled: u32::from(s.enabled),
             last_result: s.last_result,
             last_switch_result: s.last_result,
@@ -358,6 +336,17 @@ impl Host {
                 .unwrap_or(0),
             ..Stats::default()
         };
+        // Auto stays the selected choice, named by the provider it resolved to. The engine's own
+        // scaler is offered because the adapter reports it (`set_engine_spatial`).
+        let selected = if s.automatic { RSF_SR_AUTO } else { s.backend };
+        let offered = self.vendors.offered(vendor, true, self.sr_choices);
+        sr_card(&mut stats, selected, s.backend, offered);
+        if let Some(adapter) = &self.policy_v2
+            && s.backend == RSF_SR_SPATIAL
+            && !adapter.spatial_name.is_empty()
+        {
+            stats.backend_name = adapter.spatial_name.as_ptr();
+        }
         fill_sharpening_stats(&mut stats, &s.sharpening);
         let reason: Option<&'static CStr> = if s.dirty {
             Some(c"Applying requested configuration after GPU completion")
@@ -776,38 +765,16 @@ impl Host {
         let Some(device) = (unsafe { com_ref::owned(leaf::child_device(commands)) }) else {
             return false;
         };
-        let setup = SrSetup {
-            struct_size: size_of::<SrSetup>() as u32,
-            abi_version: 1,
-            device: device.as_raw(),
-            backend: s.backend,
-            quality: s.quality,
-            streamline_host: leaf::present_host(),
-            output_width: s.width,
-            output_height: s.height,
-            inverted_depth: pass.camera.depth_inverted,
-            fsr2_directory_utf8: self.fsr2.as_ptr(),
-            fsr3_directory_utf8: self.fsr3.as_ptr(),
-            fsr4_directory_utf8: self.fsr4.as_ptr(),
-            xess_directory_utf8: self.xess.as_ptr(),
-            log: Some(log),
-            user: self.user(),
-            dlss: DlssSetup {
-                struct_size: size_of::<DlssSetup>() as u32,
-                abi_version: RSF_DLSS_ABI_VERSION,
-                interposer_path_utf8: self.interposer.as_ptr(),
-                plugin_directory_utf8: self.streamline.as_ptr(),
-                engine: self.engine_type,
-                engine_version_utf8: self.engine_version.as_ptr(),
-                project_id_utf8: self.project_id.as_ptr(),
-                preset: s.preset,
-                require_signature: 1,
-                log: Some(log),
-                log_user: self.user(),
-                ..DlssSetup::default()
-            },
-            ..SrSetup::default()
-        };
+        let mut setup = self.vendors.sr_setup(
+            device.as_raw(),
+            (s.backend, s.quality, s.preset),
+            Some(log),
+            self.user(),
+        );
+        // The host plans the render extents; the vendor context reports them.
+        (setup.output_width, setup.output_height) = (s.width, s.height);
+        setup.inverted_depth = pass.camera.depth_inverted;
+        setup.streamline_host = leaf::present_host();
         let created = unsafe { leaf::sr12_create(&setup, &mut s.sr) };
         drop(device);
         s.last_result = created;
@@ -964,16 +931,19 @@ unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
         log_file: Mutex::new(log_file),
         plugin: AtomicPtr::new(null_mut()),
         preferences,
-        streamline,
-        interposer: CString::new(interposer).unwrap_or_default(),
-        fsr2: unsafe { copy_c_string(setup.fsr2_directory_utf8, c"") },
-        fsr3: unsafe { copy_c_string(setup.fsr3_directory_utf8, c"") },
-        fsr4: unsafe { copy_c_string(setup.fsr4_directory_utf8, c"") },
-        xess: unsafe { copy_c_string(setup.xess_directory_utf8, c"") },
         sr_choices: setup.sr_backend_choices,
-        engine_type: setup.engine_type,
-        engine_version: unsafe { copy_c_string(setup.engine_version_utf8, c"") },
-        project_id: unsafe { copy_c_string(setup.project_id_utf8, c"") },
+        vendors: Vendors {
+            streamline,
+            interposer: CString::new(interposer).unwrap_or_default(),
+            fsr2: unsafe { copy_c_string(setup.fsr2_directory_utf8, c"") },
+            fsr3: unsafe { copy_c_string(setup.fsr3_directory_utf8, c"") },
+            fsr4: unsafe { copy_c_string(setup.fsr4_directory_utf8, c"") },
+            xess: unsafe { copy_c_string(setup.xess_directory_utf8, c"") },
+            engine_type: setup.engine_type,
+            application_id: 0,
+            engine_version: unsafe { copy_c_string(setup.engine_version_utf8, c"") },
+            project_id: unsafe { copy_c_string(setup.project_id_utf8, c"") },
+        },
         set_engine_spatial,
         policy_v2,
     };

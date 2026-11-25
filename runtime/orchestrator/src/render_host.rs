@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: MIT
-//! The generic D3D12 render host behind render_host.h and render_frontend.h.
+//! The one D3D12 render host, behind render_host.h, render_frontend.h and callback_render_host.h.
+//!
+//! Every D3D12 integration reports into this module. The vendor packages, the engine identity, the
+//! SR context setup and the overlay's SR card are one implementation (`Vendors`, `sr_card`). The
+//! integration's retirement contract picks the entry: this file serves an engine whose recordings
+//! the host retires by fence (RDR2, `rsf_render_host_create`); `callback` serves an adapter whose
+//! callbacks guarantee command-slot retirement and that may report its engine's own spatial
+//! scaler (Unity Mono, `rsf_callback_host_start`).
 //!
 //! Rust owns admission, host and control state, SR backend resolution, settings translation and
 //! commit, SR context lifetime, recording slots, fence retirement, scene and Present matching,
@@ -20,7 +27,6 @@ use crate::settings_store::{
 use crate::sharpening_policy;
 use crate::sr_choices::{directory, package_has, sr_backends, sr_quality};
 use crate::sync::lock;
-use crate::sys::rsf_fg12_setup as FgSetup;
 use crate::sys::{
     RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
     RSF_FG_STAT_TOTAL_PRESENTED, RSF_RENDER_FRONTEND_ABI_VERSION,
@@ -33,6 +39,7 @@ use crate::sys::{
     rsf_overlay_intent as Intent, rsf_overlay_stats as Stats, rsf_render_status as Status,
 };
 use crate::sys::{RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_NONE, RSF_SR_SPATIAL, RSF_SR_XESS};
+use crate::sys::{rsf_backend_log_fn, rsf_fg12_setup as FgSetup};
 use crate::sys::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
 use crate::wide::copy_nul as wide_copy;
 #[cfg(not(test))]
@@ -60,6 +67,7 @@ use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::System::WindowsProgramming::GetPrivateProfileStringW;
 use windows_sys::core::w;
 
+mod callback;
 #[cfg(test)]
 mod tests;
 
@@ -137,6 +145,84 @@ pub(super) struct ResourceDesc {
     pub(super) format: u32,
     pub(super) samples: u32,
 }
+
+/// The vendor packages and the engine identity that an SR context and the offered set come from.
+struct Vendors {
+    streamline: CString,
+    interposer: CString,
+    fsr2: CString,
+    fsr3: CString,
+    fsr4: CString,
+    xess: CString,
+    engine_type: u32,
+    application_id: u32,
+    engine_version: CString,
+    project_id: CString,
+}
+
+impl Vendors {
+    /// What the panel offers on this adapter: the packages beside the Runtime, the engine's own
+    /// scaler when the integration reports one, and the integration's limit.
+    fn offered(&self, vendor: Option<u32>, engine_spatial: bool, limit: u32) -> u32 {
+        let packages = [&self.streamline, &self.fsr3, &self.xess].map(|text| directory(text));
+        sr_backends(vendor, package_has(packages), engine_spatial) & limit
+    }
+
+    /// The SR context setup for `backend` on `device`; the entry adds what its integration reports.
+    fn sr_setup(
+        &self,
+        device: Handle,
+        (backend, quality, preset): (u32, u32, u32),
+        log: rsf_backend_log_fn,
+        user: Handle,
+    ) -> SrSetup {
+        SrSetup {
+            struct_size: size_of::<SrSetup>() as u32,
+            abi_version: 1,
+            device,
+            backend,
+            quality,
+            fsr2_directory_utf8: self.fsr2.as_ptr(),
+            fsr3_directory_utf8: self.fsr3.as_ptr(),
+            fsr4_directory_utf8: self.fsr4.as_ptr(),
+            xess_directory_utf8: self.xess.as_ptr(),
+            log,
+            user,
+            dlss: DlssSetup {
+                struct_size: size_of::<DlssSetup>() as u32,
+                abi_version: RSF_DLSS_ABI_VERSION,
+                interposer_path_utf8: self.interposer.as_ptr(),
+                plugin_directory_utf8: self.streamline.as_ptr(),
+                engine: self.engine_type,
+                engine_version_utf8: self.engine_version.as_ptr(),
+                project_id_utf8: if self.project_id.is_empty() {
+                    null()
+                } else {
+                    self.project_id.as_ptr()
+                },
+                application_id: self.application_id,
+                require_signature: 1,
+                log,
+                log_user: user,
+                preset,
+                ..DlssSetup::default()
+            },
+            ..SrSetup::default()
+        }
+    }
+}
+
+/// The overlay's SR card for either entry. `selected` may be Auto; `resolved` is the backend it
+/// runs as, zero until Auto resolves, and until then Auto offers the levels every provider it can
+/// pick accepts.
+fn sr_card(stats: &mut Stats, selected: u32, resolved: u32, offered: u32) {
+    stats.backend = selected;
+    stats.backend_name = sr_name(resolved).as_ptr();
+    stats.sr_backend_choices = offered;
+    stats.sr_quality_choices = sr_quality(if resolved != 0 { resolved } else { selected });
+    stats.dlss_preset_available = 1;
+}
+
 #[derive(Clone, Copy)]
 struct Slot {
     commands: Handle,
@@ -225,16 +311,9 @@ pub(crate) struct Host {
     section: Vec<u16>,
     session: u64,
     sr_choices: u32,
-    engine_type: u32,
-    application_id: u32,
-    engine_version: CString,
-    project_id: CString,
+    vendors: Vendors,
     window_filter: WindowFn,
     window_user: *mut c_void,
-    streamline: CString,
-    interposer: CString,
-    fsr: CString,
-    xess: CString,
     logger: rsf_game_log_fn,
     logger_user: *mut c_void,
     engine_streamline: bool,
@@ -542,49 +621,21 @@ impl Host {
 
     // Replaces the SR context for a changed backend, quality, preset, exposure or extent.
     fn configure(&self, s: &mut State, pass: &Pass, key: ContextKey) -> i32 {
-        let quality = key.quality;
         let camera = &pass.camera;
         let device = s.device.as_ref().map_or(null_mut(), Interface::as_raw);
-        let mut setup = SrSetup {
-            struct_size: size_of::<SrSetup>() as u32,
-            abi_version: 2,
+        let mut setup = self.vendors.sr_setup(
             device,
-            backend: s.backend,
-            quality,
-            output_width: camera.output_width,
-            output_height: camera.output_height,
-            render_width: camera.render_width,
-            render_height: camera.render_height,
-            engine_input_extents: 1,
-            inverted_depth: camera.depth_inverted,
-            external_exposure: u32::from(!pass.exposure.is_null()),
-            fsr2_directory_utf8: self.fsr.as_ptr(),
-            fsr3_directory_utf8: self.fsr.as_ptr(),
-            fsr4_directory_utf8: self.fsr.as_ptr(),
-            xess_directory_utf8: self.xess.as_ptr(),
-            log: Some(backend_log),
-            user: self.user(),
-            ..SrSetup::default()
-        };
-        setup.dlss = DlssSetup {
-            struct_size: size_of::<DlssSetup>() as u32,
-            abi_version: RSF_DLSS_ABI_VERSION,
-            interposer_path_utf8: self.interposer.as_ptr(),
-            plugin_directory_utf8: self.streamline.as_ptr(),
-            engine: self.engine_type,
-            engine_version_utf8: self.engine_version.as_ptr(),
-            project_id_utf8: if self.project_id.is_empty() {
-                null()
-            } else {
-                self.project_id.as_ptr()
-            },
-            application_id: self.application_id,
-            require_signature: 1,
-            log: Some(backend_log),
-            log_user: self.user(),
-            preset: s.preset,
-            ..DlssSetup::default()
-        };
+            (s.backend, key.quality, s.preset),
+            Some(backend_log),
+            self.user(),
+        );
+        // The engine owns its render extents and may supply its exposure.
+        setup.abi_version = 2;
+        (setup.output_width, setup.output_height) = (camera.output_width, camera.output_height);
+        (setup.render_width, setup.render_height) = (camera.render_width, camera.render_height);
+        setup.engine_input_extents = 1;
+        setup.inverted_depth = camera.depth_inverted;
+        setup.external_exposure = u32::from(!pass.exposure.is_null());
         setup.streamline_host = leaf::present_host();
         // The scene is linear floating-point HDR even when the swapchain is SDR.
         if s.backend == RSF_SR_DLSS && setup.streamline_host.is_null() {
@@ -1159,23 +1210,14 @@ impl Host {
         } else {
             prefs.sr_backend
         };
-        stats.backend = prefs.sr_backend;
-        stats.backend_name = sr_name(resolved).as_ptr();
-        stats.requested_backend = stats.backend;
-        stats.enabled = prefs.sr_enabled;
-        stats.quality = quality;
         let mut adapter = Adapter::default();
         let vendor = (unsafe { leaf::adapter(device.as_raw(), &mut adapter) } != 0)
             .then_some(adapter.vendor);
-        let packages = [&self.streamline, &self.fsr, &self.xess].map(|text| directory(text));
-        stats.sr_backend_choices =
-            sr_backends(vendor, package_has(packages), false) & self.sr_choices;
-        // Until Auto has resolved, it offers the levels every provider it can pick accepts.
-        stats.sr_quality_choices = sr_quality(if resolved != 0 {
-            resolved
-        } else {
-            prefs.sr_backend
-        });
+        let offered = self.vendors.offered(vendor, false, self.sr_choices);
+        sr_card(&mut stats, prefs.sr_backend, resolved, offered);
+        stats.requested_backend = stats.backend;
+        stats.enabled = prefs.sr_enabled;
+        stats.quality = quality;
         [stats.sr_change_id, stats.sr_change_status] = SR_CHANGE.get();
         stats.sharpening_available = 1;
         fill_sharpening_stats(
@@ -1184,7 +1226,6 @@ impl Host {
         );
         stats.have_depth = u32::from(status.sr_effective_backend != 0);
         stats.dlss_preset = prefs.dlss_preset;
-        stats.dlss_preset_available = 1;
         stats.refusal_reason = if status.fg_requested != 0 && status.fg_active == 0 {
             status.reason.as_ptr()
         } else {
@@ -1450,6 +1491,7 @@ unsafe fn describe(setup: &Setup, services: &Services) -> Host {
     let root = utf8(&unsafe { wide_copy(setup.runtime_directory) });
     let streamline = format!("{root}/streamline");
     let interposer = format!("{streamline}/sl.interposer.dll");
+    let fsr = c_string(format!("{root}/fidelityfx"));
     let text = |value: *const c_char| {
         if value.is_null() {
             CString::default()
@@ -1464,16 +1506,20 @@ unsafe fn describe(setup: &Setup, services: &Services) -> Host {
         session: services.session_id,
         // This host hands the engine no plan for its own scaler, so Spatial is never its choice.
         sr_choices: setup.sr_backend_choices & !(1 << RSF_SR_SPATIAL),
-        engine_type: setup.engine_type,
-        application_id: setup.application_id,
-        engine_version: text(setup.engine_version_utf8),
-        project_id: text(setup.project_id_utf8),
+        vendors: Vendors {
+            streamline: c_string(streamline),
+            interposer: c_string(interposer),
+            fsr2: fsr.clone(),
+            fsr3: fsr.clone(),
+            fsr4: fsr,
+            xess: c_string(format!("{root}/xess")),
+            engine_type: setup.engine_type,
+            application_id: setup.application_id,
+            engine_version: text(setup.engine_version_utf8),
+            project_id: text(setup.project_id_utf8),
+        },
         window_filter: setup.accept_window,
         window_user: setup.user,
-        streamline: c_string(streamline),
-        interposer: c_string(interposer),
-        fsr: c_string(format!("{root}/fidelityfx")),
-        xess: c_string(format!("{root}/xess")),
         logger: services.log,
         logger_user: services.user,
         engine_streamline: setup.presentation_owner == ENGINE_PRESENTATION,
@@ -1507,11 +1553,12 @@ fn install(host: &Host, setup: &Setup) -> i32 {
         fg.struct_size = size_of::<FgSetup>() as u32;
         fg.backend = RSF_FG_BACKEND_AUTO;
         fg.max_generated_frames = u32::MAX;
-        fg.runtime_directory_utf8 = host.fsr.as_ptr();
-        fg.fsr3_directory_utf8 = host.fsr.as_ptr();
-        fg.fsr4_directory_utf8 = host.fsr.as_ptr();
-        fg.xess_directory_utf8 = host.xess.as_ptr();
-        fg.streamline_directory_utf8 = host.streamline.as_ptr();
+        let vendors = &host.vendors;
+        fg.runtime_directory_utf8 = vendors.fsr3.as_ptr();
+        fg.fsr3_directory_utf8 = vendors.fsr3.as_ptr();
+        fg.fsr4_directory_utf8 = vendors.fsr4.as_ptr();
+        fg.xess_directory_utf8 = vendors.xess.as_ptr();
+        fg.streamline_directory_utf8 = vendors.streamline.as_ptr();
         fg.options = FgOptions {
             struct_size: size_of::<FgOptions>() as u32,
             mode: RSF_FG_OFF,
@@ -1524,9 +1571,9 @@ fn install(host: &Host, setup: &Setup) -> i32 {
         fg.units_to_meters = setup.units_to_meters;
         fg.runtime_switching = 1;
         fg.ui_mode = setup.ui_mode;
-        fg.engine_type = host.engine_type;
-        fg.engine_version_utf8 = host.engine_version.as_ptr();
-        fg.project_id_utf8 = host.project_id.as_ptr();
+        fg.engine_type = vendors.engine_type;
+        fg.engine_version_utf8 = vendors.engine_version.as_ptr();
+        fg.project_id_utf8 = vendors.project_id.as_ptr();
         fg.log = Some(backend_log);
         fg.user = host.user();
         fg.accept_window = Some(accept_window);
