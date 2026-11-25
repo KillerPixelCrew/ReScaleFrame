@@ -79,6 +79,9 @@ thread_local! {
     static CHAIN_EXTENT: Cell<[u32; 2]> = const { Cell::new([64, 64]) };
     // Bits: 1 translucency, 2 UI composition, 4 texture binding, 8 window end.
     static ROUTED: Cell<u32> = const { Cell::new(0) };
+    // What the host offered the overlay: SR, FG and latency choices.
+    static OFFERED: Cell<[u32; 3]> = const { Cell::new([0; 3]) };
+    static INSTALLS: Cell<i32> = const { Cell::new(1) };
 }
 
 fn owned(cell: &'static std::thread::LocalKey<Cell<Raw>>) -> Raw {
@@ -101,10 +104,11 @@ pub(super) mod native {
         dump_texture, dump_wants, end as creation_end, evaluate as sr_evaluate,
         facade as present_is_owner, fg_latency_event, fg_options_set, fg_prepare,
         fg_rendered_source_set, fg_retire, fg_set_log, final_fact as fg_final, ini_read, ini_write,
-        last_present as window_last_present, native_present as dlss_native_present,
-        none as chain_buffer, none as chain_present, none as com_identity, nothing as dump_poll,
-        nothing as dump_request, observe as observer_install, output as pipeline_output,
-        overlay_configure, overlay_present, pass_fact as fg_frame, pass_fact as fg_submission,
+        last_present as window_last_present, listen as observer_listen,
+        native_present as dlss_native_present, none as chain_buffer, none as chain_present,
+        none as com_identity, nothing as dump_poll, nothing as dump_request,
+        observe as observer_install, output as pipeline_output, overlay_configure, overlay_present,
+        owner_exists as present_has_owner, pass_fact as fg_frame, pass_fact as fg_submission,
         pass_result as scene_pass, pass_result as window_scope, poll_toggle as overlay_poll_toggle,
         present_path as scene_present_path, preset as pipeline_preset,
         refuse_bridge as present_install, refuse_bridge as present_install_scoped,
@@ -164,7 +168,14 @@ pub(super) unsafe extern "C" fn observe(
     _: Raw,
     _: rsf_observer_present_event_fn,
 ) -> i32 {
+    INSTALLS.get()
+}
+// An observer the game installed carries the host's listener.
+pub(super) unsafe fn listen(_: rsf_observer_present_event_fn, _: Raw) -> i32 {
     1
+}
+pub(super) fn owner_exists() -> i32 {
+    OWNER_FACADE.get()
 }
 pub(super) unsafe extern "C" fn facade(_: Raw) -> i32 {
     OWNER_FACADE.get()
@@ -316,9 +327,15 @@ pub(super) unsafe extern "C" fn dump_result(
 }
 pub(super) unsafe extern "C" fn dump_complete(_: *const rsf_frame_record, _: i32) {}
 pub(super) unsafe extern "C" fn overlay_configure(
-    _: *const rsf_overlay_service_setup,
+    setup: *const rsf_overlay_service_setup,
     applied: *mut rsf_render_settings,
 ) -> i32 {
+    let setup = unsafe { &*setup };
+    OFFERED.set([
+        setup.sr_backend_choices,
+        setup.fg_backend_choices,
+        setup.latency_choices,
+    ]);
     unsafe {
         *applied = rsf_render_settings {
             struct_size: size_of::<rsf_render_settings>() as u32,
@@ -1105,4 +1122,63 @@ fn adapter_options_follow_the_host_options_and_present_comes_first() {
     let late = Fixture::new();
     assert_eq!(late.host.bind_presentation(raw(&late.chain)), OK);
     assert_eq!(late.host.register(&adapter(&options)), NOT_READY);
+}
+
+#[test]
+fn sr_and_the_overlay_never_depend_on_the_frame_generation_bridge() {
+    // Native Presents reach the adapter before binding, and stand aside for a facade.
+    let fixture = Fixture::native_graph();
+    ADAPTER_PRESENTS.set(0);
+    assert_eq!(fixture.host.register(&adapter(&[])), OK);
+    let event = rsf_observer_present_event {
+        struct_size: size_of::<rsf_observer_present_event>() as u32,
+        swapchain: raw(&fixture.chain),
+        ..Default::default()
+    };
+    OWNER_FACADE.set(0);
+    unsafe { host_native_present(fixture.host.user(), &event) };
+    assert_eq!(ADAPTER_PRESENTS.get(), 1);
+    OWNER_FACADE.set(1);
+    unsafe { host_native_present(fixture.host.user(), &event) };
+    OWNER_FACADE.set(0);
+    assert_eq!(ADAPTER_PRESENTS.get(), 1, "a facade's own events serve it");
+    let packages = crate::sr_choices::Packages::all("d3d11-host-bridgeless");
+    // Refused at install, or installed while its chain creation fell back to the native chain.
+    for installed in [false, true] {
+        let mut fixture = Fixture::rooted(packages.0.to_str().unwrap());
+        fixture.host.setup.presentation_bridge = 1;
+        fixture.host.setup.capabilities =
+            RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_INPUT_TIMELINE;
+        fixture
+            .host
+            .bridge_installed
+            .store(installed, Ordering::SeqCst);
+        OWNER_FACADE.set(0);
+        // The game installed the observer for its own work; the host listens beside it.
+        INSTALLS.set(0);
+        assert_eq!(fixture.evaluate(), OK, "SR evaluates without the bridge");
+        INSTALLS.set(1);
+        let g = fixture.host.lock_graphics();
+        assert!(g.configured && g.observer && !g.facade && g.running);
+        assert_eq!(g.evaluated, 1);
+        drop(g);
+        let [sr, fg, latency] = OFFERED.get();
+        assert_ne!(sr, 0, "the overlay offers SR");
+        assert_eq!(
+            (fg, latency),
+            (0, 1 << REFLEX_OFF),
+            "FG and latency unavailable"
+        );
+        let report = fixture.host.shared().report;
+        assert_eq!(report.effective_backend, RSF_SR_DLSS);
+        let reason = unsafe { CStr::from_ptr(report.reason.as_ptr()) };
+        let expected = if installed {
+            "Frame generation unavailable: the presentation bridge could not create its chain"
+        } else {
+            "Frame generation unavailable: the presentation bridge was refused"
+        };
+        assert_eq!(reason.to_str().unwrap(), expected);
+        assert!(fixture.host.native_presentation.load(Ordering::SeqCst));
+        assert!(!fixture.host.bridge_bound.load(Ordering::SeqCst));
+    }
 }

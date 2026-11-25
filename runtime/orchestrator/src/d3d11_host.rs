@@ -184,6 +184,9 @@ struct Graphics {
     configured: bool,
     scene_bound: bool,
     observer: bool,
+    // The engine presents through the bridge's facade; without it FG and latency are unavailable.
+    facade: bool,
+    fg_unavailable: Option<&'static str>,
     attempted: bool,
     running: bool,
     reset: bool,
@@ -225,6 +228,8 @@ impl Graphics {
             configured: false,
             scene_bound: false,
             observer: false,
+            facade: false,
+            fg_unavailable: None,
             attempted: false,
             running: false,
             reset: true,
@@ -297,6 +302,8 @@ pub(crate) struct Host {
     text: Text,
     bridge_installed: AtomicBool,
     bridge_bound: AtomicBool,
+    // Configured on the engine's own chain because the bridge's facade is absent.
+    native_presentation: AtomicBool,
     active: AtomicBool,
     transport: AtomicBool,
     fidelity: AtomicBool,
@@ -507,6 +514,7 @@ impl Host {
             text,
             bridge_installed: AtomicBool::new(false),
             bridge_bound: AtomicBool::new(false),
+            native_presentation: AtomicBool::new(false),
             active: AtomicBool::new(false),
             transport: AtomicBool::new(true),
             fidelity: AtomicBool::new(false),
@@ -716,15 +724,23 @@ impl Host {
         if g.configured {
             return true;
         }
+        // Generation needs the engine to present through the bridge's facade. Without one (the
+        // bridge refused, or its chain creation fell back) the session presents natively: SR,
+        // sharpening and the overlay work, generation and latency are reported unavailable.
         let bridge = self.bridge();
-        if self.setup.presentation_bridge != 0
-            && (!bridge || unsafe { native::present_is_owner(swapchain) } == 0)
-        {
+        let facade = bridge && unsafe { native::present_is_owner(swapchain) } != 0;
+        let fg_unavailable = if self.setup.presentation_bridge == 0 || facade {
+            None
+        } else if !bridge {
+            Some("Frame generation unavailable: the presentation bridge was refused")
+        } else if native::present_has_owner() == 0 {
+            Some("Frame generation unavailable: the presentation bridge could not create its chain")
+        } else {
             self.log(
                 "D3D11 host refused presentation binding: engine chain is not the final application facade.",
             );
             return false;
-        }
+        };
         g.device = self.child_device(context);
         let mut vendor = 0;
         if g.device.is_none() || unsafe { native::device_vendor(g.device_ptr(), &mut vendor) } == 0
@@ -738,8 +754,8 @@ impl Host {
         let selected = crate::rsf_gpu_select_sr_backend(vendor, 0, sr_choices);
         g.auto_backend = selected;
         let caps = self.setup.capabilities;
-        let timeline = bridge && caps & RSF_D3D11_HOST_CAP_INPUT_TIMELINE != 0;
-        let rendered = bridge && caps & RSF_D3D11_HOST_CAP_RENDERED_SOURCE != 0;
+        let timeline = facade && caps & RSF_D3D11_HOST_CAP_INPUT_TIMELINE != 0;
+        let rendered = facade && caps & RSF_D3D11_HOST_CAP_RENDERED_SOURCE != 0;
         let generation = (timeline || rendered) && caps & RSF_D3D11_HOST_CAP_FG_INPUTS != 0;
         let mut defaults = rsf_render_settings {
             struct_size: size_of::<rsf_render_settings>() as u32,
@@ -757,7 +773,11 @@ impl Host {
         if rendered {
             defaults.fg_backend = FG_BACKEND_FSR3;
         }
-        if rendered {
+        if let Some(reason) = fg_unavailable {
+            self.log(&format!(
+                "{reason}; native presentation keeps SR, sharpening and the overlay, latency Off."
+            ));
+        } else if rendered {
             self.log(
                 "D3D11 rendered-source FG: input timing unavailable; latency Off, no pre-input pacing.",
             );
@@ -833,15 +853,20 @@ impl Host {
         self.shared().desired = applied;
         g.execution_thread = current_thread();
         g.chain = Some(unsafe { com_ref::retain(swapchain) });
-        if unsafe { native::present_is_owner(swapchain) } != 0 {
+        g.facade = facade;
+        g.fg_unavailable = fg_unavailable;
+        if facade {
             g.observer = true;
             self.log(
                 "D3D11 callback host uses bridge application Present events; native DXGI interception is unnecessary.",
             );
         } else {
+            // The listener registered at create delivers native Present events, on the host's
+            // own observer or on one the game installed for its input work.
             g.observer = unsafe {
-                native::observer_install(Some(host_log), self.user(), Some(host_present))
-            } != 0;
+                native::observer_install(Some(host_log), self.user(), None) != 0
+                    || native::observer_listen(Some(host_native_present), self.user()) != 0
+            };
         }
         if !g.observer {
             self.log("D3D11 callback host: Present observation refused; SR activation suspended.");
@@ -865,8 +890,10 @@ impl Host {
             native::latency_window_bind(self.upstream.session_id, window);
         }
         g.configured = true;
-        if g.observer && self.setup.presentation_bridge != 0 {
+        if g.observer && facade {
             self.bridge_bound.store(true, Ordering::Release);
+        } else if g.observer {
+            self.native_presentation.store(true, Ordering::Release);
         }
         self.log(
             "D3D11 callback host configured; FG/latency controls follow declared capabilities and native eligibility.",
@@ -1359,6 +1386,9 @@ impl Host {
                     report,
                     &format!("SR result {result}; native temporal processing retained"),
                 );
+            } else if let Some(reason) = g.fg_unavailable {
+                // The overlay's status line carries why generation is not offered.
+                set_reason(report, reason);
             }
         }
         if result != g.last_result || g.logged < 3 {
@@ -1785,7 +1815,7 @@ impl Host {
         {
             return;
         }
-        let bridge = self.bridge();
+        let bridge = g.facade;
         // Native ownership facts remain useful before a generation provider is enabled.
         match pass.role {
             RSF_GAME_RENDER_FRAME if bridge => unsafe { native::fg_frame(pass, begin) },
@@ -1852,7 +1882,7 @@ impl Host {
         if !self.active()
             || event.flags & DXGI_PRESENT_TEST != 0
             || event_thread != g.execution_thread
-            || (self.bridge() && unsafe { native::present_is_owner(event.swapchain) } == 0)
+            || (g.facade && unsafe { native::present_is_owner(event.swapchain) } == 0)
             || !self.same(event.swapchain, g.chain_ptr())
         {
             return;
@@ -1975,11 +2005,14 @@ impl Host {
     }
 
     fn cpu(&self, event: *const rsf_game_cpu_event) {
-        // Installation/preparation alone does not prove the engine retained the facade.
-        if self.setup.presentation_bridge != 0 && !self.bridge_bound.load(Ordering::Acquire) {
-            return;
-        }
-        if !self.bridge() {
+        // Installation/preparation alone does not prove the engine retained the facade. A session
+        // presenting natively without it records CPU facts outside generation.
+        if !self.bridge_bound.load(Ordering::Acquire) {
+            let waiting = self.setup.presentation_bridge != 0
+                && !self.native_presentation.load(Ordering::Acquire);
+            if waiting {
+                return;
+            }
             match self.upstream.cpu_event {
                 Some(cpu) => unsafe { cpu(self.upstream.user, event) },
                 None => unsafe { native::cpu_event(event) },
@@ -2316,6 +2349,16 @@ unsafe extern "C" fn host_action(user: Raw, index: u32, value: i32) -> c_int {
     }
 }
 
+// Native DXGI Present, for a session the bridge's facade does not present: it stands aside while
+// a facade exists or is bound, whose own application events reach `host_present`.
+unsafe extern "C" fn host_native_present(user: Raw, event: *const rsf_observer_present_event) {
+    let host = unsafe { host(user) };
+    if host.bridge_bound.load(Ordering::Acquire) || native::present_has_owner() != 0 {
+        return;
+    }
+    unsafe { host_present(user, event) };
+}
+
 unsafe extern "C" fn host_present(user: Raw, event: *const rsf_observer_present_event) {
     if let Some(event) = unsafe { event.as_ref() } {
         let host = unsafe { host(user) };
@@ -2409,6 +2452,8 @@ unsafe extern "C" fn rsf_d3d11_host_create(
     // The host is process-lived: adapter callbacks may hold its user pointer.
     let host_ref = unsafe { &*host };
     host_ref.install_bridge();
+    // Native Presents reach the host even when no bridge facade presents this game.
+    unsafe { native::observer_listen(Some(host_native_present), host.cast()) };
     unsafe {
         *services = rsf_game_host_services {
             struct_size: size_of::<rsf_game_host_services>() as u32,

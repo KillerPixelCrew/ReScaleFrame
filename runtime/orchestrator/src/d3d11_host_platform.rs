@@ -114,6 +114,17 @@ pub(super) unsafe extern "C" fn fg_latency_event(_: Raw, event: *const rsf_obser
     unsafe { crate::native_fg::rsf_native_fg_present(event) };
 }
 
+pub(super) unsafe fn observer_listen(
+    present: crate::sys::rsf_observer_present_event_fn,
+    user: Raw,
+) -> i32 {
+    i32::from(crate::d3d11_observer_callbacks::listen(present, user))
+}
+
+pub(super) fn present_has_owner() -> i32 {
+    crate::d3d11_present::rsf_d3d11_present_has_owner()
+}
+
 pub(super) fn latency_window_bind(session_id: u64, window: Raw) {
     let _ = crate::native_fg_cpu::bind_window(session_id, window.addr() as u64);
 }

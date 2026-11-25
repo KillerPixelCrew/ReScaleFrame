@@ -51,6 +51,23 @@ pub(super) struct Registration {
 unsafe impl Send for Registration {}
 
 static OPTIONS: Mutex<Option<Registration>> = Mutex::new(None);
+
+/// The D3D11 host's Present listener beside the installer's own, for a host presenting natively
+/// on an observer a game installed for its input work.
+#[derive(Clone, Copy)]
+struct Listener(rsf_observer_present_event_fn, Handle);
+
+// The host's process-lived callback and user pointer, never dereferenced here.
+unsafe impl Send for Listener {}
+
+static LISTENER: Mutex<Option<Listener>> = Mutex::new(None);
+
+/// Adds the host's listener. False when no observer is installed to call it.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn listen(callback: rsf_observer_present_event_fn, user: Handle) -> bool {
+    *crate::sync::lock(&LISTENER) = Some(Listener(callback, user));
+    installed() != 0 && snapshot().is_some()
+}
 static CREATION: Mutex<()> = Mutex::new(());
 thread_local! { static IN_CREATION: Cell<bool> = const { Cell::new(false) }; }
 
@@ -118,6 +135,10 @@ impl Registration {
         let callback = self.options.on_present_event;
         if callback.is_some() {
             unsafe { (self.calls.event)(callback, self.options.on_present_event_user, event) };
+        }
+        let listener = *crate::sync::lock(&LISTENER);
+        if let Some(Listener(callback, user)) = listener.filter(|listener| listener.0.is_some()) {
+            unsafe { (self.calls.event)(callback, user, event) };
         }
     }
 }
