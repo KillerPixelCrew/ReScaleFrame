@@ -146,7 +146,8 @@ established by static review; the fg-ac7 and fg-unity workers are changing that 
 | ef4538c4 | F6, B4: one D3D11 texture LOD bias policy. `rsf_graphics::frame_tap::biased_sampler` (linear-mip, non-comparison samplers with a mip range; summed bias clamped to the D3D11 range) creates every biased clone: the frame tap's live rebind (AC7) and the host's explicit slots (`sampler_bias.rs`, Skyrim SE, Fallout 4). The two entry points stay because the engines bind differently (a state-cached engine needs the live rebind; the others name their slots). | `cargo check -p rsf-orchestrator --features test-fixtures --tests`, `cargo test -p rsf-graphics --lib`; the WARP fixture `tests/sampler_bias.rs` updated, not run here. |
 | 96fcafe0 | F2 (parity item): Anomaly installs the presentation bridge whenever its FG stage runs; `FGBridge` and its panel option are gone. | `cargo test -p rsf-anomaly --lib` (171). |
 | b256fa81 | C1 for D3D11 (overlay-parity follow-up 1): the D3D11 SR pipeline serves FSR1 with the shared `sr12/easu.hlsl` kernel; the host and the D3D11 SR admission offer it, so AC7, Skyrim SE, Fallout 4 and Anomaly do. | `cargo test -p rsf-orchestrator --lib` (414), `-p rsf-anomaly --lib` (171). |
-## Follow-ups, ranked by user impact
+| 30cc9a23 | The D3D11 host no longer ties SR and the overlay to the presentation bridge: with the bridge refused or its chain creation fallen back, it presents natively (SR, sharpening, overlay), reports FG and latency unavailable with the reason, and reaches Present through an observer listener when the game installed the observer itself. Every D3D11 host game. | `cargo test -p rsf-orchestrator --lib` (415), new host test. |
+| f46bb6f0 | FSR1's ratio table in one core module (`fsr1.rs`); the D3D12 SR path should switch to it. | `cargo test -p rsf-orchestrator --lib` (415). |## Follow-ups, ranked by user impact
 
 **F1. AC7 onto the shared D3D11 host.** AC7 is the most-played integration and the one whose host
 is furthest from the core: `dlss_bridge.c` applies overlay intents, switches providers with its
@@ -160,14 +161,61 @@ sampler bias (F6), behind the existing pass roles. Size: several thousand lines 
 and a CMake target; not attempted here. Gains: Auto SR, auxiliaries, Steam overlay forwarding,
 one VRR read.
 
-**F2. Anomaly onto the shared D3D11 host.** Status 25 November: only the bridge parity item is done (96fcafe0). AC7's move added what Anomaly needs from the host: RSF_D3D11_HOST_CAP_NATIVE_GRAPH-style routing is not needed (Anomaly can call process_upscale with RECONFIGURE planning like Skyrim), and sf_d3d11_host_set_adapter carries its overlay options and a Present callback. Same design. Anomaly keeps discovery, the world-window
-swap (`sr_swap.rs`), motion production, the twin targets, its jitter application and its facts:
-scope, cut, level, device reset as `rsf_frame_record` fields. The host takes the SR stage driving
-(`sr_temporal.rs`), the FG binding (`fg_stage.rs`), the overlay setup and DXGI/DirectInput overlay
-hooks, and the FG reset rules of `fg_policy.rs`, which become core rules any FG host applies
-(reset after an unfed frame, on extent change, on reported cut). Blocked until the held
-`d3d11_present*.rs` commits are integrated. Gains: FSR2, Spatial, Auto, 15 generated frames.
+**F2. Anomaly onto the shared D3D11 host.** Done so far: the bridge is installed whenever the FG
+stage runs (96fcafe0) and FSR1 is offered through the D3D11 SR admission (b256fa81). The rest waits
+for the user's next Anomaly and AC7 runs, so the AC7 move (a4066454, 30cc9a23) is confirmed first.
+Plan, one commit per step, each leaving Anomaly working and tested:
 
+1. *Host gap.* `rsf_d3d11_host_adapter` gains `option_label` (append, size-checked like the other
+   records) and the host forwards it to the overlay service's `option_label` with the adapter index,
+   because Anomaly's options show live status text (`overlay.rs` `option_label`). Host test: labels
+   reach the panel at the adapter's offset.
+2. *Session and overlay.* `games/anomaly` creates the host where `overlay.rs` configures the overlay
+   service today: configuration path the Anomaly INI, section `Anomaly` (the overlay service already
+   uses it, so saved SR/FG keys carry over), runtime directory beside the plugin, X-Ray version and
+   project id from `sr_stage_platform.h`, units 1.0, Anomaly's motion decode
+   (`RSF_ANOMALY_SR_MOTION_*`), quality 0x1f, presentation bridge 1 (factory interception, as
+   `fg_stage` installs it), its window filter as `accept_window`, capabilities FG_INPUTS and
+   INPUT_TIMELINE. Its adapter options (`overlay.rs` registry, saved options, capture settings) go
+   through `rsf_d3d11_host_set_adapter`; `suspend`/`resume` become `rsf_d3d11_host_set_active`.
+   Delete the overlay-service setup in `overlay.rs` and the DXGI Present, Present1, ResizeBuffers
+   and ResizeTarget detours in `overlay_hooks.rs` (the bridge facade, or the host's native Present
+   listener, delivers Present). The DirectInput detours stay: they gate the game's input while the
+   panel is open, an input fact the core has no service for yet; they read the overlay capture
+   state as today. Checks: Anomaly overlay tests rewritten against the host's adapter options; the
+   overlay fixture (`overlay/fixture.rs`) for the coordinator's device run.
+3. *SR.* `sr_temporal.rs` stops driving `rsf_get_d3d11_sr_api`. The world-window boundary in
+   `sr_swap.rs`/`sr_stage.rs` reports a RECONFIGURE planning pass through `process_upscale` with the
+   output extent (as `games/skyrim-se/src/resolution.rs` does) and reads the plan from
+   `render_config`; the SR pass at the swap calls `process_upscale` with colour, depth, motion,
+   exposure, camera and jitter. Delete backend switching, result handling, quality, preset and
+   sharpening application and the log name tables in `sr_temporal.rs` (A5, A19); `d3d11_sr_admission.rs`
+   and, if nothing else uses it, `d3d11_sr_api.rs` go with them. Keep the twin targets, jitter
+   application, motion, geometry and foliage work. Checks: `sr_temporal` and `sr_stage` tests
+   rewritten to assert the reported passes; the SR jitter fixture
+   (`tests/anomaly_sr_jitter_fixture.rs`) for the device run, with its 0.05 px acceptance.
+4. *FG.* `fg_stage.rs` stops binding `rsf_get_d3d11_present_api`/`rsf_get_d3d11_fg_api`. It reports
+   FRAME and SUBMISSION scopes, the HUD-less boundary as FINAL_SCENE and WINDOW, and the SR-off
+   depth/motion of `fg_inputs.rs` as an FG_INPUTS pass (the host's `fg_capture`), all through the
+   host's `render_pass`; CPU events through its `cpu_event`. Delete the bridge installation,
+   options, provider requests, generated-frame and latency application and the FG name table
+   (A5, A19). `rsf_native_fg_dispatch_pass`/`_cpu` and `rsf_get_d3d11_fg_api` then have no user:
+   delete them in `fg_dispatch.rs`. Checks: `fg_stage` tests against the reported passes; the FG
+   device fixture (`fg_stage/fixture_device.rs`) for the coordinator.
+5. *Reset rules into the core (A6).* In `native_fg.rs` `rsf_native_fg_prepare`, a source is not
+   continuous when the previous presented source of the session was not fed, when the fed extent
+   changed, or on the session's first fed frame; history then restarts as for a reported RESET. These
+   rules apply to every FG game. Anomaly keeps only facts: a cut and a device reset as
+   `RSF_GAME_RENDER_RESET`, scope frames and the `FGScopeHold` frames after them as
+   `RSF_GAME_RENDER_NO_FG` (the hold is how long X-Ray's scope render disturbs the main view, an
+   engine fact). `fg_policy.rs` shrinks to that reporting and its counters. Check: native_fg
+   prepare tests for each rule (first, unfed predecessor, extent change, reported reset, NO_FG).
+
+Behaviour to confirm in a run after steps 2 to 5: Anomaly upscaling with every backend and FSR1,
+the jitter acceptance, every FG provider switched on from the overlay, overlay controls and Anomaly
+options with live labels, latency status, input gating while the panel is open; and, for step 5,
+AC7, Skyrim SE and Fallout 4 FG after menus, cuts and resolution changes (one frame without
+generation after a discontinuity is expected).
 **F3. A core Vulkan host for Godot.** Move `integrations/godot/native/vulkan.rs` session logic
 (SDK init and shutdown order, provider resolution, admission, presenter lifecycle) into
 `runtime/orchestrator` beside `vulkan_sr.rs` and `vulkan_fg.rs`, entered through a versioned
