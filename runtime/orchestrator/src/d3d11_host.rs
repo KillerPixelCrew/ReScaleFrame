@@ -33,8 +33,8 @@ use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_FRAME,
     RSF_GAME_RENDER_RECONFIGURE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR,
     RSF_GAME_RENDER_SUBMISSION, RSF_GAME_RENDER_WINDOW, RSF_SCREEN_FLIGHT, RSF_SCREEN_GAMEPLAY,
-    rsf_camera_frame, rsf_frame_record,
-    rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_config, rsf_game_render_feedback,
+    rsf_camera_frame, rsf_frame_record, rsf_game_cpu_event, rsf_game_host_services,
+    rsf_game_render_config, rsf_game_render_feedback,
 };
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::mem::offset_of;
