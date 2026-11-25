@@ -813,9 +813,29 @@ fn refused_plugins_are_stopped_or_kept_for_retry() {
 
 #[test]
 fn auto_resolves_from_the_owning_adapter_and_prepares_the_vendor_context() {
+    // Auto picks among the providers whose packages are beside the Runtime.
+    let packages = crate::sr_choices::Packages::all("callback-auto");
+    let directory = |leaf: &str| CString::new(packages.0.join(leaf).to_str().unwrap()).unwrap();
+    let (streamline, fidelityfx, xess) = (
+        directory("streamline"),
+        directory("fidelityfx"),
+        directory("xess"),
+    );
+    let (fsr_text, xess_text) = (fidelityfx.to_str().unwrap(), xess.to_str().unwrap());
+    let interposer = format!("{}\\sl.interposer.dll", streamline.to_str().unwrap());
     let files = Files::new("auto");
+    let packaged = |backend| {
+        reset();
+        let mut start = setup(&files, backend, 2);
+        start.streamline_directory_utf8 = streamline.as_ptr();
+        start.fsr3_directory_utf8 = fidelityfx.as_ptr();
+        start.xess_directory_utf8 = xess.as_ptr();
+        let host = Box::new(unsafe { describe(&start) }.ok().unwrap());
+        events();
+        host
+    };
     for (vendor, backend) in [(0x10de, 1), (0x8086, 5), (0x1002, 3)] {
-        let host = host(&files, RSF_SR_AUTO, 2);
+        let host = packaged(RSF_SR_AUTO);
         with(|world| world.vendor = vendor);
         let device = fake(null_mut());
         let list = fake(device);
@@ -826,7 +846,7 @@ fn auto_resolves_from_the_owning_adapter_and_prepares_the_vendor_context() {
             [
                 "policy 0 2".to_owned(),
                 format!(
-                    "create abi=1 backend={backend} quality=2 0x0->1920x1080 depth=1 preset=6 signature=1 interposer=C:\\SL\\sl.interposer.dll engine=4 6000.0 project fsr=C:\\FSR xess=C:\\XeSS"
+                    "create abi=1 backend={backend} quality=2 0x0->1920x1080 depth=1 preset=6 signature=1 interposer={interposer} engine=4 6000.0 project fsr={fsr_text} xess={xess_text}"
                 ),
                 "sharpen 1 0.4".into(),
                 "evaluate 1 slot=0".into(),
@@ -849,6 +869,13 @@ fn auto_resolves_from_the_owning_adapter_and_prepares_the_vendor_context() {
             "Auto SR selected backend {backend} from owning D3D12 adapter vendor={vendor:#x} device=0x2204"
         )));
     }
+    // Without the provider packages Auto serves nothing rather than a provider that cannot start.
+    let host = host(&files, RSF_SR_AUTO, 2);
+    with(|world| world.vendor = 0x10de);
+    let device = fake(null_mut());
+    run(&host, fake(device), &sr((1920, 1080)), true);
+    assert!(!events().iter().any(|event| event.starts_with("create")));
+    assert_eq!(host.lock().backend, RSF_SR_NONE);
 }
 
 #[test]

@@ -584,15 +584,34 @@ fn create(
     render: (u32, u32),
 ) -> Option<Context> {
     let paths = control::paths()?;
+    let vendors = &paths.vendors;
     let mut backend = settings.sr_backend;
     if backend == RSF_SR_AUTO {
-        backend = unsafe { rsf_gpu_default_sr_backend(binding.vendor_id(), 0) };
+        // Among the providers the Runtime serves from the packages beside it, as every host
+        // resolves Auto; the Runtime's admission reads the packages before a provider starts.
+        let mut admission = rsf_d3d11_sr_admission {
+            struct_size: size_of::<rsf_d3d11_sr_admission>() as u32,
+            abi_version: RSF_D3D11_SR_ADMISSION_ABI_VERSION,
+            backend_choices: RSF_SR_CHOICES_ALL,
+            requested_backend: RSF_SR_AUTO,
+            streamline_directory_utf8: vendors.streamline.as_ptr(),
+            fidelityfx_directory_utf8: vendors.fidelityfx.as_ptr(),
+            xess_directory_utf8: vendors.xess.as_ptr(),
+            device: null_mut(),
+            offered_backends: 0,
+            selected_backend: 0,
+        };
+        let offered = if unsafe { rsf_d3d11_sr_admit(&mut admission) } == 0 {
+            admission.offered_backends
+        } else {
+            0
+        };
+        backend = unsafe { rsf_gpu_select_sr_backend(binding.vendor_id(), 0, offered) };
     }
     // Godot evaluates FSR1 before the callback; the context only normalises its inputs.
     if backend == RSF_SR_SPATIAL {
         backend = RSF_SR_NONE;
     }
-    let vendors = &paths.vendors;
     let mut setup = rsf_sr12_setup {
         struct_size: size_of::<rsf_sr12_setup>() as u32,
         abi_version: 1,

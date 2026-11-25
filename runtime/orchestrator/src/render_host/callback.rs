@@ -887,8 +887,9 @@ impl Host {
                 self.log("Automatic SR refused: owning D3D12 adapter could not be identified.");
                 return false;
             }
-            s.backend =
-                crate::rsf_gpu_select_sr_backend(adapter.vendor, adapter.software, self.sr_choices);
+            // Among the providers this machine serves, as the panel offers them.
+            let offered = self.vendors.offered(Some(adapter.vendor), self.sr_choices);
+            s.backend = crate::rsf_gpu_select_sr_backend(adapter.vendor, adapter.software, offered);
             s.requested_backend = s.backend;
             if !accepts_backend_quality(s.backend, s.quality)
                 || (self.policy_v2.is_none() && !self.policy(s.backend, s.quality))

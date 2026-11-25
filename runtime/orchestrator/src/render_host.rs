@@ -488,8 +488,9 @@ impl Host {
         let Some(adapter) = self.adapter(s) else {
             return RSF_SR_NONE;
         };
-        let selected =
-            crate::rsf_gpu_select_sr_backend(adapter.vendor, adapter.software, self.sr_choices);
+        // Among the providers this machine serves, as the panel offers them.
+        let offered = self.vendors.offered(Some(adapter.vendor), self.sr_choices);
+        let selected = crate::rsf_gpu_select_sr_backend(adapter.vendor, adapter.software, offered);
         self.automatic_backend.store(selected, Ordering::Relaxed);
         self.log(&format!(
             "Auto SR selected backend {selected} from owning adapter vendor={:#x} device={:#x}",

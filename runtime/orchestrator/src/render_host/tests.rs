@@ -571,7 +571,10 @@ fn install_reads_one_shot_requests_and_owns_fg_or_observer() {
 
 #[test]
 fn process_resolves_auto_configures_and_reserves_slots() {
-    let ini = Temporary::new("process");
+    // Auto resolves among the providers whose packages are beside the Runtime.
+    let packages = crate::sr_choices::Packages::all("render-host-process");
+    let mut ini = Temporary::new("process");
+    ini.directory = crate::settings_store::wide(packages.0.to_str().unwrap());
     let host = host(&ini, 0);
     events();
     let device = fake("device", null_mut());
@@ -649,7 +652,10 @@ fn spatial_is_served_by_sr12_at_the_engine_extents() {
 
 #[test]
 fn submission_retires_snapshotted_slots_on_one_direct_queue() {
-    let ini = Temporary::new("submit");
+    // Auto resolves among the providers whose packages are beside the Runtime.
+    let packages = crate::sr_choices::Packages::all("render-host-submit");
+    let mut ini = Temporary::new("submit");
+    ini.directory = crate::settings_store::wide(packages.0.to_str().unwrap());
     let host = host(&ini, 0);
     let device = fake("device", null_mut());
     let list = fake("list", device);
@@ -704,7 +710,10 @@ fn submission_retires_snapshotted_slots_on_one_direct_queue() {
 
 #[test]
 fn fence_failures_poison_and_present_routes_to_the_registration() {
-    let ini = Temporary::new("fence");
+    // Auto resolves among the providers whose packages are beside the Runtime.
+    let packages = crate::sr_choices::Packages::all("render-host-fence");
+    let mut ini = Temporary::new("fence");
+    ini.directory = crate::settings_store::wide(packages.0.to_str().unwrap());
     let host = host(&ini, 0);
     let device = fake("device", null_mut());
     let list = fake("list", device);
