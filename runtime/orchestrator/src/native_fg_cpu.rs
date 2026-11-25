@@ -1264,6 +1264,12 @@ pub(crate) fn latency_present(id: u64, chain: Handle, begin: bool) {
         return;
     }
     if begin {
+        // The render thread can open the primary submission before the game thread closes the
+        // simulation interval (AC7 reports it at FrameEndSync). That refused attempt is retried
+        // here, so an observed submission still opens its interval before Present.
+        if lock(&LEDGER).frame(id).is_some_and(|frame| frame.submitted) {
+            start_render_marker(id);
+        }
         let threaded = THREADED.load(Ordering::Relaxed);
         if !threaded {
             end_render_marker(id, "render submission end before present");
