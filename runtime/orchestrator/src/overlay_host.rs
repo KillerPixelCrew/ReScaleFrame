@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Owner of the shared D3D11 overlay host behind loader/proxy/src/overlay_host.h.
+// Owner of the shared D3D11 overlay host behind overlay_host.h.
 //
 // AC7's embedded bridge, the Runtime overlay service and the D3D11-on-12 path all draw the same
 // panel through this one host. It decides lifecycle, owns the panel, renderer and device, runs the

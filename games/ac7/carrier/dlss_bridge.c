@@ -33,7 +33,7 @@
 #include <string.h>
 
 #include "dlss_bridge.h"
-#include "overlay_host.h"
+#include "../../../runtime/orchestrator/src/overlay_host.h"
 
 static rsf_plugin_session* game_session;
 static int game_prepared;
@@ -341,8 +341,6 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
     stats->backend = pipeline.backend;
     stats->requested_backend = pipeline.requested_backend;
     stats->last_switch_result = pipeline.last_switch_result;
-    stats->backend_name = pipeline.backend == 2 ? "FSR2" : pipeline.backend == 3 ? "FSR3" :
-        pipeline.backend == 4 ? "FSR4" : pipeline.backend == 5 ? "XeSS" : "DLSS";
 
     /* Why nothing is happening, in the order the pipeline actually fails. */
     if (!bridge.started) {

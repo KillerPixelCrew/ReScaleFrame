@@ -63,3 +63,28 @@ target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE 
 
 target_include_directories(rsf_ac7_render_scope PRIVATE "${CMAKE_SOURCE_DIR}/runtime/graphics/include")
 add_library(ReScaleFrame::AC7RenderScope ALIAS rsf_ac7_render_scope)
+
+# The AC7 carrier. Its file name is the mechanism, so it is deliberately not ReScaleFrame.*.
+# It keeps the DirectInput ABI and AC7's original entry path, and links the Runtime and the
+# game's view buffer reader rather than loading them, so getting into the game stays one added file.
+add_library(rsf_proxy_ac7 SHARED carrier/dinput8_proxy.c carrier/dlss_bridge.c)
+target_link_libraries(rsf_proxy_ac7 PRIVATE
+    ReScaleFrame::LoaderDiagnostics
+    ReScaleFrame::Graphics
+    ReScaleFrame::OrchestratorCore
+    ReScaleFrame::AC7View
+    ReScaleFrame::AC7MotionCapture
+    ReScaleFrame::AC7VelocityPass
+    bcrypt
+    rsf_build_options)
+target_compile_definitions(rsf_proxy_ac7 PRIVATE _CRT_SECURE_NO_WARNINGS)
+set_target_properties(rsf_proxy_ac7 PROPERTIES OUTPUT_NAME "dinput8" PREFIX ""
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ac7/bin/$<CONFIG>"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ac7/lib/$<CONFIG>"
+    PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ac7/bin/$<CONFIG>")
+add_dependencies(rsf_proxy_ac7 rsf_game_ac7)
+if(MSVC)
+    target_sources(rsf_proxy_ac7 PRIVATE carrier/ac7_exports.def)
+    # Optimized builds need exact private-function addresses for capture crash analysis.
+    target_link_options(rsf_proxy_ac7 PRIVATE "/MAP:$<TARGET_FILE_DIR:rsf_proxy_ac7>/dinput8.map")
+endif()

@@ -18,7 +18,7 @@
 #include <rescaleframe/dlss_pipeline.h>
 
 #include "dlss_bridge.h"
-#include "overlay_host.h"
+#include "../../../runtime/orchestrator/src/overlay_host.h"
 #include "../../../runtime/orchestrator/src/render_settings_store.h"
 #include <rescaleframe/fg_choice.h>
 

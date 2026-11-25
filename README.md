@@ -103,7 +103,7 @@ AC7's integration brings modern upscaling and frame generation into its existing
 rendering pipeline. Native hooks expose the engine's scene, camera, depth, motion and
 composition boundaries, and prepare the renderer to supply the data those technologies need.
 
-The [native bridge](loader/proxy/src/dlss_bridge.c) routes scene passes into ReScaleFrame's
+The [native bridge](games/ac7/carrier/dlss_bridge.c) routes scene passes into ReScaleFrame's
 SR processing and carries CPU, scene, UI and window events into the shared FG/latency paths.
 The D3D11/D3D12 presentation bridge provides the route to SDKs that require D3D12.
 

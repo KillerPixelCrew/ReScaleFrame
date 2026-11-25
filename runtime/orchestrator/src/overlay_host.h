@@ -2,8 +2,8 @@
 /* Shared D3D11 overlay host C ABI. The Rust orchestrator owns the panel, renderer and input
    capture for both the swap-chain and supplied-target paths. */
 
-#ifndef RSF_PROXY_OVERLAY_HOST_H
-#define RSF_PROXY_OVERLAY_HOST_H
+#ifndef RSF_OVERLAY_HOST_H
+#define RSF_OVERLAY_HOST_H
 
 #include <rescaleframe/overlay.h>
 
@@ -52,4 +52,4 @@ void rsf_overlay_host_stop(void);
 } /* extern "C" */
 #endif
 
-#endif /* RSF_PROXY_OVERLAY_HOST_H */
+#endif /* RSF_OVERLAY_HOST_H */

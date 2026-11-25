@@ -1,30 +1,3 @@
-# The AC7 carrier. Its file name is the mechanism, so it is deliberately not ReScaleFrame.*.
-# It keeps the DirectInput ABI and AC7's original entry path, and links the backend path and the
-# game's view buffer reader rather than loading them, so getting into the game stays one added
-# file. Both belong on the other side of the ownership line in AGENTS.md and are here because this
-# is what can be loaded today.
-add_library(rsf_proxy_ac7 SHARED src/dinput8_proxy.c src/dlss_bridge.c)
-target_link_libraries(rsf_proxy_ac7 PRIVATE
-    ReScaleFrame::LoaderDiagnostics
-    ReScaleFrame::Graphics
-    ReScaleFrame::OrchestratorCore
-    ReScaleFrame::AC7View
-    ReScaleFrame::AC7MotionCapture
-    ReScaleFrame::AC7VelocityPass
-    bcrypt
-    rsf_build_options)
-target_compile_definitions(rsf_proxy_ac7 PRIVATE _CRT_SECURE_NO_WARNINGS)
-set_target_properties(rsf_proxy_ac7 PROPERTIES OUTPUT_NAME "dinput8" PREFIX ""
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ac7/bin/$<CONFIG>"
-    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ac7/lib/$<CONFIG>"
-    PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ac7/bin/$<CONFIG>")
-add_dependencies(rsf_proxy_ac7 rsf_game_ac7)
-if(MSVC)
-    target_sources(rsf_proxy_ac7 PRIVATE src/ac7_exports.def)
-    # Optimized builds need exact private-function addresses for capture crash analysis.
-    target_link_options(rsf_proxy_ac7 PRIVATE "/MAP:$<TARGET_FILE_DIR:rsf_proxy_ac7>/dinput8.map")
-endif()
-
 if(MSVC)
     enable_language(ASM_MASM)
 

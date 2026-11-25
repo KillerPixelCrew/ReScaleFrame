@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-/// Binds the overlay fixture's view of the loader proxy's overlay host header.
+/// Binds the overlay fixture's view of the Runtime's D3D11 overlay host header.
 fn bindings() {
     let builder = rsf_bindgen::owner(
-        &["loader/proxy/src/overlay_host.h"],
+        &["runtime/orchestrator/src/overlay_host.h"],
         &[],
-        &["loader/proxy/src/overlay_host.h"],
+        &["runtime/orchestrator/src/overlay_host.h"],
         &[],
         &[],
     );
