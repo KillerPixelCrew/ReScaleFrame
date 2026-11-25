@@ -1,10 +1,9 @@
 /* SPDX-License-Identifier: MIT */
-/* The native side of ReScaleFrame.Godot.Native.dll that Rust cannot express: the CMake-selected
-   optional Vulkan provider symbols, the CMake project version and the DLL unload hook. The
-   GDExtension classes, every rsfg_* export and all decisions are Rust (native/lib.rs). */
+/* The native side of ReScaleFrame.Godot.Native.dll that Rust cannot express: the CMake project
+   version and the DLL unload hook. The GDExtension classes, every rsfg_* export and all decisions
+   are Rust (native/lib.rs, and the Runtime's Vulkan host behind exports.def). */
 #include <rescaleframe/native_cpu.h>
 #include "api.h"
-#include "vulkan_features.h"
 
 #include <rescaleframe/fg_choice.h>
 #include <rescaleframe/native_fg_d3d12.h>
@@ -17,40 +16,6 @@
 const char* rsf_godot_version(void)
 {
     return RSF_VERSION_STRING;
-}
-
-/* These symbols only exist in configurations which compile the corresponding provider. Supply raw
-   build facts and optional functions to the Rust owner. */
-const rsf_godot_vk_features* rsf_godot_vk_native_features(void)
-{
-    static const rsf_godot_vk_features features = {
-#if defined(RSF_VULKAN_SR_ENABLED)
-        1u,
-#else
-        0u,
-#endif
-#if defined(RSF_VULKAN_FSR4_ENABLED)
-        1u,
-#else
-        0u,
-#endif
-#if defined(RSF_VULKAN_XESS_FG_ENABLED)
-        1u,
-#else
-        0u,
-#endif
-#if defined(RSF_VULKAN_FSR4_FG_ENABLED)
-        rsf_fsr4gvk_probe,
-#else
-        NULL,
-#endif
-#if defined(RSF_FRAME_DUMP_VULKAN)
-        {rsf_input_dump_vk_create, rsf_input_dump_vk_snapshot, rsf_input_dump_vk_drain, rsf_input_dump_vk_destroy},
-#else
-        {NULL, NULL, NULL, NULL},
-#endif
-    };
-    return &features;
 }
 
 void rsf_godot_host_unload(void);

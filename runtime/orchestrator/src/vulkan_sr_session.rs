@@ -14,17 +14,17 @@ use rsf_game_sys::backend_result::{
 };
 
 mod routes;
+pub(crate) mod linked;
 use routes::{Route, Routes};
 
-struct Session {
+pub(crate) struct Session {
     route: &'static Route,
     owner: Handle,
     ready: bool,
     split: bool,
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_session_open(
+pub(crate) unsafe fn rsf_core_srvk_session_open(
     routes: &'static Routes,
     setup: *const Setup,
     handoff: *const Handoff,
@@ -75,8 +75,7 @@ unsafe extern "C" fn rsf_core_srvk_session_open(
     result
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_session_plan(
+pub(crate) unsafe fn rsf_core_srvk_session_plan(
     session: *const Session,
     width: *mut u32,
     height: *mut u32,
@@ -87,8 +86,7 @@ unsafe extern "C" fn rsf_core_srvk_session_plan(
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_session_record(
+pub(crate) unsafe fn rsf_core_srvk_session_record(
     routes: &'static Routes,
     session: *mut Session,
     frame: *const Frame,
@@ -128,15 +126,13 @@ unsafe extern "C" fn rsf_core_srvk_session_record(
     unsafe { (routes.fallback)(&fallback) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_session_retire(session: *mut Session, commands: Handle) {
+pub(crate) unsafe fn rsf_core_srvk_session_retire(session: *mut Session, commands: Handle) {
     if let Some(session) = unsafe { session.as_mut() }.filter(|session| session.ready) {
         unsafe { (session.route.retire)(session.owner, commands) };
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_session_close(raw: *mut Session) -> i32 {
+pub(crate) unsafe fn rsf_core_srvk_session_close(raw: *mut Session) -> i32 {
     let Some(session) = (unsafe { raw.as_mut() }) else {
         return 0;
     };

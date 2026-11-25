@@ -1,40 +1,44 @@
 // SPDX-License-Identifier: MIT
-//! The Godot Vulkan session: settings and their reconstruction generation, provider admission
-//! from the session's capability facts (Auto resolved by the Runtime's adapter policy), the FG
-//! presenter the engine's WSI owner creates, the Runtime SR session with its retirement rules, the
+//! The Runtime's Vulkan host for an engine integration that owns its device and WSI
+//! (`rescaleframe/native_vulkan_host.h`): settings and their reconstruction generation, provider
+//! admission from the session's capability facts (Auto resolved by the Runtime's adapter policy),
+//! the FG presenter the engine's WSI owner creates, the SR session with its retirement rules, the
 //! frame capture and the status record. One lock is the session's guard and serializes every
-//! borrowed engine and Runtime object, as the C++ guard did; Runtime capture calls from nested SDK
-//! WSI skip it while it is held.
+//! borrowed engine and Runtime object; Runtime capture calls from nested SDK WSI skip it while it
+//! is held. `creation.rs` is the resolver the engine creates its instance and devices through.
 
-use crate::control::{
-    Settings, Status, default_settings, reconstruction_key, sharpening, status_header,
-};
+use crate::fg_choice::{rsf_fg_default_backend, rsf_fg_select_auto_backend};
 use crate::sys::*;
-use crate::vulkan_creation::{self as creation, DeviceReceipt, VkFunction, VkProc};
-use crate::{checked, window};
+use crate::vulkan_fsr4_fg::rsf_fsr4gvk_probe;
+use crate::vulkan_sr_session::{
+    Session, linked, rsf_core_srvk_session_close, rsf_core_srvk_session_plan,
+    rsf_core_srvk_session_retire,
+};
 use ash::vk;
+use creation::{DeviceReceipt, VkFunction, VkProc};
 use rsf_game_sys::backend_result;
-use rsf_game_sys::ffi_util::{ascii_wide, lock_or_recover, wide};
+use rsf_game_sys::ffi_util::{ascii_wide, checked, lock_or_recover, wide};
 use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
     RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
-    RSF_FG_BACKEND_XESS, RSF_FRAME_FLAG_RESET, RSF_GAME_FRAME_ABI_VERSION,
-    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, RSF_SCREEN_FLIGHT,
-    RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_NONE, RSF_SR_SPATIAL, RSF_SR_XESS,
-    rsf_frame_record, rsf_game_log_fn,
+    RSF_FG_BACKEND_XESS, RSF_FG_OFF, RSF_FRAME_FLAG_RESET, RSF_GAME_FRAME_ABI_VERSION,
+    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, RSF_REFLEX_OFF,
+    RSF_SCREEN_FLIGHT, RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_NONE,
+    RSF_SR_SPATIAL, RSF_SR_XESS, rsf_frame_record, rsf_game_log_fn,
 };
 use std::ffi::{CStr, CString, c_int, c_void};
 use std::mem::size_of_val;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock};
+use windows_sys::Win32::System::LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 
 mod capture;
-#[path = "../../../runtime/orchestrator/src/vulkan_sr_session/linked.rs"]
-mod linked;
+mod creation;
 
 type Handle = *mut c_void;
-const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x800;
+type Settings = rsf_vkhost_settings;
+type Status = rsf_vkhost_status;
 const SHADER_READ: u32 = 5;
 const TRANSFER_DST: u32 = 7;
 const PRESENT_LAYOUT: u32 = 1_000_001_002;
@@ -42,25 +46,43 @@ const PRESENT_LAYOUT: u32 = 1_000_001_002;
 const REGISTERED_MESSAGE: u32 = 0xc000;
 /// Logged refusals per session: rejected passes, FSR4 dispatch failures and input refusals.
 const DIAGNOSTIC_LIMIT: u32 = 4;
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn LoadLibraryExW(path: *const u16, file: Handle, flags: u32) -> Handle;
-}
-
-unsafe extern "C" {
-    // The Runtime's private choice (runtime/orchestrator/src/fg_auto_choice.h).
-    fn rsf_fg_select_auto_backend(preferred: u32, choices: u32) -> u32;
-}
+/// The Vulkan SR providers, and with them the Vulkan frame dump (both need the Vulkan headers).
+const SR_BUILT: bool = cfg!(feature = "ffx-vk");
 
 /// A Vulkan handle from the pointer-sized word the records carry.
-pub(crate) fn handle<H: vk::Handle>(pointer: *mut c_void) -> H {
+fn handle<H: vk::Handle>(pointer: *mut c_void) -> H {
     H::from_raw(pointer.addr() as u64)
 }
 
-fn features() -> &'static rsf_godot_vk_features {
-    // The CMake-configured native table is immutable and part of this module.
-    unsafe { &*rsf_godot_vk_native_features() }
+/// The settings a session starts from; the sharpening request is empty.
+fn default_settings() -> Settings {
+    Settings {
+        struct_size: size_of::<Settings>() as u32,
+        abi_version: RSF_VKHOST_SETTINGS_ABI_VERSION,
+        sr_backend: RSF_SR_AUTO,
+        quality: 1,
+        dlss_preset: 0,
+        fg_backend: RSF_FG_BACKEND_AUTO,
+        fg_mode: RSF_FG_OFF,
+        generated_frames: 1,
+        latency_mode: RSF_REFLEX_OFF,
+        frame_limit_us: 0,
+        gameplay: 1,
+        ..Default::default()
+    }
+}
+
+/// The settings whose change retires the SR session.
+fn reconstruction_key(settings: &Settings) -> (u32, u32, u32) {
+    (settings.sr_backend, settings.quality, settings.dlss_preset)
+}
+
+fn status_header() -> Status {
+    Status {
+        struct_size: size_of::<Status>() as u32,
+        abi_version: RSF_VKHOST_ABI_VERSION,
+        ..Default::default()
+    }
 }
 
 #[derive(Default)]
@@ -68,8 +90,8 @@ struct State {
     settings: Settings,
     generation: u64,
     status: Status,
-    /// The engine's primary window as `rsfg_vk_window` last reported it, admitted or not: the FG
-    /// presenter's host window and the FSR4 and XeSS FG precondition. Null from each start.
+    /// The engine's primary window as `rsf_vkhost_window` last reported it, admitted or not: the
+    /// FG presenter's host window and the FSR4 and XeSS FG precondition. Null from each start.
     primary_window: Handle,
     frame: u64,
     explicit: bool,
@@ -88,7 +110,7 @@ struct State {
     streamline_ready: bool,
     capture: capture::Capture,
     /// The Runtime SR session and the request it was opened for.
-    sr: Handle,
+    sr: *mut Session,
     /// The last open succeeded; a session kept after a failed open is retired next pass.
     sr_ready: bool,
     /// The engine device and its proc the session was opened on, kept for retirement.
@@ -116,7 +138,7 @@ fn state() -> MutexGuard<'static, State> {
     lock_or_recover(&STATE)
 }
 
-pub(crate) fn booted() -> bool {
+fn booted() -> bool {
     ACTIVE.load(Ordering::Acquire)
 }
 
@@ -146,7 +168,7 @@ impl State {
     /// requirements; FSR4 its build, the engine's graph lease capability and the interop device.
     /// FSR3 is always served.
     fn sr_choices(&self, receipt: &DeviceReceipt) -> u32 {
-        let fsr4 = features().fsr4_sr != 0 && self.graph_handoff && receipt.interop;
+        let fsr4 = cfg!(feature = "fsr4-vk") && self.graph_handoff && receipt.interop;
         choice(true, RSF_SR_FSR3)
             | choice(self.streamline_ready, RSF_SR_DLSS)
             | choice(receipt.xess, RSF_SR_XESS)
@@ -155,10 +177,10 @@ impl State {
 
     /// The FG providers offered to Auto: FSR3, and XeSS with its build, the interop device and the
     /// primary window. DLSS-G stays an explicit opt-in (its presenter's retirement after native
-    /// secondary window use still ends in an access violation, NATIVE.md) and FSR4 FG needs a
-    /// provider probe that Auto does not trigger.
+    /// secondary window use still ends in an access violation, integrations/godot/NATIVE.md) and
+    /// FSR4 FG needs a provider probe that Auto does not trigger.
     fn fg_choices(&self, receipt: &DeviceReceipt) -> u32 {
-        let xess = features().xess_fg != 0 && receipt.interop && !self.primary_window.is_null();
+        let xess = cfg!(feature = "xess-fg-vk") && receipt.interop && !self.primary_window.is_null();
         choice(true, RSF_FG_BACKEND_FSR3) | choice(xess, RSF_FG_BACKEND_XESS)
     }
 
@@ -168,22 +190,18 @@ impl State {
     fn providers(&self, settings: &Settings, receipt: &DeviceReceipt) -> (u32, u32) {
         let adapter = receipt.adapter.unwrap_or_default();
         let sr = match settings.sr_backend {
-            RSF_SR_AUTO => unsafe {
-                rsf_gpu_select_sr_backend(
-                    adapter.vendor,
-                    adapter.software,
-                    self.sr_choices(receipt),
-                )
-            },
+            RSF_SR_AUTO => crate::rsf_gpu_select_sr_backend(
+                adapter.vendor,
+                adapter.software,
+                self.sr_choices(receipt),
+            ),
             backend => backend,
         };
         let fg = match settings.fg_backend {
-            RSF_FG_BACKEND_AUTO => unsafe {
-                rsf_fg_select_auto_backend(
-                    rsf_fg_default_backend(adapter.vendor, adapter.software),
-                    self.fg_choices(receipt),
-                )
-            },
+            RSF_FG_BACKEND_AUTO => rsf_fg_select_auto_backend(
+                rsf_fg_default_backend(adapter.vendor, adapter.software),
+                self.fg_choices(receipt),
+            ),
             backend => backend,
         };
         (sr, fg)
@@ -208,9 +226,9 @@ impl State {
         }
         let presenter = !self.presenter.is_null();
         if selected == RSF_FG_BACKEND_FSR4 {
-            let Some(probe) = features().fsr4_probe else {
+            if !cfg!(feature = "fsr4-fg-vk") {
                 return false;
-            };
+            }
             if !presenter
                 || !receipt.interop
                 || self.primary_window.is_null()
@@ -228,7 +246,10 @@ impl State {
                 abi_version: RSF_FSR4FG_BRIDGE_ABI_VERSION,
                 ..Default::default()
             };
-            if unsafe { probe(&setup, &mut info) } != backend_result::OK || info.max_generated < 1 {
+            if unsafe { rsf_fsr4gvk_probe(&setup, &mut info) }
+                != backend_result::OK
+                || info.max_generated < 1
+            {
                 return false;
             }
         }
@@ -271,7 +292,9 @@ impl State {
         if wait.is_none_or(|wait| unsafe { wait(handle(self.sr_device)) } != vk::Result::SUCCESS) {
             return false;
         }
-        if unsafe { linked::rsf_core_srvk_session_close(self.sr) } != backend_result::OK {
+        if unsafe { rsf_core_srvk_session_close(self.sr) }
+            != backend_result::OK
+        {
             return false;
         }
         self.sr = ptr::null_mut();
@@ -295,7 +318,7 @@ impl State {
         result: i32,
         begin: bool,
     ) {
-        if features().capture.snapshot.is_none() {
+        if !SR_BUILT {
             return;
         }
         let armed = unsafe { rsf_input_dump_requested() } != 0;
@@ -329,62 +352,57 @@ fn system_resolver() -> Option<VkProc> {
     static SYSTEM: OnceLock<Option<VkProc>> = OnceLock::new();
     *SYSTEM.get_or_init(|| {
         const DLL: [u16; 13] = ascii_wide(b"vulkan-1.dll\0");
-        // Keep this loader mapped through Godot's late Vulkan destruction.
+        // Keep this loader mapped through the engine's late Vulkan destruction.
         let module =
             unsafe { LoadLibraryExW(DLL.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
         unsafe { typed_export::<VkProc>(module, c"vkGetInstanceProcAddr") }
     })
 }
 
-/// While booted, the engine's primary window for the presenter and FG admission.
-pub(crate) fn report_window(window: Handle) {
+#[unsafe(no_mangle)]
+extern "C" fn rsf_vkhost_window(window: Handle) {
     state().primary_window = window;
 }
 
-/// This build carries the Vulkan SR payload.
-pub(crate) fn supported() -> bool {
-    features().sr != 0
+#[unsafe(no_mangle)]
+extern "C" fn rsf_vkhost_supported() -> i32 {
+    SR_BUILT.into()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsfg_vulkan_supported() -> i32 {
-    supported().into()
+extern "C" fn rsf_vkhost_booted() -> i32 {
+    booted().into()
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsfg_vk_resolver() -> Option<VkProc> {
+extern "C" fn rsf_vkhost_resolver() -> Option<VkProc> {
     state().resolver
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsfg_vk_host_capabilities(flags: u32) -> i32 {
+extern "C" fn rsf_vkhost_capabilities(flags: u32) -> i32 {
     let mut state = state();
-    if booted() || flags & !RSF_GODOT_VK_GRAPH_HANDOFF != 0 {
+    if booted() || flags & !RSF_VKHOST_GRAPH_HANDOFF != 0 {
         return 0;
     }
-    state.graph_handoff = flags & RSF_GODOT_VK_GRAPH_HANDOFF != 0;
+    state.graph_handoff = flags & RSF_VKHOST_GRAPH_HANDOFF != 0;
     1
-}
-
-/// # Safety
-/// `setup` is null or a readable record of its stated size whose strings are NUL-terminated.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_boot_vulkan(setup: *const rsf_godot_setup) -> i32 {
-    // SAFETY: the caller's guarantee.
-    let Some(setup) = (unsafe { checked(setup, RSF_GODOT_ABI_VERSION) }) else {
-        return 0;
-    };
-    let result = boot(setup);
-    if result != 0 {
-        window::bind_cpu_service(true);
-    }
-    result
 }
 
 /// The directories, Streamline and XeSS initialization and the creation resolver of a new
 /// session. The generation keeps counting across sessions.
-fn boot(setup: &rsf_godot_setup) -> i32 {
-    if setup.runtime_directory.is_null() || !supported() {
+///
+/// # Safety
+/// `setup` is null or a readable record of its stated size whose strings are NUL-terminated.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vkhost_boot(setup: *const rsf_vkhost_setup) -> i32 {
+    let Some(setup) = (unsafe { checked(setup) }) else {
+        return 0;
+    };
+    if setup.abi_version != RSF_VKHOST_ABI_VERSION
+        || setup.runtime_directory.is_null()
+        || !SR_BUILT
+    {
         return 0;
     }
     let mut state = state();
@@ -440,9 +458,9 @@ fn boot(setup: &rsf_godot_setup) -> i32 {
     );
     state.streamline_ready = latency_result == backend_result::OK;
     state.log(if state.streamline_ready {
-        c"Godot Vulkan host ready with Streamline Vulkan dispatch and PCL startup."
+        c"Vulkan host ready with Streamline Vulkan dispatch and PCL startup."
     } else {
-        c"Godot Vulkan host ready. Streamline Vulkan initialization failed; platform latency capabilities are queried at device creation."
+        c"Vulkan host ready. Streamline Vulkan initialization failed; platform latency capabilities are queried at device creation."
     });
     ACTIVE.store(true, Ordering::Release);
     1
@@ -450,7 +468,8 @@ fn boot(setup: &rsf_godot_setup) -> i32 {
 
 /// The presenter is disabled and drained, then the SR session retires before the capture, XeSS
 /// and SDK stop. A refused step keeps the session booted.
-pub(crate) fn shutdown() -> c_int {
+#[unsafe(no_mangle)]
+extern "C" fn rsf_vkhost_shutdown() -> c_int {
     let mut state = state();
     if !booted() {
         return 1;
@@ -490,8 +509,13 @@ pub(crate) fn shutdown() -> c_int {
     1
 }
 
-/// `settings` passed the shared `rsfg_configure` refusal rules.
-pub(crate) fn configure(settings: &Settings) -> c_int {
+/// # Safety
+/// `settings` is null or a readable record of its stated size.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vkhost_configure(settings: *const Settings) -> c_int {
+    let Some(settings) = (unsafe { checked(settings) }) else {
+        return 0;
+    };
     let mut state = state();
     if !booted() || !state.admit(settings) {
         return 0;
@@ -508,12 +532,26 @@ pub(crate) fn configure(settings: &Settings) -> c_int {
     1
 }
 
-pub(crate) fn settings() -> (Settings, c_int) {
-    (state().settings, c_int::from(booted()))
+/// # Safety
+/// `output` is null or writable for a settings record.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vkhost_settings_get(output: *mut Settings) -> c_int {
+    if output.is_null() {
+        return 0;
+    }
+    unsafe { output.write(state().settings) };
+    c_int::from(booted())
 }
 
 /// The record with the Streamline Vulkan latency overlay, also when the session is not booted.
-pub(crate) fn status() -> (Status, c_int) {
+///
+/// # Safety
+/// `output` is null or writable for a status record.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vkhost_status_get(output: *mut Status) -> c_int {
+    if output.is_null() {
+        return 0;
+    }
     let mut value = state().status;
     let mut latency = rsf_latencyvk_status {
         struct_size: size_of::<rsf_latencyvk_status>() as u32,
@@ -529,28 +567,31 @@ pub(crate) fn status() -> (Status, c_int) {
         value.marker_calls = latency.marker_calls;
         value.latency_owner = latency.owner;
     }
-    (value, c_int::from(booted()))
+    unsafe { output.write(value) };
+    c_int::from(booted())
 }
 
-pub(crate) fn render_begin(frame: u64, explicit: bool) {
-    if !explicit {
+#[unsafe(no_mangle)]
+extern "C" fn rsf_vkhost_render_begin(frame: u64, explicit: u32) {
+    if explicit == 0 {
         unsafe { rsf_latencyvk_render(frame) };
     }
     let mut state = state();
     state.frame = frame;
-    state.explicit = explicit;
+    state.explicit = explicit != 0;
 }
 
 /// A native Present the engine issues itself. A nested SDK WSI call is already inside the
 /// provider-owned Present, which holds the guard.
-pub(crate) fn capture_present(info: *const c_void, result: i32, begin: bool) {
+#[unsafe(no_mangle)]
+extern "C" fn rsf_vkhost_capture_present(info: *const c_void, result: i32, begin: u32) {
     if let Ok(mut state) = STATE.try_lock() {
-        state.capture_present(ptr::null_mut(), info, result, begin);
+        state.capture_present(ptr::null_mut(), info, result, begin != 0);
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_vk_create(
+unsafe extern "C" fn rsf_vkhost_create(
     setup: *const rsf_fgvk_setup,
     out: *mut Handle,
     chain: *mut u64,
@@ -558,7 +599,7 @@ unsafe extern "C" fn rsfg_vk_create(
     if !booted() || out.is_null() || chain.is_null() {
         return backend_result::INVALID_ARGUMENT;
     }
-    let Some(setup) = (unsafe { rsf_game_sys::ffi_util::checked(setup) }) else {
+    let Some(setup) = (unsafe { checked(setup) }) else {
         return backend_result::INVALID_ARGUMENT;
     };
     let mut state = state();
@@ -617,17 +658,17 @@ unsafe extern "C" fn rsfg_vk_create(
     status.max_generated_frames = maximum;
     let queues = if owner.is_null() { 0 } else { 4 };
     state.log_text(format!(
-        "Godot Vulkan swapchain owner: create={result} reserved queues={queues}"
+        "Vulkan host swapchain owner: create={result} reserved queues={queues}"
     ));
     result
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_vk_capture_setup(setup: *const rsf_fgvk_setup) {
+unsafe extern "C" fn rsf_vkhost_capture_setup(setup: *const rsf_fgvk_setup) {
     if !booted() {
         return;
     }
-    let Some(setup) = (unsafe { rsf_game_sys::ffi_util::checked(setup) }) else {
+    let Some(setup) = (unsafe { checked(setup) }) else {
         return;
     };
     if setup.graphics.instance_proc.is_none() || setup.graphics.device_proc.is_none() {
@@ -639,19 +680,19 @@ unsafe extern "C" fn rsfg_vk_capture_setup(setup: *const rsf_fgvk_setup) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsfg_vk_capture_release(user: Handle) -> i32 {
+extern "C" fn rsf_vkhost_capture_release(user: Handle) -> i32 {
     state().capture.release(user)
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_vk_images(owner: Handle, count: *mut u32, images: *mut u64) -> i32 {
+unsafe extern "C" fn rsf_vkhost_images(owner: Handle, count: *mut u32, images: *mut u64) -> i32 {
     unsafe { rsf_fgvk_images(owner.cast(), count, images) }
 }
 
 /// A provider change needs the engine to recreate its WSI owner; the Runtime presenter manages
 /// guide sizes at retired slot reuse.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_vk_acquire(
+unsafe extern "C" fn rsf_vkhost_acquire(
     owner: Handle,
     timeout: u64,
     semaphore: u64,
@@ -674,7 +715,7 @@ unsafe extern "C" fn rsfg_vk_acquire(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_vk_image_layout(owner: Handle) -> u32 {
+unsafe extern "C" fn rsf_vkhost_image_layout(owner: Handle) -> u32 {
     let mut layout = PRESENT_LAYOUT;
     if !owner.is_null() {
         let _ = unsafe { rsf_fgvk_image_layout(owner.cast(), &mut layout) };
@@ -683,7 +724,7 @@ unsafe extern "C" fn rsfg_vk_image_layout(owner: Handle) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_vk_present(owner: Handle, info: *const c_void) -> i32 {
+unsafe extern "C" fn rsf_vkhost_present(owner: Handle, info: *const c_void) -> i32 {
     let mut state = state();
     if !state.explicit {
         unsafe { rsf_latencyvk_submit_end(state.frame) };
@@ -710,15 +751,17 @@ unsafe extern "C" fn rsfg_vk_present(owner: Handle, info: *const c_void) -> i32 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsfg_vk_recording_begin(commands: Handle) {
+extern "C" fn rsf_vkhost_recording_begin(commands: Handle) {
     let state = state();
-    state.capture.retire(commands);
-    // Godot reports the recycled recording only after its previous use retired.
-    unsafe { linked::rsf_core_srvk_session_retire(state.sr, commands) };
+    if SR_BUILT {
+        state.capture.retire(commands);
+    }
+    // The engine reports the recycled recording only after its previous use retired.
+    unsafe { rsf_core_srvk_session_retire(state.sr, commands) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_vk_submitted(commands: *const Handle, count: u32) {
+unsafe extern "C" fn rsf_vkhost_submitted(commands: *const Handle, count: u32) {
     let state = state();
     if !state.presenter.is_null() {
         unsafe { rsf_fgvk_submitted(state.presenter, commands, count) };
@@ -726,7 +769,7 @@ unsafe extern "C" fn rsfg_vk_submitted(commands: *const Handle, count: u32) {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_vk_destroy(owner: Handle) -> i32 {
+unsafe extern "C" fn rsf_vkhost_destroy(owner: Handle) -> i32 {
     let mut state = state();
     let live = owner == state.presenter.cast();
     if live {
@@ -749,7 +792,7 @@ unsafe extern "C" fn rsfg_vk_destroy(owner: Handle) -> i32 {
             if unsafe { rsf_latencyvk_shutdown() } == backend_result::OK {
                 state.shutdown_pending = false;
             } else {
-                state.log(c"Godot Vulkan SDK shutdown refused after owner retirement; retaining the mapped session.");
+                state.log(c"Vulkan host SDK shutdown refused after owner retirement; retaining the mapped session.");
             }
         }
     }
@@ -757,12 +800,12 @@ unsafe extern "C" fn rsfg_vk_destroy(owner: Handle) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_vk_drain(owner: Handle) -> i32 {
+unsafe extern "C" fn rsf_vkhost_drain(owner: Handle) -> i32 {
     let _state = state();
     unsafe { rsf_fgvk_drain(owner.cast()) }
 }
 
-fn image(packet: &rsf_godot_vk_packet, value: &rsf_godot_vk_image, layout: u32) -> rsf_srvk_image {
+fn image(packet: &rsf_vkhost_packet, value: &rsf_vkhost_image, layout: u32) -> rsf_srvk_image {
     rsf_srvk_image {
         device: packet.device,
         image: value.image,
@@ -775,39 +818,36 @@ fn image(packet: &rsf_godot_vk_packet, value: &rsf_godot_vk_image, layout: u32) 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_render_vulkan(
-    commands: Handle,
-    packet: *const rsf_godot_vk_packet,
-) -> i32 {
+unsafe extern "C" fn rsf_vkhost_render(commands: Handle, packet: *const rsf_vkhost_packet) -> i32 {
     unsafe { render(commands, packet, None, ptr::null_mut()) }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsfg_render_vulkan_handoff(
+unsafe extern "C" fn rsf_vkhost_render_handoff(
     commands: Handle,
-    packet: *const rsf_godot_vk_packet,
-    handoff: *const rsf_godot_vk_handoff,
+    packet: *const rsf_vkhost_packet,
+    handoff: *const rsf_fsr4vk_handoff,
     continuation: *mut Handle,
 ) -> i32 {
     if continuation.is_null() {
         return 0;
     }
     unsafe { continuation.write(commands) };
-    let Some(handoff) = (unsafe { rsf_game_sys::ffi_util::checked(handoff) }) else {
+    let Some(handoff) = (unsafe { checked(handoff) }) else {
         return 0;
     };
-    if handoff.abi_version != RSF_GODOT_VK_HANDOFF_ABI_VERSION {
+    if handoff.abi_version != RSF_SRVK_SPLIT_ABI_VERSION {
         return 0;
     }
     unsafe { render(commands, packet, Some(handoff), continuation) }
 }
 
-/// One SR or final-scene pass of `rsfg_render_vulkan`: the FG recording, then the SR session's
-/// evaluation or the Runtime's spatial fallback.
+/// One SR or final-scene pass: the FG recording, then the SR session's evaluation or the
+/// Runtime's spatial fallback.
 unsafe fn render(
     commands: Handle,
-    packet: *const rsf_godot_vk_packet,
-    handoff: Option<&rsf_godot_vk_handoff>,
+    packet: *const rsf_vkhost_packet,
+    handoff: Option<&rsf_fsr4vk_handoff>,
     continuation: *mut Handle,
 ) -> i32 {
     if !continuation.is_null() {
@@ -816,11 +856,11 @@ unsafe fn render(
     if !booted() || commands.is_null() {
         return 0;
     }
-    let Some(packet) = (unsafe { rsf_game_sys::ffi_util::checked(packet) }) else {
+    let Some(packet) = (unsafe { checked(packet) }) else {
         return 0;
     };
     let pass = &packet.pass;
-    if packet.abi_version != RSF_GODOT_ABI_VERSION
+    if packet.abi_version != RSF_VKHOST_ABI_VERSION
         || packet.device.is_null()
         || packet.instance_proc.is_none()
         || packet.device_proc.is_none()
@@ -855,7 +895,7 @@ unsafe fn render(
         },
         ..Default::default()
     };
-    if features().capture.snapshot.is_some() {
+    if SR_BUILT {
         let backend = state.settings.sr_backend;
         state.capture.render(commands, packet, record, backend);
     }
@@ -917,8 +957,8 @@ unsafe fn render(
 /// once.
 struct Sr<'a> {
     state: MutexGuard<'static, State>,
-    packet: &'a rsf_godot_vk_packet,
-    handoff: Option<&'a rsf_godot_vk_handoff>,
+    packet: &'a rsf_vkhost_packet,
+    handoff: Option<&'a rsf_fsr4vk_handoff>,
     continuation: *mut Handle,
     /// The command buffer recording continues on.
     commands: Handle,
@@ -959,7 +999,7 @@ impl Sr<'_> {
         if backend == RSF_SR_NONE && settings.sr_backend == RSF_SR_AUTO {
             return self.record(None, backend_result::NOT_SUPPORTED, false);
         }
-        // Godot evaluates FSR1 itself; no session passes the engine's output through.
+        // The engine evaluates FSR1 itself; no session passes the engine's output through.
         if backend == RSF_SR_NONE || backend == RSF_SR_SPATIAL {
             self.report(backend_result::OK, Some(backend));
             return 1;
@@ -972,11 +1012,15 @@ impl Sr<'_> {
         }
         let state = &mut *self.state;
         let (mut width, mut height) = (0, 0);
-        let _ = unsafe { linked::rsf_core_srvk_session_plan(state.sr, &mut width, &mut height) };
+        let _ = unsafe { rsf_core_srvk_session_plan(state.sr, &mut width, &mut height) };
         self.plan = [width, height];
         state.status.render_width = width;
         state.status.render_height = height;
-        let sharpening = sharpening(&settings);
+        let sharpening = if settings.sharpening.struct_size != 0 {
+            settings.sharpening
+        } else {
+            unsafe { rsf_sharpening_core_defaults() }
+        };
         self.record(Some(sharpening), backend_result::OK, true)
     }
 
@@ -1001,27 +1045,18 @@ impl Sr<'_> {
             output_width: camera.output_width,
             output_height: camera.output_height,
             depth_inverted: camera.depth_inverted,
-            // The pinned Godot producer supplies finite z_far.
-            depth_infinite: 0,
+            depth_infinite: u32::from(camera.far_plane.is_infinite()),
             motion_jittered: camera.motion_jittered,
             runtime_directory_utf8: state.directory.as_ptr(),
         };
         let handoff = self
             .handoff
-            .filter(|handoff| !self.continuation.is_null() && handoff.split_record.is_some())
-            .map(|handoff| rsf_fsr4vk_handoff {
-                struct_size: size_of::<rsf_fsr4vk_handoff>() as u32,
-                abi_version: RSF_SRVK_SPLIT_ABI_VERSION,
-                timeline_enabled: handoff.timeline_enabled,
-                queue_family: handoff.queue_family,
-                user: handoff.user,
-                split_record: handoff.split_record,
-            });
+            .filter(|handoff| !self.continuation.is_null() && handoff.split_record.is_some());
         let mut owner = ptr::null_mut();
         let result = unsafe {
             linked::open(
                 &setup,
-                handoff.as_ref().map_or(ptr::null(), ptr::from_ref),
+                handoff.map_or(ptr::null(), ptr::from_ref),
                 state.fsr4.as_ptr(),
                 settings.dlss_preset,
                 &mut owner,
@@ -1105,7 +1140,7 @@ impl Sr<'_> {
             if backend == RSF_SR_FSR4 && result != backend_result::OK && self.state.spend() {
                 let continuing = u32::from(!next.is_null());
                 self.state.log_text(format!(
-                    "Godot Vulkan FSR4 dispatch: result={result} continuation={continuing}"
+                    "Vulkan FSR4 dispatch: result={result} continuation={continuing}"
                 ));
             }
             unsafe { rsf_input_dump_result(self.record, c"sr".as_ptr(), backend, result) };

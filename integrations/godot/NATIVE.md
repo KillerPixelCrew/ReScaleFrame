@@ -37,8 +37,20 @@ bodies.
 | `native/control.rs` | Requested settings and their generation, the `rsfg_configure` refusal rules (applied before either backend sees a request), engine-module service routing (`rsfg_attach_engine`, `rsfg_configure_engine`, `rsfg_reset_history`), the D3D12 FG install and the D3D12 status record (ABI 3) with latency availability, mode and counters read from the Runtime latency owner |
 | `native/d3d12.rs` | D3D12 render path: the engine's first device and queue published only with their completion fence, the SR context plan (Auto resolved by the Runtime's `rsf_gpu_default_sr_backend`, spatial mapped to the normalising context because Godot evaluates FSR1 itself, fallback to backend 0 when a provider is not created), the command slots, the Present receipt committed only by a recorded pass, HUD-less slot admission bound to the source's SR slot, and the capture owner |
 | `native/window.rs` | Input window admission (the first window of the process whose class is `Engine`, asked by the Runtime's `accept_window` callback and by `rsfg_vk_window`, kept until `rsfg_shutdown`), per-HWND subclass forwarding that survives a refused restoration, so a replacement window attaches independently, and the Runtime CPU service with the Present execution receipt |
-| `native/vulkan.rs` | The Vulkan session under one guard: boot state and identity, requested settings and generation (kept across sessions), provider admission and Auto resolution, the FG presenter, the Runtime SR session with its retirement, the frame capture (`vulkan/capture.rs`) and the status record with the Streamline Vulkan latency overlay |
-| `native/vulkan_creation.rs` | The engine loader's instance and device creation: the owner instance, XeSS preparation, the XeSS, Win32 interop and latency stages with their fallbacks, and a receipt of the accepted stages and the adapter for each successful `vkCreateDevice` |
+| `native/runtime.rs` | The entries that route to the booted backend, the Vulkan boot (the Runtime host's boot plus the CPU service), the primary-window report, the Present markers and the engine's own WSI calls under the Runtime's Streamline scopes |
+
+The Vulkan session is the Runtime's Vulkan host (`runtime/orchestrator/src/vulkan_host.rs`,
+contract `rescaleframe/native_vulkan_host.h`), not Godot code: boot state and identity, requested
+settings and generation (kept across sessions), provider admission and Auto resolution, the FG
+presenter, the SR session with its retirement, the frame capture (`vulkan_host/capture.rs`), the
+status record with the Streamline Vulkan latency overlay, and the creation resolver
+(`vulkan_host/creation.rs`: the owner instance, XeSS preparation, the XeSS, Win32 interop and
+latency stages with their fallbacks, and a receipt of the accepted stages and the adapter for each
+successful `vkCreateDevice`). `api.h`'s setup, settings, status and Vulkan pass records are that
+host's records under their Godot names; `exports.def` publishes the host's presenter and pass
+entries as the `rsfg_vk_*` and `rsfg_render_vulkan*` exports the engine module resolves. Godot
+prepares the inputs (the packet, the graph split, the primary window) and presents what the host
+returns.
 
 The native integration binds one versioned Runtime CPU service at backend setup: CPU facts and
 window messages use its report callback, diagnostic pings its ping callback. Godot admits the window;
@@ -62,7 +74,7 @@ lookup, so older modules and DLLs keep their entry points.
 
 ## Vulkan Auto through the Runtime provider policy
 
-The Vulkan session does not pick a vendor on its own (Rule 3); it asks the same Runtime policy as the
+The Runtime Vulkan host does not pick a vendor on its own (Rule 3); it asks the same Runtime policy as the
 D3D12 path, with the facts it has. Explicit SR and FG requests, their admission and refusal order and
 the FSR4 lease admission are unchanged.
 
@@ -71,8 +83,7 @@ the FSR4 lease admission are unchanged.
   choices. FSR4 is never chosen.
 - FG takes `rsf_fg_default_backend(vendor, software)` and passes it to
   `rsf_fg_select_auto_backend(preferred, choices)` (`fg_choice.rs`): the preference when served,
-  otherwise FSR3 when served, otherwise none. It is private to the orchestrator crate; the Godot
-  DLL links OrchestratorCore statically.
+  otherwise FSR3 when served, otherwise none.
 - Facts: adapter vendor, device and software (`VK_PHYSICAL_DEVICE_TYPE_CPU`) read by the creation
   owner after each successful `vkCreateDevice` (without facts the Runtime sees an unknown adapter
   and yields FSR3); Streamline availability from the start leaf's `streamline_ready`; and the
@@ -115,8 +126,8 @@ The checklist below maps each earlier finding to its source evidence.
 | Present recording receipt | `d3d12.rs` commits the receipt only after a recorded pass; Present reports a refused one as a missed SR. |
 | HUD-less slot admission | `d3d12.rs` matches the SR slot's session and source, waits on already-submitted work, and refuses a failed wait. |
 | Size-first ABI validation | Raw header reads in `lib.rs` read the size word before the version. |
-| Auto policy delegation | `vulkan.rs` passes the adapter facts and the servable choices to the Runtime's selectors, whose own fixtures cover provider policy. |
-| Device-bound readiness | `vulkan_creation.rs` keeps a receipt per created device; its fixture checks the receipt and its removal at `vkDestroyDevice`. |
+| Auto policy delegation | The Runtime Vulkan host (`vulkan_host.rs`) passes the adapter facts and the servable choices to the Runtime's selectors, whose own fixtures cover provider policy. |
+| Device-bound readiness | The host's `vulkan_host/creation.rs` keeps a receipt per created device; its fixture (an `rsf-orchestrator` unit test) checks the receipt and its removal at `vkDestroyDevice`. |
 
 The C++ had no tests of the D3D12, window and Vulkan session paths; their fake-leaf tests went with
 the leaf layer in the C++-reference pass (PORT.md), and these paths need a Godot run to verify.
@@ -318,9 +329,11 @@ are `float`, `taa_jitter` and `prev_taa_jitter` are `Vector2`).
 - The Rust archive is defined through `rsf_add_rust_static` in every configuration.
   `eng/build-godot.ps1` builds `--target rsf_godot`, which also runs
   `cargo build --locked -p rsf-godot`. Cargo is already required by the root build.
-- The Vulkan creation fixture (the port of `tests/godot_vulkan_creation.cpp`) and the motion
-  classification run in the `rsf-godot` Cargo tests. Its Vulkan records are `ash::vk`; the `rsf_*`
-  provider records come from rsf-game-sys.
+- The motion classification runs in the `rsf-godot` Cargo tests. The Vulkan creation fixture (the
+  port of `tests/godot_vulkan_creation.cpp`) moved with the creation resolver into the Runtime's
+  Vulkan host and runs in `cargo test -p rsf-orchestrator --lib vulkan_host`.
+- `exports.def` aliases the host's entries (`rsfg_vk_images=rsf_vkhost_images` and so on); the
+  linker resolves them from the orchestrator archive the DLL links.
 - `rsf_godot` carries a second Rust archive beside the orchestrator's, the same unverified
   multi-archive link as Fallout 4 and Minecraft. It has not been linked.
 - `tools-requirements.txt` (SCons, NumPy, Pillow) serves the engine build and the visual analyzer

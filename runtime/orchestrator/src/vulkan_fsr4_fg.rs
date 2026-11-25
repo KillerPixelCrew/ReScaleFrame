@@ -112,7 +112,10 @@ const _: () = {
 };
 /// Queries the matching DX12 device's exact major-4 provider without HWND or WSI calls.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_probe(setup: *const Graphics, info: *mut BridgeInfo) -> i32 {
+pub(crate) unsafe extern "C" fn rsf_fsr4gvk_probe(
+    setup: *const Graphics,
+    info: *mut BridgeInfo,
+) -> i32 {
     unsafe { probe(setup, info) }
 }
 

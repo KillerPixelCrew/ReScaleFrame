@@ -3,13 +3,14 @@
 #include <stdint.h>
 
 // Engine sources inserted by eng/patch-godot.py include this through rsf_godot_engine.h, so it
-// names the api.h records without including their SDK headers.
-struct rsf_godot_setup;
-struct rsf_godot_status;
-struct rsf_godot_settings;
+// names the api.h records without including their SDK headers. Most are the Runtime's Vulkan host
+// records, which api.h names with the same typedefs.
+typedef struct rsf_vkhost_setup rsf_godot_setup;
+typedef struct rsf_vkhost_status rsf_godot_status;
+typedef struct rsf_vkhost_settings rsf_godot_settings;
 struct rsf_godot_engine_services;
-struct rsf_godot_vk_packet;
-struct rsf_godot_vk_handoff;
+typedef struct rsf_vkhost_packet rsf_godot_vk_packet;
+typedef struct rsf_fsr4vk_handoff rsf_godot_vk_handoff;
 struct rsf_game_render_pass;
 
 // Private native host table in the SCons Rust object (native.rs). Rust loads the library,
@@ -21,12 +22,12 @@ extern "C" {
 #endif
 // Main thread, once during boot. A nonzero error is the Windows load error.
 uint32_t rsf_godot_native_load(const uint16_t *path, uint32_t (*vulkan_driver)(void), uint32_t *error);
-uint32_t rsf_godot_native_boot(uint32_t vulkan, const struct rsf_godot_setup *setup);
+uint32_t rsf_godot_native_boot(uint32_t vulkan, const rsf_godot_setup *setup);
 void rsf_godot_native_capabilities(uint32_t flags);
 uint32_t rsf_godot_native_attach(const struct rsf_godot_engine_services *services);
-uint32_t rsf_godot_native_status(struct rsf_godot_status *status);
+uint32_t rsf_godot_native_status(rsf_godot_status *status);
 uint32_t rsf_godot_native_shutdown(void);
-uint32_t rsf_godot_native_configure(const struct rsf_godot_settings *settings);
+uint32_t rsf_godot_native_configure(const rsf_godot_settings *settings);
 void rsf_godot_native_vk_window(void *window);
 
 // Main loop thread: frame.rs's report leaf.
@@ -63,9 +64,9 @@ uint32_t rsf_godot_native_vk_drain(void *owner);
 
 // packet.rs's driver routing.
 int rsf_godot_native_render(void *device, void *queue, void *commands, const struct rsf_game_render_pass *pass);
-int rsf_godot_native_render_vulkan(void *commands, const struct rsf_godot_vk_packet *packet);
-int rsf_godot_native_render_vulkan_handoff(void *commands, const struct rsf_godot_vk_packet *packet,
-    const struct rsf_godot_vk_handoff *handoff, void **continuation);
+int rsf_godot_native_render_vulkan(void *commands, const rsf_godot_vk_packet *packet);
+int rsf_godot_native_render_vulkan_handoff(void *commands, const rsf_godot_vk_packet *packet,
+    const rsf_godot_vk_handoff *handoff, void **continuation);
 #ifdef __cplusplus
 }
 #endif

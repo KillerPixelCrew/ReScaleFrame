@@ -351,6 +351,8 @@ mod vulkan_fsr4_fg;
 #[cfg(windows)]
 mod vulkan_fsr4_sr;
 #[cfg(windows)]
+mod vulkan_host;
+#[cfg(windows)]
 mod vulkan_latency;
 /// The XeSS SDK records, for the Vulkan XeSS fixtures in tests/vulkan-fg.
 #[cfg(all(windows, feature = "test-fixtures"))]

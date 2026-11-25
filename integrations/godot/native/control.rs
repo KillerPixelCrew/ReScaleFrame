@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! The Godot runtime control and the D3D12 session: the requested settings and their
 //! reconstruction generation, the `rsfg_configure` refusal rules, the engine module's services,
-//! the D3D12 FG install and the status record assembled from the Runtime's facts. While the Vulkan
-//! session (`vulkan.rs`) is booted, configuration, settings and status go to it after the same
+//! the D3D12 FG install and the status record assembled from the Runtime's facts. While the
+//! Runtime's Vulkan host is booted, configuration, settings and status go to it after the same
 //! refusal rules.
 use crate::sys::*;
-use crate::{checked, checked_output, d3d12, vulkan, window};
+use crate::runtime::vulkan_booted;
+use crate::{checked, checked_output, d3d12, window};
 use rsf_game_sys::ffi_util::lock_or_recover;
 use rsf_game_sys::{
     RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF, RSF_FG_STAT_TOTAL_PRESENTED, RSF_REFLEX_BOOST,
@@ -27,7 +28,8 @@ const QUALITY_ULTRA_QUALITY: u32 = 5;
 const MAX_GENERATED_FRAMES: u32 = 15;
 const DLSS_ENGINE_CUSTOM: u32 = 0;
 
-/// The settings both backends start from; the sharpening request is empty.
+/// The settings the D3D12 session and the GDExtension defaults start from, as the Runtime Vulkan
+/// host's do; the sharpening request is empty.
 pub(crate) fn default_settings() -> Settings {
     Settings {
         struct_size: size_of::<Settings>() as u32,
@@ -45,8 +47,8 @@ pub(crate) fn default_settings() -> Settings {
     }
 }
 
-/// The settings whose change retires the SR contexts of both backends.
-pub(crate) fn reconstruction_key(settings: &Settings) -> (u32, u32, u32) {
+/// The settings whose change retires the D3D12 SR context.
+fn reconstruction_key(settings: &Settings) -> (u32, u32, u32) {
     (settings.sr_backend, settings.quality, settings.dlss_preset)
 }
 
@@ -133,7 +135,7 @@ pub(crate) fn booted() -> bool {
 
 /// Any backend that accepts engine control.
 fn active() -> bool {
-    booted() || vulkan::booted()
+    booted() || vulkan_booted()
 }
 
 pub(crate) fn snapshot() -> (Settings, u64) {
@@ -388,8 +390,8 @@ unsafe extern "C" fn rsfg_configure(settings: *const Settings) -> c_int {
     if !settings_valid(settings) {
         return 0;
     }
-    if vulkan::booted() {
-        return vulkan::configure(settings);
+    if vulkan_booted() {
+        return unsafe { rsf_vkhost_configure(settings) };
     }
     {
         let mut session = session();
@@ -410,13 +412,11 @@ pub(crate) unsafe extern "C" fn rsfg_settings(output: *mut Settings) -> c_int {
     let Some(output) = (unsafe { checked_output(output, RSF_GODOT_SETTINGS_ABI_VERSION) }) else {
         return 0;
     };
-    let (settings, result) = if vulkan::booted() {
-        vulkan::settings()
-    } else {
-        (session().settings, 1)
-    };
-    unsafe { output.write(settings) };
-    result
+    if vulkan_booted() {
+        return unsafe { rsf_vkhost_settings_get(output) };
+    }
+    unsafe { output.write(session().settings) };
+    1
 }
 
 /// # Safety
@@ -427,8 +427,9 @@ pub(crate) unsafe extern "C" fn rsfg_status(output: *mut Status) -> c_int {
     let Some(output) = (unsafe { checked_output(output, RSF_GODOT_ABI_VERSION) }) else {
         return 0;
     };
-    if vulkan::booted() {
-        let (mut value, result) = vulkan::status();
+    if vulkan_booted() {
+        let mut value = status_header();
+        let result = unsafe { rsf_vkhost_status_get(&mut value) };
         if result != 0 {
             let mut inputs = rsf_native_cpu_counters {
                 struct_size: size_of::<rsf_native_cpu_counters>() as u32,

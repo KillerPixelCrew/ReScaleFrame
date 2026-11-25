@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Godot Vulkan device creation. `resolver` wraps the engine loader's `vkGetInstanceProcAddr` and
+//! The Vulkan host's device creation. `resolver` wraps the engine loader's `vkGetInstanceProcAddr` and
 //! intercepts `vkCreateInstance`, `vkCreateDevice` and `vkDestroyDevice`. A prepared XeSS session
 //! adds the SDK's instance and device requirements to private copies of the engine's requests; the
 //! device request then gets the Win32 interop extensions when the device has them and the
@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 mod chain;
 use chain::Chain;
 
-// The linked Runtime's XeSS and latency services (crate::sys); tests.rs mocks them.
+// The Runtime's XeSS and latency services (crate::sys); tests.rs mocks them.
 #[cfg(test)]
 use tests::{
     rsf_latencyvk_device_created, rsf_latencyvk_device_destroyed, rsf_latencyvk_require_device,
@@ -32,7 +32,7 @@ use tests::{
 
 /// `PFN_vkVoidFunction`.
 pub(crate) type VkFunction = unsafe extern "C" fn();
-/// `rsf_godot_vk_proc`: `vkGetInstanceProcAddr` or `vkGetDeviceProcAddr`.
+/// `rsf_vk_get_proc`: `vkGetInstanceProcAddr` or `vkGetDeviceProcAddr`.
 pub(crate) type VkProc = unsafe extern "C" fn(*mut c_void, *const c_char) -> Option<VkFunction>;
 
 const MAX_EXTENSIONS: u32 = 4096;
@@ -83,7 +83,7 @@ fn owner() -> *mut c_void {
 fn diagnostic(message: &CStr) {
     let binding = binding();
     if let Some(log) = binding.log {
-        // SAFETY: the engine module's logger lives while its library is loaded.
+        // SAFETY: the engine's logger lives through the session's setup contract.
         unsafe { log(binding.log_user as *mut c_void, message.as_ptr()) };
     }
 }
@@ -96,7 +96,7 @@ fn owner_proc(underlying: VkProc, name: &CStr) -> Option<VkFunction> {
 
 /// The owner instance's `vkGetDeviceProcAddr`.
 fn owner_device_proc(underlying: VkProc) -> Option<VkProc> {
-    // SAFETY: vkGetDeviceProcAddr has the rsf_godot_vk_proc signature.
+    // SAFETY: vkGetDeviceProcAddr has the rsf_vk_get_proc signature.
     owner_proc(underlying, c"vkGetDeviceProcAddr")
         .map(|get| unsafe { transmute::<VkFunction, VkProc>(get) })
 }

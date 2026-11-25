@@ -720,7 +720,6 @@ dependencies = [
 name = "rsf-godot"
 version = "0.1.2"
 dependencies = [
- "ash",
  "rsf-bindgen",
  "rsf-game-sys",
  "windows",

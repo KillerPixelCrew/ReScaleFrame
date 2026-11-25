@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! The Vulkan frame capture: the readable swapchain request, the Runtime's frame dump owner and
-//! the capture stages of the engine's final image.
+//! the capture stages of the engine's final image. The host reaches it only in a build with
+//! the Vulkan SR providers (`SR_BUILT`), which is every build with the Vulkan frame dump: both need
+//! the Vulkan headers.
 use super::*;
 use ash::vk::Handle as _;
 use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR};
@@ -9,6 +11,7 @@ use std::ffi::c_char;
 const TRANSFER_SRC: vk::ImageUsageFlags = vk::ImageUsageFlags::TRANSFER_SRC;
 const SWAPCHAIN_IMAGES: usize = 16;
 
+// frame_capture_vk.rs's stage owner, as an untyped handle.
 unsafe extern "C" {
     fn rsf_core_capture_vk_create(command_completion: u32) -> Handle;
     fn rsf_core_capture_vk_initialize(
@@ -52,7 +55,6 @@ pub(super) struct Capture {
 pub(super) fn readable_create(
     setup: &rsf_fgvk_setup,
 ) -> Option<vk::SwapchainCreateInfoKHR<'static>> {
-    features().capture.create?;
     let info = setup
         .create_info
         .cast::<vk::SwapchainCreateInfoKHR<'static>>();
@@ -89,9 +91,6 @@ impl Capture {
     }
 
     pub(super) fn setup(&mut self, setup: &rsf_fgvk_setup) {
-        let Some(create) = features().capture.create else {
-            return;
-        };
         if !self.owner.is_null() && self.setup.user != setup.queue_user {
             return;
         }
@@ -116,7 +115,7 @@ impl Capture {
             user: setup.queue_user,
         };
         if self.owner.is_null() {
-            let _ = unsafe { create(&self.setup, &mut self.owner) };
+            let _ = unsafe { rsf_input_dump_vk_create(&self.setup, &mut self.owner) };
         }
         self.format = info.image_format.as_raw() as u32;
         self.width = info.image_extent.width;
@@ -154,15 +153,11 @@ impl Capture {
         if self.owner.is_null() || self.setup.user != user {
             return backend_result::OK;
         }
-        let ops = &features().capture;
-        let (Some(drain), Some(destroy)) = (ops.drain, ops.destroy) else {
-            return backend_result::NOT_READY;
-        };
-        let joined = unsafe { drain(self.owner) };
+        let joined = unsafe { rsf_input_dump_vk_drain(self.owner) };
         if joined != backend_result::OK && joined != RSF_INPUT_DUMP_VK_DEVICE_LOST {
             return joined;
         }
-        let stopped = unsafe { destroy(self.owner) };
+        let stopped = unsafe { rsf_input_dump_vk_destroy(self.owner) };
         if stopped != backend_result::OK {
             return stopped;
         }
@@ -188,21 +183,16 @@ impl Capture {
     }
 
     pub(super) fn retire(&self, commands: Handle) {
-        if features().capture.create.is_some() {
-            unsafe { rsf_core_capture_vk_retire(self.stages, commands) };
-        }
+        unsafe { rsf_core_capture_vk_retire(self.stages, commands) };
     }
 
     pub(super) fn render(
         &mut self,
         commands: Handle,
-        packet: &rsf_godot_vk_packet,
+        packet: &rsf_vkhost_packet,
         record: rsf_frame_record,
         backend: u32,
     ) {
-        if features().capture.create.is_none() {
-            return;
-        }
         self.record = Some(record);
         if packet.pass.role == RSF_GAME_RENDER_SR {
             let _ = unsafe { rsf_input_dump_begin_record(&record, backend) };
@@ -246,9 +236,6 @@ impl Capture {
         backend: u32,
         frame: u64,
     ) -> bool {
-        let Some(snapshot) = features().capture.snapshot else {
-            return false;
-        };
         let record = self
             .record
             .filter(|record| record.frame_id == frame)
@@ -297,7 +284,8 @@ impl Capture {
             copy_source: u32::from(self.usage.contains(TRANSFER_SRC)),
         };
         unsafe {
-            snapshot(self.owner, &record, &image, c"final_color".as_ptr()) != backend_result::OK
+            rsf_input_dump_vk_snapshot(self.owner, &record, &image, c"final_color".as_ptr())
+                != backend_result::OK
         }
     }
 

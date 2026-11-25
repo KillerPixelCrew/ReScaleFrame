@@ -1,20 +1,11 @@
 // SPDX-License-Identifier: MIT
-//! Provider transport for a host that already links NativeVulkan. The session and
-//! provider policy live in the Runtime archive, which also links into non-Vulkan
-//! targets and therefore cannot unconditionally reference these native symbols.
+//! The Runtime's Vulkan SR providers as the session's routes, for the Vulkan host
+//! (vulkan_host.rs). The session's unit tests route to doubles instead.
 
+use super::routes::{Route, Routes};
+use super::{Fallback, Frame, Handle, Handoff, Setup};
 use crate::sys::*;
-use std::ffi::{c_char, c_void};
-
-type Handle = *mut c_void;
-type Setup = rsf_srvk_setup;
-type Frame = rsf_srvk_frame;
-type Fallback = rsf_srvk_fallback;
-type Handoff = rsf_fsr4vk_handoff;
-
-#[path = "routes.rs"]
-mod routes;
-use routes::{Route, Routes};
+use std::ffi::c_char;
 
 static ROUTES: Routes = Routes {
     native: Route {
@@ -88,45 +79,18 @@ unsafe extern "C" fn fallback(input: &Fallback) -> i32 {
     unsafe { rsf_srvk_spatial_fallback(input) }
 }
 
-unsafe extern "C" {
-    fn rsf_core_srvk_session_open(
-        routes: *const Routes,
-        setup: *const Setup,
-        handoff: *const Handoff,
-        directory: *const c_char,
-        preset: u32,
-        out: *mut Handle,
-    ) -> i32;
-    fn rsf_core_srvk_session_record(
-        routes: *const Routes,
-        owner: Handle,
-        frame: *const Frame,
-        fallback: *const Fallback,
-        split_recording: u32,
-        provider: *mut i32,
-        next: *mut Handle,
-    ) -> i32;
-    pub(super) fn rsf_core_srvk_session_plan(
-        owner: *const c_void,
-        width: *mut u32,
-        height: *mut u32,
-    ) -> i32;
-    pub(super) fn rsf_core_srvk_session_retire(owner: Handle, commands: Handle);
-    pub(super) fn rsf_core_srvk_session_close(owner: Handle) -> i32;
-}
-
-pub(super) unsafe fn open(
+pub(crate) unsafe fn open(
     setup: &Setup,
     handoff: *const Handoff,
     directory: *const c_char,
     preset: u32,
-    out: &mut Handle,
+    out: &mut *mut super::Session,
 ) -> i32 {
-    unsafe { rsf_core_srvk_session_open(&ROUTES, setup, handoff, directory, preset, out) }
+    unsafe { super::rsf_core_srvk_session_open(&ROUTES, setup, handoff, directory, preset, out) }
 }
 
-pub(super) unsafe fn record(
-    owner: Handle,
+pub(crate) unsafe fn record(
+    owner: *mut super::Session,
     frame: *const Frame,
     fallback: &Fallback,
     split: bool,
@@ -134,7 +98,7 @@ pub(super) unsafe fn record(
     next: *mut Handle,
 ) -> i32 {
     unsafe {
-        rsf_core_srvk_session_record(
+        super::rsf_core_srvk_session_record(
             &ROUTES,
             owner,
             frame,

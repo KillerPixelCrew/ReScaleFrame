@@ -1,3 +1,5 @@
+; The rsfg_vk_* presenter entries and the Vulkan pass entries are the Runtime Vulkan host's
+; (rescaleframe/native_vulkan_host.h), exported under the names the engine module resolves.
 EXPORTS
     rsf_godot_initialize
     rsfg_attach_engine
@@ -10,23 +12,23 @@ EXPORTS
     rsfg_cpu
     rsfg_request_latency_ping
     rsfg_vk_window
-    rsfg_vulkan_supported
-    rsfg_vk_resolver
-    rsfg_vk_host_capabilities
+    rsfg_vulkan_supported=rsf_vkhost_supported
+    rsfg_vk_resolver=rsf_vkhost_resolver
+    rsfg_vk_host_capabilities=rsf_vkhost_capabilities
     rsfg_boot_vulkan
-    rsfg_vk_create
-    rsfg_vk_capture_setup
-    rsfg_vk_capture_release
-    rsfg_vk_images
-    rsfg_vk_acquire
-    rsfg_vk_image_layout
-    rsfg_vk_present
-    rsfg_vk_recording_begin
-    rsfg_vk_submitted
-    rsfg_vk_destroy
-    rsfg_vk_drain
-    rsfg_render_vulkan
-    rsfg_render_vulkan_handoff
+    rsfg_vk_create=rsf_vkhost_create
+    rsfg_vk_capture_setup=rsf_vkhost_capture_setup
+    rsfg_vk_capture_release=rsf_vkhost_capture_release
+    rsfg_vk_images=rsf_vkhost_images
+    rsfg_vk_acquire=rsf_vkhost_acquire
+    rsfg_vk_image_layout=rsf_vkhost_image_layout
+    rsfg_vk_present=rsf_vkhost_present
+    rsfg_vk_recording_begin=rsf_vkhost_recording_begin
+    rsfg_vk_submitted=rsf_vkhost_submitted
+    rsfg_vk_destroy=rsf_vkhost_destroy
+    rsfg_vk_drain=rsf_vkhost_drain
+    rsfg_render_vulkan=rsf_vkhost_render
+    rsfg_render_vulkan_handoff=rsf_vkhost_render_handoff
     rsfg_boot
     rsfg_create_swapchain
     rsfg_configure

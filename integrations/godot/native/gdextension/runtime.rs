@@ -43,7 +43,7 @@ fn admission(godot: &'static Godot, rendering: ObjectPtr) -> (bool, bool) {
     let name = |method| unsafe { godot.string(method, rendering, &[]) }.map(|name| name.utf8());
     let driver = match name(Bind::GET_RENDERING_DRIVER_NAME).as_deref() {
         Some(b"d3d12") => true,
-        Some(b"vulkan") => crate::vulkan::supported(),
+        Some(b"vulkan") => (unsafe { crate::sys::rsf_vkhost_supported() }) != 0,
         _ => false,
     };
     let renderer = name(Bind::GET_RENDERING_METHOD).as_deref() == Some(b"forward_plus".as_slice());
