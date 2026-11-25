@@ -18,6 +18,7 @@ use ash::vk;
 use creation::{DeviceReceipt, VkFunction, VkProc};
 use rsf_game_sys::backend_result;
 use rsf_game_sys::ffi_util::{ascii_wide, checked, lock_or_recover, wide};
+use rsf_game_sys::vendor_paths::VendorPaths;
 use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
     RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
@@ -354,12 +355,6 @@ fn choice(servable: bool, id: u32) -> u32 {
     if servable { 1 << id } else { 0 }
 }
 
-fn runtime_path(root: &CStr, suffix: &[u8]) -> CString {
-    let mut path = root.to_bytes().to_vec();
-    path.extend_from_slice(suffix);
-    CString::new(path).expect("runtime suffix has no NUL")
-}
-
 fn system_resolver() -> Option<VkProc> {
     static SYSTEM: OnceLock<Option<VkProc>> = OnceLock::new();
     *SYSTEM.get_or_init(|| {
@@ -438,10 +433,10 @@ unsafe extern "C" fn rsf_vkhost_boot(setup: *const rsf_vkhost_setup) -> i32 {
     state.frame = 0;
     state.explicit = false;
     state.streamline_ready = false;
-    let root = unsafe { CStr::from_ptr(setup.runtime_directory) };
-    state.directory = runtime_path(root, b"/fidelityfx-vulkan");
-    state.fsr4 = runtime_path(root, b"/fidelityfx");
-    state.streamline = runtime_path(root, b"/streamline-vulkan");
+    let vendors = VendorPaths::new(unsafe { CStr::from_ptr(setup.runtime_directory) });
+    state.directory = vendors.fidelityfx_vulkan;
+    state.fsr4 = vendors.fidelityfx;
+    state.streamline = vendors.streamline_vulkan;
     state.log = setup.log;
     state.log_user = setup.log_user;
     let latency = rsf_slvk_setup {
@@ -452,7 +447,7 @@ unsafe extern "C" fn rsf_vkhost_boot(setup: *const rsf_vkhost_setup) -> i32 {
         features: RSF_SLVK_DLSS_SR | RSF_SLVK_DLSS_FG,
     };
     let latency_result = unsafe { rsf_slvk_initialize(&latency) };
-    let xess = runtime_path(root, b"/xess");
+    let xess = vendors.xess;
     let Ok(intel) = xess.to_str() else { return 0 };
     state.intel = wide(intel);
     let xess = rsf_xessvk_setup {

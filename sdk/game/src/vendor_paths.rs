@@ -3,13 +3,16 @@ use std::ffi::{CStr, CString};
 
 /// The vendor runtime folders of one ReScaleFrame directory, as every host and adapter hands
 /// them to the Runtime: `streamline`, `fidelityfx` (FSR2, FSR3 and FSR4 share it) and `xess`
-/// under the root, the layout `eng/common.ps1` `Get-RsfVendorPayload` deploys.
+/// under the root, the layout `eng/common.ps1` `Get-RsfVendorPayload` deploys, and the Vulkan
+/// builds `eng/build-godot.ps1` adds beside them (`fidelityfx-vulkan`, `streamline-vulkan`).
 #[derive(Clone, Default)]
 pub struct VendorPaths {
     pub streamline: CString,
     pub interposer: CString,
     pub fidelityfx: CString,
     pub xess: CString,
+    pub fidelityfx_vulkan: CString,
+    pub streamline_vulkan: CString,
 }
 
 impl VendorPaths {
@@ -21,10 +24,26 @@ impl VendorPaths {
             CString::new(bytes).expect("SDK path suffixes contain no NUL")
         };
         Self {
-            streamline: join(br"\streamline"),
-            interposer: join(br"\streamline\sl.interposer.dll"),
-            fidelityfx: join(br"\fidelityfx"),
-            xess: join(br"\xess"),
+            fidelityfx_vulkan: join(br"\fidelityfx-vulkan"),
+            streamline_vulkan: join(br"\streamline-vulkan"),
+            ..Self::from_folders(
+                join(br"\streamline"),
+                join(br"\fidelityfx"),
+                join(br"\xess"),
+            )
+        }
+    }
+
+    /// The D3D folders an adapter already resolved (a host whose setup names each one); the
+    /// interposer is the one beside Streamline's plugins.
+    pub fn from_folders(streamline: CString, fidelityfx: CString, xess: CString) -> Self {
+        let interposer = [streamline.as_bytes(), br"\sl.interposer.dll"].concat();
+        Self {
+            interposer: CString::new(interposer).expect("a CString holds no NUL"),
+            streamline,
+            fidelityfx,
+            xess,
+            ..Self::default()
         }
     }
 }
@@ -80,6 +99,16 @@ mod tests {
             c"D:\\Games\\bin\\ReScaleFrame\\fidelityfx"
         );
         assert_eq!(xess(c"R").as_c_str(), c"R\\xess");
+        assert_eq!(
+            paths.fidelityfx_vulkan.as_c_str(),
+            c"D:\\Games\\bin\\ReScaleFrame\\fidelityfx-vulkan"
+        );
+        assert_eq!(
+            paths.streamline_vulkan.as_c_str(),
+            c"D:\\Games\\bin\\ReScaleFrame\\streamline-vulkan"
+        );
+        let resolved = VendorPaths::from_folders(c"S".into(), c"F".into(), c"X".into());
+        assert_eq!(resolved.interposer.as_c_str(), c"S\\sl.interposer.dll");
     }
 
     #[test]

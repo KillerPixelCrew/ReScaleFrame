@@ -548,10 +548,15 @@ fn install_reads_one_shot_requests_and_owns_fg_or_observer() {
         installed.lock().capture_directory.to_str().unwrap(),
         "C:\\captures"
     );
-    let vendors = &installed.vendors;
-    for fsr in [&vendors.fsr2, &vendors.fsr3, &vendors.fsr4] {
-        assert!(fsr.to_str().unwrap().ends_with("/fidelityfx"));
-    }
+    let paths = &installed.vendors.paths;
+    assert!(paths.fidelityfx.to_str().unwrap().ends_with("\\fidelityfx"));
+    assert!(
+        paths
+            .interposer
+            .to_str()
+            .unwrap()
+            .ends_with("\\streamline\\sl.interposer.dll")
+    );
 
     let engine = host(&ini, ENGINE_PRESENTATION);
     let log = events();
@@ -760,7 +765,7 @@ fn settings_apply_validates_then_commits_one_section_write() {
     for change in [
         |s: &mut Settings| s.sr_enabled = 2,
         |s: &mut Settings| s.latency = 3,
-        |s: &mut Settings| s.sr_quality = 5,
+        |s: &mut Settings| (s.sr_backend, s.sr_quality) = (RSF_SR_DLSS, 5),
         |s: &mut Settings| s.generated_frames = 0,
         |s: &mut Settings| s.generated_frames = 16,
         |s: &mut Settings| s.dlss_preset = 7,

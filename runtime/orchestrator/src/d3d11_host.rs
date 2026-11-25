@@ -25,6 +25,7 @@ use crate::sys::{
 use crate::sys::{rsf_native_present_record, rsf_observer_present_event};
 use crate::wide::copy_nul as wide_copy;
 use rsf_game_sys::ffi_util::{checked, has_capacity};
+use rsf_game_sys::vendor_paths::VendorPaths;
 use rsf_game_sys::{RSF_FG_CHOICES_ALL, RSF_OVERLAY_MAX_GENERATED_FRAMES, RSF_SR_AUTO};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_ABI_VERSION,
@@ -106,9 +107,7 @@ fn ptr_of(object: &Option<IUnknown>) -> Raw {
 }
 
 struct Text {
-    streamline: CString,
-    fidelityfx: CString,
-    xess: CString,
+    vendors: VendorPaths,
     captures: CString,
     identity: CString,
     fingerprint: CString,
@@ -477,21 +476,19 @@ impl Host {
     // The SR backends the panel offers on `vendor`'s adapter: the Runtime's answer from the packages
     // beside it, and FSR1, which the pipeline serves itself. This host keeps no list.
     fn sr_offer(&self, vendor: u32) -> u32 {
-        let text = &self.text;
-        let packages = [&text.streamline, &text.fidelityfx, &text.xess].map(|text| directory(text));
+        let vendors = &self.text.vendors;
+        let packages =
+            [&vendors.streamline, &vendors.fidelityfx, &vendors.xess].map(|text| directory(text));
         sr_backends(Some(vendor), package_has(packages), true)
     }
 
     fn new(setup: &rsf_d3d11_host_setup, upstream: rsf_game_host_services) -> Option<Self> {
         let copy = |text: *const c_char| unsafe { CStr::from_ptr(text) }.to_owned();
         let runtime = unsafe { wide_copy(setup.runtime_directory) };
-        let root = String::from_utf16_lossy(&runtime[..runtime.len() - 1]);
-        let path = |leaf: &str| CString::new(format!("{root}/{leaf}")).ok();
+        let root = CString::new(String::from_utf16_lossy(&runtime[..runtime.len() - 1])).ok()?;
         let text = Text {
-            streamline: path("streamline")?,
-            fidelityfx: path("fidelityfx")?,
-            xess: path("xess")?,
-            captures: path("captures")?,
+            vendors: VendorPaths::new(&root),
+            captures: CString::new([root.as_bytes(), b"/captures"].concat()).ok()?,
             identity: copy(setup.identity_utf8),
             fingerprint: copy(setup.executable_sha256),
             version: copy(setup.engine_version_utf8),
@@ -647,7 +644,7 @@ impl Host {
         let rendered = self.setup.capabilities & RSF_D3D11_HOST_CAP_RENDERED_SOURCE != 0;
         let bridge = rsf_d3d11_present_setup {
             struct_size: size_of::<rsf_d3d11_present_setup>() as u32,
-            runtime_directory_utf8: self.text.streamline.as_ptr(),
+            runtime_directory_utf8: self.text.vendors.streamline.as_ptr(),
             development_runtime: 0,
             log: Some(host_log),
             user: self.user(),
@@ -665,10 +662,10 @@ impl Host {
             units_to_meters: self.setup.units_to_meters,
             runtime_switching: 1,
             ui_mode: UI_MODE_BACKBUFFER_HUDLESS,
-            fsr3_directory_utf8: self.text.fidelityfx.as_ptr(),
-            fsr4_directory_utf8: self.text.fidelityfx.as_ptr(),
-            xess_directory_utf8: self.text.xess.as_ptr(),
-            streamline_directory_utf8: self.text.streamline.as_ptr(),
+            fsr3_directory_utf8: self.text.vendors.fidelityfx.as_ptr(),
+            fsr4_directory_utf8: self.text.vendors.fidelityfx.as_ptr(),
+            xess_directory_utf8: self.text.vendors.xess.as_ptr(),
+            streamline_directory_utf8: self.text.vendors.streamline.as_ptr(),
             engine_type: self.setup.engine_type,
             engine_version_utf8: self.text.version.as_ptr(),
             project_id_utf8: self.text.project.as_ptr(),
@@ -968,7 +965,7 @@ impl Host {
                 let start = rsf_dlss_pipeline_setup {
                     struct_size: size_of::<rsf_dlss_pipeline_setup>() as u32,
                     abi_version: RSF_DLSS_PIPELINE_ABI_VERSION,
-                    streamline_directory_utf8: text.streamline.as_ptr(),
+                    streamline_directory_utf8: text.vendors.streamline.as_ptr(),
                     streamline_log_directory_utf8: ptr::null(),
                     require_signature: 1,
                     output_width: width,
@@ -980,10 +977,10 @@ impl Host {
                     engine: setup.engine_type,
                     engine_version_utf8: text.version.as_ptr(),
                     project_id_utf8: text.project.as_ptr(),
-                    fsr2_directory_utf8: text.fidelityfx.as_ptr(),
-                    fsr3_directory_utf8: text.fidelityfx.as_ptr(),
-                    fsr4_directory_utf8: text.fidelityfx.as_ptr(),
-                    xess_directory_utf8: text.xess.as_ptr(),
+                    fsr2_directory_utf8: text.vendors.fidelityfx.as_ptr(),
+                    fsr3_directory_utf8: text.vendors.fidelityfx.as_ptr(),
+                    fsr4_directory_utf8: text.vendors.fidelityfx.as_ptr(),
+                    xess_directory_utf8: text.vendors.xess.as_ptr(),
                     view_space_to_meters: setup.units_to_meters,
                     standard_depth: u32::from(setup.depth_inverted == 0),
                 };

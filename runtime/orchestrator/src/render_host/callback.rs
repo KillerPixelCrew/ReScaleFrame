@@ -23,16 +23,16 @@ use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening};
 #[cfg(not(test))]
 use crate::plugin_session::Session;
 use crate::settings_store::{
-    read_settings_and_fg_mode, rsf_settings_store_read_layout, rsf_settings_store_write,
-    rsf_settings_store_write_layout, set_sharpening, sharpening_of,
+    read_settings_and_fg_mode, refused, rsf_settings_store_read_layout, rsf_settings_store_write,
+    rsf_settings_store_write_layout, set_sharpening,
 };
 use crate::sharpening_policy;
 use crate::sr_choices::sr_quality;
 use crate::sync::lock;
 use crate::sys::rsf_sr12_setup as SrSetup;
 use crate::sys::{
-    RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_REFLEX_OFF,
-    RSF_RENDER_FRONTEND_ABI_VERSION, rsf_render_settings as Settings,
+    RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_RENDER_FRONTEND_ABI_VERSION,
+    rsf_render_settings as Settings,
 };
 use crate::sys::{
     RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,
@@ -45,6 +45,7 @@ use crate::sys::{
 };
 use crate::wide::copy_nul as wide_copy;
 use rsf_game_sys::ffi_util::{checked, has_capacity};
+use rsf_game_sys::vendor_paths::VendorPaths;
 use rsf_game_sys::{
     RSF_CALLBACK_HOST_ABI_VERSION as HOST_ABI_VERSION, RSF_CALLBACK_HOST_ABI_VERSION_V2,
     RSF_CALLBACK_HOST_ABI_VERSION_V3, RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FG_INPUTS,
@@ -1065,9 +1066,14 @@ unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
             &log_path[..log_path.len() - 1],
         ))
         .map_err(|_| 4u32)?;
-    let streamline = unsafe { copy_c_string(setup.streamline_directory_utf8, c"") };
-    let mut interposer = streamline.as_bytes().to_vec();
-    interposer.extend_from_slice(b"\\sl.interposer.dll");
+    // FSR2, FSR3 and FSR4 share one FidelityFX package; every adapter names it in each field.
+    let paths = unsafe {
+        VendorPaths::from_folders(
+            copy_c_string(setup.streamline_directory_utf8, c""),
+            copy_c_string(setup.fsr3_directory_utf8, c""),
+            copy_c_string(setup.xess_directory_utf8, c""),
+        )
+    };
     let preferences = unsafe { wide_copy(setup.preferences_path) };
     let ui_preferences = unsafe { rsf_settings_store_read_layout(preferences.as_ptr(), SECTION) };
     let host = Host {
@@ -1114,12 +1120,7 @@ unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
         preferences,
         sr_choices: setup.sr_backend_choices,
         vendors: Vendors {
-            streamline,
-            interposer: CString::new(interposer).unwrap_or_default(),
-            fsr2: unsafe { copy_c_string(setup.fsr2_directory_utf8, c"") },
-            fsr3: unsafe { copy_c_string(setup.fsr3_directory_utf8, c"") },
-            fsr4: unsafe { copy_c_string(setup.fsr4_directory_utf8, c"") },
-            xess: unsafe { copy_c_string(setup.xess_directory_utf8, c"") },
+            paths,
             engine_type: setup.engine_type,
             application_id: 0,
             engine_version: unsafe { copy_c_string(setup.engine_version_utf8, c"") },
@@ -1353,32 +1354,10 @@ pub(super) fn settings_apply(request: &Settings) -> Option<i32> {
     with_host(|host| host.settings_apply(request))
 }
 
-// The checks a settings request passes, as the RDR2 entry checks one, for a host offering
-// `sr_choices`.
-fn settings_valid(request: &Settings, sr_choices: u32) -> bool {
-    let backend = if request.sr_backend == RSF_SR_AUTO {
-        RSF_SR_NONE
-    } else {
-        request.sr_backend
-    };
-    let sharpening = sharpening_of(request, &sharpening_policy::defaults());
-    sharpening_policy::valid(&sharpening)
-        && request.sr_enabled <= 1
-        && request.status_overlay <= 1
-        && request.latency <= 2
-        && request.fg_enabled <= 3
-        && (1..=15).contains(&request.generated_frames)
-        && leaf::dlss_preset_valid(request.dlss_preset) != 0
-        && request.sr_backend <= 31
-        && sr_choices & (1 << request.sr_backend) != 0
-        && accepts_backend_quality(backend, request.sr_quality)
-        && fg_choice::allowed(request.fg_backend, RSF_FG_BACKEND_ALL)
-}
-
 // Whether a request without a host would pass any host's checks, so an adapter can refuse it
 // before the host it will be applied by exists.
 pub(super) fn settings_acceptable(request: &Settings) -> bool {
-    settings_valid(request, rsf_game_sys::RSF_SR_CHOICES_ALL)
+    refused(request, rsf_game_sys::RSF_SR_CHOICES_ALL) == 0
 }
 
 // A settings request as the panel change it amounts to against what is saved.
@@ -1426,11 +1405,11 @@ fn settings_intent(saved: &Settings, request: &Settings) -> Intent {
 }
 
 impl Host {
-    // A request from the adapter's own settings API: checked as the RDR2 entry checks one, then
+    // A request from the adapter's own settings API: checked by the Runtime's settings rule, then
     // applied and saved exactly as the same change made in the panel. FG mode is fg_enabled's
     // stored value (0 off, 1 fixed, 2 auto, 3 dynamic).
     fn settings_apply(&self, request: &Settings) -> i32 {
-        if !settings_valid(request, self.sr_choices) {
+        if refused(request, self.sr_choices) != 0 {
             return -1;
         }
         let mut fg = FgStatus {

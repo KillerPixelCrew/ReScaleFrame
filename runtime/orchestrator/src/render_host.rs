@@ -28,7 +28,7 @@ use crate::sharpening_policy;
 use crate::sr_choices::{directory, package_has, sr_backends, sr_quality};
 use crate::sync::lock;
 use crate::sys::{
-    RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
+    RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_FG_OFF,
     RSF_FG_STAT_TOTAL_PRESENTED, RSF_RENDER_FRONTEND_ABI_VERSION,
     rsf_native_fg_options as FgOptions, rsf_native_fg_status as FgStatus,
     rsf_render_settings as Settings, rsf_sharpening_options as Sharpening,
@@ -45,6 +45,7 @@ use crate::wide::copy_nul as wide_copy;
 #[cfg(not(test))]
 use crate::{d3d12_observer::Observer, dlss_native12::Registration};
 use rsf_game_sys::ffi_util::{checked, has_capacity};
+use rsf_game_sys::vendor_paths::VendorPaths;
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RESET,
     RSF_GAME_RENDER_WINDOW, rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services,
@@ -148,12 +149,7 @@ pub(super) struct ResourceDesc {
 
 /// The vendor packages and the engine identity that an SR context and the offered set come from.
 struct Vendors {
-    streamline: CString,
-    interposer: CString,
-    fsr2: CString,
-    fsr3: CString,
-    fsr4: CString,
-    xess: CString,
+    paths: VendorPaths,
     engine_type: u32,
     application_id: u32,
     engine_version: CString,
@@ -165,7 +161,9 @@ impl Vendors {
     /// limit, and FSR1, which every D3D12 host serves: the engine's own scaler where the
     /// integration reports one, sr12's otherwise.
     fn offered(&self, vendor: Option<u32>, limit: u32) -> u32 {
-        let packages = [&self.streamline, &self.fsr3, &self.xess].map(|text| directory(text));
+        let paths = &self.paths;
+        let packages =
+            [&paths.streamline, &paths.fidelityfx, &paths.xess].map(|text| directory(text));
         sr_backends(vendor, package_has(packages), true) & limit
     }
 
@@ -183,17 +181,17 @@ impl Vendors {
             device,
             backend,
             quality,
-            fsr2_directory_utf8: self.fsr2.as_ptr(),
-            fsr3_directory_utf8: self.fsr3.as_ptr(),
-            fsr4_directory_utf8: self.fsr4.as_ptr(),
-            xess_directory_utf8: self.xess.as_ptr(),
+            fsr2_directory_utf8: self.paths.fidelityfx.as_ptr(),
+            fsr3_directory_utf8: self.paths.fidelityfx.as_ptr(),
+            fsr4_directory_utf8: self.paths.fidelityfx.as_ptr(),
+            xess_directory_utf8: self.paths.xess.as_ptr(),
             log,
             user,
             dlss: DlssSetup {
                 struct_size: size_of::<DlssSetup>() as u32,
                 abi_version: RSF_DLSS_ABI_VERSION,
-                interposer_path_utf8: self.interposer.as_ptr(),
-                plugin_directory_utf8: self.streamline.as_ptr(),
+                interposer_path_utf8: self.paths.interposer.as_ptr(),
+                plugin_directory_utf8: self.paths.streamline.as_ptr(),
                 engine: self.engine_type,
                 engine_version_utf8: self.engine_version.as_ptr(),
                 project_id_utf8: if self.project_id.is_empty() {
@@ -1068,21 +1066,9 @@ impl Host {
         Ok(self.try_lock().ok_or(BUSY)?.settings)
     }
 
-    // Validated against the whole request, then saved in one section write and applied.
+    // Checked by the Runtime's settings rule, then saved in one section write and applied.
     fn settings_apply(&self, request: &Settings) -> i32 {
-        let sharpening = sharpening_of(request, &sharpening_policy::defaults());
-        if !sharpening_policy::valid(&sharpening)
-            || request.sr_enabled > 1
-            || request.fg_enabled > 1
-            || request.status_overlay > 1
-            || request.latency > 2
-            || request.sr_quality > 4
-            || !(1..=15).contains(&request.generated_frames)
-            || leaf::dlss_preset_valid(request.dlss_preset) == 0
-            || (request.sr_backend != RSF_SR_AUTO
-                && (request.sr_backend > 31 || !has(self.sr_choices, request.sr_backend)))
-            || !fg_choice::allowed(request.fg_backend, RSF_FG_BACKEND_ALL)
-        {
+        if settings_store::refused(request, self.sr_choices) != 0 {
             return INVALID;
         }
         let Some(mut state) = self.try_lock() else {
@@ -1490,10 +1476,7 @@ unsafe fn describe(setup: &Setup, services: &Services) -> Host {
             0,
         )
     } != 0;
-    let root = utf8(&unsafe { wide_copy(setup.runtime_directory) });
-    let streamline = format!("{root}/streamline");
-    let interposer = format!("{streamline}/sl.interposer.dll");
-    let fsr = c_string(format!("{root}/fidelityfx"));
+    let root = c_string(utf8(&unsafe { wide_copy(setup.runtime_directory) }));
     let text = |value: *const c_char| {
         if value.is_null() {
             CString::default()
@@ -1509,12 +1492,7 @@ unsafe fn describe(setup: &Setup, services: &Services) -> Host {
         // The engine reports no spatial scaler of its own; sr12 serves Spatial (FSR1) itself.
         sr_choices: setup.sr_backend_choices,
         vendors: Vendors {
-            streamline: c_string(streamline),
-            interposer: c_string(interposer),
-            fsr2: fsr.clone(),
-            fsr3: fsr.clone(),
-            fsr4: fsr,
-            xess: c_string(format!("{root}/xess")),
+            paths: VendorPaths::new(&root),
             engine_type: setup.engine_type,
             application_id: setup.application_id,
             engine_version: text(setup.engine_version_utf8),
@@ -1556,11 +1534,12 @@ fn install(host: &Host, setup: &Setup) -> i32 {
         fg.backend = RSF_FG_BACKEND_AUTO;
         fg.max_generated_frames = u32::MAX;
         let vendors = &host.vendors;
-        fg.runtime_directory_utf8 = vendors.fsr3.as_ptr();
-        fg.fsr3_directory_utf8 = vendors.fsr3.as_ptr();
-        fg.fsr4_directory_utf8 = vendors.fsr4.as_ptr();
-        fg.xess_directory_utf8 = vendors.xess.as_ptr();
-        fg.streamline_directory_utf8 = vendors.streamline.as_ptr();
+        let paths = &vendors.paths;
+        fg.runtime_directory_utf8 = paths.fidelityfx.as_ptr();
+        fg.fsr3_directory_utf8 = paths.fidelityfx.as_ptr();
+        fg.fsr4_directory_utf8 = paths.fidelityfx.as_ptr();
+        fg.xess_directory_utf8 = paths.xess.as_ptr();
+        fg.streamline_directory_utf8 = paths.streamline.as_ptr();
         fg.options = FgOptions {
             struct_size: size_of::<FgOptions>() as u32,
             mode: RSF_FG_OFF,
