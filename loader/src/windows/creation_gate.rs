@@ -108,7 +108,10 @@ pub(super) fn arm() {
         return;
     };
     let slot = base + rva;
-    RESOLVE.store(resolve as usize, Ordering::Release);
+    RESOLVE.store(
+        resolve as extern "C" fn() -> usize as usize,
+        Ordering::Release,
+    );
     let held = writable(slot, |cell| take(cell, gate_address())).flatten();
     if let Some(original) = held {
         ORIGINAL.store(original, Ordering::Release);

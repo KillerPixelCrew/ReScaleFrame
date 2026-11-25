@@ -1237,14 +1237,13 @@ fn provider_changes_respect_policy_and_wait_for_the_flagged_pass() {
     assert_eq!(host.lock().requested_backend, 1);
     with(|world| world.policy_ok = true);
     // Ultra Quality is served by XeSS and the engine's scaler only, and DLSS here is not either.
-    for refused in [Intent {
+    let refused = Intent {
         quality_changed: 1,
         quality: 5,
         ..intent()
-    }] {
-        window(&host, queue, Some(refused));
-        assert_eq!(events(), ["fg window 5", "overlay"]);
-    }
+    };
+    window(&host, queue, Some(refused));
+    assert_eq!(events(), ["fg window 5", "overlay"]);
     window(
         &host,
         queue,
