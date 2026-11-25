@@ -336,10 +336,10 @@ impl Host {
                 .unwrap_or(0),
             ..Stats::default()
         };
-        // Auto stays the selected choice, named by the provider it resolved to. The engine's own
-        // scaler is offered because the adapter reports it (`set_engine_spatial`).
+        // Auto stays the selected choice, named by the provider it resolved to. FSR1 here is the
+        // engine's own scaler, which the adapter reports (`set_engine_spatial`).
         let selected = if s.automatic { RSF_SR_AUTO } else { s.backend };
-        let offered = self.vendors.offered(vendor, true, self.sr_choices);
+        let offered = self.vendors.offered(vendor, self.sr_choices);
         sr_card(&mut stats, selected, s.backend, offered);
         if let Some(adapter) = &self.policy_v2
             && s.backend == RSF_SR_SPATIAL

@@ -2,7 +2,7 @@
 use super::*;
 use crate::sys::rsf_backend_log_fn;
 use rsf_shader_compiler::{Compiler, Request, blob_bytes, compile};
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
 use windows::Win32::Graphics::Direct3D::Fxc::{
     D3DCOMPILE_ENABLE_STRICTNESS, D3DCOMPILE_OPTIMIZATION_LEVEL3,
@@ -74,22 +74,36 @@ fn create_root(device: &ID3D12Device) -> Option<ID3D12RootSignature> {
     })
 }
 
-fn normalization_shader(log: rsf_backend_log_fn, user: Raw) -> Option<Vec<u8>> {
-    let Some(module) = Compiler::system("d3dcompiler_47.dll") else {
-        if let Some(log) = log {
-            unsafe {
-                log(
-                    user,
-                    c"shader RSF temporal input normalization: d3dcompiler_47 is not available"
-                        .as_ptr(),
-                )
-            };
+// The sr12 compute kernels, each compiled from its source with the System32 compiler.
+const NORMALIZATION: (&[u8], &CStr) = (
+    include_bytes!("normalize.hlsl"),
+    c"RSF temporal input normalization",
+);
+const SPATIAL: (&[u8], &CStr) = (
+    include_bytes!("../sr12/easu.hlsl"),
+    c"RSF spatial upscaling (FSR1 EASU)",
+);
+
+fn compute_shader(
+    (source, name): (&[u8], &CStr),
+    log: rsf_backend_log_fn,
+    user: Raw,
+) -> Option<Vec<u8>> {
+    let say = |message: String| {
+        if let (Some(log), Ok(message)) = (log, CString::new(message)) {
+            unsafe { log(user, message.as_ptr()) };
         }
+    };
+    let Some(module) = Compiler::system("d3dcompiler_47.dll") else {
+        say(format!(
+            "shader {}: d3dcompiler_47 is not available",
+            name.to_string_lossy()
+        ));
         return None;
     };
     let request = Request {
-        source: include_bytes!("normalize.hlsl"),
-        name: c"RSF temporal input normalization",
+        source,
+        name,
         entry: c"main",
         target: c"cs_5_0",
         flags: D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
@@ -98,36 +112,29 @@ fn normalization_shader(log: rsf_backend_log_fn, user: Raw) -> Option<Vec<u8>> {
     if result.status >= 0 && result.code.is_some() {
         return result.code;
     }
-    if let Some(log) = log {
-        let status = if result.status < 0 {
-            result.status
-        } else {
-            windows_sys::Win32::Foundation::E_FAIL
-        };
-        let errors = result.errors.as_deref().unwrap_or_default();
-        let errors = errors.split(|byte| *byte == 0).next().unwrap_or_default();
-        let mut message = format!(
-            "shader RSF temporal input normalization (main): compile failed 0x{:08x} ",
-            status as u32
-        )
-        .into_bytes();
-        message.extend_from_slice(&errors[..errors.len().min(511 - message.len())]);
-        if let Ok(message) = CString::new(message) {
-            unsafe { log(user, message.as_ptr()) };
-        }
-    }
+    let status = if result.status < 0 {
+        result.status
+    } else {
+        windows_sys::Win32::Foundation::E_FAIL
+    };
+    let errors = result.errors.as_deref().unwrap_or_default();
+    let errors = errors.split(|byte| *byte == 0).next().unwrap_or_default();
+    let mut message = format!(
+        "shader {} (main): compile failed 0x{:08x} ",
+        name.to_string_lossy(),
+        status as u32
+    )
+    .into_bytes();
+    message.extend_from_slice(&errors[..errors.len().min(511 - message.len())]);
+    say(String::from_utf8_lossy(&message).into_owned());
     None
 }
 
-// The normalization root signature and pipeline, as owned references.
-pub(crate) unsafe fn rsf_core_sr12_create_pipeline(
-    device: Raw,
-    log: rsf_backend_log_fn,
-    user: Raw,
-) -> Option<(Raw, Raw)> {
-    let device: &ID3D12Device = unsafe { borrow(&device) };
-    let root = create_root(device)?;
-    let code = normalization_shader(log, user)?;
+fn compute_pipeline(
+    device: &ID3D12Device,
+    root: &ID3D12RootSignature,
+    code: &[u8],
+) -> Option<ID3D12PipelineState> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: ManuallyDrop::new(Some(unsafe {
             ID3D12RootSignature::from_raw(root.as_raw())
@@ -138,10 +145,35 @@ pub(crate) unsafe fn rsf_core_sr12_create_pipeline(
         },
         ..Default::default()
     };
-    let pipeline = receive::<ID3D12PipelineState>(|iid, out| unsafe {
+    receive::<ID3D12PipelineState>(|iid, out| unsafe {
         (device.vtable().CreateComputePipelineState)(device.as_raw(), &desc, iid, out)
-    })?;
+    })
+}
+
+// The normalization root signature and pipeline, as owned references.
+pub(crate) unsafe fn rsf_core_sr12_create_pipeline(
+    device: Raw,
+    log: rsf_backend_log_fn,
+    user: Raw,
+) -> Option<(Raw, Raw)> {
+    let device: &ID3D12Device = unsafe { borrow(&device) };
+    let root = create_root(device)?;
+    let code = compute_shader(NORMALIZATION, log, user)?;
+    let pipeline = compute_pipeline(device, &root, &code)?;
     Some((root.into_raw(), pipeline.into_raw()))
+}
+
+// The spatial upscaling pipeline on the normalization root signature, as an owned reference.
+pub(crate) unsafe fn rsf_core_sr12_create_spatial_pipeline(
+    device: Raw,
+    root: Raw,
+    log: rsf_backend_log_fn,
+    user: Raw,
+) -> Raw {
+    let device: &ID3D12Device = unsafe { borrow(&device) };
+    compute_shader(SPATIAL, log, user)
+        .and_then(|code| compute_pipeline(device, unsafe { borrow(&root) }, &code))
+        .map_or(null_mut(), Interface::into_raw)
 }
 
 pub(crate) unsafe extern "C" fn rsf_core_sr12_create_heap(device: Raw) -> Raw {

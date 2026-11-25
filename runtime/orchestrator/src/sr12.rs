@@ -400,6 +400,8 @@ enum Vendor {
     None,
     Dlss(NonNull<c_void>),
     Session(NonNull<c_void>),
+    // The Runtime's own FSR1 EASU pass (`Gpu::spatial`), for an engine without a spatial scaler.
+    Spatial,
 }
 
 // Vendor context and native helper objects. Dropped before the GPU resources.
@@ -413,7 +415,7 @@ impl Drop for Native {
     fn drop(&mut self) {
         unsafe {
             match self.vendor {
-                Vendor::None => {}
+                Vendor::None | Vendor::Spatial => {}
                 Vendor::Dlss(context) => native::dlss_destroy(context.as_ptr().cast()),
                 Vendor::Session(session) => native::session_destroy(session.as_ptr().cast()),
             }
@@ -431,6 +433,8 @@ struct Gpu {
     output: Option<IUnknown>,
     exposure: Option<IUnknown>,
     exposure_upload: Option<IUnknown>,
+    // The spatial pipeline on the normalization root signature, with its own per-slot heaps.
+    spatial: Option<(IUnknown, [IUnknown; SLOTS])>,
 }
 
 struct Captured {
@@ -519,6 +523,15 @@ unsafe fn open_vendor(
             setup.output_height
         };
         return (Vendor::None, OK, width, height);
+    }
+    if setup.backend == RSF_SR_SPATIAL {
+        // FSR1's published scale per quality: native, quality, balanced, performance, ultra
+        // performance, ultra quality. Engine input extents replace this plan.
+        const RATIOS: [f32; 6] = [1.0, 1.5, 1.7, 2.0, 3.0, 1.3];
+        let ratio = RATIOS[setup.quality as usize];
+        let planned = |extent: u32| ((extent as f32 / ratio) as u32).max(1);
+        let (width, height) = (planned(setup.output_width), planned(setup.output_height));
+        return (Vendor::Spatial, OK, width, height);
     }
     if setup.backend == RSF_SR_DLSS {
         // DLSS reads its setup from the caller's own structure.
@@ -623,11 +636,22 @@ unsafe fn create_gpu(
     } else {
         None
     };
+    let spatial = if setup.backend == RSF_SR_SPATIAL {
+        let pipeline = unsafe {
+            native::create_spatial_pipeline(device, root.as_raw(), setup.log, setup.user)
+        };
+        Some((
+            unsafe { com_ref::owned(pipeline) }?,
+            [heap()?, heap()?, heap()?],
+        ))
+    } else {
+        None
+    };
     let (mut exposure, mut exposure_upload) = (None, None);
+    // Vendor exposure only: the spatial pass reads none.
     if setup.input_sdr != 0
         && !external_exposure
-        && setup.backend != RSF_SR_NONE
-        && setup.backend != RSF_SR_DLSS
+        && ![RSF_SR_NONE, RSF_SR_DLSS, RSF_SR_SPATIAL].contains(&setup.backend)
     {
         // SDR has no changing pre-exposure. XeSS requires an exposure texture when auto
         // exposure is disabled; feed the actual constant scale, not HDR adaptation.
@@ -654,6 +678,7 @@ unsafe fn create_gpu(
         output,
         exposure,
         exposure_upload,
+        spatial,
     })
 }
 
@@ -665,7 +690,7 @@ unsafe fn create(setup: *const Setup) -> Result<Sr12, i32> {
         || s.device.is_null()
         || s.output_width == 0
         || s.output_height == 0
-        || s.backend > RSF_SR_XESS
+        || (s.backend > RSF_SR_XESS && s.backend != RSF_SR_SPATIAL)
         || s.quality > MAX_QUALITY
     {
         return Err(INVALID_ARGUMENT);
@@ -1030,6 +1055,50 @@ impl Sr12 {
         ]
     }
 
+    // FSR1 EASU from the normalized colour into the private output, in place of a vendor call.
+    // The shared sharpening and the reinsertion follow it as they follow every backend.
+    unsafe fn spatial(&self, list: Handle, pass: &Pass, slot: usize) -> i32 {
+        let Some((pipeline, heaps)) = self.gpu.spatial.as_ref() else {
+            return INVALID_ARGUMENT;
+        };
+        let device = self.device.as_raw();
+        let heap = heaps[slot].as_raw();
+        let [jitter_x, jitter_y] = pass.camera.jitter_pixels;
+        let constants = [
+            self.width,
+            self.height,
+            self.output_width,
+            self.output_height,
+            jitter_x.to_bits(),
+            jitter_y.to_bits(),
+        ];
+        unsafe {
+            // The shared root table has four reads and four writes; the pass uses the first of each.
+            for index in 0..4 {
+                let (source, target) = if index == 0 {
+                    (
+                        self.gpu.normalized[COLOR].as_raw(),
+                        raw(self.gpu.output.as_ref()),
+                    )
+                } else {
+                    (ptr::null_mut(), ptr::null_mut())
+                };
+                native::write_srv(device, heap, index, source, RGBA16_FLOAT);
+                native::write_uav(device, heap, NORMALIZED_UAV + index, target, RGBA16_FLOAT);
+            }
+            native::dispatch(
+                list,
+                heap,
+                self.gpu.root.as_raw(),
+                pipeline.as_raw(),
+                constants.as_ptr(),
+                self.output_width.div_ceil(8),
+                self.output_height.div_ceil(8),
+            );
+        }
+        OK
+    }
+
     unsafe fn transition_inputs(&self, list: Handle, before: u32, after: u32) {
         unsafe {
             for texture in &self.gpu.normalized {
@@ -1064,9 +1133,16 @@ impl Sr12 {
         resource
     }
 
-    unsafe fn vendor_evaluate(&self, list: Handle, frame: &rsf_sr_frame, pass: &Pass) -> i32 {
+    unsafe fn vendor_evaluate(
+        &self,
+        list: Handle,
+        frame: &rsf_sr_frame,
+        pass: &Pass,
+        slot: usize,
+    ) -> i32 {
         match self.native.vendor {
             Vendor::None => OK,
+            Vendor::Spatial => unsafe { self.spatial(list, pass, slot) },
             Vendor::Dlss(context) if !pass.native_frame_context.is_null() => unsafe {
                 native::dlss_evaluate_borrowed(
                     context.as_ptr().cast(),
@@ -1208,7 +1284,7 @@ impl Sr12 {
                 );
             }
         }
-        let result = unsafe { self.vendor_evaluate(list, &frame, pass) };
+        let result = unsafe { self.vendor_evaluate(list, &frame, pass, slot) };
         unsafe {
             native::dump_result(&record, c"sr".as_ptr(), self.backend, result);
             native::capture_event(

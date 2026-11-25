@@ -45,7 +45,9 @@ pub(super) use crate::d3d12_host::sr::{
     rsf_core_sr12_create_exposure_texture as create_exposure_texture,
     rsf_core_sr12_create_exposure_upload as create_exposure_upload,
     rsf_core_sr12_create_heap as create_heap, rsf_core_sr12_create_pipeline as create_pipeline,
-    rsf_core_sr12_create_readback as create_readback, rsf_core_sr12_owned_by as owned_by,
+    rsf_core_sr12_create_readback as create_readback,
+    rsf_core_sr12_create_spatial_pipeline as create_spatial_pipeline,
+    rsf_core_sr12_owned_by as owned_by,
 };
 pub(super) use crate::d3d12_sharpening::{
     create_host as sharpen_create, destroy_host as sharpen_destroy, run_host as sharpen_run,

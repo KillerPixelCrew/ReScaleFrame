@@ -161,11 +161,12 @@ struct Vendors {
 }
 
 impl Vendors {
-    /// What the panel offers on this adapter: the packages beside the Runtime, the engine's own
-    /// scaler when the integration reports one, and the integration's limit.
-    fn offered(&self, vendor: Option<u32>, engine_spatial: bool, limit: u32) -> u32 {
+    /// What the panel offers on this adapter: the packages beside the Runtime, the integration's
+    /// limit, and FSR1, which every D3D12 host serves: the engine's own scaler where the
+    /// integration reports one, sr12's otherwise.
+    fn offered(&self, vendor: Option<u32>, limit: u32) -> u32 {
         let packages = [&self.streamline, &self.fsr3, &self.xess].map(|text| directory(text));
-        sr_backends(vendor, package_has(packages), engine_spatial) & limit
+        sr_backends(vendor, package_has(packages), true) & limit
     }
 
     /// The SR context setup for `backend` on `device`; the entry adds what its integration reports.
@@ -722,7 +723,8 @@ impl Host {
         drop(owner);
         // Auto needs the owning adapter, which is known only once the game records a pass.
         s.backend = self.resolve_backend(s);
-        if !(RSF_SR_DLSS..=RSF_SR_XESS).contains(&s.backend) || !has(self.sr_choices, s.backend) {
+        let served = matches!(s.backend, RSF_SR_DLSS..=RSF_SR_XESS | RSF_SR_SPATIAL);
+        if !served || !has(self.sr_choices, s.backend) {
             s.reset = true;
             return NOT_READY;
         }
@@ -1213,7 +1215,7 @@ impl Host {
         let mut adapter = Adapter::default();
         let vendor = (unsafe { leaf::adapter(device.as_raw(), &mut adapter) } != 0)
             .then_some(adapter.vendor);
-        let offered = self.vendors.offered(vendor, false, self.sr_choices);
+        let offered = self.vendors.offered(vendor, self.sr_choices);
         sr_card(&mut stats, prefs.sr_backend, resolved, offered);
         stats.requested_backend = stats.backend;
         stats.enabled = prefs.sr_enabled;
@@ -1504,8 +1506,8 @@ unsafe fn describe(setup: &Setup, services: &Services) -> Host {
         ini,
         section,
         session: services.session_id,
-        // This host hands the engine no plan for its own scaler, so Spatial is never its choice.
-        sr_choices: setup.sr_backend_choices & !(1 << RSF_SR_SPATIAL),
+        // The engine reports no spatial scaler of its own; sr12 serves Spatial (FSR1) itself.
+        sr_choices: setup.sr_backend_choices,
         vendors: Vendors {
             streamline: c_string(streamline),
             interposer: c_string(interposer),

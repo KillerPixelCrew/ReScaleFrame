@@ -29,7 +29,8 @@ pub(crate) fn package_has<'a>(
 
 /// The SR backends this machine can serve. `vendor` is the owning adapter's, or `None` before a
 /// device exists. FSR2, FSR3 and FSR4 share one FidelityFX upscaler package. DLSS needs an NVIDIA
-/// adapter. `engine_spatial` is the host's own scaler. Auto is offered once any provider is.
+/// adapter. `engine_spatial` is a spatial scaler the host serves: its engine's own, or the Runtime's
+/// (sr12 on D3D12). Auto is offered once any provider is.
 pub(crate) fn sr_backends(
     vendor: Option<u32>,
     has: impl Fn(usize, &str) -> bool,

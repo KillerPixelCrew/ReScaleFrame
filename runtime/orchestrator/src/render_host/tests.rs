@@ -621,6 +621,28 @@ fn process_resolves_auto_configures_and_reserves_slots() {
 }
 
 #[test]
+fn spatial_is_served_by_sr12_at_the_engine_extents() {
+    let ini = Temporary::new("spatial");
+    ini.write("SrBackend", "6");
+    let host = host(&ini, 0);
+    events();
+    let device = fake("device", null_mut());
+    let list = fake("list", device);
+    assert_eq!(
+        host.process(list, &pass(10, (960, 540), (1920, 1080))),
+        BACKEND_OK
+    );
+    let log = events();
+    assert!(
+        log.contains(
+            &"create backend=6 quality=3 960x540->1920x1080 exposure=0 registration=0".to_string()
+        ),
+        "{log:#?}"
+    );
+    assert!(log.contains(&"evaluate 1 slot=0 reset=1".to_string()));
+}
+
+#[test]
 fn submission_retires_snapshotted_slots_on_one_direct_queue() {
     let ini = Temporary::new("submit");
     let host = host(&ini, 0);
@@ -742,8 +764,6 @@ fn settings_apply_validates_then_commits_one_section_write() {
         |s: &mut Settings| s.generated_frames = 0,
         |s: &mut Settings| s.generated_frames = 16,
         |s: &mut Settings| s.dlss_preset = 7,
-        // This host has no engine scaler to hand a spatial plan to.
-        |s: &mut Settings| s.sr_backend = 6,
         |s: &mut Settings| s.sr_backend = 40,
         |s: &mut Settings| s.fg_backend = 0,
         |s: &mut Settings| s.fg_backend = 2,
@@ -922,12 +942,12 @@ fn the_panel_offers_the_common_set_on_this_gpu_and_its_packages() {
         unsafe { present(host.user(), null_mut(), 1, 0, 1) };
         with(|world| world.stats.take()).unwrap()
     };
-    // Spatial is the engine's own scaler, which this host cannot hand a plan to.
+    // FSR1 is sr12's own pass here: the engine reports no scaler of its own.
     let nvidia = shown(0x10de);
-    assert_eq!(nvidia.sr_backend_choices, COMMON);
+    assert_eq!(nvidia.sr_backend_choices, COMMON | (1 << RSF_SR_SPATIAL));
     assert_eq!(
         shown(0x1002).sr_backend_choices,
-        COMMON & !(1 << RSF_SR_DLSS)
+        (COMMON & !(1 << RSF_SR_DLSS)) | (1 << RSF_SR_SPATIAL)
     );
     // Every provider and Auto are offered for generation, and Ultra Quality only with XeSS.
     assert_eq!(

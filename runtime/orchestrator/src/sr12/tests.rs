@@ -226,6 +226,15 @@ pub(super) unsafe fn create_pipeline(
         created("pipeline", TextureDesc::default()),
     ))
 }
+pub(super) unsafe fn create_spatial_pipeline(
+    _: Handle,
+    root: Handle,
+    _: rsf_backend_log_fn,
+    _: Handle,
+) -> Handle {
+    event(format!("spatial-pipeline on {}", name(root)));
+    created("spatial", TextureDesc::default())
+}
 pub(super) unsafe extern "C" fn create_heap(_: Handle) -> Handle {
     created("heap", TextureDesc::default())
 }
@@ -458,13 +467,13 @@ pub(super) mod native {
         capture_configure, capture_create, capture_destroy, capture_enabled, capture_event,
         capture_flush, capture_force_reset, capture_record, capture_wants, copy_region, copy_tile,
         copy_unit_exposure, create_exposure_texture, create_exposure_upload, create_heap,
-        create_pipeline, create_readback, create_texture, depth_domains, describe_stub as describe,
-        dispatch, dlss_create, dlss_create_registered, dlss_create_shared, dlss_destroy,
-        dlss_evaluate, dlss_evaluate as session_evaluate, dlss_evaluate_borrowed, dlss_plan,
-        dlss_present, dlss_set_sdr, dump_begin_record, dump_pass_metadata, dump_result,
-        dump_sr_frame, fg_handoff, map, owned_by, session_create, session_destroy,
-        session_get_status, session_select, sharpen_create, sharpen_destroy, sharpen_run,
-        transition, unmap, write_exposure_upload, write_srv, write_uav,
+        create_pipeline, create_readback, create_spatial_pipeline, create_texture, depth_domains,
+        describe_stub as describe, dispatch, dlss_create, dlss_create_registered,
+        dlss_create_shared, dlss_destroy, dlss_evaluate, dlss_evaluate as session_evaluate,
+        dlss_evaluate_borrowed, dlss_plan, dlss_present, dlss_set_sdr, dump_begin_record,
+        dump_pass_metadata, dump_result, dump_sr_frame, fg_handoff, map, owned_by, session_create,
+        session_destroy, session_get_status, session_select, sharpen_create, sharpen_destroy,
+        sharpen_run, transition, unmap, write_exposure_upload, write_srv, write_uav,
     };
 }
 unsafe extern "C" fn log(user: *mut c_void, message: *const c_char) {
@@ -688,7 +697,7 @@ fn create_refuses_before_any_platform_call() {
         ),
         (
             Setup {
-                backend: RSF_SR_XESS + 1,
+                backend: RSF_SR_AUTO,
                 ..valid
             },
             INVALID_ARGUMENT,
@@ -805,6 +814,104 @@ fn accepted_frame_normalizes_hands_off_and_reinserts_in_order() {
     assert!(position(&events, "flush 0xffffffff") < position(&events, "dlss-destroy"));
     assert!(position(&events, "dlss-destroy") < position(&events, "release texture"));
     scene.release();
+}
+
+#[test]
+fn spatial_upscaling_runs_easu_in_place_of_a_vendor() {
+    let scene = Scene::new(RENDER, OUTPUT);
+    // Without engine extents FSR1 plans its own: quality is 1.5x.
+    let planned = Setup {
+        quality: 1,
+        ..scene.setup(RSF_SR_SPATIAL, 1, OUTPUT)
+    };
+    let (result, owner) = create_with(&planned);
+    assert_eq!(result, OK);
+    let (mut width, mut height) = (0, 0);
+    assert_eq!(
+        unsafe { rsf_core_sr12_plan(owner, &mut width, &mut height) },
+        OK
+    );
+    assert_eq!((width, height), (1280, 720));
+    unsafe { rsf_core_sr12_destroy(owner) };
+    take_events();
+
+    let setup = Setup {
+        engine_input_extents: 1,
+        render_width: RENDER.0,
+        render_height: RENDER.1,
+        ..scene.setup(RSF_SR_SPATIAL, 2, OUTPUT)
+    };
+    let (result, owner) = create_with(&setup);
+    assert_eq!(result, OK);
+    let created = take_events();
+    position(&created, "spatial-pipeline on root");
+    assert!(
+        !created
+            .iter()
+            .any(|event| event.starts_with("unit-exposure"))
+    );
+    let mut pass = scene.pass(5, RENDER, OUTPUT);
+    pass.camera.jitter_pixels = [0.25, -0.5];
+    assert_eq!(
+        unsafe { rsf_core_sr12_evaluate(owner, scene.list, &pass, 1) },
+        OK
+    );
+    let events = take_events();
+    let dispatches: Vec<usize> = (0..events.len())
+        .filter(|&index| events[index].starts_with("dispatch"))
+        .collect();
+    assert_eq!(dispatches.len(), 2, "{events:#?}");
+    let (normalized, spatial) = (dispatches[0], dispatches[1]);
+    // The output extent in 8x8 groups, the render extent and the jitter it removes. The fake
+    // prints the six constants in the normalization pass's names.
+    let jitter = format!(
+        "inputs_only={} external={}",
+        0.25f32.to_bits(),
+        (-0.5f32).to_bits()
+    );
+    let dispatched = &events[spatial];
+    assert!(
+        dispatched.contains(" 240x135 extent=960x540 ") && dispatched.ends_with(&jitter),
+        "{dispatched}"
+    );
+    let heap = events[spatial].split(' ').nth(2).unwrap().to_owned();
+    assert!(events.contains(&format!("srv {heap} 1 null f10")));
+    assert!(events.contains(&format!("uav {heap} 5 null f10")));
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.starts_with("dlss") || event.starts_with("session"))
+    );
+    let sharpened = position(&events, "sharpen");
+    let copied = position(&events, "copy engine-output<-");
+    assert!(normalized < spatial && spatial < sharpened && sharpened < copied);
+    unsafe { rsf_core_sr12_destroy(owner) };
+    scene.release();
+}
+
+// The kernel production compiles at context creation (d3d12_host/sr.rs), with the same compiler,
+// entry, target and flags. No device is involved.
+#[test]
+fn the_spatial_kernel_compiles() {
+    use rsf_shader_compiler::{Compiler, Request, compile};
+    use windows::Win32::Graphics::Direct3D::Fxc::{
+        D3DCOMPILE_ENABLE_STRICTNESS, D3DCOMPILE_OPTIMIZATION_LEVEL3,
+    };
+    let module = Compiler::system("d3dcompiler_47.dll").expect("System32 compiler");
+    let request = Request {
+        source: include_bytes!("easu.hlsl"),
+        name: c"RSF spatial upscaling (FSR1 EASU)",
+        entry: c"main",
+        target: c"cs_5_0",
+        flags: D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+    };
+    let result = unsafe { compile(module.entry().unwrap(), request, &[], ptr::null_mut()) };
+    let errors = String::from_utf8_lossy(result.errors.as_deref().unwrap_or_default());
+    assert!(
+        result.status >= 0 && result.code.is_some(),
+        "{:#x}: {errors}",
+        result.status
+    );
 }
 
 #[test]
