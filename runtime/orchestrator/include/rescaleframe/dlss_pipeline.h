@@ -146,13 +146,8 @@ typedef struct rsf_dlss_pipeline_frame {
     uint32_t struct_size;
     uint32_t abi_version;
 
-    /* Pre-tonemap scene colour at render resolution.
-
-       Which texture this is cannot be settled from a descriptor. Ace Combat 7 allocates many full
-       resolution `R16G16B16A16_FLOAT` targets and the one temporal AA reads is distinguishable
-       only by what it is bound alongside, so the game's role table marks scene colour as a
-       candidate rather than picking one. The caller resolves that, today by taking slot 0 of the
-       bound set, and that assumption is unverified until a rendered result exists. */
+    /* Pre-tonemap scene colour at render resolution. Which texture this is cannot be settled from a
+       descriptor, so the integration identifies it at its producer; the pipeline uses it as given. */
     void* scene_color;
     void* depth;
     /* The game's own velocity target, still in its own encoding. The decode runs here; handing a
