@@ -135,9 +135,13 @@ pub(crate) fn pacing_boundary(event: &Event) -> bool {
 }
 
 /// Legacy threaded hosts report overlapping simulation/render and EndFrame after
-/// Present. Preserve those dependencies until they migrate; input-keyed facts use
-/// canonical order.
+/// Present. Preserve those dependencies until they migrate.
 const LEGACY_MARKER_REQUIRED: [u32; 6] = [0, 1, 1, 4, 4, 16];
+/// Input-keyed facts use one ordered sequence. The one exception is the one NVIDIA
+/// documents: a render thread may begin submitting before the game thread ends the
+/// simulation, so submit start follows only simulation start. Submit end still
+/// follows simulation end.
+const KEYED_MARKER_REQUIRED: [u32; 6] = [0, 1, 1, 7, 15, 31];
 
 const EMPTY_EVENT: Event = unsafe { zeroed() };
 const EMPTY_RECORD: rsf_native_cpu_frame = unsafe { zeroed() };
@@ -993,7 +997,7 @@ pub extern "C" fn rsf_native_cpu_marker(source: u64, marker: u32) -> i32 {
 
 pub(crate) fn marker_prerequisites(flags: u32, marker: u32) -> u32 {
     if flags & KEYED != 0 {
-        (1 << marker) - 1
+        KEYED_MARKER_REQUIRED[marker as usize]
     } else {
         LEGACY_MARKER_REQUIRED[marker as usize]
     }

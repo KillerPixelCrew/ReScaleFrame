@@ -1199,11 +1199,19 @@ fn start_render_marker(id: u64) {
             return;
         }
     }
-    // Only the real simulation interval authorizes vendor submission timing.
-    if f.stage_mask & THROUGH_SIM_END != THROUGH_SIM_END
-        || !frame.marked(SIM_START)
-        || !frame.marked(SIM_END)
-        || f.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE != 0
+    // Only a real simulation interval authorizes vendor submission timing. A primary submission
+    // built after the engine's update-to-redraw boundary may begin on the render thread before
+    // the game thread ends that interval (Unreal ends it at FrameEndSync), so it opens at its
+    // real time once the interval began. Submit end still waits for the interval's end.
+    let (stages, simulated) = if frame.submitted {
+        (THROUGH_SIM_BEGIN, frame.marked(SIM_START))
+    } else {
+        (
+            THROUGH_SIM_END,
+            frame.marked(SIM_START) && frame.marked(SIM_END),
+        )
+    };
+    if f.stage_mask & stages != stages || !simulated || f.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE != 0
     {
         finish(false, false);
         failure(
@@ -1264,12 +1272,6 @@ pub(crate) fn latency_present(id: u64, chain: Handle, begin: bool) {
         return;
     }
     if begin {
-        // The render thread can open the primary submission before the game thread closes the
-        // simulation interval (AC7 reports it at FrameEndSync). That refused attempt is retried
-        // here, so an observed submission still opens its interval before Present.
-        if lock(&LEDGER).frame(id).is_some_and(|frame| frame.submitted) {
-            start_render_marker(id);
-        }
         let threaded = THREADED.load(Ordering::Relaxed);
         if !threaded {
             end_render_marker(id, "render submission end before present");

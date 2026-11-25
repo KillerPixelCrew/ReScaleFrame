@@ -120,43 +120,54 @@ pub(super) fn run() -> i32 {
     assert!(send(fact(6, RSF_GAME_CPU_FRAME_END)));
     FAIL_MARKER.store(false, Relaxed);
 
-    // AC7 closes the simulation interval at FrameEndSync, after the render thread opened the
-    // primary submission. The refused submit start is opened at Present, so every marker arrives.
+    // Unreal's render thread begins the primary submission before the game thread ends the
+    // simulation at FrameEndSync. Submit start is delivered at the submission, after the real
+    // simulation start and before its end; submit end and Present still follow that end.
     platform::rsf_native_fg_reflex_ordering_set(0);
+    let delivered = |source: u64| -> Vec<u32> {
+        let state = STATE.lock().unwrap();
+        let markers = state.markers.iter().filter(|record| record.0 == source);
+        markers.map(|record| record.1).collect()
+    };
+    let submission = |source: u64, begin: u32| {
+        let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
+        pass.struct_size = size_of_val(&pass) as u32;
+        pass.session_id = SESSION;
+        pass.source_frame_id = source;
+        pass.flags = RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION;
+        unsafe { fg_submission(&pass, begin) };
+    };
     assert!(send(fact(7, RSF_GAME_CPU_FRAME_BEGIN)));
     assert!(send(fact(7, RSF_GAME_CPU_INPUT_SAMPLE)));
     assert!(send(fact(7, RSF_GAME_CPU_SIMULATION_BEGIN)));
-    let mut submission: rsf_game_render_pass = unsafe { std::mem::zeroed() };
-    submission.struct_size = size_of_val(&submission) as u32;
-    submission.session_id = SESSION;
-    submission.source_frame_id = 7;
-    submission.flags = RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION;
-    unsafe { fg_submission(&submission, 1) };
+    submission(7, 1);
+    assert_eq!(delivered(7), [SIM_START, SUBMIT_START]);
     assert!(send(fact(7, RSF_GAME_CPU_SIMULATION_END)));
     observe_latency_present(7, null_mut(), 1);
     observe_latency_present(7, null_mut(), 0);
-    unsafe { fg_submission(&submission, 0) };
+    submission(7, 0);
     assert!(send(fact(7, RSF_GAME_CPU_FRAME_END)));
-    let delivered: Vec<u32> = STATE
-        .lock()
-        .unwrap()
-        .markers
-        .iter()
-        .filter(|record| record.0 == 7)
-        .map(|record| record.1)
-        .collect();
-    assert_eq!(
-        delivered,
-        [
-            SIM_START,
-            SIM_END,
-            SUBMIT_START,
-            SUBMIT_END,
-            PRESENT_START,
-            PRESENT_END
-        ]
-    );
+    let ordered = [
+        SIM_START,
+        SUBMIT_START,
+        SIM_END,
+        SUBMIT_END,
+        PRESENT_START,
+        PRESENT_END,
+    ];
+    assert_eq!(delivered(7), ordered);
     assert!(snapshot(7).failed == 0 && snapshot(7).completed != 0);
+
+    // A submission without a real simulation start sends no submit timing, also once a
+    // substitute start is normalized in after it.
+    assert!(send(fact(8, RSF_GAME_CPU_FRAME_BEGIN)));
+    submission(8, 1);
+    assert!(send(fact(8, RSF_GAME_CPU_SIMULATION_END)));
+    observe_latency_present(8, null_mut(), 1);
+    observe_latency_present(8, null_mut(), 0);
+    submission(8, 0);
+    assert!(send(fact(8, RSF_GAME_CPU_FRAME_END)));
+    assert!(delivered(8).is_empty());
     platform::rsf_native_fg_reflex_ordering_set(1);
 
     latency_end_session(SESSION + 1);
