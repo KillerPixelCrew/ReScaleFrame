@@ -9,6 +9,12 @@
 //! parent module's, shared with every D3D12 integration. The adapter's only policy input is
 //! `set_engine_spatial`, which learns whether the engine upscales spatially itself, never the
 //! vendor; the Runtime decides when the engine's scaler runs.
+//!
+//! Settings are rsf_render_settings in the preferences file's [Rendering] section, saved on every
+//! change like every other host's. A key never saved keeps the adapter's start value: the SR
+//! choice, quality and DLSS model it starts the host with, and the generation options it
+//! installed generation with. The generation provider stays in fg_choice's key, which the
+//! adapter's install reads at the next start.
 use super::{Adapter, ResourceDesc, Vendors, sr_card};
 use crate::com_ref;
 use crate::copy_c_string;
@@ -17,12 +23,17 @@ use crate::overlay_settings::{fill_sharpening_stats, intent_sharpening};
 #[cfg(not(test))]
 use crate::plugin_session::Session;
 use crate::settings_store::{
-    rsf_settings_store_read_layout, rsf_settings_store_write_layout,
-    rsf_settings_store_write_sharpening, write_dlss_preset,
+    read_settings_and_fg_mode, rsf_settings_store_read_layout, rsf_settings_store_write,
+    rsf_settings_store_write_layout, set_sharpening,
 };
+use crate::sharpening_policy;
 use crate::sr_choices::sr_quality;
 use crate::sync::lock;
 use crate::sys::rsf_sr12_setup as SrSetup;
+use crate::sys::{
+    RSF_FG_BACKEND_AUTO, RSF_FG_FIXED, RSF_REFLEX_OFF, RSF_RENDER_FRONTEND_ABI_VERSION,
+    rsf_render_settings as Settings,
+};
 use crate::sys::{
     RSF_OVERLAY_SR_CHANGE_APPLIED, RSF_OVERLAY_SR_CHANGE_PENDING, RSF_OVERLAY_SR_CHANGE_REFUSED,
     rsf_overlay_intent as Intent, rsf_overlay_stats as Stats,
@@ -106,7 +117,10 @@ struct State {
     requested_generation: Option<u32>,
     enabled: bool,
     show_performance: bool,
-    loaded_frame_limit: bool,
+    // What is saved: every accepted change, written as one section.
+    settings: Settings,
+    // The saved generation options are applied once generation reports its start options.
+    generation_restored: bool,
     // Panel layout word, saved in the preferences file under its own key.
     ui_preferences: u32,
     automatic: bool,
@@ -230,6 +244,48 @@ impl Host {
         unsafe { crate::settings_store::read_sharpening(self.preferences.as_ptr(), SECTION) }
     }
 
+    // The saved settings with `start` for keys never saved, and the stored generation mode.
+    fn read_settings(&self, start: &Settings) -> (Settings, u32) {
+        let defaults = sharpening_policy::defaults();
+        unsafe { read_settings_and_fg_mode(self.preferences.as_ptr(), SECTION, start, &defaults) }
+            .unwrap_or((*start, start.fg_enabled))
+    }
+
+    fn save(&self, s: &State) {
+        if unsafe { rsf_settings_store_write(self.preferences.as_ptr(), SECTION, &s.settings) }
+            != OK
+        {
+            self.log("Could not save the settings; the change applies for this session.");
+        }
+    }
+
+    // The saved generation options over the ones the adapter installed generation with.
+    fn restore_generation(&self, s: &mut State, fg: &mut FgOptions) {
+        let started = Settings {
+            fg_enabled: fg.mode,
+            generated_frames: fg.generated_frames,
+            latency: fg.reflex_mode,
+            frame_limit_us: fg.frame_limit_us,
+            ..s.settings
+        };
+        let (saved, mode) = self.read_settings(&started);
+        let restored = FgOptions {
+            mode,
+            generated_frames: saved.generated_frames,
+            reflex_mode: saved.latency,
+            frame_limit_us: saved.frame_limit_us,
+            ..*fg
+        };
+        let generation =
+            |o: &FgOptions| (o.mode, o.generated_frames, o.reflex_mode, o.frame_limit_us);
+        (s.settings.fg_enabled, s.settings.generated_frames) = (mode, saved.generated_frames);
+        (s.settings.latency, s.settings.frame_limit_us) = (saved.latency, saved.frame_limit_us);
+        if generation(&restored) != generation(fg) {
+            *fg = restored;
+            unsafe { leaf::fg_options(fg) };
+        }
+    }
+
     fn destroy(&self, context: &mut Handle) {
         if !context.is_null() {
             unsafe { leaf::sr12_destroy(*context) };
@@ -295,6 +351,11 @@ impl Host {
             } else if leaf::present_backend() == s.save_target {
                 s.save_pending = false;
                 let _ = leaf::fg_choice_save(s.save_backend);
+                // Off is fg_choice's own value; the settings keep the last provider.
+                if s.save_backend != 0 {
+                    s.settings.fg_backend = s.save_backend;
+                    self.save(s);
+                }
             }
         }
         let mut adapter = Adapter::default();
@@ -373,20 +434,9 @@ impl Host {
             ..unsafe { std::mem::zeroed() }
         };
         let have_fg = unsafe { leaf::fg_status(&mut fg) } != 0;
-        if have_fg && !s.loaded_frame_limit {
-            s.loaded_frame_limit = true;
-            let limit = unsafe {
-                crate::settings_store::rsf_settings_store_read_integer(
-                    self.preferences.as_ptr(),
-                    SECTION,
-                    c"FrameLimitUs".as_ptr(),
-                    fg.requested.frame_limit_us,
-                )
-            };
-            if limit != fg.requested.frame_limit_us {
-                fg.requested.frame_limit_us = limit;
-                unsafe { leaf::fg_options(&fg.requested) };
-            }
+        if have_fg && !s.generation_restored {
+            s.generation_restored = true;
+            self.restore_generation(s, &mut fg.requested);
         }
         unsafe { leaf::overlay_fill_fg(&mut stats, if have_fg { &fg } else { null() }) };
         // The saved choice stays on the old provider until the switch lands, so show the target.
@@ -459,24 +509,15 @@ impl Host {
                 fg.reflex_mode = intent.reflex_mode;
             }
             if intent.frame_limit_changed != 0 {
-                let saved = unsafe {
-                    crate::settings_store::rsf_settings_store_write_integer(
-                        self.preferences.as_ptr(),
-                        SECTION,
-                        c"FrameLimitUs".as_ptr(),
-                        intent.frame_limit_us,
-                    )
-                };
-                if saved == OK {
-                    fg.frame_limit_us = intent.frame_limit_us;
-                } else {
-                    self.log("Could not save the frame limit; keeping the active limit.");
-                }
+                fg.frame_limit_us = intent.frame_limit_us;
             }
             unsafe { leaf::fg_options(fg) };
+            (s.settings.fg_enabled, s.settings.generated_frames) = (fg.mode, fg.generated_frames);
+            (s.settings.latency, s.settings.frame_limit_us) = (fg.reflex_mode, fg.frame_limit_us);
         }
         if intent.performance_hud_changed != 0 {
             s.show_performance = intent.performance_hud != 0;
+            s.settings.status_overlay = u32::from(s.show_performance);
         }
         if intent.ui_preferences_changed != 0 && intent.ui_preferences != s.ui_preferences {
             s.ui_preferences = intent.ui_preferences;
@@ -493,11 +534,9 @@ impl Host {
         }
         if intent.sharpening_changed != 0 {
             let requested = intent_sharpening(intent);
-            if unsafe {
-                rsf_settings_store_write_sharpening(self.preferences.as_ptr(), SECTION, &requested)
-            } == OK
-            {
+            if sharpening_policy::valid(&requested) {
                 s.sharpening = requested;
+                set_sharpening(&mut s.settings, &requested);
                 if !s.sr.is_null() {
                     let _ = unsafe { leaf::sr12_set_sharpening(s.sr, &s.sharpening) };
                 }
@@ -505,6 +544,24 @@ impl Host {
                 self.log("Could not save sharpening settings; previous values retained.");
             }
         }
+        self.apply_policy(s, intent);
+        // One section write of everything accepted, as the other hosts save their settings.
+        let persisted = intent.fg_changed != 0
+            || intent.reflex_changed != 0
+            || intent.frame_limit_changed != 0
+            || intent.performance_hud_changed != 0
+            || intent.sharpening_changed != 0
+            || intent.dlss_preset_changed != 0
+            || intent.backend_changed != 0
+            || intent.quality_changed != 0
+            || intent.enabled_changed != 0;
+        if persisted {
+            self.save(s);
+        }
+    }
+
+    // A backend, quality, enable or DLSS model change the adapter's policy accepts.
+    fn apply_policy(&self, s: &mut State, intent: &Intent) {
         let preset_changed = intent.dlss_preset_changed != 0
             && intent.dlss_preset != s.preset
             && leaf::dlss_preset_valid(intent.dlss_preset) != 0;
@@ -547,11 +604,11 @@ impl Host {
         if intent.enabled_changed != 0 {
             s.enabled = intent.enabled != 0;
         }
+        s.settings.sr_backend = if s.automatic { RSF_SR_AUTO } else { backend };
+        (s.settings.sr_quality, s.settings.sr_enabled) = (quality, u32::from(s.enabled));
         if preset_changed {
             s.preset = intent.dlss_preset;
-            if unsafe { write_dlss_preset(self.preferences.as_ptr(), SECTION, s.preset) } != OK {
-                self.log("Could not save requested DLSS model preset.");
-            }
+            s.settings.dlss_preset = s.preset;
             self.log("DLSS model change requested; draining previous GPU work.");
         } else {
             self.log("Overlay requested vendor/quality change; draining previous GPU work.");
@@ -913,7 +970,8 @@ unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
             requested_generation: None,
             enabled: true,
             show_performance: false,
-            loaded_frame_limit: false,
+            settings: unsafe { std::mem::zeroed() },
+            generation_restored: false,
             ui_preferences,
             automatic,
             last_result: 0,
@@ -947,8 +1005,68 @@ unsafe fn describe(setup: *const Setup) -> Result<Host, u32> {
         set_engine_spatial,
         policy_v2,
     };
+    // The saved settings over the adapter's start values: its SR choice, and the options it
+    // installed generation with when generation already reports them.
+    let mut fg = FgStatus {
+        struct_size: size_of::<FgStatus>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    let generation = if unsafe { leaf::fg_status(&mut fg) } != 0 {
+        fg.requested
+    } else {
+        FgOptions {
+            mode: RSF_FG_FIXED,
+            generated_frames: 1,
+            reflex_mode: RSF_REFLEX_OFF,
+            ..unsafe { std::mem::zeroed() }
+        }
+    };
+    let start = Settings {
+        struct_size: size_of::<Settings>() as u32,
+        abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
+        sr_enabled: 1,
+        sr_backend: setup.backend,
+        sr_quality: quality,
+        dlss_preset: setup.dlss_preset,
+        fg_enabled: generation.mode,
+        fg_backend: RSF_FG_BACKEND_AUTO,
+        generated_frames: generation.generated_frames,
+        latency: generation.reflex_mode,
+        frame_limit_us: generation.frame_limit_us,
+        ..unsafe { std::mem::zeroed() }
+    };
+    let (mut settings, fg_mode) = host.read_settings(&start);
+    settings.fg_enabled = fg_mode;
+    let saved = if settings.sr_backend == RSF_SR_AUTO {
+        RSF_SR_NONE
+    } else {
+        settings.sr_backend
+    };
+    if !accepts_backend_quality(saved, settings.sr_quality)
+        || leaf::dlss_preset_valid(settings.dlss_preset) == 0
+    {
+        (settings.sr_backend, settings.sr_quality) = (setup.backend, quality);
+        settings.dlss_preset = setup.dlss_preset;
+    }
     let sharpening = host.read_sharpening();
-    host.lock().sharpening = sharpening;
+    set_sharpening(&mut settings, &sharpening);
+    let (backend, quality) = {
+        let mut s = host.lock();
+        s.automatic = settings.sr_backend == RSF_SR_AUTO;
+        s.backend = if s.automatic {
+            RSF_SR_NONE
+        } else {
+            settings.sr_backend
+        };
+        (s.requested_backend, s.quality) = (s.backend, settings.sr_quality);
+        s.requested_quality = s.quality;
+        s.preset = settings.dlss_preset;
+        s.enabled = settings.sr_enabled != 0;
+        s.show_performance = settings.status_overlay != 0;
+        s.sharpening = sharpening;
+        s.settings = settings;
+        (s.backend, s.quality)
+    };
     if !host.policy(backend, quality) {
         return Err(8);
     }

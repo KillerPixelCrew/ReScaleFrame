@@ -4,9 +4,7 @@
 use crate::bridge_state::rsf_unity_mono_drained_generation;
 use crate::discovery::{self, Player};
 use crate::generation::{self, RSF_DLSS_ENGINE_UNITY, Sources};
-use crate::runtime_config::{
-    Ini, path_setting, preferences_path, profile_int, setting, terminated, utf8,
-};
+use crate::runtime_config::{Ini, path_setting, preferences_path, setting, terminated, utf8};
 use crate::startup_policy::{self, MONO_DEADLINE, wait_for_sr};
 use rsf_game_sys::ffi_util::lock_or_recover;
 // The carrier already loaded the Runtime. The plugin target links its import library.
@@ -335,15 +333,10 @@ fn sr_start(ini: *const u16, identity: &mut Option<Identity>) -> u32 {
         executable_name_utf8: identity.name.as_ptr().cast(),
         sha256_hex: identity.hash.as_ptr(),
     };
+    // Start values only: the Runtime restores what the overlay saved in the preferences.
     let backend = setting(&ini, w!("Backend"), RSF_SR_AUTO);
     let quality = setting(&ini, w!("Quality"), 1);
-    // The overlay's saved preset wins over the ini's.
-    let mut dlss_preset = profile_int(
-        w!("Rendering"),
-        w!("DlssPreset"),
-        setting(&ini, w!("DlssPreset"), 0),
-        preferences.as_ptr(),
-    );
+    let mut dlss_preset = setting(&ini, w!("DlssPreset"), 0);
     if dlss_preset > 13 || RSF_DLSS_PRESET_MASK & (1 << dlss_preset) == 0 {
         dlss_preset = 0;
     }

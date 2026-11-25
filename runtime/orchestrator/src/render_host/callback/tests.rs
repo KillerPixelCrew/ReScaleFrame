@@ -1372,6 +1372,74 @@ fn generation_provider_choice_is_saved_after_the_switch_lands() {
 }
 
 #[test]
+fn the_sr_choice_is_saved_and_wins_over_the_start_values_at_the_next_start() {
+    let files = Files::new("restore");
+    // Nothing saved: the adapter's start values.
+    let first = host(&files, 1, 1);
+    {
+        let s = first.lock();
+        let started = (s.requested_backend, s.requested_quality, s.enabled);
+        assert_eq!((started, s.show_performance), ((1, 1, true), false));
+    }
+    let queue = fake(fake(null_mut()));
+    window(
+        &first,
+        queue,
+        Some(Intent {
+            backend_changed: 1,
+            backend: 3,
+            quality_changed: 1,
+            quality: 3,
+            performance_hud_changed: 1,
+            performance_hud: 1,
+            ..intent()
+        }),
+    );
+    assert_eq!(events(), ["fg window 5", "overlay", "policy 0 3"]);
+    let saved = ["SR", "SRBackend", "SRQuality", "StatusOverlay"].map(|key| files.integer(key));
+    assert_eq!(saved, [1, 3, 3, 1]);
+    drop(first);
+    let restarted = host(&files, 1, 1);
+    let s = restarted.lock();
+    assert_eq!(
+        (s.requested_backend, s.requested_quality, s.automatic),
+        (3, 3, false)
+    );
+    assert!(s.enabled && s.show_performance);
+    drop(s);
+    // A saved value no provider serves falls back to the start values.
+    files.write("SRQuality", "5");
+    let refused = host(&files, 1, 1);
+    assert_eq!(refused.lock().requested_backend, 1);
+}
+
+#[test]
+fn saved_generation_options_replace_the_installed_ones_once() {
+    let files = Files::new("generation");
+    files.write("FG", "0");
+    files.write("FGGeneratedFrames", "3");
+    let host = host(&files, 1, 1);
+    let queue = fake(fake(null_mut()));
+    let mut status: FgStatus = unsafe { std::mem::zeroed() };
+    status.requested.mode = 1;
+    status.requested.generated_frames = 2;
+    status.requested.frame_limit_us = 5000;
+    with(|world| world.fg_status = Some(status));
+    window(&host, queue, None);
+    // The unsaved frame limit keeps the installed value.
+    assert_eq!(
+        events(),
+        [
+            "fg window 5",
+            "fg options mode=0 generated=3 reflex=0 limit=5000",
+            "overlay"
+        ]
+    );
+    window(&host, queue, None);
+    assert_eq!(events(), ["fg window 5", "overlay"]);
+}
+
+#[test]
 fn sharpening_is_polled_from_the_preferences_once_a_second() {
     let files = Files::new("poll");
     files.write("Sharpness", "0.3");
