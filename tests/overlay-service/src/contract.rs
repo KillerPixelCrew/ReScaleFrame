@@ -656,8 +656,8 @@ extern "C" fn rsf_test_overlay_contract(
         unsafe { diagnostics_get(&mut diagnostics) } == RSF_OK
             && diagnostics.started == 0
             && diagnostics.presents == 0
-            && diagnostics.apply_attempts == 12
-            && diagnostics.apply_refused == 9
+            && diagnostics.apply_attempts == 13
+            && diagnostics.apply_refused == 10
             && diagnostics.last_apply_result == RSF_ERROR_NOT_READY,
         "diagnostics count short, reentrant and failed writes",
     );

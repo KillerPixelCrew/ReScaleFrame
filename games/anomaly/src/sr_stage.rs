@@ -608,6 +608,7 @@ pub(crate) struct Stage {
 }
 
 // A path's UTF-16 units, without a terminator.
+#[cfg(test)]
 fn units(path: &Path) -> Vec<u16> {
     #[cfg(windows)]
     {

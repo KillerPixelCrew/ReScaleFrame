@@ -373,14 +373,14 @@ fn adapter_binding(query: Query) {
         1
     );
     assert!(rsf_anomaly_sr_plan(&live, 1920, 1080).is_none());
-    // A value that is no provider id, and an unoffered quality, keep the current choice (Auto at
-    // the default quality).
+    // A value that is no provider id, and a quality past Ultra Quality (5, offered since every
+    // engine that renders reduced renders it), keep the current choice (Auto at the default quality).
     rsf_anomaly_sr_request(
         &live,
         &Settings {
             enabled: false,
             backend: 15,
-            quality: 5,
+            quality: 6,
             preset: 0,
         },
     );
