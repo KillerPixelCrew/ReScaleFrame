@@ -8,8 +8,8 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_PRESENT, DXGI_PRESENT_PARAMETERS, IDXGIDeviceSubObject, IDXGIObject, IDXGISwapChain,
-    IDXGISwapChain1, IDXGISwapChain2, IDXGISwapChain3, IDXGISwapChain4,
+    DXGI_PRESENT, DXGI_PRESENT_PARAMETERS, DXGI_SWAP_CHAIN_DESC, IDXGIDeviceSubObject, IDXGIObject,
+    IDXGISwapChain, IDXGISwapChain1, IDXGISwapChain2, IDXGISwapChain3, IDXGISwapChain4,
 };
 use windows::core::{BOOL, GUID, IUnknown, Interface};
 
@@ -106,6 +106,22 @@ pub(super) unsafe extern "C" fn get_fullscreen(receiver: Raw, fullscreen: *mut i
 pub(super) unsafe extern "C" fn set_fullscreen(receiver: Raw, fullscreen: i32, target: Raw) -> i32 {
     let chain = unsafe { IDXGISwapChain::from_raw_borrowed(&receiver) }.unwrap();
     unsafe { (chain.vtable().SetFullscreenState)(receiver, BOOL(fullscreen), target) }.0
+}
+
+// The swap effect and creation flags DXGI reports for the chain the bridge presents on.
+pub(super) unsafe extern "C" fn chain_presentation(
+    receiver: Raw,
+    effect: *mut u32,
+    flags: *mut u32,
+) -> i32 {
+    let chain = unsafe { IDXGISwapChain::from_raw_borrowed(&receiver) }.unwrap();
+    let mut desc = DXGI_SWAP_CHAIN_DESC::default();
+    let result = unsafe { (chain.vtable().GetDesc)(receiver, &mut desc) };
+    unsafe {
+        effect.write(desc.SwapEffect.0 as u32);
+        flags.write(desc.Flags);
+    }
+    result.0
 }
 
 pub(super) unsafe extern "C" fn physical_present(receiver: Raw, sync: u32, flags: u32) -> i32 {

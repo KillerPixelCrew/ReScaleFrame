@@ -7,7 +7,7 @@ use rsf_graphics::dump_options::Log as Listener;
 use std::arch::naked_asm;
 use std::ffi::c_void;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use windows::core::w;
 use windows_sys::Win32::{
@@ -507,6 +507,17 @@ unsafe fn observe_nvapi(
     }
 }
 
+// The driver's last sleep status for the presenting device: bit 0 VRR active, bit 1 independent
+// flip, PRESENTATION_KNOWN once a status was read. 0 until then.
+static PRESENTATION: AtomicU32 = AtomicU32::new(0);
+const PRESENTATION_KNOWN: u32 = 4;
+
+/// The last (VRR, independent flip) the driver reported for the presenting device, if any.
+pub(crate) fn driver_presentation() -> Option<(bool, bool)> {
+    let value = PRESENTATION.load(Ordering::Relaxed);
+    (value & PRESENTATION_KNOWN != 0).then_some((value & 1 != 0, value & 2 != 0))
+}
+
 pub(crate) unsafe fn rsf_reflex_driver_sleep(device: *mut c_void, log: Log, user: *mut c_void) {
     let mut state = NV_GET_SLEEP_STATUS_PARAMS {
         version: version::<NV_GET_SLEEP_STATUS_PARAMS>(),
@@ -519,6 +530,15 @@ pub(crate) unsafe fn rsf_reflex_driver_sleep(device: *mut c_void, log: Log, user
         let status = unsafe { std::mem::transmute::<*mut c_void, SleepStatus>(address) };
         unsafe { status(device, &mut state) }
     };
+    // NVAPI_OK.
+    if result == 0 {
+        PRESENTATION.store(
+            PRESENTATION_KNOWN
+                | u32::from(state.bFsVrr != 0)
+                | (u32::from(state.bFullscreenIFlip != 0) << 1),
+            Ordering::Relaxed,
+        );
+    }
     if log.is_some() {
         let mut foreground = 0;
         unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground) };

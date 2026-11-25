@@ -830,6 +830,23 @@ pub(super) unsafe extern "C" fn set_fullscreen(chain: Raw, fullscreen: i32, _: R
     reenter_physical(if fullscreen == 0 { null_mut() } else { chain });
     with(|fake| std::mem::replace(&mut fake.fullscreen_result, S_OK))
 }
+pub(super) unsafe extern "C" fn chain_presentation(
+    chain: Raw,
+    effect: *mut u32,
+    flags: *mut u32,
+) -> i32 {
+    assert_chain(chain);
+    let tearing = with(|fake| fake.tearing);
+    unsafe {
+        effect.write(DXGI_SWAP_EFFECT_FLIP_DISCARD);
+        flags.write(if tearing {
+            DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+        } else {
+            0
+        });
+    }
+    S_OK
+}
 pub(super) unsafe extern "C" fn physical_present(chain: Raw, sync: u32, flags: u32) -> i32 {
     assert_chain(chain);
     reenter_physical(chain);
@@ -1803,6 +1820,28 @@ fn present_interval_and_tearing_policy() {
     });
     assert_eq!(normalized, 1, "logged once per requested interval");
     unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn presentation_facts_report_flip_tearing_and_driver_state() {
+    // A flip-discard chain created for tearing, presented at interval 0 with tearing, while the
+    // driver reports composition: the line separates our flags from the driver's verdict.
+    let present = DXGI_PRESENT_ALLOW_TEARING as u64;
+    assert_eq!(
+        presentation_facts(
+            Some((
+                DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+            )),
+            present,
+            Some((false, false)),
+        ),
+        "swap_effect=4 chain_tearing=1 present_sync=0 present_tearing=1 driver_vrr=0 driver_iflip=0"
+    );
+    assert_eq!(
+        presentation_facts(None, 1 << 32, None),
+        "swap_effect=unknown chain_tearing=unknown present_sync=1 present_tearing=0 driver_vrr=unknown driver_iflip=unknown"
+    );
 }
 
 #[test]

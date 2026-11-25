@@ -823,6 +823,27 @@ impl PresentationSync {
     }
 }
 
+// What decides independent flip and VRR for the window: the presenting chain's swap effect and
+// tearing creation flag, the last Present's interval and tearing flag, and the driver's last
+// reported VRR and independent flip. Each is "unknown" until it has been read.
+fn presentation_facts(
+    chain: Option<(u32, u32)>,
+    last_present: u64,
+    driver: Option<(bool, bool)>,
+) -> String {
+    let known = |value: Option<u32>| value.map_or_else(|| "unknown".to_owned(), |v| v.to_string());
+    let flags = last_present as u32;
+    format!(
+        "swap_effect={} chain_tearing={} present_sync={} present_tearing={} driver_vrr={} driver_iflip={}",
+        known(chain.map(|(effect, _)| effect)),
+        known(chain.map(|(_, flags)| u32::from(flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING != 0))),
+        last_present >> 32,
+        u32::from(flags & DXGI_PRESENT_ALLOW_TEARING != 0),
+        known(driver.map(|(vrr, _)| u32::from(vrr))),
+        known(driver.map(|(_, iflip)| u32::from(iflip))),
+    )
+}
+
 // Application Presents of one summary window, so a log always shows whether presentation ran.
 #[derive(Default, Debug, PartialEq, Eq)]
 struct PresentLedger {
@@ -884,6 +905,8 @@ pub(crate) struct Owner {
     reported_steps: Mutex<Vec<&'static str>>,
     buffer_queries: AtomicU32,
     ledger: Mutex<PresentLedger>,
+    // The last application Present's interval (high half) and physical Present flags.
+    last_present: AtomicU64,
     serial: AtomicU64,
     next_slot: AtomicU32,
     slot_fences: [AtomicU64; SLOTS],
@@ -925,6 +948,7 @@ impl Owner {
             reported_steps: Mutex::default(),
             buffer_queries: AtomicU32::new(0),
             ledger: Mutex::default(),
+            last_present: AtomicU64::new(0),
             serial: AtomicU64::new(0),
             next_slot: AtomicU32::new(0),
             slot_fences: Default::default(),
@@ -1032,8 +1056,20 @@ impl Owner {
             } else {
                 "bridge"
             };
+            let chain = self.physical().and_then(|physical| {
+                let (mut effect, mut flags) = (0, 0);
+                let result = unsafe {
+                    leaf::chain_presentation(physical.chain.as_raw(), &mut effect, &mut flags)
+                };
+                (!failed(result)).then_some((effect, flags))
+            });
+            let facts = presentation_facts(
+                chain,
+                self.last_present.load(Ordering::Relaxed),
+                crate::reflex_audit::driver_presentation(),
+            );
             log(&format!(
-                "presentation bridge: presents in {LEDGER_SECONDS}s attempted={} completed={} failed={} last_failure=0x{:08x} mode={mode}",
+                "presentation bridge: presents in {LEDGER_SECONDS}s attempted={} completed={} failed={} last_failure=0x{:08x} mode={mode} {facts}",
                 window.attempted, window.completed, window.failed, window.last_failure as u32
             ));
         }
@@ -2278,6 +2314,10 @@ impl Owner {
         {
             physical_flags |= DXGI_PRESENT_ALLOW_TEARING;
         }
+        self.last_present.store(
+            (u64::from(sync) << 32) | u64::from(physical_flags),
+            Ordering::Relaxed,
+        );
         let mut ticks = [0_u64; 6];
         if debug {
             ticks[0] = crate::now_qpc();
