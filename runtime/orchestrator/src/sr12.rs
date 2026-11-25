@@ -525,12 +525,9 @@ unsafe fn open_vendor(
         return (Vendor::None, OK, width, height);
     }
     if setup.backend == RSF_SR_SPATIAL {
-        // FSR1's published scale per quality: native, quality, balanced, performance, ultra
-        // performance, ultra quality. Engine input extents replace this plan.
-        const RATIOS: [f32; 6] = [1.0, 1.5, 1.7, 2.0, 3.0, 1.3];
-        let ratio = RATIOS[setup.quality as usize];
-        let planned = |extent: u32| ((extent as f32 / ratio) as u32).max(1);
-        let (width, height) = (planned(setup.output_width), planned(setup.output_height));
+        // FSR1's own plan; engine input extents replace it.
+        let [width, height] =
+            crate::fsr1::plan([setup.output_width, setup.output_height], setup.quality);
         return (Vendor::Spatial, OK, width, height);
     }
     if setup.backend == RSF_SR_DLSS {
