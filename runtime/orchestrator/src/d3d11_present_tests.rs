@@ -2027,6 +2027,7 @@ fn ensure_failure_falls_back_to_plain_presentation() {
 fn physical_lease_defers_switch_and_keeps_callbacks_on_the_creation_queue() {
     for native12 in [false, true] {
         let _guard = reset();
+        let base = live();
         let mut value = setup(FSR3, 1);
         value.streamline_directory_utf8 = c"streamline".as_ptr();
         assert_eq!(prepare(&value), 1);
@@ -2070,6 +2071,8 @@ fn physical_lease_defers_switch_and_keeps_callbacks_on_the_creation_queue() {
         assert_eq!(present(bridge, 1, 0), S_OK);
         assert_eq!(rsf_d3d11_present_backend(), DLSS);
         assert_eq!(rsf_d3d11_present_generation(), 2);
+        // The switch destroyed the FSR3 session and released its chain.
+        assert_eq!(live(), (base.0 + 1, base.1 + 1));
         let (result, new_lease, new_chain) = physical_lease(chain, 0);
         assert_eq!(result, S_OK);
         assert_ne!(new_chain, old_chain);
@@ -2086,6 +2089,7 @@ fn physical_lease_defers_switch_and_keeps_callbacks_on_the_creation_queue() {
         assert_eq!(present(bridge, 1, 0), S_OK);
         unsafe { bridge_release_owned(bridge) };
         assert!(unsafe { rsf_d3d11_present_queue() }.is_null());
+        assert_eq!(live(), base);
         with(|fake| {
             assert_eq!(fake.physical[1].chain.refs.get(), 1);
             assert_eq!(fake.proxy_queue.refs.get(), 1);
@@ -3066,4 +3070,50 @@ fn linked_chain_dispatch_pins_calls_and_consumes_only_the_release_reference() {
     let result = unsafe { dispatch_result_slot(&mut request).read() };
     assert_eq!((request.handled, result, receiver.refs.get()), (1, 0, 0));
     ACTIVE_BRIDGE.store(null_mut(), Ordering::Release);
+}
+
+fn live() -> (i32, i32) {
+    (
+        LIVE_PROVIDERS.load(Ordering::Relaxed),
+        LIVE_PHYSICAL.load(Ordering::Relaxed),
+    )
+}
+
+#[test]
+fn window_line_reports_presents_per_frame_and_survives_a_counter_restart() {
+    const FREQUENCY: u64 = 1_000;
+    let mut status = EMPTY_STATUS;
+    status.valid_statistics = RSF_FG_STAT_TOTAL_PRESENTED | RSF_FG_STAT_GENERATED_PRESENTED;
+    status.effective_generated_frames = 1;
+    let mut window = Window::default();
+    let mut line = None;
+    // 2x for five seconds at 60 frames per second: two presents, one generated, per frame.
+    for frame in 0..=300_u64 {
+        status.total_presented = frame * 2;
+        status.generated_presented = frame;
+        let now = 1 + frame * 1_000 / 60;
+        line = window_line(&mut window, now, FREQUENCY, Some(&status), 1).or(line);
+    }
+    let line = line.expect("a window line after five seconds");
+    assert!(line.contains("frames=300 fps=60.0 backend=1"), "{line}");
+    assert!(line.contains("effective_generated=1"), "{line}");
+    assert!(
+        line.contains("presents_per_frame=2.00 generated_per_frame=1.00"),
+        "{line}"
+    );
+
+    // A new provider restarts its counters below the window's start.
+    status.total_presented = 4;
+    status.generated_presented = 2;
+    let mut restarted = None;
+    for frame in 1..=300_u64 {
+        let now = 5_001 + frame * 1_000 / 60;
+        restarted = window_line(&mut window, now, FREQUENCY, Some(&status), 3).or(restarted);
+    }
+    let restarted = restarted.expect("a second window line");
+    assert!(
+        restarted.contains("presents_per_frame=unavailable generated_per_frame=unavailable"),
+        "{restarted}"
+    );
+    assert!(window_line(&mut Window::default(), 1, FREQUENCY, None, 0).is_none());
 }

@@ -21,8 +21,9 @@ use crate::sys::rsf_d3d11_present_status as PresentStatus;
 use crate::sys::rsf_observer_present_event as Event;
 use crate::sys::{
     RSF_BACKEND_ABI_VERSION, RSF_FG_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO,
-    RSF_FG_OFF, RSF_PACING_REFLEX, RSF_PACING_XELL, RSF_REFLEX_OFF, rsf_fg_options,
-    rsf_fg_retirement, rsf_fg_status, rsf_generation_provider as Provider, rsf_generation_setup,
+    RSF_FG_OFF, RSF_FG_STAT_GENERATED_PRESENTED, RSF_FG_STAT_TOTAL_PRESENTED, RSF_PACING_REFLEX,
+    RSF_PACING_XELL, RSF_REFLEX_OFF, rsf_fg_options, rsf_fg_retirement, rsf_fg_status,
+    rsf_generation_provider as Provider, rsf_generation_setup,
 };
 use crate::sys::{rsf_d3d11_present_setup as Setup, rsf_streamline_host};
 use rsf_game_sys::backend_result::{
@@ -364,6 +365,12 @@ static CREATION_TOKENS: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_CREATION_TOKEN: AtomicU64 = AtomicU64::new(0);
 static OUTER_ALIAS: AtomicPtr<c_void> = AtomicPtr::new(null_mut()); // Retained after admission.
 static SCOPED_ADMITTED: AtomicBool = AtomicBool::new(false);
+// Generation objects alive in the process, for the periodic window line. A retired provider or
+// chain that is never released shows as a count above one after a switch.
+static LIVE_PROVIDERS: AtomicI32 = AtomicI32::new(0);
+static LIVE_PHYSICAL: AtomicI32 = AtomicI32::new(0);
+// Seconds between window lines.
+const WINDOW_SECONDS: f64 = 5.0;
 
 struct SendGraphics(Graphics);
 unsafe impl Send for SendGraphics {}
@@ -431,14 +438,113 @@ fn destroy_provider(api: Option<&Provider>, session: Raw) -> i32 {
     let Some(api) = api else {
         return NOT_SUPPORTED;
     };
-    if let Some(destroy) = api.destroy_checked {
-        return unsafe { destroy(session) };
-    }
-    let Some(destroy) = api.destroy else {
-        return NOT_SUPPORTED;
+    let result = if let Some(destroy) = api.destroy_checked {
+        unsafe { destroy(session) }
+    } else if let Some(destroy) = api.destroy {
+        unsafe { destroy(session) };
+        OK
+    } else {
+        NOT_SUPPORTED
     };
-    unsafe { destroy(session) };
-    OK
+    if result == OK {
+        LIVE_PROVIDERS.fetch_sub(1, Ordering::Relaxed);
+    }
+    result
+}
+
+// Counts a session a provider's create returned, whether or not creation succeeded; every
+// non-null session goes through destroy_provider.
+fn created_provider(session: Raw) {
+    if !session.is_null() {
+        LIVE_PROVIDERS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+// Vendor presents or generated frames per application frame since the window began. A provider
+// switch restarts the vendor counter, so a smaller count is unavailable rather than a wrap.
+fn per_frame(
+    state: Option<&rsf_fg_status>,
+    flag: u32,
+    now: u64,
+    start: u64,
+    frames: u64,
+) -> String {
+    state
+        .filter(|state| state.valid_statistics & flag != 0)
+        .and_then(|_| now.checked_sub(start))
+        .map_or_else(
+            || "unavailable".to_owned(),
+            |count| format!("{:.2}", count as f64 / frames as f64),
+        )
+}
+
+// One line every WINDOW_SECONDS of presented application frames. It shows whether the vendor
+// presents or generates more frames per application frame than its effective count, the RTX 40
+// unlock admission the provider reports, and whether retired providers or physical chains are
+// still alive after a switch.
+fn window_line(
+    window: &mut Window,
+    now: u64,
+    frequency: u64,
+    state: Option<&rsf_fg_status>,
+    backend: u32,
+) -> Option<String> {
+    let (presented, generated) = state.map_or((0, 0), |state| {
+        (state.total_presented, state.generated_presented)
+    });
+    if window.start_qpc == 0 || frequency == 0 {
+        *window = Window {
+            start_qpc: now,
+            frames: 0,
+            presented,
+            generated,
+        };
+        return None;
+    }
+    window.frames += 1;
+    if (now.wrapping_sub(window.start_qpc) as f64) < WINDOW_SECONDS * frequency as f64 {
+        return None;
+    }
+    let seconds = now.wrapping_sub(window.start_qpc) as f64 / frequency as f64;
+    let frames = window.frames;
+    let status = state.copied().unwrap_or(EMPTY_STATUS);
+    let line = format!(
+        "FG bridge window: frames={frames} fps={:.1} backend={backend} generation={} configured_mode={} \
+        effective_mode={} effective_generated={} max_generated={} active={} presents_per_frame={} \
+        generated_per_frame={} mfg_unlock={} pacing={} live_providers={} live_physical={}",
+        frames as f64 / seconds,
+        generation(),
+        status.configured_mode,
+        status.effective_mode,
+        status.effective_generated_frames,
+        status.max_generated_frames,
+        status.active,
+        per_frame(
+            state,
+            RSF_FG_STAT_TOTAL_PRESENTED,
+            presented,
+            window.presented,
+            frames
+        ),
+        per_frame(
+            state,
+            RSF_FG_STAT_GENERATED_PRESENTED,
+            generated,
+            window.generated,
+            frames
+        ),
+        status.mfg_unlock_status,
+        status.pacing_owner,
+        LIVE_PROVIDERS.load(Ordering::Relaxed),
+        LIVE_PHYSICAL.load(Ordering::Relaxed),
+    );
+    *window = Window {
+        start_qpc: now,
+        frames: 0,
+        presented,
+        generated,
+    };
+    Some(line)
 }
 
 fn read_guard() -> Option<std::sync::RwLockReadGuard<'static, ()>> {
@@ -588,6 +694,28 @@ pub(crate) struct Physical {
 // A lease pins their lifetime. DXGI and the caller still govern operation ordering.
 unsafe impl Send for Physical {}
 unsafe impl Sync for Physical {}
+
+impl Physical {
+    fn new(chain: IUnknown, queue: IUnknown) -> Self {
+        LIVE_PHYSICAL.fetch_add(1, Ordering::Relaxed);
+        Self { chain, queue }
+    }
+}
+
+impl Drop for Physical {
+    fn drop(&mut self) {
+        LIVE_PHYSICAL.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+// Application frames and vendor presents since the last window line.
+#[derive(Default)]
+struct Window {
+    start_qpc: u64,
+    frames: u64,
+    presented: u64,
+    generated: u64,
+}
 
 // One direct allocator and closed list on the graphics device (Streamline's proxy device when a
 // host exists). The list is declared first so it releases before its allocator.
@@ -774,6 +902,7 @@ pub(crate) struct Owner {
     post_switch_frames: AtomicU32,
     last_normalized_sync: AtomicU32,
     timing: Mutex<Timing>,
+    window: Mutex<Window>,
 }
 
 unsafe impl Send for Owner {}
@@ -814,6 +943,7 @@ impl Owner {
             post_switch_frames: AtomicU32::new(0),
             last_normalized_sync: AtomicU32::new(0),
             timing: Mutex::new(Timing::default()),
+            window: Mutex::default(),
         }
     }
 
@@ -1164,10 +1294,7 @@ impl Owner {
         if queue.is_null() {
             return INIT_FAILED;
         }
-        let physical = Arc::new(Physical {
-            chain,
-            queue: unsafe { com_ref::retain(queue) },
-        });
+        let physical = Arc::new(Physical::new(chain, unsafe { com_ref::retain(queue) }));
         let mut current = lock(&self.physical);
         if current.is_some() {
             return INIT_FAILED;
@@ -1245,6 +1372,7 @@ impl Owner {
         let mut provider = null_mut();
         let mut chain = null_mut();
         let mut result = unsafe { create(&setup, &mut provider, &mut chain) };
+        created_provider(provider);
         if result != OK {
             let runtime = if setup.runtime_directory_utf8.is_null() {
                 String::new()
@@ -1862,6 +1990,7 @@ impl Owner {
                     let mut probe = null_mut();
                     let mut probe_chain = null_mut();
                     let created = unsafe { create(&probe_setup, &mut probe, &mut probe_chain) };
+                    created_provider(probe);
                     let retired = self.discard_unpublished(backend, probe);
                     if retired == OK { created } else { retired }
                 }
@@ -2421,6 +2550,19 @@ impl Owner {
         // A frame the bridge lost costs this one Present, never the session's image.
         if failed(result) && !(submission_fenced && result == DXGI_ERROR_WAS_STILL_DRAWING) {
             self.retreat(step, if failed(stage) { stage } else { result });
+        }
+        if !failed(result) && settings().log.is_some() {
+            let state = self.provider_status();
+            let line = window_line(
+                &mut lock(&self.window),
+                crate::now_qpc(),
+                crate::qpc_frequency(),
+                state.as_ref(),
+                ACTIVE_BACKEND.load(Ordering::SeqCst),
+            );
+            if let Some(line) = line {
+                log(&line);
+            }
         }
         result
     }
