@@ -193,3 +193,33 @@ fn status_snapshots_are_coherent_while_other_threads_abort_and_pace() {
     assert_eq!(status.total_presented, SAMPLES * 2);
     assert_eq!(status.latency_paced_frames, SAMPLES);
 }
+
+#[test]
+fn intervals_count_prepares_resets_and_aborts_once_per_interval() {
+    let (state, _) = enabled();
+    state.prepared(true);
+    state.prepared(false);
+    state.abort();
+    state.prepared(true);
+    for _ in 1..INTERVAL_PRESENTS {
+        assert_eq!(state.presented(), None);
+    }
+    let interval = state.presented().unwrap();
+    assert_eq!(
+        interval,
+        Interval {
+            presents: INTERVAL_PRESENTS,
+            prepares: 3,
+            resets: 2,
+            aborts: 1,
+        }
+    );
+    assert_eq!(
+        interval.line("XeSS"),
+        "XeSS FG interval presents=600 prepares=3 resets=2 aborts=1"
+    );
+    // An idle interval, generation off, is not reported.
+    for _ in 0..INTERVAL_PRESENTS {
+        assert_eq!(state.presented(), None);
+    }
+}

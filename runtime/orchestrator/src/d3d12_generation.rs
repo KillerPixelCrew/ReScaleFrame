@@ -227,11 +227,34 @@ impl PrepareOrder {
     }
 }
 
+/// Presents between two interval lines of a provider.
+const INTERVAL_PRESENTS: u32 = 600;
+
+/// History events of one provider over an interval of presents: enabled prepares, how many
+/// of them restarted history, and aborts, which invalidate history for the next prepare.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+struct Interval {
+    presents: u32,
+    prepares: u32,
+    resets: u32,
+    aborts: u32,
+}
+
+impl Interval {
+    fn line(self, provider: &str) -> String {
+        format!(
+            "{provider} FG interval presents={} prepares={} resets={} aborts={}",
+            self.presents, self.prepares, self.resets, self.aborts
+        )
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Snapshot {
     status: Status,
     request: Option<Options>,
     order: PrepareOrder,
+    interval: Interval,
 }
 
 impl Snapshot {
@@ -264,7 +287,27 @@ impl State {
             status,
             request: None,
             order: PrepareOrder::default(),
+            interval: Interval::default(),
         }))
+    }
+
+    /// Counts an enabled source frame handed to the SDK, and whether it restarted history.
+    fn prepared(&self, reset: bool) {
+        let mut state = self.0.lock().unwrap();
+        state.interval.prepares += 1;
+        state.interval.resets += u32::from(reset);
+    }
+
+    /// Counts one present. Every `INTERVAL_PRESENTS` presents returns the interval's counts and
+    /// starts the next one; an interval without prepares or aborts reports nothing.
+    fn presented(&self) -> Option<Interval> {
+        let mut state = self.0.lock().unwrap();
+        state.interval.presents += 1;
+        if state.interval.presents < INTERVAL_PRESENTS {
+            return None;
+        }
+        let interval = std::mem::take(&mut state.interval);
+        (interval.prepares != 0 || interval.aborts != 0).then_some(interval)
     }
 
     fn read(&self) -> Snapshot {
@@ -317,6 +360,7 @@ impl State {
         let mut state = self.0.lock().unwrap();
         state.order.invalidate();
         state.status.active = 0;
+        state.interval.aborts += 1;
     }
 
     fn paced(&self) {

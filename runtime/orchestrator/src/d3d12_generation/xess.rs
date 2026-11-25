@@ -409,6 +409,7 @@ impl Session for Xess {
         }
         self.prepared_reset.set(reset);
         self.prepared_gap.set(id - before.order.last_prepare);
+        self.state.prepared(reset);
         let count = before
             .request
             .map_or(0, |options| options.generated_frames)
@@ -446,6 +447,9 @@ impl Session for Xess {
                 before.order.last_prepare, present.interpolation, present.enabled, present.frames, status.active,
                 u32::from(self.prepared_reset.get()), self.prepared_gap.get()
             ));
+        }
+        if let Some(interval) = self.state.presented() {
+            self.log.say(&interval.line("XeSS"));
         }
         if result < 0 { FEATURE_FAILED } else { OK }
     }

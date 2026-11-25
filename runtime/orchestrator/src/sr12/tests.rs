@@ -323,15 +323,16 @@ pub(super) unsafe extern "C" fn copy_region(
 pub(super) unsafe extern "C" fn copy_unit_exposure(_: Handle, target: Handle, _: Handle) {
     event(format!("copy-exposure {}", name(target)));
 }
-pub(super) unsafe extern "C" fn copy_motion_tile(
+pub(super) unsafe extern "C" fn copy_tile(
     _: Handle,
     _: Handle,
     offset: u64,
-    _: Handle,
+    source: Handle,
+    format: u32,
     x: u32,
     y: u32,
 ) {
-    event(format!("tile {offset} {x},{y}"));
+    event(format!("tile {offset} {} {format} {x},{y}", name(source)));
 }
 pub(super) unsafe extern "C" fn map(_: Handle, bytes: u64) -> *const u8 {
     with(|world| {
@@ -455,15 +456,15 @@ pub(super) unsafe fn fg_handoff(_: Handle, _: &rsf_frame_record, _: Handle, _: H
 pub(super) mod native {
     pub(in crate::sr12) use super::{
         capture_configure, capture_create, capture_destroy, capture_enabled, capture_event,
-        capture_flush, capture_force_reset, capture_record, capture_wants, copy_motion_tile,
-        copy_region, copy_unit_exposure, create_exposure_texture, create_exposure_upload,
-        create_heap, create_pipeline, create_readback, create_texture, depth_domains,
-        describe_stub as describe, dispatch, dlss_create, dlss_create_registered,
-        dlss_create_shared, dlss_destroy, dlss_evaluate, dlss_evaluate as session_evaluate,
-        dlss_evaluate_borrowed, dlss_plan, dlss_present, dlss_set_sdr, dump_begin_record,
-        dump_pass_metadata, dump_result, dump_sr_frame, fg_handoff, map, owned_by, session_create,
-        session_destroy, session_get_status, session_select, sharpen_create, sharpen_destroy,
-        sharpen_run, transition, unmap, write_exposure_upload, write_srv, write_uav,
+        capture_flush, capture_force_reset, capture_record, capture_wants, copy_region, copy_tile,
+        copy_unit_exposure, create_exposure_texture, create_exposure_upload, create_heap,
+        create_pipeline, create_readback, create_texture, depth_domains, describe_stub as describe,
+        dispatch, dlss_create, dlss_create_registered, dlss_create_shared, dlss_destroy,
+        dlss_evaluate, dlss_evaluate as session_evaluate, dlss_evaluate_borrowed, dlss_plan,
+        dlss_present, dlss_set_sdr, dump_begin_record, dump_pass_metadata, dump_result,
+        dump_sr_frame, fg_handoff, map, owned_by, session_create, session_destroy,
+        session_get_status, session_select, sharpen_create, sharpen_destroy, sharpen_run,
+        transition, unmap, write_exposure_upload, write_srv, write_uav,
     };
 }
 unsafe extern "C" fn log(user: *mut c_void, message: *const c_char) {
@@ -1069,19 +1070,132 @@ fn motion_diagnostic_reads_back_after_slot_reuse() {
         OK
     );
     let events = take_events();
-    assert!(events.contains(&"tile 6144 720,405".to_owned()));
+    // The last quarter-point tile of the normalized motion, the engine's motion in its own
+    // format, and the normalized depth.
+    let tiles: Vec<_> = events
+        .iter()
+        .filter(|event| event.starts_with("tile ") && event.ends_with(" 720,405"))
+        .collect();
+    assert_eq!(tiles.len(), 3, "{events:?}");
+    assert!(tiles[0].starts_with("tile 6144 ") && tiles[0].ends_with(" 34 720,405"));
+    assert_eq!(tiles[1], "tile 14336 motion 34 720,405");
+    assert!(tiles[2].starts_with("tile 22528 ") && tiles[2].ends_with(" 41 720,405"));
     let next = scene.pass(6, RENDER, OUTPUT);
     assert_eq!(
         unsafe { rsf_core_sr12_evaluate(owner, scene.list, &next, 0) },
         OK
     );
     let logs = with(|world| std::mem::take(&mut world.logs));
+    let tile = |x, y| {
+        format!(" tile={x},{y} found=0.000,0.000 raw=0.000000,0.000000 depth=0.000000 expected=n/a")
+    };
     assert_eq!(
         logs,
-        ["Normalized motion samples: mean=0.000000 max=0.000000 render pixels invalid=0"]
+        [format!(
+            "Normalized motion samples: mean=0.000000 max=0.000000 render pixels invalid=0 frame=105 camera_motion_included=0 motion_to_uv=0.5,-0.5 motion_jittered=0 jitter=0.000,0.000{}{}{}{} verdict=no-camera",
+            tile(240, 135),
+            tile(720, 135),
+            tile(240, 405),
+            tile(720, 405)
+        )]
     );
     unsafe { rsf_core_sr12_destroy(owner) };
     scene.release();
+}
+
+#[test]
+fn motion_checks_continue_at_the_interval_after_the_first_frames() {
+    let scene = Scene::new(RENDER, OUTPUT);
+    let (_, owner) = create_with(&scene.setup(RSF_SR_DLSS, 1, OUTPUT));
+    let mut sampled = Vec::new();
+    for frame in 1..=(DIAGNOSTIC_INTERVAL + 2) {
+        take_events();
+        let pass = scene.pass(frame, RENDER, OUTPUT);
+        assert_eq!(
+            unsafe { rsf_core_sr12_evaluate(owner, scene.list, &pass, (frame % 3) as u32) },
+            OK
+        );
+        if take_events()
+            .iter()
+            .any(|event| event.starts_with("tile 0 "))
+        {
+            sampled.push(frame);
+        }
+    }
+    let expected: Vec<u64> = (1..=u64::from(DIAGNOSTIC_FRAMES))
+        .chain([DIAGNOSTIC_INTERVAL])
+        .collect();
+    assert_eq!(sampled, expected);
+    unsafe { rsf_core_sr12_destroy(owner) };
+    scene.release();
+}
+
+#[test]
+fn a_moving_camera_without_vectors_reads_as_missing() {
+    // Unity's column-major clip-to-previous with a clip-space shift of (0.1, -0.05): every
+    // static texel moves 0.05 * width right and 0.025 * height down toward its previous position.
+    let mut clip_to_previous = [0.0f32; 16];
+    for index in [0, 5, 10, 15] {
+        clip_to_previous[index] = 1.0;
+    }
+    (clip_to_previous[12], clip_to_previous[13]) = (0.1, -0.05);
+    let expected = camera_motion(&clip_to_previous, (100.5, 50.5), 0.3, RENDER).unwrap();
+    assert!((expected[0] - 48.0).abs() < 1e-3 && (expected[1] - 13.5).abs() < 1e-3);
+    let sample = MotionSample {
+        frame: 9,
+        extent: RENDER,
+        clip_to_previous,
+        jitter: [0.25, -0.25],
+        motion_to_uv: [1.0, 1.0],
+        camera_motion_included: 1,
+        motion_jittered: 0,
+    };
+    let mut bytes = vec![0u8; READBACK_BYTES as usize];
+    // Depth 0.5 at every tile centre; the normalized and engine motion stay zero.
+    for tile in 0..4u64 {
+        let at = (DEPTH_SECTION + tile * TILE_BYTES) as usize + 4 * 256 + 16;
+        bytes[at..at + 4].copy_from_slice(&0.5f32.to_le_bytes());
+    }
+    let line = motion_check_line(&bytes, &sample);
+    assert!(line.ends_with(" verdict=missing"), "{line}");
+    assert!(line.contains(" expected=48.000,13.500"), "{line}");
+
+    let still = MotionSample {
+        clip_to_previous: [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ],
+        ..sample
+    };
+    assert!(motion_check_line(&bytes, &still).ends_with(" verdict=camera-still"));
+}
+
+#[test]
+fn verdicts_follow_the_static_tiles() {
+    let tile = |found: [f32; 2], expected: Option<[f32; 2]>| TileCheck {
+        origin: (0, 0),
+        found,
+        raw: [0.0; 2],
+        depth: 0.5,
+        expected,
+    };
+    let moving = Some([8.0, -6.0]);
+    // A character covers one tile; the other three carry the camera's motion.
+    let matched = [
+        tile([8.2, -6.1], moving),
+        tile([7.6, -5.8], moving),
+        tile([0.0, 0.0], moving),
+        tile([8.0, -6.0], moving),
+    ];
+    assert_eq!(motion_verdict(&matched), "match");
+    // A flipped vertical convention matches no tile.
+    let flipped = [tile([8.0, 6.0], moving); 4];
+    assert_eq!(motion_verdict(&flipped), "mismatch");
+    assert_eq!(motion_verdict(&[tile([0.01, 0.0], moving); 4]), "missing");
+    assert_eq!(
+        motion_verdict(&[tile([0.0; 2], Some([0.2, 0.1])); 4]),
+        "camera-still"
+    );
+    assert_eq!(motion_verdict(&[tile([0.0; 2], None); 4]), "no-camera");
 }
 
 #[test]

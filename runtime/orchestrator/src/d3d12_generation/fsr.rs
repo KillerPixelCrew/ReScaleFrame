@@ -619,6 +619,7 @@ impl Session for Fsr {
             self.state.reset_history(before.order.revision);
             return FEATURE_FAILED;
         }
+        self.state.prepared(reset);
         if self
             .state
             .complete(before.order.revision, record.frame_id, true, mode, count)
@@ -675,6 +676,9 @@ impl Session for Fsr {
                 "FSR FG counters source={} generated={dispatched} DXGI_present_count={count} query={:08x}",
                 before.order.last_prepare, result as u32
             ));
+        }
+        if let Some(interval) = self.state.presented() {
+            self.log.say(&interval.line("FSR"));
         }
         OK
     }

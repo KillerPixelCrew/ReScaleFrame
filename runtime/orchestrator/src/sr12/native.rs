@@ -257,11 +257,14 @@ pub(super) unsafe extern "C" fn copy_unit_exposure(list: Handle, target: Handle,
     unsafe { commands.CopyTextureRegion(&to, 0, 0, 0, &from, None) };
 }
 
-pub(super) unsafe extern "C" fn copy_motion_tile(
+// One 8x8 tile of a four-byte-texel texture into the readback footprint at `offset`, in the
+// source's own `format`.
+pub(super) unsafe extern "C" fn copy_tile(
     list: Handle,
     buffer: Handle,
     offset: u64,
     source: Handle,
+    format: u32,
     x: u32,
     y: u32,
 ) {
@@ -269,7 +272,7 @@ pub(super) unsafe extern "C" fn copy_motion_tile(
     let from = texture_copy(&source, None);
     let to = texture_copy(
         &buffer,
-        Some(footprint(offset, DXGI_FORMAT_R16G16_FLOAT, TILE, TILE)),
+        Some(footprint(offset, DXGI_FORMAT(format as i32), TILE, TILE)),
     );
     let rectangle = D3D12_BOX {
         left: x,

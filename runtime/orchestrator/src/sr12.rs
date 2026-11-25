@@ -75,11 +75,20 @@ const NORMALIZED_UAV: u32 = 4;
 const EXPOSURE_UAV: u32 = 7;
 const EXPOSURE_UPLOAD_BYTES: u64 = 256;
 
-// Four 8x8 RG16F tiles, each in a 256-byte row pitch footprint.
+// 8x8 tiles of four bytes per texel, each in a 256-byte row pitch footprint. A motion check
+// reads the four quarter-point tiles of three textures, in this order: the normalized motion,
+// the engine's motion before normalization and the normalized depth.
 const TILE: u32 = 8;
 const TILE_BYTES: u64 = 2048;
-const READBACK_BYTES: u64 = 4 * TILE_BYTES;
+const RAW_MOTION_SECTION: u64 = 4 * TILE_BYTES;
+const DEPTH_SECTION: u64 = 8 * TILE_BYTES;
+const READBACK_BYTES: u64 = 12 * TILE_BYTES;
+// Every evaluation of a new context is checked for this many frames, then one in
+// DIAGNOSTIC_INTERVAL, so a long session keeps reporting while the camera moves.
 const DIAGNOSTIC_FRAMES: u32 = 12;
+const DIAGNOSTIC_INTERVAL: u64 = 600;
+// A tile moves when the camera alone shifts its static content by at least this many pixels.
+const MOVING_PIXELS: f32 = 1.0;
 
 type Handle = *mut c_void;
 
@@ -199,6 +208,168 @@ fn motion_statistics(mapped: &[u8]) -> (f32, f32, u32) {
     (sum / 256.0, maximum, invalid)
 }
 
+/// The pass facts a motion check compares its readback with, kept until the slot's readback
+/// is mapped.
+#[derive(Clone, Copy)]
+struct MotionSample {
+    frame: u64,
+    extent: (u32, u32),
+    clip_to_previous: [f32; 16],
+    jitter: [f32; 2],
+    motion_to_uv: [f32; 2],
+    camera_motion_included: u32,
+    motion_jittered: u32,
+}
+
+/// One quarter-point tile at its centre texel: the normalized pixel motion found there, the
+/// engine's motion before normalization, the device depth, and the motion the camera alone
+/// gives static content there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TileCheck {
+    origin: (u32, u32),
+    found: [f32; 2],
+    raw: [f32; 2],
+    depth: f32,
+    expected: Option<[f32; 2]>,
+}
+
+/// Render-pixel motion toward the previous frame that the camera alone gives a static point at
+/// texel centre (x, y) with device depth `depth`. `clip_to_previous` is in the row-major,
+/// row-vector layout the vendors read (Unity's column-major memory): previous = clip * M.
+/// None when the previous position has no finite projection.
+fn camera_motion(
+    clip_to_previous: &[f32; 16],
+    (x, y): (f32, f32),
+    depth: f32,
+    (width, height): (u32, u32),
+) -> Option<[f32; 2]> {
+    let (width, height) = (width as f32, height as f32);
+    let clip = [x / width * 2.0 - 1.0, 1.0 - y / height * 2.0, depth, 1.0];
+    let previous = |column: usize| -> f32 {
+        (0..4)
+            .map(|row| clip[row] * clip_to_previous[row * 4 + column])
+            .sum()
+    };
+    let w = previous(3);
+    if !w.is_finite() || w.abs() < 1e-6 {
+        return None;
+    }
+    let motion = [
+        (previous(0) / w + 1.0) * 0.5 * width - x,
+        (1.0 - previous(1) / w) * 0.5 * height - y,
+    ];
+    motion
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(motion)
+}
+
+fn length([x, y]: [f32; 2]) -> f32 {
+    (x * x + y * y).sqrt()
+}
+
+/// Whether the motion texture carries camera motion. Only tiles the camera moves by at least
+/// MOVING_PIXELS count: "missing" when every such tile holds under a tenth of its expectation,
+/// "match" when at least half are within max(0.5 px, 25 %) of it (characters and other moving
+/// objects may cover the rest), "mismatch" otherwise; "camera-still" without a moving tile and
+/// "no-camera" without a usable previous-clip transform.
+fn motion_verdict(tiles: &[TileCheck]) -> &'static str {
+    if tiles.iter().all(|tile| tile.expected.is_none()) {
+        return "no-camera";
+    }
+    let moving: Vec<_> = tiles
+        .iter()
+        .filter_map(|tile| Some((tile.found, tile.expected?)))
+        .filter(|(_, expected)| length(*expected) >= MOVING_PIXELS)
+        .collect();
+    if moving.is_empty() {
+        return "camera-still";
+    }
+    if moving
+        .iter()
+        .all(|(found, expected)| length(*found) < 0.1 * length(*expected))
+    {
+        return "missing";
+    }
+    let matched = moving
+        .iter()
+        .filter(|(found, expected)| {
+            let error = [found[0] - expected[0], found[1] - expected[1]];
+            length(error) <= (0.25 * length(*expected)).max(0.5)
+        })
+        .count();
+    if matched * 2 >= moving.len() {
+        "match"
+    } else {
+        "mismatch"
+    }
+}
+
+/// The four tile checks of a mapped readback.
+fn tile_checks(mapped: &[u8], sample: &MotionSample) -> [TileCheck; 4] {
+    let centre = (TILE / 2) as usize;
+    let at = |section: u64, tile: u32| -> usize {
+        (section + u64::from(tile) * TILE_BYTES) as usize + centre * 256 + centre * 4
+    };
+    let half = |at: usize| half_to_f32(u16::from_le_bytes([mapped[at], mapped[at + 1]]));
+    let pair = |at: usize| [half(at), half(at + 2)];
+    std::array::from_fn(|tile| {
+        let tile = tile as u32;
+        let origin = tile_origin(tile, sample.extent.0, sample.extent.1);
+        let depth_at = at(DEPTH_SECTION, tile);
+        let depth = f32::from_le_bytes(mapped[depth_at..depth_at + 4].try_into().unwrap());
+        let texel = (
+            (origin.0 + TILE / 2) as f32 + 0.5,
+            (origin.1 + TILE / 2) as f32 + 0.5,
+        );
+        TileCheck {
+            origin,
+            found: pair(at(0, tile)),
+            raw: pair(at(RAW_MOTION_SECTION, tile)),
+            depth,
+            expected: depth
+                .is_finite()
+                .then(|| camera_motion(&sample.clip_to_previous, texel, depth, sample.extent))
+                .flatten(),
+        }
+    })
+}
+
+/// The periodic motion line: the normalized statistics, the declared motion facts, each tile
+/// and the verdict.
+fn motion_check_line(mapped: &[u8], sample: &MotionSample) -> String {
+    let (mean, maximum, invalid) = motion_statistics(mapped);
+    let tiles = tile_checks(mapped, sample);
+    let mut line = format!(
+        "Normalized motion samples: mean={mean:.6} max={maximum:.6} render pixels invalid={invalid} frame={} camera_motion_included={} motion_to_uv={},{} motion_jittered={} jitter={:.3},{:.3}",
+        sample.frame,
+        sample.camera_motion_included,
+        sample.motion_to_uv[0],
+        sample.motion_to_uv[1],
+        sample.motion_jittered,
+        sample.jitter[0],
+        sample.jitter[1]
+    );
+    for tile in &tiles {
+        let expected = tile
+            .expected
+            .map_or_else(|| "n/a".to_owned(), |[x, y]| format!("{x:.3},{y:.3}"));
+        line.push_str(&format!(
+            " tile={},{} found={:.3},{:.3} raw={:.6},{:.6} depth={:.6} expected={expected}",
+            tile.origin.0,
+            tile.origin.1,
+            tile.found[0],
+            tile.found[1],
+            tile.raw[0],
+            tile.raw[1],
+            tile.depth
+        ));
+    }
+    line.push_str(" verdict=");
+    line.push_str(motion_verdict(&tiles));
+    line
+}
+
 #[derive(Clone, Copy, Default)]
 struct History {
     frame: u64,
@@ -275,6 +446,8 @@ struct State {
     // address from passing for the cached one.
     validated: [Option<IUnknown>; 4],
     view_formats: [u32; 3],
+    // The engine motion's resource format, which the motion check copies it in.
+    motion_format: u32,
     validated_generation: u32,
     validated_list: Option<IUnknown>,
     exposure_input: Option<(IUnknown, u32)>,
@@ -282,8 +455,9 @@ struct State {
     history: History,
     captured: [Captured; SLOTS],
     motion_readback: [Option<IUnknown>; SLOTS],
-    motion_pending: [bool; SLOTS],
+    motion_samples: [Option<MotionSample>; SLOTS],
     diagnostic_frames: u32,
+    evaluations: u64,
     sharpen_reported: bool,
 }
 
@@ -561,6 +735,7 @@ unsafe fn create(setup: *const Setup) -> Result<Sr12, i32> {
         state: Mutex::new(State {
             validated: [const { None }; 4],
             view_formats: [0; 3],
+            motion_format: 0,
             validated_generation: 0,
             validated_list: None,
             exposure_input: None,
@@ -571,8 +746,9 @@ unsafe fn create(setup: *const Setup) -> Result<Sr12, i32> {
                 list: ptr::null_mut(),
             }),
             motion_readback: [const { None }; SLOTS],
-            motion_pending: [false; SLOTS],
+            motion_samples: [None; SLOTS],
             diagnostic_frames: 0,
+            evaluations: 0,
             sharpen_reported: false,
         }),
     })
@@ -660,32 +836,37 @@ impl Sr12 {
             if index != OUTPUT {
                 state.view_formats[index] = view;
             }
+            if index == MOTION {
+                state.motion_format = desc.format;
+            }
         }
         state.validated = pointers.map(|resource| unsafe { retain_object(resource) });
         state.validated_generation = pass.resource_generation;
         true
     }
 
-    unsafe fn motion_diagnostic(&self, state: &mut State, list: Handle, slot: usize) {
+    // Reads back the quarter-point tiles of the normalized motion, the engine's motion and the
+    // normalized depth after normalization, and on the slot's next use logs them beside the
+    // motion the pass camera predicts there (motion_check_line).
+    unsafe fn motion_diagnostic(&self, state: &mut State, list: Handle, pass: &Pass, slot: usize) {
         if self.log.callback.is_none() {
             return;
         }
-        if state.motion_pending[slot] {
-            if let Some(buffer) = state.motion_readback[slot].as_ref() {
-                let mapped = unsafe { native::map(buffer.as_raw(), READBACK_BYTES) };
-                if !mapped.is_null() {
-                    let bytes =
-                        unsafe { std::slice::from_raw_parts(mapped, READBACK_BYTES as usize) };
-                    let (mean, maximum, invalid) = motion_statistics(bytes);
-                    unsafe { native::unmap(buffer.as_raw()) };
-                    self.log.say(&format!(
-                        "Normalized motion samples: mean={mean:.6} max={maximum:.6} render pixels invalid={invalid}"
-                    ));
-                }
+        if let Some(sample) = state.motion_samples[slot].take()
+            && let Some(buffer) = state.motion_readback[slot].as_ref()
+        {
+            let mapped = unsafe { native::map(buffer.as_raw(), READBACK_BYTES) };
+            if !mapped.is_null() {
+                let bytes = unsafe { std::slice::from_raw_parts(mapped, READBACK_BYTES as usize) };
+                let line = motion_check_line(bytes, &sample);
+                unsafe { native::unmap(buffer.as_raw()) };
+                self.log.say(&line);
             }
-            state.motion_pending[slot] = false;
         }
-        if state.diagnostic_frames >= DIAGNOSTIC_FRAMES || !diagnostic_fits(self.width, self.height)
+        state.evaluations += 1;
+        if (state.diagnostic_frames >= DIAGNOSTIC_FRAMES
+            && !state.evaluations.is_multiple_of(DIAGNOSTIC_INTERVAL))
+            || !diagnostic_fits(self.width, self.height)
         {
             return;
         }
@@ -700,23 +881,42 @@ impl Sr12 {
         let Some(buffer) = state.motion_readback[slot].as_ref() else {
             return;
         };
-        let motion = self.gpu.normalized[MOTION].as_raw();
+        let sources = [
+            (0, self.gpu.normalized[MOTION].as_raw(), RG16_FLOAT),
+            (RAW_MOTION_SECTION, pass.motion, state.motion_format),
+            (
+                DEPTH_SECTION,
+                self.gpu.normalized[DEPTH].as_raw(),
+                R32_FLOAT,
+            ),
+        ];
         unsafe {
-            native::transition(list, motion, SHADER_READ, COPY_SOURCE);
-            for tile in 0..4 {
-                let (x, y) = tile_origin(tile, self.width, self.height);
-                native::copy_motion_tile(
-                    list,
-                    buffer.as_raw(),
-                    u64::from(tile) * TILE_BYTES,
-                    motion,
-                    x,
-                    y,
-                );
+            for (section, source, format) in sources {
+                native::transition(list, source, SHADER_READ, COPY_SOURCE);
+                for tile in 0..4 {
+                    let (x, y) = tile_origin(tile, self.width, self.height);
+                    native::copy_tile(
+                        list,
+                        buffer.as_raw(),
+                        section + u64::from(tile) * TILE_BYTES,
+                        source,
+                        format,
+                        x,
+                        y,
+                    );
+                }
+                native::transition(list, source, COPY_SOURCE, SHADER_READ);
             }
-            native::transition(list, motion, COPY_SOURCE, SHADER_READ);
         }
-        state.motion_pending[slot] = true;
+        state.motion_samples[slot] = Some(MotionSample {
+            frame: frame_id(pass),
+            extent: (self.width, self.height),
+            clip_to_previous: pass.camera.clip_to_previous_clip,
+            jitter: pass.camera.jitter_pixels,
+            motion_to_uv: pass.motion_to_uv,
+            camera_motion_included: pass.motion_camera_included,
+            motion_jittered: pass.camera.motion_jittered,
+        });
         state.diagnostic_frames += 1;
     }
 
@@ -902,7 +1102,7 @@ impl Sr12 {
             self.normalize(state, list, pass, slot);
             self.transition_inputs(list, UNORDERED_ACCESS, SHADER_READ);
             // The caller joins a slot's previous GPU completion before entering this evaluation.
-            self.motion_diagnostic(state, list, slot);
+            self.motion_diagnostic(state, list, pass, slot);
         }
         let reset = !state.history.continues(pass);
         let record = self.record(pass, reset);
