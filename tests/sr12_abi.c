@@ -35,7 +35,11 @@ int main(void)
     CHECK(refused(&changed, &placeholder, RSF_BACKEND_ERROR_ABI_MISMATCH));
     changed = setup; changed.struct_size = sizeof(setup) - sizeof(void*);
     CHECK(refused(&changed, &placeholder, RSF_BACKEND_ERROR_INVALID_ARGUMENT));
-    changed = setup; changed.backend = RSF_SR_XESS + 1;
+    /* Spatial (FSR1) is a served backend and is admitted past this check, so it is not used here:
+       admission would reach the placeholder device. Auto and anything past it are refused. */
+    changed = setup; changed.backend = RSF_SR_AUTO;
+    CHECK(refused(&changed, &placeholder, RSF_BACKEND_ERROR_INVALID_ARGUMENT));
+    changed = setup; changed.backend = RSF_SR_AUTO + 1;
     CHECK(refused(&changed, &placeholder, RSF_BACKEND_ERROR_INVALID_ARGUMENT));
     changed = setup; changed.quality = 6;
     CHECK(refused(&changed, &placeholder, RSF_BACKEND_ERROR_INVALID_ARGUMENT));
