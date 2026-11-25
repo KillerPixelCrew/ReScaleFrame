@@ -227,7 +227,7 @@ impl Cold {
 
     fn attempt() -> Option<(Options, Log)> {
         let mut cold = COLD.lock().unwrap();
-        if cold.attempted || !cold.configured.as_ref().is_some_and(|(o, _)| o.bridge) {
+        if cold.attempted || cold.configured.is_none() {
             return None;
         }
         cold.attempted = true;
@@ -737,9 +737,9 @@ unsafe extern "C" fn rsf_anomaly_fg_configure_ini(
     if ini.is_null() {
         return false;
     }
+    // The bridge is installed whenever the stage runs, so FG can be switched on in the overlay.
     let options = Options::read(ini);
-    let selected = options.bridge;
-    if selected && apply {
+    if apply {
         Cold::configure(
             options,
             Log {
@@ -749,7 +749,7 @@ unsafe extern "C" fn rsf_anomaly_fg_configure_ini(
         );
         install_runtime(runtime, depth_rva, platform);
     }
-    selected
+    true
 }
 
 fn install_runtime(runtime: HMODULE, depth_rva: u32, platform: *const Platform) -> bool {

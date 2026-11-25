@@ -50,7 +50,6 @@ pub(crate) fn register(path: &[u16]) {
         sr_stage,
         set_sr_stage,
     );
-    register_panel_option(c"Frame generation bridge", 0..=1, true, bridge, set_bridge);
     register_panel_option(
         c"F10 frame capture",
         0..=1,
@@ -150,14 +149,6 @@ extern "C" fn sr_stage() -> i32 {
 
 extern "C" fn set_sr_stage(value: i32) -> bool {
     write(w!("SRStage"), value)
-}
-
-extern "C" fn bridge() -> i32 {
-    read(w!("FGBridge"), 1)
-}
-
-extern "C" fn set_bridge(value: i32) -> bool {
-    write(w!("FGBridge"), value)
 }
 
 extern "C" fn sr_capture() -> i32 {

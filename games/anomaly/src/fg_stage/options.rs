@@ -107,7 +107,6 @@ impl Capture {
 }
 
 pub(super) struct Settings {
-    pub bridge: bool,
     pub debug: bool,
     pub development: bool,
     pub scope_hold: u32,
@@ -116,7 +115,6 @@ pub(super) struct Settings {
 }
 
 pub(super) struct Options {
-    pub bridge: bool,
     pub debug: bool,
     pub development: bool,
     pub scope_hold: u32,
@@ -133,8 +131,6 @@ impl Options {
         let enabled = number(w!("FG"), 0) != 0;
         let capture = unsafe { CaptureSettings::read(ini) };
         let settings = Settings {
-            // The panel can enable generation live only with a bridge installed at startup.
-            bridge: enabled || number(w!("FGBridge"), 1) != 0,
             scope_hold: number(w!("FGScopeHold"), 4),
             debug: number(w!("FGDebug"), 0) != 0,
             development: number(w!("FGDevelopment"), 0) != 0,
@@ -194,7 +190,6 @@ impl Options {
         } = settings.frontend;
         let known = RSF_FG_BACKEND_ALL.checked_shr(backend).unwrap_or(0) & 1 != 0;
         Self {
-            bridge: settings.bridge,
             debug: settings.debug,
             development: settings.development,
             scope_hold: settings.scope_hold.clamp(1, 64),

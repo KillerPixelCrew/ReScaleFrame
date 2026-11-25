@@ -156,7 +156,6 @@ fn fg_settings_keep_option_bounds_and_normalize_only_vendor_paths() {
     .map(|path| crate::sr_stage::plain_directory(&path.encode_utf16().collect::<Vec<_>>()));
     let options = Options::admit(
         options::Settings {
-            bridge: true,
             debug: false,
             development: false,
             scope_hold: 0,
@@ -174,13 +173,8 @@ fn fg_settings_keep_option_bounds_and_normalize_only_vendor_paths() {
     );
     let frontend = options.frontend;
     assert_eq!(
-        (
-            options.bridge,
-            frontend.enabled,
-            frontend.backend,
-            frontend.generated
-        ),
-        (true, 1, RSF_FG_BACKEND_AUTO, 3)
+        (frontend.enabled, frontend.backend, frontend.generated),
+        (1, RSF_FG_BACKEND_AUTO, 3)
     );
     assert_eq!(
         (
@@ -452,7 +446,6 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
     Cold::configure(
         Options::admit(
             options::Settings {
-                bridge: true,
                 debug: false,
                 development: false,
                 scope_hold: 4,

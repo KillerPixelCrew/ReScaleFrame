@@ -276,7 +276,7 @@ fn request_sr(settings: &rsf_render_settings) {
 
 // ---- configuration translation -----------------------------------------------------------------------------------
 
-/// What this adapter can apply: FG when the presentation bridge was installed at cold start (FG=1 or FGBridge=1), with
+/// What this adapter can apply: FG when the presentation bridge was installed at cold start (always with Mode=Observe), with
 /// every provider the Runtime knows (it masks them with the bridge's own device-dependent choices); SR only with
 /// SRStage=5, as the backends whose vendor runtime is installed and the qualities Native to Ultra performance. Zero SR
 /// choices tell the Runtime that SR is unavailable, so the panel offers none, a request to enable it is refused and

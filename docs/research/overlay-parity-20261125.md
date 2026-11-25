@@ -77,9 +77,7 @@ FSR4 FG off RDNA 4 (`rsf_generation_fsr4_supported`, already present), any provi
 3. Ultra Quality with XeSS on D3D11 hosts. `d3d11_host.rs` `validate_setup` rejects quality bits above 0x1f, and
    `overlay_service.rs` keeps one static quality mask per host. Make the service intersect the mask with
    `sr_quality(backend)` and raise the bound; check the `dlss_pipeline` quality range.
-4. Anomaly installs the presentation bridge only with `FG=1` or `FGBridge=1` (`games/anomaly/src/overlay.rs:331`),
-   so every FG control is greyed in a default session. Installing it unconditionally, as Skyrim and Fallout 4 do
-   (`presentation_bridge`), changes startup hooking and needs the user's decision.
+4. Done on `NightHammer1000/wave-d3d11`: Anomaly installs the presentation bridge whenever its FG stage runs (Mode=Observe); the `FGBridge` switch and its panel option are gone, so FG can be switched on in the overlay in a default session as in every other game.
 5. Project Wingman has no render host or overlay (`games/project-wingman`): an adapter that supplies colour,
    depth, motion, jitter and exposure to the D3D11 or render host is the work; the panel then needs nothing.
 6. Rendered-source FG (`d3d11_host.rs` `fg_choices(true, true)`) offers FSR3 and FSR4 only, because DLSS-G and

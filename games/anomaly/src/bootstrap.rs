@@ -155,7 +155,7 @@ fn orchestrate(entry: &mut Entry, request: &Request, runtime: &Runtime) -> u32 {
         let fg = unsafe { leaves::fg(ini, request.observe, runtime.module, request.build, LOG_FN) };
         if fg && !request.observe {
             write_log(
-                b"Anomaly FG refused: FG/FGBridge require Mode=Observe; presentation stays stock.",
+                b"Anomaly FG refused: frame generation requires Mode=Observe; presentation stays stock.",
             );
         }
         entry.stages_configured = request.observe;
