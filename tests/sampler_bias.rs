@@ -110,11 +110,20 @@ fn run(gpu: &Device) -> TestResult {
     let prior = get(0);
     unsafe { context.PSSetSamplers(1, Some(&foreign_binding)) };
     baselines[1] = foreign.as_raw();
+    // The shared policy leaves comparison samplers native and clamps the summed bias.
     check(
-        apply(context, &baselines, 3, 15.0) == (false, 0)
-            && get(0) == prior
+        apply(context, &baselines, 3, 15.0) == (true, 1)
+            && get(0) != prior
             && get(1).as_ref() == Some(&foreign),
-        "invalid later slot preserves bindings",
+        "policy leaves a comparison slot native",
+    )?;
+    let clamped = get(0).ok_or("no clamped sampler")?;
+    unsafe { clamped.GetDesc(&mut actual) };
+    near(
+        actual.MipLODBias,
+        15.25,
+        1e-6,
+        "summed bias inside the D3D11 range",
     )?;
     check(
         apply(context, &baselines, 0, 15.0) == (true, 0) && get(0).as_ref() == Some(&native),

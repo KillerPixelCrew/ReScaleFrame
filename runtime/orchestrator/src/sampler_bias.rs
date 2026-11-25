@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
-// Pixel-shader sampler LOD bias on the immediate context, formerly sampler_bias.cpp.
+// Pixel-shader sampler LOD bias on the immediate context for adapter-selected slots. The clones
+// follow the one D3D11 bias policy the frame tap's live rebind uses (rsf_graphics::frame_tap).
+use rsf_graphics::frame_tap::biased_sampler;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, D3D11_DEVICE_CONTEXT_IMMEDIATE, D3D11_MIP_LOD_BIAS_MAX,
-    D3D11_MIP_LOD_BIAS_MIN, D3D11_SAMPLER_DESC, ID3D11Device, ID3D11DeviceContext,
-    ID3D11SamplerState,
+    D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, D3D11_DEVICE_CONTEXT_IMMEDIATE, ID3D11Device,
+    ID3D11DeviceContext, ID3D11SamplerState,
 };
 use windows::core::Interface;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
@@ -117,19 +118,13 @@ pub(crate) unsafe fn rsf_sampler_bias_apply(
         let replacement = if let Some(entry) = cached {
             entry.replacement.clone()
         } else {
-            let mut desc = D3D11_SAMPLER_DESC::default();
-            unsafe { original.GetDesc(&mut desc) };
-            desc.MipLODBias += bias;
-            if !(D3D11_MIP_LOD_BIAS_MIN..=D3D11_MIP_LOD_BIAS_MAX).contains(&desc.MipLODBias) {
-                return 0;
+            // A sampler the policy leaves alone stays native in its slot.
+            let clone = unsafe { biased_sampler(original.as_raw(), bias) };
+            if clone.is_null() {
+                continue;
             }
-            let mut replacement = None;
-            if unsafe { device.CreateSamplerState(&desc, Some(&mut replacement)) }.is_err() {
-                return 0;
-            }
-            let Some(replacement) = replacement else {
-                return 0;
-            };
+            // SAFETY: the policy returned an owned sampler reference.
+            let replacement = unsafe { ID3D11SamplerState::from_raw(clone) };
             state.entries[state.next] = Some(Entry {
                 original: original.clone(),
                 replacement: replacement.clone(),

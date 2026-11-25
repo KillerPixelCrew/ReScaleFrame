@@ -141,7 +141,14 @@ pub(super) unsafe fn viewport(context: Handle, result: *mut D3D11_VIEWPORT) -> u
     count
 }
 
-pub(super) unsafe fn clone_sampler(context: Handle, sampler: Handle, bias: f32) -> Handle {
+/// The D3D11 texture LOD bias policy, shared by the frame tap's live rebind and the D3D11 host's
+/// explicit sampler slots: an owned clone of `sampler` on its own device with `bias` added, for
+/// linear-mip, non-comparison samplers that have a mip range. Null when the sampler is not biased
+/// or the clone cannot be created.
+///
+/// # Safety
+/// `sampler` is a live `ID3D11SamplerState`.
+pub unsafe fn biased_sampler(sampler: Handle, bias: f32) -> Handle {
     let mut desc = D3D11_SAMPLER_DESC::default();
     unsafe { (vtable::<ID3D11SamplerState>(&sampler).GetDesc)(sampler, &mut desc) };
     if desc.Filter.0 & 1 == 0
@@ -151,7 +158,7 @@ pub(super) unsafe fn clone_sampler(context: Handle, sampler: Handle, bias: f32) 
         return null_mut();
     }
     desc.MipLODBias = (desc.MipLODBias + bias).clamp(-16.0, 15.99);
-    let Some(device) = (unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }) else {
+    let Some(device) = (unsafe { com_ref::owned(rsf_d3d11_output_child_device(sampler)) }) else {
         return null_mut();
     };
     let device = device.as_raw();

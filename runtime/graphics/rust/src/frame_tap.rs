@@ -2,6 +2,7 @@
 // Shared D3D11 frame tap. The Rust detours and platform leaves use the native COM ABI.
 mod detours;
 mod platform;
+pub use platform::biased_sampler;
 
 use crate::com_ref;
 use crate::sys::*;
@@ -491,7 +492,7 @@ impl Samplers {
 
     // What to bind for one of the game's samplers at the current bias. The leaf decides which
     // filters are biased; a sampler it declines keeps passing through until the bias changes.
-    fn biased(&mut self, context: Handle, original: Handle) -> Handle {
+    fn biased(&mut self, original: Handle) -> Handle {
         if original.is_null() || self.bias == 0.0 {
             return original;
         }
@@ -511,7 +512,7 @@ impl Samplers {
             self.clones.remove(&(previous.as_raw() as usize));
         }
         entry.bias = bias;
-        let clone = unsafe { com_ref::owned(platform::clone_sampler(context, original, bias)) };
+        let clone = unsafe { com_ref::owned(biased_sampler(original, bias)) };
         let Some(clone) = clone else {
             return original;
         };
@@ -1105,7 +1106,7 @@ pub extern "C" fn rsf_frame_tap_set_sampler_bias(bias: f32) -> i32 {
     let originals = current
         .each_ref()
         .map(|sampler| state.original_of(sampler.as_ref().map_or(null_mut(), Interface::as_raw)));
-    let bound = originals.map(|sampler| state.biased(context, sampler));
+    let bound = originals.map(|sampler| state.biased(sampler));
     unsafe { platform::set_shader_views(forward, context, 0, SAMPLERS as u32, bound.as_ptr()) };
     drop(current);
     TAP.sampler_bias_active.store(bias != 0.0, Release);
@@ -1602,7 +1603,7 @@ unsafe fn rsf_core_frame_tap_samplers(
     }
     let bound_slots = unsafe { slice::from_raw_parts_mut(bound, count) };
     for (bound, &original) in bound_slots.iter_mut().zip(&originals) {
-        *bound = state.biased(context, original);
+        *bound = state.biased(original);
     }
     bound.cast_const()
 }
