@@ -11,7 +11,8 @@ use super::{
     rsf_core_d3d11p_duplicate_application_ready, rsf_core_d3d11p_get_buffer,
     rsf_core_d3d11p_max_latency, rsf_core_d3d11p_physical_pending, rsf_core_d3d11p_present,
     rsf_core_d3d11p_release_physical, rsf_core_d3d11p_render_index, rsf_core_d3d11p_resize,
-    rsf_core_d3d11p_set_fullscreen, rsf_core_d3d11p_set_max_latency, settings,
+    rsf_core_d3d11p_resize_borderless_target, rsf_core_d3d11p_set_fullscreen,
+    rsf_core_d3d11p_set_max_latency, settings,
 };
 // The facade state's leaves; the unit test below fakes them.
 #[cfg(not(test))]
@@ -181,15 +182,24 @@ macro_rules! forward {
 forward!(set_private_data, IDXGIObject, SetPrivateData, key: *const GUID, bytes: u32, data: *const c_void);
 forward!(set_private_interface, IDXGIObject, SetPrivateDataInterface, key: *const GUID, value: Raw);
 forward!(get_private_data, IDXGIObject, GetPrivateData, key: *const GUID, bytes: *mut u32, data: Raw);
+// Windowed, DXGI sizes the window through the physical chain. In the application's fullscreen the
+// owner keeps the window over its output instead of changing a display mode.
 unsafe extern "system" fn resize_target(this: Raw, mode: *const DXGI_MODE_DESC) -> HRESULT {
     let facade = unsafe { Facade::borrow(this) };
-    let result = facade.forward(|physical| unsafe {
-        physical_method!(IDXGISwapChain, ResizeTarget(physical, mode))
-    });
+    let borderless =
+        !mode.is_null() && unsafe { rsf_core_d3d11p_resize_borderless_target(facade.chain) } != 0;
+    let result = if borderless {
+        S_OK
+    } else {
+        facade.forward(|physical| unsafe {
+            physical_method!(IDXGISwapChain, ResizeTarget(physical, mode))
+        })
+    };
     let (width, height) = unsafe { mode.as_ref() }.map_or((0, 0), |mode| (mode.Width, mode.Height));
     log(&format!(
-        "presentation bridge: application ResizeTarget({width}x{height}) result=0x{:08x}",
-        result.0 as u32
+        "presentation bridge: application ResizeTarget({width}x{height}) result=0x{:08x} borderless={}",
+        result.0 as u32,
+        u32::from(borderless)
     ));
     result
 }
@@ -244,29 +254,32 @@ unsafe extern "system" fn set_fullscreen(this: Raw, fullscreen: BOOL, target: Ra
     unsafe { ptr::read_volatile(&result) }
 }
 
+// The state the application set: bridge chains stay windowed, so the physical chain never knows
+// it. A fullscreen target is the output the window covers.
 unsafe extern "system" fn get_fullscreen(
     this: Raw,
     enabled: *mut BOOL,
     target: *mut Raw,
 ) -> HRESULT {
     let facade = unsafe { Facade::borrow(this) };
-    if unsafe { rsf_core_d3d11p_physical_pending(facade.chain) } == 0 {
-        return facade.forward(|physical| unsafe {
-            physical_method!(
-                IDXGISwapChain,
-                GetFullscreenState(physical, enabled, target)
-            )
-        });
-    }
     if enabled.is_null() && target.is_null() {
         return windows::Win32::Foundation::E_INVALIDARG;
     }
+    let fullscreen = facade.snapshot_description().Windowed.0 == 0;
     if !enabled.is_null() {
-        let windowed = facade.snapshot_description().Windowed.0 != 0;
-        unsafe { enabled.write(BOOL(i32::from(!windowed))) };
+        unsafe { enabled.write(BOOL(i32::from(fullscreen))) };
     }
     if !target.is_null() {
-        unsafe { target.write(null_mut()) };
+        let mut output = null_mut();
+        if fullscreen && let Ok(lease) = facade.physical(false) {
+            let (physical, slot) = (lease.chain, &raw mut output);
+            let result =
+                unsafe { physical_method!(IDXGISwapChain, GetContainingOutput(physical, slot)) };
+            if result.is_err() {
+                output = null_mut();
+            }
+        }
+        unsafe { target.write(output) };
     }
     S_OK
 }
@@ -277,9 +290,13 @@ unsafe extern "system" fn get_desc(this: Raw, out: *mut DXGI_SWAP_CHAIN_DESC) ->
         return HRESULT(E_POINTER);
     }
     if facade.native12() && !switching() {
-        return facade.forward(|physical| unsafe {
+        let result = facade.forward(|physical| unsafe {
             physical_method!(IDXGISwapChain, GetDesc(physical, out))
         });
+        if result.is_ok() {
+            unsafe { (*out).Windowed = facade.snapshot_description().Windowed };
+        }
+        return result;
     }
     unsafe { out.write(facade.snapshot_description()) };
     S_OK
@@ -369,9 +386,13 @@ unsafe extern "system" fn get_fullscreen_desc(
         return HRESULT(E_POINTER);
     }
     if facade.native12() && !switching() {
-        return facade.forward(|physical| unsafe {
+        let result = facade.forward(|physical| unsafe {
             physical_method!(IDXGISwapChain1, GetFullscreenDesc(physical, out))
         });
+        if result.is_ok() {
+            unsafe { (*out).Windowed = facade.snapshot_description().Windowed };
+        }
+        return result;
     }
     let description = facade.snapshot_description();
     unsafe {
@@ -634,6 +655,20 @@ mod tests {
         assert_eq!((desc1.Height, desc1.BufferCount), (360, 2));
         assert_eq!(unsafe { chain.GetCurrentBackBufferIndex() }, 0);
         assert_eq!(unsafe { chain.GetMaximumFrameLatency() }.unwrap(), 1);
+        // Fullscreen is the description's state, never a physical chain's.
+        let (mut enabled, mut target) = (BOOL(0), ptr::dangling_mut::<c_void>());
+        let result =
+            unsafe { (legacy.vtable().GetFullscreenState)(raw, &mut enabled, &mut target) };
+        assert_eq!((result, enabled, target), (S_OK, BOOL(1), null_mut()));
+        state.description.Windowed = BOOL(1);
+        let result = unsafe { (legacy.vtable().GetFullscreenState)(raw, &mut enabled, null_mut()) };
+        assert_eq!((result, enabled), (S_OK, BOOL(0)));
+        assert!(
+            unsafe { chain.GetFullscreenDesc() }
+                .unwrap()
+                .Windowed
+                .as_bool()
+        );
         drop((chain, legacy));
         assert_eq!(state.destroys.load(Ordering::SeqCst), 0);
         drop(identity);

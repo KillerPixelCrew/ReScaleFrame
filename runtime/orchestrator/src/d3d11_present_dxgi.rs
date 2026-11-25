@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_PRESENT_PARAMETERS, DXGI_SWAP_CHAIN_DESC, IDXGIDeviceSubObject, IDXGIObject,
     IDXGISwapChain, IDXGISwapChain1, IDXGISwapChain2, IDXGISwapChain3, IDXGISwapChain4,
 };
-use windows::core::{BOOL, GUID, IUnknown, Interface};
+use windows::core::{GUID, IUnknown, Interface};
 
 pub(super) unsafe fn rsf_d3d11p_facade_query_interface(
     facade: Raw,
@@ -93,19 +93,6 @@ pub(super) unsafe extern "C" fn query_chain4(receiver: Raw, out: *mut Raw) -> i3
             out,
         )
     }
-}
-
-pub(super) unsafe extern "C" fn get_fullscreen(receiver: Raw, fullscreen: *mut i32) -> i32 {
-    let chain = unsafe { IDXGISwapChain::from_raw_borrowed(&receiver) }.unwrap();
-    let mut value = BOOL(0);
-    let result = unsafe { (chain.vtable().GetFullscreenState)(receiver, &mut value, null_mut()) };
-    unsafe { fullscreen.write(value.0) };
-    result.0
-}
-
-pub(super) unsafe extern "C" fn set_fullscreen(receiver: Raw, fullscreen: i32, target: Raw) -> i32 {
-    let chain = unsafe { IDXGISwapChain::from_raw_borrowed(&receiver) }.unwrap();
-    unsafe { (chain.vtable().SetFullscreenState)(receiver, BOOL(fullscreen), target) }.0
 }
 
 // The swap effect and creation flags DXGI reports for the chain the bridge presents on.

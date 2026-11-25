@@ -12,6 +12,24 @@ use std::sync::MutexGuard;
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+// An overlapped, visible 640x480 window, and the 1920x1080 monitor right of the primary one.
+const WINDOWED_FRAME: WindowFrame = WindowFrame {
+    style: 0x10CF_0000,
+    ex_style: 0x100,
+    left: 100,
+    top: 100,
+    right: 740,
+    bottom: 580,
+};
+const MONITOR: WindowFrame = WindowFrame {
+    style: 0,
+    ex_style: 0,
+    left: 2560,
+    top: 0,
+    right: 4480,
+    bottom: 1080,
+};
+
 struct FakeBuffer {
     application: Box<FakeCom>,
     peer: Option<Box<FakeCom>>,
@@ -65,8 +83,8 @@ struct Fake {
     windowed: u32,
     tearing: bool,
     fsr4: bool,
-    fullscreen: i32,
-    fullscreen_result: i32,
+    window_frame: WindowFrame,
+    output: Option<WindowFrame>,
     join_result: i32,
     queue_missing: bool,
     host_available: bool,
@@ -141,8 +159,8 @@ impl Fake {
             windowed: 1,
             tearing: false,
             fsr4: false,
-            fullscreen: 0,
-            fullscreen_result: S_OK,
+            window_frame: WINDOWED_FRAME,
+            output: Some(MONITOR),
             join_result: S_OK,
             queue_missing: false,
             host_available: false,
@@ -819,16 +837,41 @@ fn reenter_physical(expected: Raw) {
         unsafe { rsf_core_d3d11p_release_physical(lease) };
     }
 }
-pub(super) unsafe extern "C" fn get_fullscreen(chain: Raw, fullscreen: *mut i32) -> i32 {
-    assert_chain(chain);
-    unsafe { *fullscreen = with(|fake| fake.fullscreen) };
-    S_OK
+// The application window (0x10) and the monitor or target output it covers.
+pub(super) unsafe fn window_frame(window: Raw, out: &mut WindowFrame) -> u32 {
+    assert_eq!(window, raw(0x10));
+    *out = with(|fake| fake.window_frame);
+    1
 }
-pub(super) unsafe extern "C" fn set_fullscreen(chain: Raw, fullscreen: i32, _: Raw) -> i32 {
-    assert_chain(chain);
-    call(format!("fullscreen {fullscreen}"));
-    reenter_physical(if fullscreen == 0 { null_mut() } else { chain });
-    with(|fake| std::mem::replace(&mut fake.fullscreen_result, S_OK))
+pub(super) unsafe fn output_rect(window: Raw, target: Raw, out: &mut WindowFrame) -> u32 {
+    assert_eq!(window, raw(0x10));
+    call(format!("output {:x}", target as usize));
+    let Some(output) = with(|fake| fake.output) else {
+        return 0;
+    };
+    *out = WindowFrame {
+        style: out.style,
+        ex_style: out.ex_style,
+        ..output
+    };
+    1
+}
+pub(super) unsafe fn apply_frame(window: Raw, frame: &WindowFrame) -> u32 {
+    assert_eq!(window, raw(0x10));
+    call(format!(
+        "frame 0x{:x} 0x{:x} ({},{}) {}x{}",
+        frame.style,
+        frame.ex_style,
+        frame.left,
+        frame.top,
+        frame.right - frame.left,
+        frame.bottom - frame.top
+    ));
+    with(|fake| fake.window_frame = *frame);
+    1
+}
+pub(super) unsafe fn set_windowed(_: Raw, windowed: u32) {
+    with(|fake| fake.windowed = windowed);
 }
 pub(super) unsafe extern "C" fn chain_presentation(
     chain: Raw,
@@ -1708,25 +1751,175 @@ fn partial_slot_creation_releases_or_retains_created_pairs() {
     }
 }
 
+// A chain created for fullscreen admits as a borderless window over the window's monitor; with
+// no exclusive entry left to refuse, the created provider is published. A failed drain at its
+// retirement still retains it and blocks a replacement.
 #[test]
-fn unpublished_provider_with_failed_drain_blocks_replacement() {
+fn fullscreen_creation_is_borderless_and_failed_drain_blocks_replacement() {
     let _guard = reset();
     assert_eq!(prepare(&setup(FSR3, 0)), 1);
     let mut fullscreen = request(0);
     fullscreen.windowed = 0;
-    with(|fake| {
-        fake.fullscreen_result = DXGI_ERROR_UNSUPPORTED;
-        fake.drain_result = E_FAIL;
-    });
-    assert_eq!(create_with(&fullscreen).0, E_FAIL);
-    assert!(rsf_core_d3d11p_active_bridge().is_null());
-    assert_eq!(generation(), 1);
+    with(|fake| fake.windowed = 0);
+    let (result, bridge) = create_with(&fullscreen);
+    assert_eq!(result, S_OK);
+    assert!(!rsf_d3d11_present_session().is_null());
     let calls = take_calls();
     assert!(calls.iter().any(|call| call == "create 3"));
+    assert!(
+        calls.ends_with(&[
+            "output 0".into(),
+            "frame 0x90020000 0x0 (2560,0) 1920x1080".into()
+        ]),
+        "{calls:?}"
+    );
+    with(|fake| fake.drain_result = E_FAIL);
+    unsafe { bridge_release_owned(bridge) };
+    let calls = take_calls();
+    assert_eq!(
+        calls[0], "frame 0x10cf0000 0x100 (100,100) 640x480",
+        "releasing the fullscreen chain restores the window"
+    );
     assert!(calls.iter().any(|call| call == "retain"));
+    assert!(rsf_core_d3d11p_active_bridge().is_null());
 
     assert_eq!(create_with(&request(0)).0, DXGI_ERROR_UNSUPPORTED);
     assert!(take_calls().is_empty());
+}
+
+// The application's SetFullscreenState never reaches a bridge chain. Entering keeps the window's
+// frame and covers the requested output; GetFullscreenState and GetDesc report the state through
+// the facade description; a repeated entry and ResizeTarget keep the window over its output;
+// leaving restores the frame. Presentation keeps tearing in that state.
+#[test]
+fn fullscreen_requests_become_a_borderless_window() {
+    let _guard = reset();
+    assert_eq!(prepare(&setup(FSR3, 1)), 1);
+    with(|fake| fake.tearing = true);
+    let bridge = create();
+    let chain = chain_of(bridge);
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    take_calls();
+    let target = raw(0x77);
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_set_fullscreen(chain, 1, target) },
+        S_OK
+    );
+    assert_eq!(
+        take_calls(),
+        ["output 77", "frame 0x90020000 0x0 (2560,0) 1920x1080"]
+    );
+    assert_eq!(
+        with(|fake| fake.windowed),
+        0,
+        "GetFullscreenState reports TRUE"
+    );
+    assert!(with(|fake| {
+        fake.logs.iter().any(|line| line
+        == "presentation bridge: exclusive fullscreen requested; presenting borderless on monitor at (2560,0) 1920x1080 applied=1")
+    }));
+    assert!(with(|fake| {
+        fake.logs.iter().any(|line| line
+        == "presentation bridge: application SetFullscreenState(1) result=0x00000000 direct=0")
+    }));
+    // Engines that reassert fullscreen every focus change leave the window as it is.
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_set_fullscreen(chain, 1, null_mut()) },
+        S_OK
+    );
+    assert!(take_calls().is_empty());
+    // ResizeTarget changes no display mode: the window stays over its monitor.
+    with(|fake| {
+        fake.window_frame.right -= 100;
+        fake.output = Some(WindowFrame {
+            left: 0,
+            right: 2560,
+            bottom: 1600,
+            ..MONITOR
+        });
+    });
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_resize_borderless_target(chain) },
+        1
+    );
+    assert_eq!(
+        take_calls(),
+        ["output 0", "frame 0x90020000 0x0 (0,0) 2560x1600"]
+    );
+    // The bridge chain stays windowed, so VSync Off still tears.
+    assert_eq!(present(bridge, 0, 0), S_OK);
+    assert_eq!(
+        with(|fake| *fake.presents.last().unwrap()),
+        (0, DXGI_PRESENT_ALLOW_TEARING)
+    );
+    take_calls();
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_set_fullscreen(chain, 0, null_mut()) },
+        S_OK
+    );
+    assert_eq!(take_calls(), ["frame 0x10cf0000 0x100 (100,100) 640x480"]);
+    assert_eq!(with(|fake| fake.windowed), 1);
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_resize_borderless_target(chain) },
+        0,
+        "windowed, DXGI resizes the window through the bridge chain"
+    );
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_set_fullscreen(chain, 0, null_mut()) },
+        S_OK
+    );
+    assert!(take_calls().is_empty(), "leaving twice restores once");
+    // Without a readable output the request is still answered and recorded.
+    with(|fake| fake.output = None);
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_set_fullscreen(chain, 1, null_mut()) },
+        S_OK
+    );
+    assert_eq!(take_calls(), ["output 0"]);
+    assert_eq!(with(|fake| fake.windowed), 0);
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_resize_borderless_target(chain) },
+        0
+    );
+    unsafe { bridge_release_owned(bridge) };
+}
+
+// The Fallout 4 and Skyrim runs: after the application's fullscreen switch the bridge Present
+// failed, and the direct D3D11 chain was put into exclusive fullscreen again. Every chain now
+// stays windowed under the borderless window, so the fallback presents on it.
+#[test]
+fn direct_fallback_in_fullscreen_keeps_the_borderless_window() {
+    let _guard = reset();
+    assert_eq!(prepare(&setup(FSR3, 1)), 1);
+    let bridge = create();
+    let chain = chain_of(bridge);
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_set_fullscreen(chain, 1, null_mut()) },
+        S_OK
+    );
+    with(|fake| fake.close_result = E_FAIL);
+    assert_eq!(present(bridge, 1, 0), E_FAIL);
+    with(|fake| fake.close_result = S_OK);
+    take_calls();
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    let calls = take_calls();
+    assert!(calls.contains(&"direct plain".to_owned()));
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("frame") || call.starts_with("output")),
+        "the window keeps its borderless frame across the chain change: {calls:?}"
+    );
+    assert!(calls.ends_with(&[
+        "direct copy 0".into(),
+        "present".into(),
+        "observed".into(),
+        "presented".into()
+    ]));
+    assert_eq!(with(|fake| fake.windowed), 0);
+    unsafe { bridge_release_owned(bridge) };
+    assert_eq!(take_calls()[0], "frame 0x10cf0000 0x100 (100,100) 640x480");
 }
 
 #[test]
@@ -1795,12 +1988,15 @@ fn present_interval_and_tearing_policy() {
         with(|fake| fake.presents[0]),
         (0, DXGI_PRESENT_ALLOW_TEARING)
     );
-    with(|fake| fake.fullscreen = 1);
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_set_fullscreen(chain_of(bridge), 1, null_mut()) },
+        S_OK
+    );
     assert_eq!(present(bridge, 0, 0), S_OK);
     assert_eq!(
         with(|fake| fake.presents[1]),
-        (0, 0),
-        "exclusive fullscreen never tears"
+        (0, DXGI_PRESENT_ALLOW_TEARING),
+        "the application's fullscreen is a borderless window and still tears"
     );
     assert_eq!(present(bridge, 3, 0), S_OK);
     assert_eq!(
@@ -2074,7 +2270,6 @@ fn physical_lease_defers_switch_and_keeps_callbacks_on_the_creation_queue() {
             fake.native12 = native12;
             fake.host_available = true;
             fake.windowed = 0;
-            fake.fullscreen = 1;
             fake.reenter_physical = true;
         });
         let bridge = create();
@@ -2747,8 +2942,9 @@ fn provider_family_is_the_single_backend_mapping() {
 // Defect in the C++ owner: a refused fullscreen entry right after lazy physical creation
 // returned before the session and status were published. The chain then presented through
 // an unpublished provider: no session for FG or latency, and NOT_READY status until a switch.
+// Lazy creation for a fullscreen chain now has no entry to refuse.
 #[test]
-fn lazy_creation_publishes_before_fullscreen_entry() {
+fn lazy_creation_publishes_the_session_of_a_fullscreen_chain() {
     let _guard = reset();
     assert_eq!(prepare(&setup(XESS, 1)), 1);
     let mut value = request(0);
@@ -2756,13 +2952,7 @@ fn lazy_creation_publishes_before_fullscreen_entry() {
     with(|fake| fake.windowed = 0);
     let (result, bridge) = create_with(&value);
     assert_eq!(result, S_OK);
-    with(|fake| fake.fullscreen_result = DXGI_ERROR_UNSUPPORTED);
-    assert_eq!(present(bridge, 1, 0), E_FAIL);
-    assert_eq!(
-        present(bridge, 1, 0),
-        S_OK,
-        "the created chain keeps presenting"
-    );
+    assert_eq!(present(bridge, 1, 0), S_OK);
     assert!(
         !rsf_d3d11_present_session().is_null(),
         "provider session published"
@@ -3056,15 +3246,18 @@ fn present_ledger_closes_one_window_per_period() {
     let mut ledger = PresentLedger::default();
     assert_eq!(ledger.record(S_OK, 100, 10), None);
     assert_eq!(ledger.record(E_FAIL, 120, 10), None);
+    // DXGI_STATUS_OCCLUDED succeeds without showing the frame.
+    assert_eq!(ledger.record(0x087A_0001, 130, 10), None);
     let closed = ledger.record(S_OK, 150, 10).expect("five seconds elapsed");
     assert_eq!(
         (
             closed.attempted,
             closed.completed,
+            closed.unshown,
             closed.failed,
             closed.last_failure
         ),
-        (3, 2, 1, E_FAIL)
+        (4, 2, 1, 1, E_FAIL)
     );
     assert_eq!((ledger.attempted, ledger.since), (0, 150));
     assert_eq!(ledger.record(S_OK, 160, 0), None, "no clock, no window");

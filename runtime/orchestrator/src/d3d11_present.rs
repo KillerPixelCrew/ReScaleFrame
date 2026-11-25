@@ -116,6 +116,37 @@ const DXGI_SWAP_EFFECT_FLIP_DISCARD: u32 = 4;
 const DXGI_USAGE_RENDER_TARGET_OUTPUT: u32 = 0x20;
 const DXGI_USAGE_UNORDERED_ACCESS: u32 = 0x400;
 const FORMATS: [u32; 4] = [28, 87, 24, 10]; // R8G8B8A8, B8G8R8A8, R10G10B10A2 UNORM, R16G16B16A16 FLOAT
+// Present returned without showing the frame: DXGI_STATUS_OCCLUDED and the mode-change statuses.
+const DXGI_STATUS_FIRST: i32 = 0x087A_0001;
+const DXGI_STATUS_LAST: i32 = 0x087A_0009;
+// A window frame's caption and sizing border, and the popup style that replaces them. The minimize
+// box stays, so the taskbar button still minimizes the window.
+const WS_POPUP: u32 = 0x8000_0000;
+const WS_VISIBLE: u32 = 0x1000_0000;
+const WS_FRAME: u32 = 0x00C0_0000 | 0x0004_0000 | 0x0008_0000 | 0x0001_0000; // CAPTION, THICKFRAME, SYSMENU, MAXIMIZEBOX
+const WS_EX_FRAME: u32 = 0x0000_0001 | 0x0000_0100 | 0x0000_0200 | 0x0002_0000; // DLGMODALFRAME, WINDOWEDGE, CLIENTEDGE, STATICEDGE
+
+// A top-level window's styles and screen rectangle.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(crate) struct WindowFrame {
+    pub(crate) style: u32,
+    pub(crate) ex_style: u32,
+    pub(crate) left: i32,
+    pub(crate) top: i32,
+    pub(crate) right: i32,
+    pub(crate) bottom: i32,
+}
+
+impl WindowFrame {
+    // The same window without caption or border, covering `output`.
+    fn borderless(self, output: Self) -> Self {
+        Self {
+            style: (self.style & !WS_FRAME) | WS_POPUP | WS_VISIBLE,
+            ex_style: self.ex_style & !WS_EX_FRAME,
+            ..output
+        }
+    }
+}
 
 pub(crate) const DLSS: u32 = 1;
 pub(crate) const FSR3: u32 = 3;
@@ -849,6 +880,8 @@ fn presentation_facts(
 struct PresentLedger {
     attempted: u64,
     completed: u64,
+    // Successful Presents that DXGI did not show (an occluded or mode-changing output).
+    unshown: u64,
     failed: u64,
     last_failure: i32,
     since: u64,
@@ -864,6 +897,8 @@ impl PresentLedger {
         if failed(result) {
             self.failed += 1;
             self.last_failure = result;
+        } else if (DXGI_STATUS_FIRST..=DXGI_STATUS_LAST).contains(&result) {
+            self.unshown += 1;
         } else {
             self.completed += 1;
         }
@@ -919,7 +954,10 @@ pub(crate) struct Owner {
     application_latency: AtomicU32,
     application_presents: AtomicU32,
     provider_retirement: Mutex<ProviderRetirement>,
-    switch_fullscreen: Mutex<Option<i32>>,
+    // A provider switch released the old chain but could not finish its teardown.
+    switch_incomplete: AtomicBool,
+    // The application's fullscreen, shown as a borderless window: the frame it replaced.
+    borderless: Mutex<Option<WindowFrame>>,
     unpublished_provider: Mutex<Option<(u32, usize)>>,
     failed_buffer_reports: AtomicU32,
     post_switch_frames: AtomicU32,
@@ -961,7 +999,8 @@ impl Owner {
             application_latency: AtomicU32::new(1),
             application_presents: AtomicU32::new(0),
             provider_retirement: Mutex::default(),
-            switch_fullscreen: Mutex::default(),
+            switch_incomplete: AtomicBool::new(false),
+            borderless: Mutex::default(),
             unpublished_provider: Mutex::default(),
             failed_buffer_reports: AtomicU32::new(0),
             post_switch_frames: AtomicU32::new(0),
@@ -1069,8 +1108,12 @@ impl Owner {
                 crate::reflex_audit::driver_presentation(),
             );
             log(&format!(
-                "presentation bridge: presents in {LEDGER_SECONDS}s attempted={} completed={} failed={} last_failure=0x{:08x} mode={mode} {facts}",
-                window.attempted, window.completed, window.failed, window.last_failure as u32
+                "presentation bridge: presents in {LEDGER_SECONDS}s attempted={} completed={} unshown={} failed={} last_failure=0x{:08x} mode={mode} {facts}",
+                window.attempted,
+                window.completed,
+                window.unshown,
+                window.failed,
+                window.last_failure as u32
             ));
         }
     }
@@ -1099,13 +1142,7 @@ impl Owner {
         };
         // Best effort: a removed D3D12 device completes its fences.
         let _ = self.drain();
-        let mut fullscreen = 0;
-        if let Some(old) = &outgoing {
-            let chain = old.chain.as_raw();
-            if !failed(unsafe { leaf::get_fullscreen(chain, &mut fullscreen) }) && fullscreen != 0 {
-                let _ = unsafe { leaf::set_fullscreen(chain, 0, null_mut()) };
-            }
-        }
+        // Bridge chains stay windowed, so the window keeps its borderless frame across the change.
         drop(outgoing);
         if destroy_provider(self.api(), self.provider()) != OK {
             log(
@@ -1147,11 +1184,6 @@ impl Owner {
             return Err(E_FAIL);
         }
         self.direct.store(true, Ordering::Release);
-        if fullscreen != 0
-            && let Some(physical) = self.physical()
-        {
-            let _ = unsafe { leaf::set_fullscreen(physical.chain.as_raw(), 1, null_mut()) };
-        }
         log(
             "presentation bridge: presenting the application's frame directly on its D3D11 device; frame generation and upscaling unavailable",
         );
@@ -1553,19 +1585,10 @@ impl Owner {
         let Some(physical) = self.physical() else {
             return self.creation_failed("physical publication", INIT_FAILED);
         };
-        // Publish the created chain before fullscreen entry. A refused entry fails this call,
-        // but the chain stays and later calls present through it, so its session must be visible.
         ACTIVE_SESSION.store(self.provider(), Ordering::Release);
         let _ = self.publish_owner_status();
         self.physical_creation
             .store(PhysicalCreation::Idle as u8, Ordering::Release);
-        if self.facts().windowed == 0 {
-            let entered = unsafe { leaf::set_fullscreen(physical.chain.as_raw(), 1, null_mut()) };
-            if failed(entered) {
-                self.report_step("initial fullscreen entry", entered);
-                return Err(E_FAIL);
-            }
-        }
         Ok(physical)
     }
 
@@ -1915,13 +1938,9 @@ impl Owner {
                 return E_FAIL;
             }
         }
-        if request.windowed == 0
-            && let Some(physical) = self.physical()
-        {
-            let entered = unsafe { leaf::set_fullscreen(physical.chain.as_raw(), 1, null_mut()) };
-            if failed(entered) {
-                return refused_initialization("initial fullscreen entry", entered, E_FAIL);
-            }
+        // A chain created for fullscreen gets the window that state stands for at creation.
+        if request.windowed == 0 {
+            self.enter_borderless(null_mut());
         }
         log(if self.tearing.load(Ordering::Relaxed) {
             "presentation bridge: windowed flip chain supports immediate tearing presentation"
@@ -1994,7 +2013,7 @@ impl Owner {
             return;
         }
         if backend == ACTIVE_BACKEND.load(Ordering::SeqCst)
-            && lock(&self.switch_fullscreen).is_none()
+            && !self.switch_incomplete.load(Ordering::Acquire)
         {
             SWITCH_RESULT.store(0, Ordering::SeqCst);
             return;
@@ -2015,7 +2034,7 @@ impl Owner {
             self.retire_unpublished()
         };
         if result == OK
-            && lock(&self.switch_fullscreen).is_none()
+            && !self.switch_incomplete.load(Ordering::Acquire)
             && backend != 0
             && backend != DLSS
         {
@@ -2035,7 +2054,8 @@ impl Owner {
         }
         if result != OK {
             SWITCH_RESULT.store(result, Ordering::SeqCst);
-            if lock(&self.switch_fullscreen).is_some() || lock(&self.unpublished_provider).is_some()
+            if self.switch_incomplete.load(Ordering::Acquire)
+                || lock(&self.unpublished_provider).is_some()
             {
                 Self::defer_switch(backend);
             }
@@ -2054,16 +2074,9 @@ impl Owner {
             }
             current.take()
         };
-        let mut fullscreen = lock(&self.switch_fullscreen).unwrap_or(0);
         let old_chain = outgoing
             .as_ref()
             .map_or(null_mut(), |pair| pair.chain.as_raw());
-        if !old_chain.is_null() {
-            let _ = unsafe { leaf::get_fullscreen(old_chain, &mut fullscreen) };
-            if fullscreen != 0 {
-                let _ = unsafe { leaf::set_fullscreen(old_chain, 0, null_mut()) };
-            }
-        }
         log(&format!(
             "Generation switch identity facade={} old_physical={} old_provider={} requested={backend}",
             hex(b),
@@ -2076,12 +2089,12 @@ impl Owner {
         HOST_PACED.store(false, Ordering::SeqCst);
         let retired = destroy_provider(self.api(), self.provider());
         if retired != OK {
-            *lock(&self.switch_fullscreen) = Some(fullscreen);
+            self.switch_incomplete.store(true, Ordering::Release);
             SWITCH_RESULT.store(retired, Ordering::SeqCst);
             Self::defer_switch(backend);
             return;
         }
-        *lock(&self.switch_fullscreen) = None;
+        self.switch_incomplete.store(false, Ordering::Release);
         self.provider.store(null_mut(), Ordering::Release);
         self.provider_backend.store(0, Ordering::Relaxed);
         CREATING.set(true);
@@ -2105,7 +2118,7 @@ impl Owner {
                 if self.create_physical(0) != OK {
                     if lock(&self.unpublished_provider).is_some() {
                         CREATING.set(false);
-                        *lock(&self.switch_fullscreen) = Some(fullscreen);
+                        self.switch_incomplete.store(true, Ordering::Release);
                         SWITCH_RESULT.store(NOT_READY, Ordering::SeqCst);
                         Self::defer_switch(backend);
                         return;
@@ -2116,11 +2129,6 @@ impl Owner {
         }
         CREATING.set(false);
         let physical = self.physical();
-        if fullscreen != 0
-            && let Some(physical) = &physical
-        {
-            let _ = unsafe { leaf::set_fullscreen(physical.chain.as_raw(), 1, null_mut()) };
-        }
         ACTIVE_BACKEND.store(effective, Ordering::SeqCst);
         ACTIVE_SESSION.store(self.provider(), Ordering::Release);
         CHAIN_GENERATION.fetch_add(1, Ordering::SeqCst);
@@ -2289,7 +2297,7 @@ impl Owner {
             );
         }
         // An incomplete provider teardown has no physical chain to present on.
-        if lock(&self.switch_fullscreen).is_some() {
+        if self.switch_incomplete.load(Ordering::Acquire) {
             self.switch_if_requested();
         }
         self.receipt("application-enter", S_OK);
@@ -2304,14 +2312,10 @@ impl Owner {
         let chain = physical.chain.as_raw();
         let queue = physical.queue.as_raw();
         // Legacy discard chains cannot request the flip-model tearing creation flag. Translate
-        // VSync Off to the supported windowed immediate-present contract.
+        // VSync Off to the supported windowed immediate-present contract; bridge chains are
+        // always windowed, also while the application is in (borderless) fullscreen.
         let mut physical_flags = flags & !DXGI_PRESENT_ALLOW_TEARING;
-        let mut fullscreen = 0;
-        if sync == 0
-            && self.tearing.load(Ordering::Relaxed)
-            && !failed(unsafe { leaf::get_fullscreen(chain, &mut fullscreen) })
-            && fullscreen == 0
-        {
+        if sync == 0 && self.tearing.load(Ordering::Relaxed) {
             physical_flags |= DXGI_PRESENT_ALLOW_TEARING;
         }
         self.last_present.store(
@@ -2678,15 +2682,77 @@ impl Owner {
         log(&text);
     }
 
+    // The bridge never takes DXGI exclusive fullscreen. Its chain presents on another device than
+    // the application's, frame generation needs a composed window, and a flip chain switched to
+    // fullscreen refuses Present (DXGI_ERROR_INVALID_CALL) until a ResizeBuffers the application
+    // never issues for the facade. The application's state is kept in the facade description,
+    // which GetFullscreenState and GetDesc report; the window shows it as a borderless popup over
+    // the output, presented through the windowed flip chain with tearing and VRR intact.
     fn set_fullscreen(&self, fullscreen: i32, target: Raw) -> i32 {
-        let physical = match self.ensure_physical() {
-            Ok(physical) => physical,
-            Err(error) => return error,
-        };
-        if failed(self.drain()) {
-            return E_FAIL;
+        if self.faulted.load(Ordering::Acquire) {
+            return DXGI_ERROR_DEVICE_REMOVED;
         }
-        unsafe { leaf::set_fullscreen(physical.chain.as_raw(), fullscreen, target) }
+        if fullscreen != 0 {
+            self.enter_borderless(target);
+        } else {
+            self.leave_borderless();
+        }
+        unsafe { leaf::set_windowed(self.b(), u32::from(fullscreen == 0)) };
+        S_OK
+    }
+
+    // Covers the requested output, or the window's monitor, with the window, keeping the frame
+    // it replaces. A repeated request leaves the window as it is.
+    fn enter_borderless(&self, target: Raw) {
+        let mut saved = lock(&self.borderless);
+        if saved.is_some() {
+            return;
+        }
+        let window = self.facts().window;
+        let (mut current, mut output) = (WindowFrame::default(), WindowFrame::default());
+        if unsafe { leaf::window_frame(window, &mut current) } == 0
+            || unsafe { leaf::output_rect(window, target, &mut output) } == 0
+        {
+            log(
+                "presentation bridge: exclusive fullscreen requested; window or output unavailable, window left as is",
+            );
+            return;
+        }
+        let applied = unsafe { leaf::apply_frame(window, &current.borderless(output)) };
+        log(&format!(
+            "presentation bridge: exclusive fullscreen requested; presenting borderless on monitor at ({},{}) {}x{} applied={applied}",
+            output.left,
+            output.top,
+            output.right - output.left,
+            output.bottom - output.top
+        ));
+        *saved = Some(current);
+    }
+
+    // Gives the window back the frame it had before the application's fullscreen.
+    fn leave_borderless(&self) {
+        let Some(frame) = lock(&self.borderless).take() else {
+            return;
+        };
+        let applied = unsafe { leaf::apply_frame(self.facts().window, &frame) };
+        log(&format!(
+            "presentation bridge: application left fullscreen; window frame restored applied={applied}"
+        ));
+    }
+
+    // In the application's fullscreen there is no display mode to change: the target stays the
+    // window over its output. False when windowed, where DXGI resizes the window itself.
+    fn resize_borderless_target(&self) -> bool {
+        let saved = lock(&self.borderless);
+        let Some(frame) = *saved else {
+            return false;
+        };
+        let window = self.facts().window;
+        let mut output = WindowFrame::default();
+        if unsafe { leaf::output_rect(window, null_mut(), &mut output) } != 0 {
+            let _ = unsafe { leaf::apply_frame(window, &frame.borderless(output)) };
+        }
+        true
     }
 
     fn resize(
@@ -2861,6 +2927,8 @@ impl Owner {
     // The facade's last reference is gone. Unpublish, drain and release or retain.
     fn retire_owner(&self) {
         let b = self.b();
+        // Releasing a fullscreen chain leaves fullscreen, as DXGI does.
+        self.leave_borderless();
         let published = {
             // Drain existing shared provider leases before unpublishing. Release this lock
             // before the GPU drain; new leases cannot obtain this session.
@@ -3271,6 +3339,8 @@ facade!(
         result
     }
 );
+facade!(rsf_core_d3d11p_resize_borderless_target() -> u32, 0,
+    |o| u32::from(o.resize_borderless_target()));
 facade!(rsf_core_d3d11p_physical_pending() -> u32, 0,
     |o| u32::from(o.creation_pending()));
 facade!(rsf_core_d3d11p_render_index() -> u32, 0, |o| o.render_index.load(Ordering::Relaxed));

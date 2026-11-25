@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! State and resource ownership behind the typed DXGI facade.
 use super::{
-    DXGI_ERROR_UNSUPPORTED, E_FAIL, S_OK, device::*, facade::*, factory::*, gpu::*, log, settings,
+    DXGI_ERROR_UNSUPPORTED, E_FAIL, S_OK, WindowFrame, device::*, facade::*, factory::*, gpu::*,
+    log, settings,
 };
 use crate::allocate_handle;
 use crate::com_ref;
@@ -17,9 +18,22 @@ use std::sync::RwLock;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Direct3D12::{ID3D12CommandQueue, ID3D12Device};
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
-use windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_DESC;
+use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_DESC, IDXGIOutput};
 use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindow};
-use windows::core::{GUID, IUnknown, Interface};
+use windows::core::{BOOL, GUID, IUnknown, Interface};
+
+// The Win32 window and monitor calls of the borderless fullscreen frame.
+mod wm {
+    pub(super) use windows_sys::Win32::Foundation::RECT;
+    pub(super) use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+    };
+    pub(super) use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
+        HWND_TOP, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOOWNERZORDER, SWP_SHOWWINDOW,
+        SetWindowLongPtrW, SetWindowPos, WS_VISIBLE,
+    };
+}
 
 use crate::sys::{
     RSF_SL_PROFILE_DLSS_FG, RSF_STREAMLINE_HOST_ABI_VERSION, rsf_streamline_host_adopt,
@@ -136,6 +150,92 @@ pub(super) unsafe extern "C" fn client_size(window: Raw, width: *mut u32, height
         height.write(rect.bottom as u32);
     }
     1
+}
+
+pub(super) unsafe fn window_frame(window: Raw, out: &mut WindowFrame) -> u32 {
+    let mut rect = wm::RECT::default();
+    if unsafe { wm::GetWindowRect(window, &mut rect) } == 0 {
+        return 0;
+    }
+    *out = WindowFrame {
+        style: unsafe { wm::GetWindowLongPtrW(window, wm::GWL_STYLE) } as u32,
+        ex_style: unsafe { wm::GetWindowLongPtrW(window, wm::GWL_EXSTYLE) } as u32,
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    };
+    1
+}
+
+// The desktop rectangle of the application's target output, else of the window's monitor.
+pub(super) unsafe fn output_rect(window: Raw, target: Raw, out: &mut WindowFrame) -> u32 {
+    let (left, top, right, bottom) =
+        if let Some(output) = unsafe { IDXGIOutput::from_raw_borrowed(&target) } {
+            let Ok(desc) = (unsafe { output.GetDesc() }) else {
+                return 0;
+            };
+            let r = desc.DesktopCoordinates;
+            (r.left, r.top, r.right, r.bottom)
+        } else {
+            let mut info = wm::MONITORINFO {
+                cbSize: size_of::<wm::MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let monitor = unsafe { wm::MonitorFromWindow(window, wm::MONITOR_DEFAULTTONEAREST) };
+            if unsafe { wm::GetMonitorInfoW(monitor, &mut info) } == 0 {
+                return 0;
+            }
+            let r = info.rcMonitor;
+            (r.left, r.top, r.right, r.bottom)
+        };
+    if right <= left || bottom <= top {
+        return 0;
+    }
+    *out = WindowFrame {
+        left,
+        top,
+        right,
+        bottom,
+        ..*out
+    };
+    1
+}
+
+// Styles first, then the position with a recomputed frame. A window of another thread moves
+// asynchronously, so its thread waiting on this one cannot deadlock the move.
+pub(super) unsafe fn apply_frame(window: Raw, frame: &WindowFrame) -> u32 {
+    unsafe {
+        wm::SetWindowLongPtrW(window, wm::GWL_STYLE, frame.style as i32 as isize);
+        wm::SetWindowLongPtrW(window, wm::GWL_EXSTYLE, frame.ex_style as i32 as isize);
+    }
+    let mut flags = wm::SWP_FRAMECHANGED | wm::SWP_NOOWNERZORDER;
+    if frame.style & wm::WS_VISIBLE != 0 {
+        flags |= wm::SWP_SHOWWINDOW;
+    }
+    if unsafe { wm::GetWindowThreadProcessId(window, null_mut()) }
+        != unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() }
+    {
+        flags |= wm::SWP_ASYNCWINDOWPOS;
+    }
+    let placed = unsafe {
+        wm::SetWindowPos(
+            window,
+            wm::HWND_TOP,
+            frame.left,
+            frame.top,
+            frame.right - frame.left,
+            frame.bottom - frame.top,
+            flags,
+        )
+    };
+    u32::from(placed != 0)
+}
+
+// The facade description carries the fullscreen state the application set.
+pub(super) unsafe fn set_windowed(facade: Raw, windowed: u32) {
+    let capsule = unsafe { capsule(rsf_d3d11p_facade_state(facade)) };
+    capsule.description.write().unwrap().Windowed = BOOL(windowed as i32);
 }
 
 pub(super) unsafe extern "C" fn canonical_identity(receiver: Raw) -> Raw {

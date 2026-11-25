@@ -370,6 +370,8 @@ pub(super) unsafe extern "C" fn rsf_d3d11p_factory_create_plain(
     queue: *mut Raw,
 ) -> i32 {
     let mut desc = *description;
+    // The application's fullscreen is a borderless window; bridge chains are always windowed.
+    desc.Windowed = BOOL(1);
     desc.SwapEffect = DXGI_SWAP_EFFECT(plan.swap_effect as i32);
     desc.Flags = plan.flags;
     if plan.buffer_count != 0 {
