@@ -54,6 +54,8 @@ struct World {
     stats: Option<Stats>,
     observer_result: i32,
     contexts: u32,
+    explicit_install_result: i32,
+    chain_result: i32,
 }
 
 thread_local! {
@@ -216,6 +218,33 @@ pub(super) unsafe extern "C" fn fg_install(setup: *const FgSetup) -> i32 {
         setup.options.mode, setup.runtime_switching
     ));
     BACKEND_OK
+}
+pub(super) unsafe extern "C" fn fg_install_explicit(setup: *const FgSetup) -> i32 {
+    let setup = unsafe { &*setup };
+    event(format!(
+        "fg install explicit mode={} switching={}",
+        setup.options.mode, setup.runtime_switching
+    ));
+    with(|world| world.explicit_install_result)
+}
+pub(super) unsafe fn present_create_for_hwnd(
+    factory: Handle,
+    queue: Handle,
+    window: Handle,
+    _: *const c_void,
+    out: *mut Handle,
+) -> i32 {
+    event(format!(
+        "create chain {} {} {}",
+        object(factory).name,
+        object(queue).name,
+        window as usize
+    ));
+    let result = with(|world| world.chain_result);
+    if result >= 0 {
+        unsafe { out.write(fake("chain", null_mut())) };
+    }
+    result
 }
 pub(super) unsafe extern "C" fn fg_options(options: *const FgOptions) {
     let options = unsafe { &*options };
@@ -428,7 +457,7 @@ fn admission_refuses_short_and_mismatched_requests() {
             ..setup(&ini, 0)
         },
         Setup {
-            presentation_owner: 2,
+            presentation_owner: EXPLICIT_PRESENTATION + 1,
             ..setup(&ini, 0)
         },
         Setup {
@@ -567,6 +596,140 @@ fn install_reads_one_shot_requests_and_owns_fg_or_observer() {
     let refused_host = unsafe { describe(&refused, &services()) };
     assert_eq!(install(&refused_host, &refused), NOT_READY);
     with(|world| world.observer_result = 0);
+}
+
+unsafe extern "C" fn only_window_nine(_: *mut c_void, window: *mut c_void) -> c_int {
+    c_int::from(window as usize == 9)
+}
+
+#[test]
+fn explicit_presentation_installs_no_hook_and_creates_at_the_engine_site() {
+    let ini = Temporary::new("explicit");
+    let explicit = host(&ini, EXPLICIT_PRESENTATION);
+    let log = events();
+    assert!(log.contains(&"fg install explicit mode=0 switching=1".to_string()));
+    assert!(
+        !log.iter()
+            .any(|event| event == "observer" || event.starts_with("fg install mode"))
+    );
+    assert!(has_event(
+        &log,
+        "log Explicit FG presentation prepared without hooks"
+    ));
+    assert!(explicit.fg_installed());
+    assert!(explicit.observer.load(Ordering::Relaxed).is_null());
+
+    let device = fake("device", null_mut());
+    let factory = fake("factory", null_mut());
+    let direct = fake("direct queue", device);
+    let copy = fake("copy queue", device);
+    let window = 9 as Handle;
+    let description = ptr::NonNull::<u32>::dangling()
+        .as_ptr()
+        .cast_const()
+        .cast::<c_void>();
+    // Device and factory reports need no observer.
+    assert_eq!(explicit.report_engine_object(device, true), OK);
+    assert_eq!(explicit.report_engine_object(factory, false), OK);
+    assert_eq!(explicit.report_engine_object(null_mut(), true), INVALID);
+    assert!(events().is_empty());
+
+    let create = |queue: Handle, chain: &mut Handle| unsafe {
+        explicit.create_swapchain(factory, queue, window, description, chain)
+    };
+    let mut chain = 0x1 as Handle;
+    assert_eq!(create(copy, &mut chain), INVALID);
+    assert!(chain.is_null());
+    assert!(!explicit.graphics_ready.load(Ordering::Acquire));
+    assert_eq!(
+        unsafe { explicit.create_swapchain(factory, direct, null_mut(), description, &mut chain) },
+        INVALID
+    );
+    assert!(events().is_empty());
+
+    assert_eq!(create(direct, &mut chain), OK);
+    assert_eq!(object(chain).name, "chain");
+    assert!(explicit.graphics_ready.load(Ordering::Acquire));
+    assert_eq!(
+        explicit
+            .lock()
+            .overlay_queue
+            .as_ref()
+            .map(Interface::as_raw),
+        Some(direct)
+    );
+    let log = events();
+    assert!(log.contains(&"create chain factory direct queue 9".to_string()));
+    assert!(has_event(
+        &log,
+        "log Explicit presentation created the engine's chain"
+    ));
+
+    // A failed creation returns its HRESULT and hands out nothing.
+    const DXGI_ERROR_INVALID_CALL: i32 = 0x887A_0001_u32 as i32;
+    with(|world| world.chain_result = DXGI_ERROR_INVALID_CALL);
+    assert_eq!(create(direct, &mut chain), DXGI_ERROR_INVALID_CALL);
+    assert!(chain.is_null());
+    assert!(has_event(
+        &events(),
+        "log Explicit presentation creation failed hr=0x887a0001"
+    ));
+    with(|world| world.chain_result = 0);
+
+    // The presentation queue report is accepted without an observer, DIRECT only.
+    assert_eq!(unsafe { explicit.report_graphics(direct) }, OK);
+    assert_eq!(unsafe { explicit.report_graphics(copy) }, INVALID);
+}
+
+#[test]
+fn explicit_creation_refuses_other_modes_refused_windows_and_missing_generation() {
+    let ini = Temporary::new("explicit-refusals");
+    let device = fake("device", null_mut());
+    let factory = fake("factory", null_mut());
+    let direct = fake("direct queue", device);
+    let description = ptr::NonNull::<u32>::dangling()
+        .as_ptr()
+        .cast_const()
+        .cast::<c_void>();
+    let create = |host: &Host, window: usize| {
+        let mut chain = null_mut();
+        let result = unsafe {
+            host.create_swapchain(factory, direct, window as Handle, description, &mut chain)
+        };
+        (result, chain.is_null())
+    };
+
+    // OWNS and ENGINE hosts never create the engine's chain.
+    let owns = host(&ini, 0);
+    assert_eq!(create(&owns, 9), (INVALID, true));
+    assert_eq!(unsafe { owns.report_graphics(direct) }, INVALID);
+    assert_eq!(owns.report_engine_object(device, true), NOT_READY);
+    let engine = host(&ini, ENGINE_PRESENTATION);
+    assert_eq!(create(&engine, 9), (INVALID, true));
+    assert_eq!(engine.report_engine_object(device, true), OK);
+    events();
+
+    // The adapter's window filter decides which window may be created on.
+    let filtered = Setup {
+        accept_window: Some(only_window_nine),
+        ..setup(&ini, EXPLICIT_PRESENTATION)
+    };
+    let filtered_host = Box::new(unsafe { describe(&filtered, &services()) });
+    assert_eq!(install(&filtered_host, &filtered), OK);
+    events();
+    assert_eq!(create(&filtered_host, 8), (INVALID, true));
+    assert!(events().is_empty());
+    assert_eq!(create(&filtered_host, 9), (OK, false));
+
+    // Without generation the engine keeps its own chain: the host refuses before creating.
+    with(|world| world.explicit_install_result = BACKEND_NOT_READY);
+    let refused = host(&ini, EXPLICIT_PRESENTATION);
+    with(|world| world.explicit_install_result = BACKEND_OK);
+    assert!(!refused.fg_installed());
+    assert!(has_event(&events(), "log Explicit FG presentation refused"));
+    assert_eq!(create(&refused, 9), (NOT_READY, true));
+    assert!(events().is_empty());
+    assert!(!refused.graphics_ready.load(Ordering::Acquire));
 }
 
 #[test]
@@ -1112,6 +1275,21 @@ fn published_entries_refuse_foreign_users_and_short_structures() {
         unsafe { rsf_render_host_factory(stranger, stranger) },
         NOT_READY
     );
+    let mut chain = stranger;
+    assert_eq!(
+        unsafe {
+            rsf_render_host_create_swapchain(
+                stranger,
+                stranger,
+                stranger,
+                stranger,
+                stranger.cast_const(),
+                &mut chain,
+            )
+        },
+        INVALID
+    );
+    assert_eq!(chain, stranger);
     assert_eq!(rsf_render_host_graphics_ready(stranger), 0);
     assert!(unsafe { rsf_render_host_native_object(stranger, stranger) }.is_null());
 }

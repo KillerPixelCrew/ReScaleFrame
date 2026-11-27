@@ -19,8 +19,8 @@ use windows::Win32::Graphics::{
         ID3D12Resource,
     },
     Dxgi::{
-        CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter1, IDXGIFactory4,
-        IDXGISwapChain,
+        CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_SWAP_CHAIN_DESC1, IDXGIAdapter1,
+        IDXGIFactory4, IDXGISwapChain,
     },
 };
 use windows::core::Interface;
@@ -124,6 +124,28 @@ pub(super) unsafe fn resource_desc(resource: Handle, out: *mut ResourceDesc) {
     }
 }
 
+unsafe extern "C" {
+    // The presentation bridge's explicit creation (d3d11_present_bridge.h), a C leaf this crate's
+    // build links. The explicit render host calls it at the engine's creation site.
+    fn rsf_d3d11_present_create_for_hwnd(
+        factory: Handle,
+        queue: Handle,
+        window: Handle,
+        desc: *const DXGI_SWAP_CHAIN_DESC1,
+        out: *mut Handle,
+    ) -> i32;
+}
+
+pub(super) unsafe fn present_create_for_hwnd(
+    factory: Handle,
+    queue: Handle,
+    window: Handle,
+    description: *const c_void,
+    out: *mut Handle,
+) -> i32 {
+    unsafe { rsf_d3d11_present_create_for_hwnd(factory, queue, window, description.cast(), out) }
+}
+
 pub(super) unsafe fn queue_direct(queue: Handle) -> i32 {
     let desc = unsafe { borrow::<ID3D12CommandQueue>(&queue).GetDesc() };
     i32::from(desc.Type == D3D12_COMMAND_LIST_TYPE_DIRECT)
@@ -161,9 +183,10 @@ pub(super) use crate::fg_choice::{
 pub(super) use crate::fg12::{
     rsf_core_fg12_capture_outputs as fg_capture_outputs, rsf_core_fg12_cpu as fg_cpu,
     rsf_core_fg12_hudless as fg_hudless, rsf_core_fg12_install as fg_install,
-    rsf_core_fg12_latency as fg_latency, rsf_core_fg12_options as fg_options,
-    rsf_core_fg12_status as fg_status, rsf_core_fg12_status_try as fg_status_try,
-    rsf_core_fg12_submitted as fg_submitted, rsf_core_fg12_window as fg_window,
+    rsf_core_fg12_install_explicit as fg_install_explicit, rsf_core_fg12_latency as fg_latency,
+    rsf_core_fg12_options as fg_options, rsf_core_fg12_status as fg_status,
+    rsf_core_fg12_status_try as fg_status_try, rsf_core_fg12_submitted as fg_submitted,
+    rsf_core_fg12_window as fg_window,
 };
 pub(super) use crate::input_dump::abi::rsf_input_dump_cancel as input_dump_cancel;
 pub(super) use crate::overlay_native12::rsf_overlay_native12_present as overlay_present;

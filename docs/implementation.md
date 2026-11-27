@@ -18,6 +18,32 @@ not here.
 | Godot | Standard and .NET engines, Vulkan SR and FG provider fixtures | Controller and export fixtures | Not a shipped game path | Generated-image comparisons against independent midpoints; some FSR2/FSR3 object-motion cases fail | [Godot developer integration](#godot-developer-integration-in-progress-25-october-2026) |
 | Minecraft (OpenGL) | Java mod with SR and FG and motion producers | Java and offscreen OpenGL checks | World geometry confirmed in the 1.1.8-dev correction; shader-pack acceptance open | None recorded | [Minecraft OpenGL SR and FG](#minecraft-opengl-sr-and-fg-17-october-2026) |
 
+## Explicit render-host presentation, 27 November 2026
+
+Built and unit-tested, not game-run or device-tested. No integration uses it yet.
+
+- The fence-retired render host (`render_host.h`) had two presentation modes and both hook: OWNS installs
+  frame generation with DXGI factory detours, ENGINE creates a MinHook observer of the engine's factory, device,
+  queue and chain. An engine that creates its own D3D12 window and swap chain and wants no hooks could only use the
+  separate Godot route (`rsf_fg12_install_explicit` plus `rsf_d3d11_present_create_for_hwnd`), without the host's
+  services (SR through `process_upscale`, fence retirement, scene and Present matching, latency, feedback).
+- `RSF_RENDER_HOST_EXPLICIT_PRESENTATION` (2) is the third mode: the host installs generation with
+  `rsf_fg12_install_explicit` (the bridge is prepared, no detours) and creates no observer. The engine calls the new
+  `rsf_render_host_create_swapchain(host, factory, queue, window, desc, out)` at its own creation site; the host
+  checks the mode, the DIRECT queue and the adapter's window filter, calls the bridge's explicit creation, keeps the
+  queue for the overlay and reports graphics ready. The engine presents on the chain it got and reports every
+  boundary through the host services, as an OWNS engine does.
+- An engine may instead create its own native chain (or the host refuses creation because generation was not
+  installed, `RSF_ERROR_NOT_READY`): SR, submission, latency and feedback still work and frame generation has no
+  chain to present on. `rsf_render_host_graphics` accepts the presentation queue in this mode;
+  `rsf_render_host_device` and `rsf_render_host_factory` accept with nothing to attach. The setup struct and
+  `RSF_RENDER_HOST_ABI_VERSION` are unchanged; a runtime without the mode refuses value 2 as an invalid argument.
+- Unit tests: the explicit host installs explicitly, never the observer or the detour install; creation refuses
+  other modes, a non-DIRECT queue, a missing window or one the filter refuses, and a host whose generation install
+  failed, each before the bridge is called; a failed creation returns its HRESULT and hands out no chain; device,
+  factory and graphics reports behave as described. The bridge's own explicit creation is exercised by the existing
+  presentation fixture (`tests/presentation/src/fg_fixture.rs`), which was not run for this change.
+
 ## One D3D12 host, Runtime FSR1 and Unity settings, 25 November 2026
 
 Built and unit-tested, not game-run or device-tested. Rule 5 audit F4 and overlay-parity follow-up 1, on

@@ -54,7 +54,8 @@ use rsf_game_sys::{
 };
 use rsf_game_sys::{
     RSF_RENDER_HOST_ABI_VERSION as HOST_ABI_VERSION,
-    RSF_RENDER_HOST_ENGINE_PRESENTATION as ENGINE_PRESENTATION, rsf_render_host_setup as Setup,
+    RSF_RENDER_HOST_ENGINE_PRESENTATION as ENGINE_PRESENTATION,
+    RSF_RENDER_HOST_EXPLICIT_PRESENTATION as EXPLICIT_PRESENTATION, rsf_render_host_setup as Setup,
 };
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -316,6 +317,9 @@ pub(crate) struct Host {
     logger: rsf_game_log_fn,
     logger_user: *mut c_void,
     engine_streamline: bool,
+    // EXPLICIT presentation: generation installed without detours, no observer, and the engine
+    // creates its chain through rsf_render_host_create_swapchain.
+    explicit: bool,
     fg_installed: AtomicBool,
     observer: AtomicPtr<Observer>,
     // Auto resolves once against the adapter that owns the game's device.
@@ -1504,6 +1508,7 @@ unsafe fn describe(setup: &Setup, services: &Services) -> Host {
         logger: services.log,
         logger_user: services.user,
         engine_streamline: setup.presentation_owner == ENGINE_PRESENTATION,
+        explicit: setup.presentation_owner == EXPLICIT_PRESENTATION,
         fg_installed: AtomicBool::new(false),
         observer: AtomicPtr::new(null_mut()),
         automatic_backend: AtomicU32::new(0),
@@ -1559,7 +1564,15 @@ fn install(host: &Host, setup: &Setup) -> i32 {
         fg.log = Some(backend_log);
         fg.user = host.user();
         fg.accept_window = Some(accept_window);
-        let installed = unsafe { leaf::fg_install(&fg) } == BACKEND_OK;
+        // Explicit installation prepares the presentation bridge and installs no DXGI detours;
+        // the engine's creation call reaches it through rsf_render_host_create_swapchain.
+        let installed = unsafe {
+            if host.explicit {
+                leaf::fg_install_explicit(&fg)
+            } else {
+                leaf::fg_install(&fg)
+            }
+        } == BACKEND_OK;
         host.fg_installed.store(installed, Ordering::Release);
     } else {
         let observed = ObserverSetup {
@@ -1585,6 +1598,10 @@ fn install(host: &Host, setup: &Setup) -> i32 {
     }
     host.log(if host.engine_streamline {
         "Engine presentation retained; SR borrows its existing graphics runtime."
+    } else if host.explicit && host.fg_installed() {
+        "Explicit FG presentation prepared without hooks; the engine creates its chain through the host."
+    } else if host.explicit {
+        "Explicit FG presentation refused; the engine creates and presents its own chain."
     } else if host.fg_installed() {
         "Shared FG presentation installed before graphics; generation starts Off."
     } else {
@@ -1602,7 +1619,7 @@ unsafe fn create(setup: *const Setup, services: *mut Services) -> i32 {
         || s.configuration_section.is_null()
         || unsafe { *s.configuration_section } == 0
         || s.engine_version_utf8.is_null()
-        || s.presentation_owner > ENGINE_PRESENTATION
+        || s.presentation_owner > EXPLICIT_PRESENTATION
         || s.sr_backend_choices == 0
         || !unsafe { has_capacity(services) }
         || unsafe { (*services).session_id } == 0
@@ -1725,23 +1742,16 @@ extern "C" fn rsf_render_overlay_toggle() {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_render_host_graphics(user: *mut c_void, queue: Handle) -> i32 {
-    let Some(host) = published(user) else {
-        return INVALID;
-    };
-    if !host.engine_streamline || queue.is_null() || unsafe { leaf::queue_direct(queue) } == 0 {
-        return INVALID;
+    match published(user) {
+        Some(host) => unsafe { host.report_graphics(queue) },
+        None => INVALID,
     }
-    host.lock().overlay_queue = unsafe { retain_object(queue) };
-    OK
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_render_host_device(user: *mut c_void, device: Handle) -> i32 {
     match published(user) {
-        Some(host) => match host.observer.load(Ordering::Acquire) {
-            observer if !observer.is_null() => leaf::observer_device(observer, device),
-            _ => NOT_READY,
-        },
+        Some(host) => host.report_engine_object(device, true),
         None => NOT_READY,
     }
 }
@@ -1749,11 +1759,96 @@ unsafe extern "C" fn rsf_render_host_device(user: *mut c_void, device: Handle) -
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_render_host_factory(user: *mut c_void, factory: Handle) -> i32 {
     match published(user) {
-        Some(host) => match host.observer.load(Ordering::Acquire) {
-            observer if !observer.is_null() => leaf::observer_factory(observer, factory),
-            _ => NOT_READY,
-        },
+        Some(host) => host.report_engine_object(factory, false),
         None => NOT_READY,
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_render_host_create_swapchain(
+    user: *mut c_void,
+    factory: Handle,
+    queue: Handle,
+    window: Handle,
+    description: *const c_void,
+    swapchain: *mut Handle,
+) -> i32 {
+    match published(user) {
+        Some(host) => unsafe {
+            host.create_swapchain(factory, queue, window, description, swapchain)
+        },
+        None => INVALID,
+    }
+}
+
+impl Host {
+    // The engine's presentation queue, reported by ENGINE and EXPLICIT hosts. OWNS retains the
+    // queue from its detours and its first submission instead.
+    unsafe fn report_graphics(&self, queue: Handle) -> i32 {
+        if !(self.engine_streamline || self.explicit)
+            || queue.is_null()
+            || unsafe { leaf::queue_direct(queue) } == 0
+        {
+            return INVALID;
+        }
+        self.lock().overlay_queue = unsafe { retain_object(queue) };
+        OK
+    }
+
+    // A device or factory report: ENGINE attaches its observer, EXPLICIT has nothing to attach.
+    fn report_engine_object(&self, object: Handle, device: bool) -> i32 {
+        if self.explicit {
+            return if object.is_null() { INVALID } else { OK };
+        }
+        match self.observer.load(Ordering::Acquire) {
+            observer if observer.is_null() => NOT_READY,
+            observer if device => leaf::observer_device(observer, object),
+            observer => leaf::observer_factory(observer, object),
+        }
+    }
+
+    // The engine's own creation call in EXPLICIT presentation. The bridge creates the chain the
+    // engine presents on; the host keeps the queue for its overlay and reports graphics ready.
+    unsafe fn create_swapchain(
+        &self,
+        factory: Handle,
+        queue: Handle,
+        window: Handle,
+        description: *const c_void,
+        swapchain: *mut Handle,
+    ) -> i32 {
+        if swapchain.is_null() {
+            return INVALID;
+        }
+        unsafe { swapchain.write(null_mut()) };
+        if !self.explicit
+            || factory.is_null()
+            || queue.is_null()
+            || window.is_null()
+            || description.is_null()
+            || unsafe { leaf::queue_direct(queue) } == 0
+        {
+            return INVALID;
+        }
+        if self.window_filter.is_some() && unsafe { accept_window(self.user(), window) } == 0 {
+            return INVALID;
+        }
+        if !self.fg_installed() {
+            return NOT_READY;
+        }
+        let result = unsafe {
+            leaf::present_create_for_hwnd(factory, queue, window, description, swapchain)
+        };
+        if result < 0 {
+            self.log(&format!(
+                "Explicit presentation creation failed hr=0x{result:08x}."
+            ));
+            return result;
+        }
+        self.lock().overlay_queue = unsafe { retain_object(queue) };
+        self.graphics_ready.store(true, Ordering::Release);
+        self.log("Explicit presentation created the engine's chain on its window and queue.");
+        result
     }
 }
 
