@@ -48,10 +48,14 @@ endif()
 # IDXGISwapChain::Present both in the table and at the function's entry and re-asserts either when
 # displaced, so a table patch and the overlay chase each other; a detour with a trampoline built
 # from the genuine bytes sits in the same chain without ever routing through the entry again.
-# BSD-2-Clause, pinned by third_party/minhook/minhook.lock.json, which the Cargo build of
-# rsf-minhook-sys provisions from as well.
+# BSD-2-Clause, pinned by third_party/minhook/minhook.lock.json. The source is the vendor/minhook
+# submodule at that revision, which the Cargo build of rsf-minhook-sys compiles as well; without it
+# FetchContent clones the same revision.
 file(READ "${PROJECT_SOURCE_DIR}/third_party/minhook/minhook.lock.json" rsf_minhook_lock)
 string(JSON rsf_minhook_rev GET "${rsf_minhook_lock}" revision)
+if(EXISTS "${PROJECT_SOURCE_DIR}/vendor/minhook/src/hook.c" AND NOT FETCHCONTENT_SOURCE_DIR_MINHOOK)
+    set(FETCHCONTENT_SOURCE_DIR_MINHOOK "${PROJECT_SOURCE_DIR}/vendor/minhook")
+endif()
 include(FetchContent)
 FetchContent_Declare(minhook
     GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git

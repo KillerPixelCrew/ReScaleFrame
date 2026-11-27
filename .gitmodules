@@ -14,3 +14,7 @@
 	path = vendor/xess
 	url = https://github.com/intel/xess.git
 	shallow = true
+[submodule "vendor/minhook"]
+	path = vendor/minhook
+	url = https://github.com/TsudaKageyu/minhook.git
+	shallow = true

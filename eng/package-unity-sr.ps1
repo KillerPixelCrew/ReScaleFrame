@@ -102,7 +102,8 @@ $taskFgId = @{ Off=0; DLSS=1; FSR3=3; FSR4=4; XeSS=5; Auto=7 }[$FrameGeneration]
 $taskSettings = [regex]::Replace($taskSettings, '(?m)^FrameGeneration=\d+', "FrameGeneration=$taskFgId")
 [IO.File]::WriteAllText($taskIni, $taskSettings, [Text.Encoding]::Unicode)
 Copy-Item -LiteralPath "$taskRoot/LICENSE" -Destination "$taskStage/LICENSE.txt"
-Copy-Item -LiteralPath "$taskRoot/build/windows-x64/_deps/minhook-src/LICENSE.txt" -Destination "$taskStage/MinHook-LICENSE.txt"
+$taskMinHook = if (Test-Path -LiteralPath "$taskRoot/vendor/minhook/src/hook.c") { "$taskRoot/vendor/minhook" } else { "$taskRoot/build/windows-x64/_deps/minhook-src" }
+Copy-Item -LiteralPath "$taskMinHook/LICENSE.txt" -Destination "$taskStage/MinHook-LICENSE.txt"
 Copy-Item -LiteralPath "$taskRoot/sdk/game/LICENSE" -Destination "$taskStage/GameSDK-MIT.txt"
 Copy-Item -LiteralPath "$taskStreamline/bin/x64/reflex.license.txt" -Destination "$taskStage/ReScaleFrame/streamline/reflex.license.txt"
 & $Python "$taskRoot/tools/package-unity-notices.py" $taskStage

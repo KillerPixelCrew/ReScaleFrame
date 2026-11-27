@@ -31,7 +31,8 @@ foreach($leaf in @('LICENSE.txt','third-party-programs.txt')) {Add-Payload "$sdk
 Add-Payload "$repo/runtime/orchestrator/ANTILAG2-LICENSE.txt" 'AMD-Anti-Lag-2-MIT.txt'
 Add-Payload "$repo/LICENSE" 'ReScaleFrame-LICENSE.txt'
 Add-Payload "$repo/runtime/backends/dlss/third_party/mfg_unlocker/LICENSE" 'MFG-Unlocker-LICENSE.txt'
-Add-Payload "$repo/build/windows-x64/_deps/minhook-src/LICENSE.txt" 'MinHook-LICENSE.txt'
+$minhook = if (Test-Path -LiteralPath "$repo/vendor/minhook/src/hook.c") { "$repo/vendor/minhook" } else { "$repo/build/windows-x64/_deps/minhook-src" }
+Add-Payload "$minhook/LICENSE.txt" 'MinHook-LICENSE.txt'
 $manifest=[Collections.Generic.List[string]]::new()
 foreach($copy in $copies) {
     $destination=Join-Path $stage $copy.relative

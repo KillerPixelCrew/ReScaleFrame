@@ -310,7 +310,8 @@ See `docs/dependencies.md` before adding any third-party code or binary.
 
 The vendor SDK sources the build compiles against are shallow submodules pinned in `eng/dependencies.json`:
 `vendor/streamline`, `vendor/fidelityfx` (SDK 2.4.0), `vendor/fidelityfx-vulkan` (SDK 1.1.4, the Vulkan FSR
-source build) and `vendor/xess`. After cloning, run `git submodule update --init --depth 1` and
+source build), `vendor/xess` and `vendor/minhook` (MinHook v1.3.4, which Cargo and CMake build from there
+without a network fetch). After cloning, run `git submodule update --init --depth 1` and
 `./eng/fetch-vendor.ps1`; the second fetches the signed Streamline runtime from the pinned release zip into
 `vendor/streamline-sdk` and the package layout into `vendor/runtimes`, verifying every hash. Change a vendor
 pin in `eng/dependencies.json` and the submodule commit together; `eng/fetch-vendor.ps1` refuses a mismatch.

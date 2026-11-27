@@ -21,6 +21,14 @@ RUNTIME = tuple(PINS["streamline"]["sha256"])
 STREAMLINE_SDK = ROOT / "vendor/streamline-sdk"
 
 
+def minhook_source() -> Path:
+    """The pinned MinHook tree: the vendor/minhook submodule, else the copy CMake fetched."""
+    vendor = ROOT / "vendor/minhook"
+    if (vendor / "src/hook.c").is_file():
+        return vendor
+    return ROOT / "build/windows-x64/_deps/minhook-src"
+
+
 def git(*args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True, encoding="utf-8").strip()
 

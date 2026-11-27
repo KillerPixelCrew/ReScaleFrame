@@ -15,7 +15,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from package_common import (ROOT, RUNTIME, STREAMLINE_SDK, VENDOR_HASHES, copy, dependency_notices, digest, git,  # noqa: E402
-                            release_identity)
+                            minhook_source, release_identity)
 
 
 def main(argv=None, *, release_revision=None, game_only=False):
@@ -58,7 +58,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
         (ROOT / "sdk/game/LICENSE", "ReScaleFrame/licenses/GameSDK-MIT.txt"),
         (ROOT / "runtime/orchestrator/ANTILAG2-LICENSE.txt", "ReScaleFrame/licenses/AMD-Anti-Lag-2-MIT.txt"),
         (ROOT / "runtime/backends/dlss/third_party/mfg_unlocker/LICENSE", "ReScaleFrame/licenses/MFG-Unlocker-MIT.txt"),
-        (ROOT / "build/windows-x64/_deps/minhook-src/LICENSE.txt", "ReScaleFrame/licenses/MinHook.txt"),
+        (minhook_source() / "LICENSE.txt", "ReScaleFrame/licenses/MinHook.txt"),
         (args.streamline_root / "license.txt", "ReScaleFrame/licenses/Streamline.txt"),
         (args.streamline_root / "3rd-party-licenses.md", "ReScaleFrame/licenses/Streamline-third-party.md"),
         (args.streamline_root / "bin/x64/nvngx_dlss.license.txt", "ReScaleFrame/streamline/nvngx_dlss.license.txt"),

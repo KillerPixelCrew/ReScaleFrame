@@ -55,6 +55,12 @@
         "libxess_fg.dll": "ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27",
         "libxell.dll": "d2030dcd694fda8f2ec7e044b13e6db8f0b56d4ba9113a5efad334e3f3ded8c7"
       }
+    },
+    "minhook": {
+      "repository": "https://github.com/TsudaKageyu/minhook.git",
+      "revision": "c3fcafdc10146beb5919319d0683e44e3c30d537",
+      "path": "vendor/minhook",
+      "release": "v1.3.4"
     }
   },
   "mesa": {

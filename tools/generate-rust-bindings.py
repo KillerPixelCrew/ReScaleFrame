@@ -14,7 +14,9 @@ from committed_bindings import bindgen, emit, finish  # noqa: E402
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--minhook", type=Path, default=root / "build/windows-x64/_deps/minhook-src",
+parser.add_argument("--minhook", type=Path,
+                    default=root / "vendor/minhook" if (root / "vendor/minhook/src/hook.c").is_file()
+                    else root / "build/windows-x64/_deps/minhook-src",
                     help="MinHook v1.3.4 source tree for the HDE64 records")
 args = parser.parse_args()
 

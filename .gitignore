@@ -19,6 +19,7 @@ __pycache__/
 !/vendor/fidelityfx
 !/vendor/fidelityfx-vulkan
 !/vendor/xess
+!/vendor/minhook
 /integrations/unity/com.kpc.rescaleframe/Runtime~/
 /integrations/unity/com.kpc.rescaleframe/Plugins/x86_64/*.dll
 /captures/
