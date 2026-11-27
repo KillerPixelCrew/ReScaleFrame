@@ -252,6 +252,10 @@ struct Scene {
     surface: usize,
     submitted: bool,
     captured: bool,
+    // The engine's own command list the final scene was recorded on, when that is not the list of
+    // the frame's SR evaluation (an engine that composes its picture in a separate present list).
+    // The scene is submitted when this list is. Zero for a scene on the SR recording's list.
+    list: usize,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -307,6 +311,9 @@ struct State {
     rates: Rates,
     // Recording serials snapshotted before Execute, so a recycled list cannot retire a newer slot.
     submitting: HashMap<u64, Vec<(usize, u64)>>,
+    // Frames whose final scene was recorded on a list of the engine's own, snapshotted before the
+    // Execute that carries that list.
+    submitting_scenes: HashMap<u64, Vec<u64>>,
     last_result: i32,
     last_dispatch: i32,
 }
@@ -442,6 +449,7 @@ impl State {
             application_presents: 0,
             rates: Rates::default(),
             submitting: HashMap::new(),
+            submitting_scenes: HashMap::new(),
             last_result: i32::MAX,
             last_dispatch: i32::MAX,
         }
@@ -933,7 +941,30 @@ impl Host {
             {
                 entry.insert(snapshot);
             }
+            // Final scenes recorded on one of these lists apart from their SR evaluation.
+            let scenes: Vec<u64> = s
+                .scenes
+                .iter()
+                .filter(|scene| {
+                    scene.list != 0 && !scene.submitted && lists.contains(&(scene.list as Handle))
+                })
+                .map(|scene| scene.frame)
+                .collect();
+            if !scenes.is_empty()
+                && let Entry::Vacant(entry) = s.submitting_scenes.entry(id)
+            {
+                entry.insert(scenes);
+            }
             return;
+        }
+        // Their list was executed: the scene is submitted, on whichever queue the engine presents
+        // from. It retires no SR slot and needs no fence value of its own.
+        for frame in s.submitting_scenes.remove(&id).unwrap_or_default() {
+            let scene = &mut s.scenes[(frame % SCENES as u64) as usize];
+            if scene.frame == frame && scene.list != 0 && !scene.submitted {
+                scene.submitted = true;
+                unsafe { leaf::fg_submitted(scene.session, scene.source) };
+            }
         }
         let Some(entry) = s.submitting.remove(&id) else {
             return;
@@ -983,21 +1014,55 @@ impl Host {
         {
             return;
         }
-        let Some(index) = s.slots.iter().position(|slot| {
+        let recorded = s.slots.iter().position(|slot| {
             slot.pending && slot.commands == commands && slot.native_frame == pass.native_frame
-        }) else {
-            return;
+        });
+        let scene = match recorded {
+            // On the list that carries the frame's SR evaluation: captured with it and submitted
+            // with that recording.
+            Some(index) => {
+                let result =
+                    unsafe { leaf::sr12_capture_scene(s.context, commands, pass, index as u32) };
+                Scene {
+                    session: pass.session_id,
+                    frame: pass.native_frame,
+                    source: pass.source_frame_id,
+                    recording: s.slots[index].serial,
+                    surface: pass.scene_surface as usize,
+                    submitted: false,
+                    captured: result == BACKEND_OK,
+                    list: 0,
+                }
+            }
+            // On a list of the engine's own, after the frame's SR evaluation was recorded on
+            // another (an engine that composes its final picture in a separate present list). The
+            // frame number pairs the two; the scene is submitted when this list is. The SR
+            // capture belongs to the evaluation's command slot and is not taken here.
+            None if !commands.is_null()
+                && s.slots
+                    .iter()
+                    .any(|slot| slot.serial != 0 && slot.native_frame == pass.native_frame) =>
+            {
+                // A list reused before its earlier scene was submitted carries only the new one.
+                for earlier in s.scenes.iter_mut() {
+                    if earlier.list == commands as usize && !earlier.submitted {
+                        earlier.list = 0;
+                    }
+                }
+                Scene {
+                    session: pass.session_id,
+                    frame: pass.native_frame,
+                    source: pass.source_frame_id,
+                    recording: 0,
+                    surface: pass.scene_surface as usize,
+                    submitted: false,
+                    captured: false,
+                    list: commands as usize,
+                }
+            }
+            None => return,
         };
-        let result = unsafe { leaf::sr12_capture_scene(s.context, commands, pass, index as u32) };
-        s.scenes[(pass.native_frame % SCENES as u64) as usize] = Scene {
-            session: pass.session_id,
-            frame: pass.native_frame,
-            source: pass.source_frame_id,
-            recording: s.slots[index].serial,
-            surface: pass.scene_surface as usize,
-            submitted: false,
-            captured: result == BACKEND_OK,
-        };
+        s.scenes[(pass.native_frame % SCENES as u64) as usize] = scene;
         if pass.source_frame_id != 0 {
             unsafe { leaf::fg_hudless(commands, pass) };
         }

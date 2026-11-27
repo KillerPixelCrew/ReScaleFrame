@@ -37,6 +37,25 @@ Built and unit-tested (orchestrator `input_dump::abi` tests), not game-run.
 - Tests: `the_projection_layout_is_the_headers`,
   `a_projection_without_matrices_is_written_and_a_bad_call_is_refused`.
 
+## Final scene on the engine's own list, 27 November 2026
+
+Built and unit-tested (synthetic host fixtures), not game-run or device-tested. No integration uses it yet.
+
+- The fence-retired D3D12 render host took a FINAL_SCENE pass only on the command list that carries the
+  frame's SR evaluation: it looked for a pending command slot with that list and frame number, and the
+  scene counted as submitted when that recording was. An engine that evaluates SR in its render lists and
+  composes its final picture in a separate present list (the scene without the UI, then the UI over it)
+  could not hand over its HUD-less image: the pass matched no slot and was dropped, so generation never
+  got `fg_hudless` and the WINDOW pass never matched.
+- A FINAL_SCENE pass on another list is now taken when a command slot holds an SR evaluation of the same
+  `native_frame`, pending or already submitted. The scene remembers that list, the host calls `fg_hudless`
+  on it, and the scene is submitted (`fg_submitted`) when a `submit` end carries that list. It retires no SR
+  slot and signals no fence. The SR capture stays with the evaluation's slot and is not taken for such a
+  scene. A list reused for a newer scene before the earlier one was submitted carries only the newer one.
+- Nothing changes for a scene on the SR recording's list, and a final scene of a frame with no SR
+  evaluation is still dropped.
+- Test: `a_final_scene_on_the_engines_own_list_pairs_by_frame_and_submits_with_that_list`.
+
 ## Explicit render-host presentation, 27 November 2026
 
 Built and unit-tested, not game-run or device-tested. No integration uses it yet.

@@ -43,7 +43,11 @@ typedef struct rsf_render_host_setup {
    keeps native evaluation. render_config then reports that plan, enabled at the planned extents,
    for the integration to apply. It reports native extents with enabled 0 when SR is off, the
    provider refused, or the settings changed since the plan; a new RECONFIGURE pass plans again.
-   Without RECONFIGURE the engine keeps choosing its own render extents, as before. */
+   Without RECONFIGURE the engine keeps choosing its own render extents, as before.
+   A FINAL_SCENE pass (end) names the frame's SR evaluation by native_frame. It may be recorded on
+   the list that carries that evaluation, or on another list of the engine's own, for an engine
+   that composes its final picture apart from its render lists; the scene is then submitted when
+   that list is reported through submit. The WINDOW pass repeats native_frame and scene_surface. */
 RSF_RUNTIME_API int32_t rsf_render_host_create(const rsf_render_host_setup*, rsf_game_host_services* services);
 /* Reports the engine's actual presentation queue without manufacturing a
    submission event. The host retains the queue for its shared overlay. ENGINE and EXPLICIT only. */

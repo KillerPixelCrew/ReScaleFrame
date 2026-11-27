@@ -982,6 +982,99 @@ fn submission_retires_snapshotted_slots_on_one_direct_queue() {
 }
 
 #[test]
+fn a_final_scene_on_the_engines_own_list_pairs_by_frame_and_submits_with_that_list() {
+    let packages = crate::sr_choices::Packages::all("render-host-detached-scene");
+    let mut ini = Temporary::new("detached-scene");
+    ini.directory = crate::settings_store::wide(packages.0.to_str().unwrap());
+    let host = host(&ini, 0);
+    let device = fake("device", null_mut());
+    let render = fake("render list", device);
+    let compose = fake("present list", device);
+    let queue = fake("direct queue", device);
+    let mut frame = pass(20, (960, 540), (1920, 1080));
+    frame.color_input = 0x10 as Handle;
+    frame.scene_surface = 0x20 as Handle;
+    frame.source_frame_id = 99;
+    // The SR evaluation is recorded and submitted on the engine's render list.
+    assert_eq!(host.process(render, &frame), BACKEND_OK);
+    events();
+    let renders = [render];
+    host.submit(queue, 5, 1, renders.as_ptr(), true);
+    host.submit(queue, 5, 1, renders.as_ptr(), false);
+    assert_eq!(events(), ["signal direct queue 1"]);
+
+    // A final scene of a frame without an SR evaluation is not taken, whatever its list.
+    let mut stray = frame;
+    stray.role = RSF_GAME_RENDER_FINAL_SCENE;
+    stray.native_frame = 21;
+    unsafe { render_pass(host.user(), compose, &stray, 0) };
+    assert!(events().is_empty());
+
+    // The frame's final scene, recorded later on the engine's own present list.
+    frame.role = RSF_GAME_RENDER_FINAL_SCENE;
+    unsafe { render_pass(host.user(), compose, &frame, 0) };
+    assert_eq!(events(), ["fg hudless 99"]);
+    {
+        let s = host.lock();
+        assert!(!s.scenes[20].submitted && !s.scenes[20].captured);
+        assert_eq!(s.scenes[20].list, compose as usize);
+    }
+    // Its window is not matched before that list was executed.
+    frame.role = RSF_GAME_RENDER_WINDOW;
+    unsafe { render_pass(host.user(), null_mut(), &frame, 1) };
+    assert!(!has_event(&events(), "fg window"));
+
+    // Another list's execution does not submit it; its own does, once, with no fence signal.
+    host.submit(queue, 6, 1, renders.as_ptr(), true);
+    host.submit(queue, 6, 1, renders.as_ptr(), false);
+    assert!(events().is_empty());
+    let presents = [compose];
+    host.submit(queue, 7, 1, presents.as_ptr(), true);
+    assert!(events().is_empty());
+    host.submit(queue, 7, 1, presents.as_ptr(), false);
+    assert_eq!(events(), [format!("fg submitted {SESSION} 99")]);
+    assert!(host.lock().scenes[20].submitted);
+    host.submit(queue, 8, 1, presents.as_ptr(), true);
+    host.submit(queue, 8, 1, presents.as_ptr(), false);
+    assert!(events().is_empty());
+
+    // The matching Present reaches FG; a different surface does not.
+    unsafe { render_pass(host.user(), null_mut(), &frame, 1) };
+    assert!(events().contains(&"fg window 99".to_string()));
+    frame.scene_surface = 0x21 as Handle;
+    unsafe { render_pass(host.user(), null_mut(), &frame, 1) };
+    assert!(!has_event(&events(), "fg window"));
+    assert!(!host.poisoned.load(Ordering::Relaxed));
+
+    // The present list reused for the next frame before the earlier scene was submitted carries
+    // only the new scene.
+    let mut next = pass(22, (960, 540), (1920, 1080));
+    next.color_input = 0x10 as Handle;
+    next.scene_surface = 0x20 as Handle;
+    next.source_frame_id = 100;
+    let mut after = next;
+    after.native_frame = 23;
+    after.source_frame_id = 101;
+    events();
+    assert_eq!(host.process(render, &next), BACKEND_OK);
+    host.submit(queue, 9, 1, renders.as_ptr(), true);
+    host.submit(queue, 9, 1, renders.as_ptr(), false);
+    assert_eq!(host.process(render, &after), BACKEND_OK);
+    host.submit(queue, 10, 1, renders.as_ptr(), true);
+    host.submit(queue, 10, 1, renders.as_ptr(), false);
+    next.role = RSF_GAME_RENDER_FINAL_SCENE;
+    after.role = RSF_GAME_RENDER_FINAL_SCENE;
+    unsafe { render_pass(host.user(), compose, &next, 0) };
+    unsafe { render_pass(host.user(), compose, &after, 0) };
+    events();
+    host.submit(queue, 11, 1, presents.as_ptr(), true);
+    host.submit(queue, 11, 1, presents.as_ptr(), false);
+    assert_eq!(events(), [format!("fg submitted {SESSION} 101")]);
+    let s = host.lock();
+    assert!(!s.scenes[22].submitted && s.scenes[23].submitted);
+}
+
+#[test]
 fn fence_failures_poison_and_present_routes_to_the_registration() {
     // Auto resolves among the providers whose packages are beside the Runtime.
     let packages = crate::sr_choices::Packages::all("render-host-fence");
