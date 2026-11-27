@@ -63,24 +63,48 @@ pub fn root() -> PathBuf {
 
 fn find_libclang() {
     println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
+    println!("cargo:rerun-if-env-changed=CLANG_PATH");
     let has = |dir: &Path| dir.join("libclang.dll").is_file() || dir.join("libclang.so").is_file();
-    if let Some(dir) = env::var_os("LIBCLANG_PATH") {
+    let dir = if let Some(dir) = env::var_os("LIBCLANG_PATH") {
         assert!(
             has(Path::new(&dir)),
             "LIBCLANG_PATH={dir:?} has no libclang. {LLVM_HINT}"
         );
+        PathBuf::from(dir)
+    } else {
+        let path = env::var_os("PATH").unwrap_or_default();
+        let found = env::split_paths(&path)
+            .chain([PathBuf::from(r"C:\Program Files\LLVM\bin")])
+            .find(|dir| has(dir));
+        match found {
+            Some(dir) => {
+                // SAFETY: the build script is single-threaded at this point.
+                unsafe { env::set_var("LIBCLANG_PATH", &dir) };
+                dir
+            }
+            None if cfg!(windows) => panic!("{LLVM_HINT}"),
+            // Elsewhere clang-sys also searches the usual system locations.
+            None => return,
+        }
+    };
+    use_clang_beside(&dir);
+}
+
+/// bindgen asks a `clang` executable for its builtin header directories (clang-sys
+/// `Clang::find`: `CLANG_PATH`, then `llvm-config --bindir`, then PATH). A clang of another LLVM
+/// release first on PATH, for example an LLVM-MinGW toolchain, hands libclang headers it cannot
+/// parse, and every binding fails ("invalid conversion between vector type '__m512i' ... and
+/// integer type 'int'" in `avx512bmmintrin.h` with libclang 22.1.8 and clang 23). Use the clang of
+/// the release whose libclang is loaded, unless `CLANG_PATH` already names one.
+fn use_clang_beside(libclang_dir: &Path) {
+    if env::var_os("CLANG_PATH").is_some() {
         return;
     }
-    let path = env::var_os("PATH").unwrap_or_default();
-    let found = env::split_paths(&path)
-        .chain([PathBuf::from(r"C:\Program Files\LLVM\bin")])
-        .find(|dir| has(dir));
-    match found {
+    let name = if cfg!(windows) { "clang.exe" } else { "clang" };
+    let clang = libclang_dir.join(name);
+    if clang.is_file() {
         // SAFETY: the build script is single-threaded at this point.
-        Some(dir) => unsafe { env::set_var("LIBCLANG_PATH", dir) },
-        None if cfg!(windows) => panic!("{LLVM_HINT}"),
-        // Elsewhere clang-sys also searches the usual system locations.
-        None => {}
+        unsafe { env::set_var("CLANG_PATH", clang) };
     }
 }
 
