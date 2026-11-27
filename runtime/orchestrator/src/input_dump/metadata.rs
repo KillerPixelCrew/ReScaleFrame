@@ -2,6 +2,7 @@
 use super::{Capture, Image, ImageState, Pixels, RAW};
 use crate::capture_metadata::Quoted;
 use crate::sys::{rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
+use rsf_game_sys::rsf_dump_projection;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame, rsf_frame_record,
     rsf_game_render_pass,
@@ -448,6 +449,35 @@ pub(super) fn sr_parameters(
     object.field("pre_exposure", Float(frame.pre_exposure));
     object.field("view_space_to_meters", Float(frame.view_space_to_meters));
     object.save(bundle, "sr_parameters.json")
+}
+
+/// `projection.json`: a projection known without the camera's matrices
+/// (input dump ABI 2). Zero and non-finite values are "not known" (null);
+/// the two conventions are written only when they say yes or no.
+pub(super) fn projection(
+    bundle: &Path,
+    record: &rsf_frame_record,
+    projection: &rsf_dump_projection,
+) -> io::Result<()> {
+    let known = |v: f32| Float(if v != 0.0 { v } else { f32::NAN });
+    let mut object = Object::new();
+    record_identity(&mut object, record);
+    object.field("near_plane", known(projection.near_plane));
+    object.field("far_plane", known(projection.far_plane));
+    object.field(
+        "vertical_fov_radians",
+        known(projection.vertical_fov_radians),
+    );
+    object.field("aspect_ratio", known(projection.aspect_ratio));
+    for (name, value) in [
+        ("depth_inverted", projection.depth_inverted),
+        ("far_infinite", projection.far_infinite),
+    ] {
+        if value <= 1 {
+            object.field(name, value == 1);
+        }
+    }
+    object.save(bundle, "projection.json")
 }
 
 pub(super) fn sr_constants(

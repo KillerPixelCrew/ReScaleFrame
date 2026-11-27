@@ -3,6 +3,7 @@ use super::*;
 use crate::sr_session::has_capacity;
 use crate::sys::{rsf_named_frame_dump, rsf_named_frame_dump_report};
 use crate::texture_dump::{PackedRows, pixel_bytes};
+use rsf_game_sys::{RSF_DUMP_PROJECTION_ABI_VERSION, rsf_dump_projection};
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_input_dump_configure(
@@ -435,6 +436,33 @@ pub(crate) unsafe extern "C" fn rsf_input_dump_sr_frame(
     publish_sr_parameters(frame, record, backend, input_sdr);
 }
 
+/// Input dump ABI 2: a projection without the camera's matrices, written as
+/// `projection.json` into the bundle of `input`'s armed record. A short or
+/// other-version call structure is refused.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_input_dump_projection(
+    input: *const rsf_frame_record,
+    projection: *const rsf_dump_projection,
+) {
+    let Some(record) = (unsafe { record(input) }) else {
+        return;
+    };
+    let Some(projection) = (unsafe { checked(projection) })
+        .filter(|p| p.abi_version == RSF_DUMP_PROJECTION_ABI_VERSION)
+    else {
+        return;
+    };
+    owner(|owner| {
+        if let Some(capture) = owner
+            .capture
+            .as_ref()
+            .filter(|capture| capture.wants(record))
+        {
+            let _ = metadata::projection(&capture.bundle, record, projection);
+        }
+    });
+}
+
 fn publish_sr_parameters(
     frame: &rsf_sr_frame,
     record: &rsf_frame_record,
@@ -477,4 +505,110 @@ pub(crate) unsafe extern "C" fn rsf_capture_sr_parameters(
         ..unsafe { std::mem::zeroed() }
     };
     publish_sr_parameters(&frame, record, backend, 0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rsf_game_sys::RSF_GAME_FRAME_ABI_VERSION;
+
+    fn record() -> rsf_frame_record {
+        rsf_frame_record {
+            struct_size: size_of::<rsf_frame_record>() as u32,
+            abi_version: RSF_GAME_FRAME_ABI_VERSION,
+            frame_id: 31,
+            session_id: 29,
+            render_width: 16,
+            render_height: 9,
+            output_width: 32,
+            output_height: 18,
+            ..unsafe { std::mem::zeroed() }
+        }
+    }
+
+    fn projection(struct_size: u32, abi_version: u32) -> rsf_dump_projection {
+        rsf_dump_projection {
+            struct_size,
+            abi_version,
+            near_plane: 4000.0,
+            far_plane: 0.05,
+            vertical_fov_radians: 0.75,
+            aspect_ratio: 0.0,
+            depth_inverted: 1,
+            far_infinite: 2,
+        }
+    }
+
+    #[test]
+    fn the_projection_layout_is_the_headers() {
+        assert_eq!(size_of::<rsf_dump_projection>(), 32);
+        assert_eq!(std::mem::offset_of!(rsf_dump_projection, near_plane), 8);
+        assert_eq!(std::mem::offset_of!(rsf_dump_projection, aspect_ratio), 20);
+        assert_eq!(std::mem::offset_of!(rsf_dump_projection, far_infinite), 28);
+        assert_eq!(rsf_game_sys::RSF_INPUT_DUMP_ABI_VERSION, 2);
+    }
+
+    #[test]
+    fn a_projection_without_matrices_is_written_and_a_bad_call_is_refused() {
+        let root = std::env::temp_dir().join(format!("rsf-dump-projection-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let dir = CString::new(root.to_string_lossy().into_owned()).unwrap();
+        let frame = record();
+        let size = size_of::<rsf_dump_projection>() as u32;
+        unsafe {
+            rsf_input_dump_configure(
+                dir.as_ptr(),
+                c"projection".as_ptr(),
+                c"".as_ptr(),
+                None,
+                std::ptr::null_mut(),
+            );
+            rsf_input_dump_request();
+            assert_ne!(rsf_input_dump_begin_record(&frame, 3), 0);
+            // Refused: short, another version, no record.
+            rsf_input_dump_projection(
+                &frame,
+                &projection(size - 4, RSF_DUMP_PROJECTION_ABI_VERSION),
+            );
+            rsf_input_dump_projection(
+                &frame,
+                &projection(size, RSF_DUMP_PROJECTION_ABI_VERSION + 1),
+            );
+            rsf_input_dump_projection(
+                std::ptr::null(),
+                &projection(size, RSF_DUMP_PROJECTION_ABI_VERSION),
+            );
+        }
+        let bundle = fs::read_dir(root.join("website"))
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .find(|p| p.is_dir())
+            .unwrap();
+        assert!(!bundle.join("projection.json").exists());
+        unsafe {
+            rsf_input_dump_projection(&frame, &projection(size, RSF_DUMP_PROJECTION_ABI_VERSION))
+        };
+        let text = fs::read_to_string(bundle.join("projection.json")).unwrap();
+        for field in [
+            "\"frame_id\":31",
+            "\"session_id\":29",
+            "\"near_plane\":4000",
+            "\"far_plane\":0.05",
+            "\"vertical_fov_radians\":0.75",
+            "\"aspect_ratio\":null",
+            "\"depth_inverted\":true",
+        ] {
+            assert!(text.contains(field), "{field}: {text}");
+        }
+        // Not known: not written.
+        assert!(!text.contains("far_infinite"), "{text}");
+        // The camera stays unavailable: matrices are still not known.
+        rsf_input_dump_cancel(29);
+        let frame_json = fs::read_to_string(bundle.join("frame.json")).unwrap_or_default();
+        assert!(
+            !frame_json.contains("\"camera_available\":true"),
+            "{frame_json}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
 }

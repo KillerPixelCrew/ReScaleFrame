@@ -18,6 +18,25 @@ not here.
 | Godot | Standard and .NET engines, Vulkan SR and FG provider fixtures | Controller and export fixtures | Not a shipped game path | Generated-image comparisons against independent midpoints; some FSR2/FSR3 object-motion cases fail | [Godot developer integration](#godot-developer-integration-in-progress-25-october-2026) |
 | Minecraft (OpenGL) | Java mod with SR and FG and motion producers | Java and offscreen OpenGL checks | World geometry confirmed in the 1.1.8-dev correction; shader-pack acceptance open | None recorded | [Minecraft OpenGL SR and FG](#minecraft-opengl-sr-and-fg-17-october-2026) |
 
+## Frame dump projection without camera matrices, input dump ABI 2, 27 November 2026
+
+Built and unit-tested (orchestrator `input_dump::abi` tests), not game-run.
+
+- A source that knows near, far and the vertical field of view but not its camera matrices (an
+  upscaler dispatch's parameters, say) could not record them: `frame.json` writes camera fields only
+  for a complete `rsf_camera_frame`, and filling one with zero matrices would make
+  `camera_available` lie to the analyzers.
+- `rsf_input_dump_projection(record, projection)` (input dump ABI 2) takes `rsf_dump_projection`
+  (`struct_size`, `abi_version` 1, `near_plane`, `far_plane`, `vertical_fov_radians`, `aspect_ratio`,
+  `depth_inverted`, `far_infinite`). Each value is optional (zero or non-finite is not known; the two
+  conventions are known only as 0 or 1). A short structure, another version or a missing record is
+  refused. It writes `projection.json` into the bundle of the armed record and never makes
+  `camera_available` true; a complete camera in the record supersedes it.
+- The frame record and `rsf_sr_frame` are unchanged: their versions are checked for equality across
+  every integration, so the projection is an appended entry point of the dumper instead.
+- Tests: `the_projection_layout_is_the_headers`,
+  `a_projection_without_matrices_is_written_and_a_bad_call_is_refused`.
+
 ## Explicit render-host presentation, 27 November 2026
 
 Built and unit-tested, not game-run or device-tested. No integration uses it yet.

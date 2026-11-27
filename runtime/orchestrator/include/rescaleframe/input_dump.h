@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #ifndef RSF_INPUT_DUMP_H
 #define RSF_INPUT_DUMP_H
-#define RSF_INPUT_DUMP_ABI_VERSION 1u
+/* 2: rsf_input_dump_projection. */
+#define RSF_INPUT_DUMP_ABI_VERSION 2u
 #include <rescaleframe/runtime.h>
 #include <rescaleframe/game_renderer.h>
 #include <rescaleframe/dlss.h>
@@ -49,6 +50,28 @@ RSF_FRAME_DUMP_API void rsf_input_dump_pass_metadata(const rsf_game_render_pass*
    Supply the same session, frame, view, generation and extents before the matched Present. */
 RSF_FRAME_DUMP_API void rsf_input_dump_result(const rsf_frame_record*, const char* stage, uint32_t backend, int32_t result);
 RSF_FRAME_DUMP_API void rsf_input_dump_sr_frame(const rsf_sr_frame*, uint32_t backend, uint32_t input_sdr);
+/* Input dump ABI 2. The projection of a frame whose camera matrices are not known: what a source
+   that has near, far and field of view (an upscaler's dispatch parameters, say) can still record.
+   A complete camera in the record (rsf_camera_frame) supersedes it; it never makes
+   camera_available true. Each value is optional: zero or a non-finite value is "not known".
+   Written as projection.json into the bundle of the armed record. A struct_size below this
+   layout or another abi_version is refused. */
+#define RSF_DUMP_PROJECTION_ABI_VERSION 1u
+typedef struct rsf_dump_projection {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    /* As the projection has them; with a reversed depth range the near plane may be the larger. */
+    float near_plane;
+    float far_plane;
+    float vertical_fov_radians;
+    /* View width over height. */
+    float aspect_ratio;
+    /* 1 reversed (near at 1), 0 not, anything else not known. */
+    uint32_t depth_inverted;
+    /* 1 the far plane is at infinity, 0 not, anything else not known. */
+    uint32_t far_infinite;
+} rsf_dump_projection;
+RSF_FRAME_DUMP_API void rsf_input_dump_projection(const rsf_frame_record*, const rsf_dump_projection*);
 /* Immediate-context convenience adapter for D3D11 integrations. Generic frame identity
    is still required; no resource is retained beyond this synchronous snapshot. */
 RSF_FRAME_DUMP_API int rsf_input_dump_texture_record(void* context, const rsf_frame_record*,
