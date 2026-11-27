@@ -81,6 +81,8 @@ pub struct rsf_game_render_pass {
     pub temporal_mask: *mut ::core::ffi::c_void,
     pub temporal_mask_weights: [f32; 4usize],
     pub depth_domains: rsf_game_depth_domains,
+    pub reactive_mask: *mut ::core::ffi::c_void,
+    pub transparency_mask: *mut ::core::ffi::c_void,
 }
 impl Default for rsf_game_render_pass {
     fn default() -> Self {

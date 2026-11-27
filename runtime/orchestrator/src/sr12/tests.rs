@@ -70,6 +70,9 @@ struct World {
     capture_wants: bool,
     sharpen_result: i32,
     readback: Vec<u8>,
+    // The reactive and transparency masks of the last vendor evaluation, by name, with their
+    // states and extents.
+    masks: Vec<String>,
 }
 
 thread_local! {
@@ -163,7 +166,19 @@ pub(super) unsafe extern "C" fn dlss_evaluate(
         name(frame.output.resource),
         name(frame.exposure.resource)
     ));
-    with(|world| world.vendor_result)
+    let masks = [&frame.reactive, &frame.transparency].map(|mask| {
+        format!(
+            "{} {:#x} {}x{}",
+            name(mask.resource),
+            mask.state,
+            mask.width,
+            mask.height
+        )
+    });
+    with(|world| {
+        world.masks = masks.to_vec();
+        world.vendor_result
+    })
 }
 pub(super) unsafe extern "C" fn dlss_evaluate_borrowed(
     context: Handle,
@@ -1129,6 +1144,71 @@ fn external_exposure_is_validated_and_normalized() {
             .any(|event| event.starts_with("copy-exposure"))
     );
     unsafe { rsf_core_sr12_destroy(owner) };
+    scene.release();
+}
+
+#[test]
+fn reactive_and_transparency_masks_reach_the_provider() {
+    let scene = Scene::new(RENDER, OUTPUT);
+    let (result, owner) = create_with(&scene.setup(RSF_SR_DLSS, 1, OUTPUT));
+    assert_eq!(result, OK);
+    let (width, height) = (u64::from(RENDER.0), RENDER.1);
+    let mask = |name: &str, width: u64, format: u32, device: Handle| {
+        fake(name, texture(width, height, format, format), device)
+    };
+    let reactive = mask("reactive", width, R8_UNORM, scene.device);
+    let transparency = mask("transparency", width + 64, R16_FLOAT, scene.device);
+    let mut pass = scene.pass(5, RENDER, OUTPUT);
+    pass.reactive_mask = reactive;
+    pass.transparency_mask = transparency;
+    assert_eq!(
+        unsafe { rsf_core_sr12_evaluate(owner, scene.list, &pass, 0) },
+        OK
+    );
+    // Both reach the provider as leased, read in NON_PIXEL_SHADER_RESOURCE at the render extent.
+    assert_eq!(
+        with(|world| world.masks.clone()),
+        ["reactive 0x40 960x540", "transparency 0x40 960x540"]
+    );
+
+    // Without masks the provider receives none.
+    let plain = scene.pass(6, RENDER, OUTPUT);
+    assert_eq!(
+        unsafe { rsf_core_sr12_evaluate(owner, scene.list, &plain, 1) },
+        OK
+    );
+    assert_eq!(
+        with(|world| world.masks.clone()),
+        ["null 0x0 0x0", "null 0x0 0x0"]
+    );
+
+    // A mask with colour channels, too small, or from another device refuses the pass.
+    let other = fake("other-device", TextureDesc::default(), ptr::null_mut());
+    let refused = [
+        mask("colour", width, RGBA16_FLOAT, scene.device),
+        mask("small", width - 1, R8_UNORM, scene.device),
+        mask("foreign", width, R32_FLOAT, other),
+    ];
+    for bad in refused {
+        let mut pass = scene.pass(7, RENDER, OUTPUT);
+        pass.transparency_mask = bad;
+        take_events();
+        assert_eq!(
+            unsafe { rsf_core_sr12_evaluate(owner, scene.list, &pass, 2) },
+            INVALID_ARGUMENT,
+            "{}",
+            name(bad)
+        );
+        assert!(
+            !take_events()
+                .iter()
+                .any(|event| event.starts_with("evaluate"))
+        );
+    }
+    unsafe { rsf_core_sr12_destroy(owner) };
+    for handle in [reactive, transparency, other].into_iter().chain(refused) {
+        unsafe { release(handle.cast()) };
+    }
     scene.release();
 }
 

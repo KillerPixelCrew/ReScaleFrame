@@ -6,8 +6,8 @@
 // Its native calls go through `native` (sr12/native.rs; fakes under test).
 use crate::com_ref;
 use crate::dxgi_format::{
-    D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
-    R32_TYPELESS, R32G8X24_TYPELESS, RGBA16_FLOAT, RGBA32_FLOAT, half_to_f32,
+    D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R8_UNORM, R16_UNORM, R24_UNORM_X8_TYPELESS,
+    R24G8_TYPELESS, R32_TYPELESS, R32G8X24_TYPELESS, RGBA16_FLOAT, RGBA32_FLOAT, half_to_f32,
 };
 use crate::retain_object;
 use crate::sharpening_policy;
@@ -168,6 +168,17 @@ fn exposure_accepted(desc: &TextureDesc) -> bool {
         && matches!(
             desc.srv_format,
             R32_FLOAT | R16_FLOAT | RG32_FLOAT | RG16_FLOAT | RGBA32_FLOAT | RGBA16_FLOAT
+        )
+}
+
+// A reactive or transparency mask: one readable channel covering the render extent.
+fn mask_accepted(desc: &TextureDesc, (width, height): (u32, u32)) -> bool {
+    single_texture(desc)
+        && desc.width >= u64::from(width)
+        && desc.height >= height
+        && matches!(
+            desc.srv_format,
+            R8_UNORM | R16_UNORM | R16_FLOAT | R32_FLOAT
         )
 }
 
@@ -456,6 +467,9 @@ struct State {
     validated_list: Option<IUnknown>,
     exposure_input: Option<(IUnknown, u32)>,
     exposure_initialized: bool,
+    // The reactive and transparency masks each slot's recording reads, held until the slot is
+    // used again, which the caller does only after that recording completed.
+    masks: [[Option<IUnknown>; 2]; SLOTS],
     history: History,
     captured: [Captured; SLOTS],
     motion_readback: [Option<IUnknown>; SLOTS],
@@ -762,6 +776,7 @@ unsafe fn create(setup: *const Setup) -> Result<Sr12, i32> {
             validated_list: None,
             exposure_input: None,
             exposure_initialized: external_exposure,
+            masks: [const { [None, None] }; SLOTS],
             history: History::default(),
             captured: std::array::from_fn(|_| Captured {
                 record: unsafe { std::mem::zeroed() },
@@ -801,6 +816,26 @@ impl Sr12 {
                 .motion_to_uv
                 .iter()
                 .all(|scale| scale.is_finite() && *scale != 0.0)
+    }
+
+    // The pass's reactive and transparency masks, retained; None refuses the pass. A mask must
+    // belong to this device and cover the render extent with one readable channel.
+    unsafe fn masks(&self, pass: &Pass) -> Option<[Option<IUnknown>; 2]> {
+        let mut masks = [None, None];
+        for (held, mask) in masks
+            .iter_mut()
+            .zip([pass.reactive_mask, pass.transparency_mask])
+        {
+            if mask.is_null() {
+                continue;
+            }
+            let desc = unsafe { native::describe(mask) };
+            if !unsafe { self.owned(mask) } || !mask_accepted(&desc, (self.width, self.height)) {
+                return None;
+            }
+            *held = Some(unsafe { retain_object(mask) }?);
+        }
+        Some(masks)
     }
 
     unsafe fn inputs_valid(&self, state: &mut State, pass: &Pass) -> bool {
@@ -1163,6 +1198,9 @@ impl Sr12 {
         if !unsafe { self.inputs_valid(state, pass) } {
             return INVALID_ARGUMENT;
         }
+        let Some(masks) = (unsafe { self.masks(pass) }) else {
+            return INVALID_ARGUMENT;
+        };
         let sharpen = *lock(&self.sharpening);
         unsafe { native::capture_flush(self.capture(), slot as u32) };
         if raw(state.validated_list.as_ref()) != list {
@@ -1257,6 +1295,18 @@ impl Sr12 {
             frame.output = self.resource(output, true, record.resource_generation);
             frame.sharpness = sharpening_policy::vendor_sharpness(&sharpen, self.backend);
         }
+        // The masks reach the provider as the engine leased them, in NON_PIXEL_SHADER_RESOURCE
+        // at the render extent; this slot holds them until its next use.
+        state.masks[slot] = masks;
+        for (binding, mask) in [&mut frame.reactive, &mut frame.transparency]
+            .into_iter()
+            .zip(&state.masks[slot])
+        {
+            if let Some(mask) = mask {
+                *binding =
+                    unsafe { self.resource(mask.as_raw(), false, record.resource_generation) };
+            }
+        }
         frame.jitter_x = pass.camera.jitter_pixels[0];
         frame.jitter_y = pass.camera.jitter_pixels[1];
         // The producer measures pixel jitter from the actual GPU projection, including its Y
@@ -1268,17 +1318,23 @@ impl Sr12 {
         );
         unsafe {
             native::dump_sr_frame(&frame, self.backend, u32::from(self.input_sdr));
-            if !frame.exposure.resource.is_null() {
-                self.capture_record(
-                    list,
-                    frame.exposure.resource,
-                    SHADER_READ,
-                    &record,
-                    c"sr-exposure",
-                    slot,
-                    NO_DISPATCH_RESET,
-                    NO_PREVIEW,
-                );
+            for (source, role) in [
+                (frame.exposure.resource, c"sr-exposure"),
+                (frame.reactive.resource, c"sr-reactive-mask"),
+                (frame.transparency.resource, c"sr-transparency-mask"),
+            ] {
+                if !source.is_null() {
+                    self.capture_record(
+                        list,
+                        source,
+                        SHADER_READ,
+                        &record,
+                        role,
+                        slot,
+                        NO_DISPATCH_RESET,
+                        NO_PREVIEW,
+                    );
+                }
             }
         }
         let result = unsafe { self.vendor_evaluate(list, &frame, pass, slot) };

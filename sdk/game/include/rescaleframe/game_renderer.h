@@ -131,6 +131,16 @@ typedef struct rsf_game_render_pass {
     /* ABI23: copied current-source depth facts, leased with depth; render_rect and
        camera supply the active raster and target projection/jitter convention. */
     rsf_game_depth_domains depth_domains;
+    /* ABI 26: optional D3D12 ID3D12Resource SR masks, leased with the SR inputs and in
+       NON_PIXEL_SHADER_RESOURCE during process_upscale. 2D single-sample textures covering the
+       render extent from the origin, as colour does; the first channel is read as a value,
+       R8_UNORM, R16_UNORM, R16_FLOAT or R32_FLOAT. reactive_mask is [0, 0.9]: how far the
+       current colour replaces history (FSR reactive, XeSS responsive pixel mask).
+       transparency_mask is [0, 1]: translucent coverage (FSR transparency and composition).
+       Null leaves the provider without that mask. D3D11 hosts ignore both; temporal_mask is
+       the D3D11 hint. */
+    void* reactive_mask;
+    void* transparency_mask;
 } rsf_game_render_pass;
 
 #define RSF_GAME_RENDER_SR 1u

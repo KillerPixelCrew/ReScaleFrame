@@ -19,6 +19,8 @@ impl rsf_game_render_pass {
             sampled_texture: null_mut(),
             native_frame_context: null_mut(),
             temporal_mask: null_mut(),
+            reactive_mask: null_mut(),
+            transparency_mask: null_mut(),
             ..*self
         }
     }
@@ -45,6 +47,8 @@ mod tests {
         pass.sampled_texture = borrowed;
         pass.native_frame_context = borrowed;
         pass.temporal_mask = borrowed;
+        pass.reactive_mask = borrowed;
+        pass.transparency_mask = borrowed;
         pass.native_frame = 37;
         pass.source_frame_id = 91;
         pass.resource_generation = 4;
@@ -65,6 +69,8 @@ mod tests {
             retained.sampled_texture,
             retained.native_frame_context,
             retained.temporal_mask,
+            retained.reactive_mask,
+            retained.transparency_mask,
         ];
         assert!(pointers.iter().all(|pointer| pointer.is_null()));
         assert_eq!(pass.native_frame_context, borrowed);

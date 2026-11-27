@@ -62,6 +62,23 @@ Built and unit-tested (synthetic host fixtures), not game-run or device-tested.
 - Tests: `reconfigure_plans_the_saved_quality_and_publishes_the_render_config`,
   `reconfigure_publishes_native_when_sr_is_off_or_refused`; the full orchestrator library suite passes.
 
+## D3D12 reactive and transparency masks, game ABI 26, 27 November 2026
+
+Built and unit-tested (synthetic sr12 fixtures), not game-run or device-tested.
+
+- `rsf_game_render_pass` gains `reactive_mask` and `transparency_mask` (game ABI 26): optional D3D12
+  resources leased with the SR inputs, in NON_PIXEL_SHADER_RESOURCE during `process_upscale`, covering
+  the render extent from the origin with one readable channel (R8_UNORM, R16_UNORM, R16_FLOAT or
+  R32_FLOAT). The ranges are those of `rsf_sr_frame`: reactive [0, 0.9], transparency [0, 1].
+- Before, the D3D12 path could take neither: `temporal_mask` is a D3D11 texture and `rsf_sr12_evaluate`
+  left `rsf_sr_frame.reactive` and `.transparency` null, although the FSR and XeSS D3D12 providers
+  already consume them. sr12 now validates each mask (device, single 2D texture, extent, format),
+  refuses the pass for an unusable one, hands both to the provider at the render extent, holds them per
+  command slot until that slot is reused, and records them in captures (`sr-reactive-mask`,
+  `sr-transparency-mask`).
+- D3D11 hosts ignore the new fields; `temporal_mask` stays the D3D11 hint. DLSS ignores both masks.
+- Test: `reactive_and_transparency_masks_reach_the_provider`.
+
 ## One D3D12 host, Runtime FSR1 and Unity settings, 25 November 2026
 
 Built and unit-tested, not game-run or device-tested. Rule 5 audit F4 and overlay-parity follow-up 1, on

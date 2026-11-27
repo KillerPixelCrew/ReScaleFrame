@@ -11,6 +11,8 @@ pub const D32_FLOAT: u32 = DXGI_FORMAT_D32_FLOAT.0 as u32;
 pub const R24G8_TYPELESS: u32 = DXGI_FORMAT_R24G8_TYPELESS.0 as u32;
 pub const D24_UNORM_S8_UINT: u32 = DXGI_FORMAT_D24_UNORM_S8_UINT.0 as u32;
 pub const R24_UNORM_X8_TYPELESS: u32 = DXGI_FORMAT_R24_UNORM_X8_TYPELESS.0 as u32;
+pub const R16_UNORM: u32 = DXGI_FORMAT_R16_UNORM.0 as u32;
+pub const R8_UNORM: u32 = DXGI_FORMAT_R8_UNORM.0 as u32;
 
 pub fn half_to_f32(half: u16) -> f32 {
     let sign = u32::from(half & 0x8000) << 16;
