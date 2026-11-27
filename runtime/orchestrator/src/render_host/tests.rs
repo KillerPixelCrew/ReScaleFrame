@@ -56,6 +56,7 @@ struct World {
     contexts: u32,
     explicit_install_result: i32,
     chain_result: i32,
+    plan: (u32, u32),
 }
 
 thread_local! {
@@ -147,6 +148,14 @@ pub(super) unsafe extern "C" fn sr12_create(setup: *const SrSetup, out: *mut Han
         unsafe { out.write(with(|world| world.contexts as usize) as Handle) };
     }
     result
+}
+pub(super) unsafe extern "C" fn sr12_plan(_: Handle, width: *mut u32, height: *mut u32) -> i32 {
+    let (w, h) = with(|world| world.plan);
+    unsafe {
+        width.write(w);
+        height.write(h);
+    }
+    BACKEND_OK
 }
 pub(super) unsafe extern "C" fn sr12_evaluate(
     context: Handle,
@@ -811,6 +820,107 @@ fn spatial_is_served_by_sr12_at_the_engine_extents() {
         "{log:#?}"
     );
     assert!(log.contains(&"evaluate 1 slot=0 reset=1".to_string()));
+}
+
+fn config(host: &Host) -> Config {
+    let mut config = Config::request();
+    assert_eq!(unsafe { render_config(host.user(), &mut config) }, 1);
+    config
+}
+
+#[test]
+fn reconfigure_plans_the_saved_quality_and_publishes_the_render_config() {
+    let ini = Temporary::new("render-config");
+    ini.write("SRBackend", "6");
+    ini.write("SRQuality", "1");
+    let host = host(&ini, 0);
+    events();
+    let device = fake("device", null_mut());
+    let list = fake("list", device);
+    with(|world| world.plan = (1280, 720));
+    // Nothing is planned before a RECONFIGURE pass, and a short record is refused.
+    assert_eq!(config(&host).enabled, 0);
+    let mut short = Config::request();
+    short.struct_size -= 4;
+    assert_eq!(unsafe { render_config(host.user(), &mut short) }, 0);
+
+    // The planning pass needs no camera; native evaluation stays for it.
+    let mut planning = pass(10, (0, 0), (1920, 1080));
+    planning.camera_valid = 0;
+    planning.flags = RSF_GAME_RENDER_RECONFIGURE;
+    assert_eq!(host.process(list, &planning), NOT_READY);
+    let log = events();
+    assert!(
+        log.contains(
+            &"create backend=6 quality=1 0x0->1920x1080 exposure=0 registration=0".to_string()
+        ),
+        "{log:#?}"
+    );
+    assert!(!has_event(&log, "evaluate"));
+    let planned = config(&host);
+    assert_eq!(planned.enabled, 1);
+    assert_eq!(planned.sr_backend, RSF_SR_SPATIAL);
+    assert_eq!((planned.output_width, planned.output_height), (1920, 1080));
+    assert_eq!((planned.render_width, planned.render_height), (1280, 720));
+    assert_eq!(planned.jitter_phases, 1, "a spatial scaler takes no jitter");
+    assert_eq!(
+        planned.checked_render_extent([1920, 1080]),
+        Some([1280, 720])
+    );
+
+    // Inputs at the planned extents use the planned context; a camera-less normal pass does not.
+    assert_eq!(
+        host.process(list, &pass(11, (1280, 720), (1920, 1080))),
+        BACKEND_OK
+    );
+    let log = events();
+    assert!(!has_event(&log, "create"), "{log:#?}");
+    assert!(
+        log.contains(&"evaluate 1 slot=0 reset=1".to_string()),
+        "{log:#?}"
+    );
+    let mut cameraless = pass(12, (1280, 720), (1920, 1080));
+    cameraless.camera_valid = 0;
+    assert_eq!(host.process(list, &cameraless), INVALID);
+
+    // A changed quality retires the plan at its output extent until the next RECONFIGURE.
+    ini.write("SRQuality", "3");
+    {
+        let mut s = host.lock();
+        s.poll_tick = 0;
+        host.poll(&mut s);
+    }
+    let stale = config(&host);
+    assert_eq!(stale.enabled, 0);
+    assert_eq!((stale.output_width, stale.output_height), (1920, 1080));
+    assert_eq!((stale.render_width, stale.render_height), (1920, 1080));
+}
+
+#[test]
+fn reconfigure_publishes_native_when_sr_is_off_or_refused() {
+    let ini = Temporary::new("render-config-off");
+    ini.write("SR", "0");
+    let host = host(&ini, 0);
+    let device = fake("device", null_mut());
+    let list = fake("list", device);
+    let mut planning = pass(10, (0, 0), (2560, 1440));
+    planning.flags = RSF_GAME_RENDER_RECONFIGURE;
+    assert_eq!(host.process(list, &planning), NOT_READY);
+    let off = config(&host);
+    assert_eq!(off.enabled, 0);
+    assert_eq!((off.render_width, off.render_height), (2560, 1440));
+
+    // A provider whose plan does not fit the output publishes no plan.
+    ini.write("SR", "1");
+    ini.write("SRBackend", "6");
+    with(|world| world.plan = (4000, 720));
+    host.lock().poll_tick = 0;
+    assert_eq!(host.process(list, &planning), NOT_READY);
+    assert_eq!(config(&host).enabled, 0);
+    // A planning pass without an output extent is refused.
+    let mut empty = planning;
+    empty.camera.output_width = 0;
+    assert_eq!(host.process(list, &empty), INVALID);
 }
 
 #[test]

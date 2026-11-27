@@ -44,6 +44,24 @@ Built and unit-tested, not game-run or device-tested. No integration uses it yet
   factory and graphics reports behave as described. The bridge's own explicit creation is exercised by the existing
   presentation fixture (`tests/presentation/src/fg_fixture.rs`), which was not run for this change.
 
+## D3D12 render host publishes render_config, 27 November 2026
+
+Built and unit-tested (synthetic host fixtures), not game-run or device-tested.
+
+- The fence-retired D3D12 render host (`rsf_render_host_create`) now fills `render_config`, as the
+  callback and D3D11 hosts already did. An integration that sizes its engine from RSF's plan sends a
+  `process_upscale` pass flagged RECONFIGURE with the output extent. The host resolves the saved backend, creates
+  the provider's context for the saved SR quality without engine extents, reads the provider's render
+  extent (`rsf_sr12_plan`), and publishes it with that vendor's jitter phases and LOD bias
+  (`rsf_game_render_config::plan`). The pass keeps native evaluation. Later passes at the planned extents
+  reuse that context at the planned quality.
+- The plan is native extents with `enabled` 0 when SR is off, the provider is not served or its plan does
+  not fit the output, or the saved backend, quality or enable state changed after planning.
+- Without a RECONFIGURE pass nothing changes: the engine keeps its own extents and the quality is still
+  inferred from the received ratio (RDR2).
+- Tests: `reconfigure_plans_the_saved_quality_and_publishes_the_render_config`,
+  `reconfigure_publishes_native_when_sr_is_off_or_refused`; the full orchestrator library suite passes.
+
 ## One D3D12 host, Runtime FSR1 and Unity settings, 25 November 2026
 
 Built and unit-tested, not game-run or device-tested. Rule 5 audit F4 and overlay-parity follow-up 1, on

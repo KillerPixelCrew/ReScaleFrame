@@ -36,7 +36,14 @@ typedef struct rsf_render_host_setup {
     void* user;
 } rsf_render_host_setup;
 /* The adapter supplies engine identity, configuration mapping and window
-   selection. This host contains no game detection, signatures or policies. */
+   selection. This host contains no game detection, signatures or policies.
+   The services include render_config. A process_upscale pass flagged RECONFIGURE (output extent
+   required, camera optional) plans the saved SR backend and quality at that output: the provider
+   chooses the render extent, and its vendor sampling gives jitter phases and LOD bias. The pass
+   keeps native evaluation. render_config then reports that plan, enabled at the planned extents,
+   for the integration to apply. It reports native extents with enabled 0 when SR is off, the
+   provider refused, or the settings changed since the plan; a new RECONFIGURE pass plans again.
+   Without RECONFIGURE the engine keeps choosing its own render extents, as before. */
 RSF_RUNTIME_API int32_t rsf_render_host_create(const rsf_render_host_setup*, rsf_game_host_services* services);
 /* Reports the engine's actual presentation queue without manufacturing a
    submission event. The host retains the queue for its shared overlay. ENGINE and EXPLICIT only. */

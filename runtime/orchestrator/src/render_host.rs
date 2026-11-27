@@ -47,9 +47,10 @@ use crate::{d3d12_observer::Observer, dlss_native12::Registration};
 use rsf_game_sys::ffi_util::{checked, has_capacity};
 use rsf_game_sys::vendor_paths::VendorPaths;
 use rsf_game_sys::{
-    RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RESET,
-    RSF_GAME_RENDER_WINDOW, rsf_game_cpu_event as CpuEvent, rsf_game_host_services as Services,
-    rsf_game_latency_event as LatencyEvent, rsf_game_log_fn, rsf_game_render_feedback as Feedback,
+    RSF_GAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_RECONFIGURE,
+    RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_WINDOW, rsf_game_cpu_event as CpuEvent,
+    rsf_game_host_services as Services, rsf_game_latency_event as LatencyEvent, rsf_game_log_fn,
+    rsf_game_render_config as Config, rsf_game_render_feedback as Feedback,
     rsf_game_render_pass as Pass,
 };
 use rsf_game_sys::{
@@ -283,6 +284,11 @@ struct State {
     enabled: bool,
     reset: bool,
     key: ContextKey,
+    // The render configuration a RECONFIGURE pass planned from the saved backend and quality,
+    // published through render_config, and the quality it was planned for. Disabled at its
+    // output extent when no plan serves the current settings.
+    plan: Config,
+    plan_quality: u32,
     settings: Settings,
     capture_enabled: bool,
     capture_directory: CString,
@@ -363,6 +369,11 @@ fn infer_quality(render_width: u32, output_width: u32) -> u32 {
     best as u32
 }
 
+// The configuration without SR at `output`: native extents, no jitter plan of a provider.
+fn native_plan(output: [u32; 2]) -> Config {
+    Config::plan(false, 0, output, output)
+}
+
 fn host_from<'a>(user: *mut c_void) -> &'a Host {
     unsafe { &*user.cast::<Host>() }
 }
@@ -412,6 +423,8 @@ impl State {
             enabled: true,
             reset: true,
             key: ContextKey::default(),
+            plan: Config::request(),
+            plan_quality: 0,
             settings: DEFAULTS,
             capture_enabled: false,
             capture_directory: CString::default(),
@@ -521,6 +534,12 @@ impl Host {
         s.backend = self.resolve_backend(s);
         s.preset = values.dlss_preset;
         s.status_overlay = values.status_overlay != 0;
+        // A plan serves only the settings it was made for; the integration plans again.
+        if s.plan.enabled != 0
+            && (!s.enabled || s.backend != s.plan.sr_backend || values.sr_quality != s.plan_quality)
+        {
+            s.plan = native_plan([s.plan.output_width, s.plan.output_height]);
+        }
         let layout =
             unsafe { rsf_settings_store_read_layout(self.ini.as_ptr(), self.section.as_ptr()) };
         self.ui_preferences.store(layout, Ordering::Relaxed);
@@ -623,8 +642,10 @@ impl Host {
         }
     }
 
-    // Replaces the SR context for a changed backend, quality, preset, exposure or extent.
-    fn configure(&self, s: &mut State, pass: &Pass, key: ContextKey) -> i32 {
+    // Replaces the SR context for a changed backend, quality, preset, exposure or extent. A
+    // planned context takes its render extent from the provider for `key.quality`; otherwise the
+    // engine owns its render extents.
+    fn configure(&self, s: &mut State, pass: &Pass, key: ContextKey, planned: bool) -> i32 {
         let camera = &pass.camera;
         let device = s.device.as_ref().map_or(null_mut(), Interface::as_raw);
         let mut setup = self.vendors.sr_setup(
@@ -633,11 +654,13 @@ impl Host {
             Some(backend_log),
             self.user(),
         );
-        // The engine owns its render extents and may supply its exposure.
+        // The engine may supply its exposure.
         setup.abi_version = 2;
         (setup.output_width, setup.output_height) = (camera.output_width, camera.output_height);
-        (setup.render_width, setup.render_height) = (camera.render_width, camera.render_height);
-        setup.engine_input_extents = 1;
+        if !planned {
+            (setup.render_width, setup.render_height) = (camera.render_width, camera.render_height);
+            setup.engine_input_extents = 1;
+        }
         setup.inverted_depth = camera.depth_inverted;
         setup.external_exposure = u32::from(!pass.exposure.is_null());
         setup.streamline_host = leaf::present_host();
@@ -685,11 +708,67 @@ impl Host {
         BACKEND_OK
     }
 
+    // A RECONFIGURE pass: plans the saved backend and quality at the pass's output extent and
+    // publishes the result through render_config. The provider's context chooses the render
+    // extent, and its vendor sampling gives jitter phases and LOD bias; the integration applies
+    // them. The context stays for inputs that arrive at the planned extents. The engine keeps
+    // its native evaluation for this pass either way.
+    fn plan(&self, s: &mut State, pass: &Pass, served: bool) -> i32 {
+        let camera = &pass.camera;
+        let output = [camera.output_width, camera.output_height];
+        s.reset = true;
+        s.plan = native_plan(output);
+        if output.contains(&0) {
+            return INVALID;
+        }
+        if !served {
+            return NOT_READY;
+        }
+        if !self.drain(s) {
+            return BUSY;
+        }
+        let quality = s.settings.sr_quality;
+        let key = ContextKey {
+            backend: s.backend,
+            quality,
+            preset: s.preset,
+            exposure: !pass.exposure.is_null(),
+            render: (0, 0),
+            output: (output[0], output[1]),
+        };
+        let result = self.configure(s, pass, key, true);
+        if result != BACKEND_OK {
+            return result;
+        }
+        let (mut width, mut height) = (0, 0);
+        let planned = unsafe { leaf::sr12_plan(s.context, &mut width, &mut height) };
+        if planned != BACKEND_OK
+            || !(1..=output[0]).contains(&width)
+            || !(1..=output[1]).contains(&height)
+        {
+            return NOT_READY;
+        }
+        s.key.render = (width, height);
+        s.plan = Config::plan(true, s.backend, output, [width, height]);
+        s.plan_quality = quality;
+        self.log(&format!(
+            "Native renderer render plan backend={} quality={quality} {width}x{height} -> {}x{}, \
+             jitter phases {}, LOD bias {:.3}.",
+            s.backend, output[0], output[1], s.plan.jitter_phases, s.plan.lod_bias
+        ));
+        NOT_READY
+    }
+
     fn process(&self, commands: Handle, pass: *const Pass) -> i32 {
         let Some(pass) = (unsafe { checked(pass) }) else {
             return INVALID;
         };
-        if commands.is_null() || pass.camera_valid == 0 || pass.session_id != self.session {
+        // A RECONFIGURE pass only plans; it needs the output extent, not a camera.
+        let reconfigure = pass.flags & RSF_GAME_RENDER_RECONFIGURE != 0;
+        if commands.is_null()
+            || (pass.camera_valid == 0 && !reconfigure)
+            || pass.session_id != self.session
+        {
             return INVALID;
         }
         if unsafe { leaf::depth_domains(pass) } != 0 {
@@ -699,6 +778,16 @@ impl Host {
         let s = &mut *guard;
         self.flush_captures(s);
         self.poll(s);
+        if reconfigure
+            && (self.poisoned.load(Ordering::Relaxed)
+                || !s.enabled
+                || leaf::dlss_preset_valid(s.preset) == 0)
+        {
+            let output = [pass.camera.output_width, pass.camera.output_height];
+            s.plan = native_plan(output);
+            s.reset = true;
+            return NOT_READY;
+        }
         if self.poisoned.load(Ordering::Relaxed)
             || !s.enabled
             || leaf::dlss_preset_valid(s.preset) == 0
@@ -726,25 +815,40 @@ impl Host {
         drop(owner);
         // Auto needs the owning adapter, which is known only once the game records a pass.
         s.backend = self.resolve_backend(s);
-        let served = matches!(s.backend, RSF_SR_DLSS..=RSF_SR_XESS | RSF_SR_SPATIAL);
-        if !served || !has(self.sr_choices, s.backend) {
+        let served = matches!(s.backend, RSF_SR_DLSS..=RSF_SR_XESS | RSF_SR_SPATIAL)
+            && has(self.sr_choices, s.backend);
+        if reconfigure {
+            return self.plan(s, pass, served);
+        }
+        if !served {
             s.reset = true;
             return NOT_READY;
         }
         let camera = &pass.camera;
+        let render = (camera.render_width, camera.render_height);
+        let output = (camera.output_width, camera.output_height);
+        // Inputs at the planned extents run the planned quality; others the nearest ratio's.
+        let planned = s.plan.enabled != 0
+            && s.plan.sr_backend == s.backend
+            && (s.plan.render_width, s.plan.render_height) == render
+            && (s.plan.output_width, s.plan.output_height) == output;
         let key = ContextKey {
             backend: s.backend,
-            quality: infer_quality(camera.render_width, camera.output_width),
+            quality: if planned {
+                s.plan_quality
+            } else {
+                infer_quality(camera.render_width, camera.output_width)
+            },
             preset: s.preset,
             exposure: !pass.exposure.is_null(),
-            render: (camera.render_width, camera.render_height),
-            output: (camera.output_width, camera.output_height),
+            render,
+            output,
         };
         if s.context.is_null() || s.key != key {
             if !self.drain(s) {
                 return BUSY;
             }
-            let result = self.configure(s, pass, key);
+            let result = self.configure(s, pass, key, false);
             if result != BACKEND_OK {
                 return result;
             }
@@ -1339,6 +1443,17 @@ unsafe extern "C" fn process(user: *mut c_void, commands: Handle, pass: *const P
     result
 }
 
+// The last RECONFIGURE plan, as one snapshot. Disabled at its output extent when SR is off, the
+// provider refused, or the settings changed since; a RECONFIGURE pass plans again.
+unsafe extern "C" fn render_config(user: *mut c_void, output: *mut Config) -> c_int {
+    if !unsafe { has_capacity(output) } {
+        return 0;
+    }
+    let plan = host_from(user).lock().plan;
+    unsafe { output.write(plan) };
+    1
+}
+
 unsafe extern "C" fn submit(
     user: *mut c_void,
     queue: Handle,
@@ -1651,6 +1766,7 @@ unsafe fn create(setup: *const Setup, services: *mut Services) -> i32 {
         return result;
     }
     services.process_upscale = Some(process);
+    services.render_config = Some(render_config);
     services.submit = Some(submit);
     services.present = Some(present);
     services.render_pass = Some(render_pass);
