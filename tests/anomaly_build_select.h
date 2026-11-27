@@ -1,29 +1,22 @@
 // SPDX-License-Identifier: MIT
-// Test helper: which exact Anomaly build profile (games/anomaly/src/build_profile.h) a fixture runs against. CTest
-// registers the profile-dependent fixtures once per build; the build is the argument "standard" (default) or "avx".
+// Test helper: which exact Anomaly build a profile-dependent fixture runs against. CTest registers those fixtures once
+// per build; the argument "standard" (default) or "avx" selects it. The Rust fixture archive owns the selection.
 #pragma once
-#include "build_profile.h"
-#include <cstdio>
-#include <cstdlib>
-#include <string_view>
+#include <stddef.h>
 
-namespace rsf::anomaly::testing {
-inline const BuildProfile& selected_build(int argc, char** argv) noexcept
-{
-    for (int i = 1; i < argc; ++i) {
-        const std::string_view value = argv[i];
-        for (const auto& build : build_profiles)
-            if (value == build.label) return build;
-    }
-    return standard_build;
+#ifdef __cplusplus
+#define RSF_BUILD_SELECT_NOEXCEPT noexcept
+extern "C" {
+#else
+#define RSF_BUILD_SELECT_NOEXCEPT
+#endif
+
+// Index of the selected build in native_profile.rs order (Standard 0, AVX 1).
+size_t rsf_test_anomaly_select_build(int argc, const char* const* argv) RSF_BUILD_SELECT_NOEXCEPT;
+// Prints the fixture banner for that build.
+void rsf_test_anomaly_announce_build(const char* label, const char* executable) RSF_BUILD_SELECT_NOEXCEPT;
+
+#ifdef __cplusplus
 }
-// The profile of the other executable: its tables must never be accepted on this build's image.
-inline const BuildProfile& other_build(const BuildProfile& build) noexcept
-{
-    return &build == &standard_build ? avx_build : standard_build;
-}
-inline void announce(const BuildProfile& build) noexcept
-{
-    std::printf("build profile: %s (%s)\n", build.label, build.executable);
-}
-}
+#endif
+#undef RSF_BUILD_SELECT_NOEXCEPT

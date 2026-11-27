@@ -19,7 +19,7 @@ extern "C" {
    D3D11, normally the facade chain of the D3D11 presentation bridge
    (d3d11_present_api.h). It is the same overlay_host/overlay_input/overlay_renderer
    path the D3D11 carrier uses, not a second panel, renderer or runtime. The Rust panel
-   (rescaleframe_overlay.dll, overlay ABI 17) is loaded from RSF_OVERLAY_DLL when that
+   (rescaleframe_overlay.dll) is loaded from RSF_OVERLAY_DLL when that
    names a file, otherwise from beside ReScaleFrame.Runtime.dll.
 
    Composition. present() draws into the chain's current D3D11 backbuffer at the
@@ -92,13 +92,18 @@ typedef struct rsf_overlay_sr_report {
     float jitter_pixels[2];
     /* Why effective differs from requested; empty when it does not. */
     char reason[96];
+    /* Why the host offers no frame generation (the presentation bridge was refused, say); empty
+       when it does. The panel shows it as the frame generation status. */
+    char fg_unavailable[96];
 } rsf_overlay_sr_report;
 
 /* API 2. An adapter-defined option the panel draws under "Advanced" (AGENTS.md Rule 2). The
    service only transports it: the adapter applies and persists a change in option_changed. */
 #define RSF_OVERLAY_SERVICE_OPTION_TOGGLE 0u /* value is 0 or 1 */
 #define RSF_OVERLAY_SERVICE_OPTION_NUMBER 1u /* minimum..maximum in steps, shown as value / divisor */
-#define RSF_OVERLAY_SERVICE_OPTION_LIMIT 24u
+#define RSF_OVERLAY_SERVICE_OPTION_LIMIT 40u
+/* The most generated frames per rendered frame a setup may allow. */
+#define RSF_OVERLAY_MAX_GENERATED_FRAMES 15u
 typedef struct rsf_overlay_service_option {
     const char* label_utf8; /* copied by configure */
     uint32_t kind;
@@ -133,7 +138,8 @@ typedef struct rsf_overlay_service_setup {
     uint32_t fg_backend_choices;
     /* Bit n: RSF_REFLEX_* latency mode n. Bit RSF_REFLEX_OFF must be set. */
     uint32_t latency_choices;
-    /* Upper bound for FGGeneratedFrames, at least 1. */
+    /* Upper bound for FGGeneratedFrames, 1 to RSF_OVERLAY_MAX_GENERATED_FRAMES. A host that can
+       generate frames passes the maximum: the provider reports what the GPU admits. */
     uint32_t max_generated_frames;
     /* Nonzero when the adapter applies DLSSPreset. */
     uint32_t dlss_preset_available;
@@ -149,7 +155,8 @@ typedef struct rsf_overlay_service_setup {
        applies SR choices at its own drained boundary. Borrowed for the call. */
     void (*settings_changed)(void* user, const rsf_render_settings* applied);
     void* user;
-    /* API 2. Up to RSF_OVERLAY_SERVICE_OPTION_LIMIT options, copied. */
+    /* API 2. Up to RSF_OVERLAY_SERVICE_OPTION_LIMIT options, copied. A nonempty
+       list requires option_changed to apply and persist edits. */
     uint32_t option_count;
     const rsf_overlay_service_option* options;
     /* Present-owner thread, each presented frame: write the current value of every option.
@@ -187,9 +194,12 @@ typedef struct rsf_overlay_capture {
    - status: any thread. Requested values are the persisted settings; effective
      values are the adapter's last sr_report and the presentation owner's provider
      status sampled at the last present().
-   - settings_get/settings_apply: any thread except from settings_changed. apply
-     validates against the setup choices, persists, forwards FG and then calls
-     settings_changed. Refused requests change nothing. */
+   - settings_get: any thread, including settings_changed, where it sees the
+     newly persisted settings.
+   - settings_apply: any thread. Validates against the setup choices, persists,
+     forwards FG and then calls settings_changed. A request with a valid size
+     and version returns BUSY while another settings update is in progress,
+     including from settings_changed. Refused requests change nothing. */
 typedef struct rsf_overlay_api {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -239,6 +249,12 @@ typedef rsf_result (*rsf_get_overlay_diagnostics_fn)(rsf_overlay_diagnostics* ou
    and struct_size is the runtime's sizeof(table). Querying loads nothing. */
 RSF_RUNTIME_API rsf_result rsf_get_overlay_api(rsf_overlay_api* api);
 typedef rsf_result (*rsf_get_overlay_api_fn)(rsf_overlay_api* api);
+
+/* Configure the shared panel and drive it from real D3D11/DXGI Present events for an
+   adapter without a presentation bridge. Call once from cold startup outside DllMain.
+   The observer leaves native Present in charge. Setup lifetime matches configure(). */
+typedef rsf_result (*rsf_start_d3d11_overlay_fn)(const rsf_overlay_service_setup* setup);
+RSF_RUNTIME_API rsf_result rsf_start_d3d11_overlay(const rsf_overlay_service_setup* setup);
 
 #ifdef __cplusplus
 }

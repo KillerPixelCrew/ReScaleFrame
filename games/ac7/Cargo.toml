@@ -1,0 +1,65 @@
+[package]
+name = "rsf-ac7"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+# rlib so tests/ac7-capture and the standalone AC7 fixtures can use the bindings it owns, and for
+# the capture fixture's unit-test link.
+crate-type = ["staticlib", "rlib"]
+
+[features]
+warp-fixture = ["dep:rsf-test-support"]
+# The view probe and session launchers' Rust halves (tests/ac7_view_probe.rs, tests/ac7_session.rs),
+# with the D3D11 leaves those launchers' archive carries.
+view-fixtures = ["dep:rsf-graphics"]
+# The AC7 carrier proxy's archive (rsf_ac7_rust): the proxy embeds the Runtime and the loader's module
+# dumps, so this archive carries both and the proxy links one Rust archive.
+carrier = ["dep:rsf-loader", "dep:rsf-orchestrator"]
+
+[dependencies]
+rsf-game-sys = { path = "../../sdk/game" }
+# MinHook.h for the capture trampolines; the adapter DLL links CMake's MinHook.
+rsf-minhook-sys = { path = "../../third_party/minhook" }
+
+[build-dependencies]
+cc.workspace = true
+rsf-bindgen = { path = "../../tools/bindgen" }
+
+[target."cfg(windows)".dependencies]
+rsf-graphics = { path = "../../runtime/graphics/rust", optional = true }
+rsf-loader = { path = "../../loader", optional = true }
+rsf-orchestrator = { path = "../../runtime/orchestrator", optional = true }
+rsf-windows = { path = "../../integrations/windows" }
+# The WARP fixtures' device; absent from the shipping build.
+rsf-test-support = { path = "../../tests/support", optional = true }
+windows = { workspace = true, features = [
+  "Win32_Graphics_Direct3D_Fxc",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_IO",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Performance",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+  "Win32_System_WindowsProgramming",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+rsf-shader-compiler = { path = "../../runtime/shader_patch/compiler" }
+
+[target."cfg(windows)".dev-dependencies]
+# Unit tests link the D3D11 leaves the adapter DLL gets from CMake.
+rsf-graphics = { path = "../../runtime/graphics/rust" }
+
+[lints]
+workspace = true

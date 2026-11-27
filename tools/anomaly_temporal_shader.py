@@ -4,11 +4,12 @@ Only first-party wrappers are tracked. Generated copies of local licensed input
 and its namespace-remapped skin functions remain in .local/anomaly/core*.
 """
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import re
 import shutil
+
+from anomaly_corpus import Refusal, corpus_hash, digest, tree
 
 REPO = Path(__file__).resolve().parents[1]
 LOCAL = REPO / '.local/anomaly'
@@ -18,29 +19,6 @@ ABI = 1
 # X-Ray's DX11 tessellation pass for PN/displacement bump materials (uber_deffer.cpp: VS -> DX11\tess.hs ->
 # DX11\tess.ds -> PS); the shadow domain shader (dx11/tess_shadow.ds) never draws into the G-buffer.
 TESS_HULL, TESS_DOMAIN = 'dx11/tess.hs', 'dx11/tess.ds'
-
-
-class Refusal(ValueError):
-    """The exact reviewed source or safe output boundary did not match."""
-
-
-def digest(data):
-    return hashlib.sha256(data).hexdigest()
-
-
-def tree(source):
-    result = {}
-    for path in sorted(source.rglob('*')):
-        if path.is_symlink() or path.is_junction():
-            raise Refusal('linked source')
-        if path.is_file():
-            result[path.relative_to(source).as_posix()] = path.read_bytes()
-    return result
-
-
-def corpus_hash(files):
-    return digest(json.dumps([[k, digest(v)] for k, v in sorted(files.items())],
-                             separators=(',', ':'), ensure_ascii=True).encode())
 
 
 def supported_roots(source):

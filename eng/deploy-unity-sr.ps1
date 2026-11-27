@@ -10,23 +10,56 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'common.ps1')
 $taskGame = (Resolve-Path -LiteralPath $GameDirectory).Path
 $taskBin = "$taskRoot/build/windows-x64/bin/$Configuration"
 $taskMod = Join-Path $taskGame 'ReScaleFrame'
 $taskManifest = Join-Path $taskMod 'deployment.json'
-$taskExe = Join-Path $taskGame 'DragNWash.exe'
-$taskExpected = '5FDFFFE386A2F43B77626CD3D70554D84C6588C94D309544924D6FAB088DDAFC'
-if (!(Test-Path -LiteralPath $taskExe) -or (Get-FileHash -LiteralPath $taskExe).Hash -ne $taskExpected) {
-    throw 'Deployment requires the researched DragNWash.exe fingerprint.'
+# Discover the Unity Mono URP player the adapter needs (AGENTS.md Rule 4). No executable build is
+# pinned: its hash is recorded as evidence. The plugin and managed helper check the rest at start-up.
+$taskPlayers = @(Get-ChildItem -LiteralPath $taskGame -Filter '*.exe' -File | Where-Object {
+    Test-Path -LiteralPath (Join-Path $taskGame "$($_.BaseName)_Data/Managed") -PathType Container })
+if ($taskPlayers.Count -ne 1) { throw "Expected one Unity player executable beside a <name>_Data/Managed directory; found $($taskPlayers.Count)." }
+$taskPlayer = $taskPlayers[0]
+foreach ($taskRequired in @('UnityPlayer.dll', 'MonoBleedingEdge/EmbedRuntime/mono-2.0-bdwgc.dll',
+    "$($taskPlayer.BaseName)_Data/Managed/UnityEngine.CoreModule.dll",
+    "$($taskPlayer.BaseName)_Data/Managed/Unity.RenderPipelines.Core.Runtime.dll",
+    "$($taskPlayer.BaseName)_Data/Managed/Unity.RenderPipelines.Universal.Runtime.dll")) {
+    if (!(Test-Path -LiteralPath (Join-Path $taskGame $taskRequired) -PathType Leaf)) { throw "Not a Unity Mono URP player: $taskRequired is missing." }
 }
-if (Get-Process DragNWash -ErrorAction SilentlyContinue) { throw 'Close DragNWash before updating the added RSF files.' }
+$taskUnity = (Get-Item -LiteralPath (Join-Path $taskGame 'UnityPlayer.dll')).VersionInfo.ProductVersion
+$taskExeHash = (Get-FileHash -LiteralPath $taskPlayer.FullName).Hash
+Write-Output "Unity player $($taskPlayer.Name): Unity $taskUnity, executable SHA256 $taskExeHash (evidence only)."
+if (Get-Process -Name $taskPlayer.BaseName -ErrorAction SilentlyContinue) { throw "Close $($taskPlayer.BaseName) before updating the added RSF files." }
 $taskOld = if (Test-Path -LiteralPath $taskManifest) { Get-Content -Raw -LiteralPath $taskManifest | ConvertFrom-Json } else { $null }
 $taskOwned = @{}
 if ($taskOld) { foreach ($taskFile in $taskOld.files) { $taskOwned[$taskFile.path] = $taskFile.sha256 } }
-$taskOriginal = if ($taskOld) { @($taskOld.original_files) } else {
-    @(Get-ChildItem -LiteralPath $taskGame -Recurse -File | ForEach-Object {
-        @{ path = [IO.Path]::GetRelativePath($taskGame, $_.FullName); sha256 = (Get-FileHash -LiteralPath $_.FullName).Hash }
-    })
+# The game's own files as they are now: everything outside RSF's folder and its two top-level files.
+# A game update changes them legitimately, so the baseline is retaken on every deployment; the copy
+# below must leave it unchanged.
+$taskPatches = @()
+if ($taskOld -and $taskOld.PSObject.Properties.Name -contains 'game_patches') { $taskPatches = @($taskOld.game_patches) }
+$taskOriginal = @(Get-ChildItem -LiteralPath $taskGame -Recurse -File | ForEach-Object {
+    $taskPath = [IO.Path]::GetRelativePath($taskGame, $_.FullName)
+    if ($taskPath -notmatch '^ReScaleFrame[\\/]' -and $taskPath -notin @('version.dll', 'ReScaleFrame.ini')) {
+        @{ path = $taskPath; sha256 = (Get-FileHash -LiteralPath $_.FullName).Hash }
+    }
+})
+$taskCurrent = @{}
+foreach ($taskFile in $taskOriginal) { $taskCurrent[$taskFile.path.Replace('\','/')] = $taskFile }
+# A recorded game patch still in place keeps its original hash in the baseline; one the game
+# replaced is dropped and must be patched again.
+$taskPatches = @($taskPatches | Where-Object {
+    $taskFile = $taskCurrent[$_.path.Replace('\','/')]
+    if ($taskFile -and $taskFile.sha256 -eq $_.patched_sha256) { $taskFile.sha256 = $_.original_sha256; $true }
+    else { Write-Warning "Recorded game patch no longer present (replaced by the game): $($_.path)"; $false }
+})
+if ($taskOld) {
+    $taskPrevious = @{}
+    foreach ($taskFile in $taskOld.original_files) { $taskPrevious[$taskFile.path.Replace('\','/')] = $taskFile.sha256 }
+    $taskChanged = @($taskCurrent.Keys | Where-Object { $taskPrevious[$_] -ne $taskCurrent[$_].sha256 }) +
+        @($taskPrevious.Keys | Where-Object { !$taskCurrent.ContainsKey($_) })
+    if ($taskChanged.Count) { Write-Output "$($taskChanged.Count) game files changed since the last deployment (game update)." }
 }
 $taskCopies = [Collections.Generic.List[object]]::new()
 function Add-UnityCopy([string]$Source, [string]$Relative) {
@@ -34,25 +67,10 @@ function Add-UnityCopy([string]$Source, [string]$Relative) {
     $taskCopies.Add(@{ source=$Source; path=$Relative })
 }
 Add-UnityCopy "$taskBin/ReScaleFrame.Loader.dll" 'version.dll'
-Add-UnityCopy "$taskRoot/runtime/backends/dlss/third_party/mfg_unlocker/LICENSE" 'ReScaleFrame/MFG-Unlocker-LICENSE.txt'
 foreach ($taskLeaf in @('ReScaleFrame.Runtime.dll','ReScaleFrame.Game.UnityMono.dll','ReScaleFrame.Unity.Managed.dll','rescaleframe_overlay.dll','0Harmony.dll','Harmony-LICENSE.txt')) {
     Add-UnityCopy "$taskBin/$taskLeaf" "ReScaleFrame/$taskLeaf"
 }
-$taskSl = "$taskRoot/.local/streamline/sdk"
-foreach ($taskLeaf in @('sl.interposer.dll','sl.common.dll','sl.dlss.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlss.dll','nvngx_dlssg.dll','nvngx_dlss.license.txt')) {
-    Add-UnityCopy "$taskSl/bin/x64/$taskLeaf" "ReScaleFrame/streamline/$taskLeaf"
-}
-foreach ($taskLeaf in @('license.txt','3rd-party-licenses.md')) { Add-UnityCopy "$taskSl/$taskLeaf" "ReScaleFrame/streamline/$taskLeaf" }
-$taskFfx = "$taskRoot/vendor/fidelityfx/Kits/FidelityFX"
-foreach ($taskLeaf in @('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_upscaler_dx12.dll','amd_fidelityfx_framegeneration_dx12.dll')) {
-    Add-UnityCopy "$taskFfx/signedbin/$taskLeaf" "ReScaleFrame/fidelityfx/$taskLeaf"
-}
-Add-UnityCopy "$taskFfx/docs/license.md" 'ReScaleFrame/fidelityfx/license.md'
-Add-UnityCopy "$taskRoot/vendor/fidelityfx/3rdpartynotice.md" 'ReScaleFrame/fidelityfx/3rdpartynotice.md'
-Add-UnityCopy "$taskRoot/vendor/xess/bin/libxess.dll" 'ReScaleFrame/xess/libxess.dll'
-Add-UnityCopy "$taskRoot/vendor/xess/bin/libxess_fg.dll" 'ReScaleFrame/xess/libxess_fg.dll'
-Add-UnityCopy "$taskRoot/vendor/xess/bin/libxell.dll" 'ReScaleFrame/xess/libxell.dll'
-foreach ($taskLeaf in @('LICENSE.txt','third-party-programs.txt')) { Add-UnityCopy "$taskRoot/vendor/xess/$taskLeaf" "ReScaleFrame/xess/$taskLeaf" }
+foreach ($taskVendor in (Get-RsfVendorPayload $taskRoot).GetEnumerator()) { Add-UnityCopy $taskVendor.Value "ReScaleFrame/$($taskVendor.Key)" }
 $taskCopies.Add(@{ source=$null; path='ReScaleFrame.ini' })
 foreach ($taskCopy in $taskCopies) {
     $taskDestination = Join-Path $taskGame $taskCopy.path
@@ -81,20 +99,16 @@ foreach ($taskCopy in $taskCopies) {
             'EntryModule=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','EntryPoint=rsf_unity_start',
             '[UnitySR]',"Backend=$taskId","Quality=$Quality",
             "FrameGeneration=$taskFg","GeneratedFrames=$GeneratedFrames","GraphicsDebug=$([int]$GraphicsDebug.IsPresent)",
-            'Plugin=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','Log=ReScaleFrame/unity-sr.log',
-            'Streamline=ReScaleFrame/streamline','FSR2=ReScaleFrame/fidelityfx','FSR3=ReScaleFrame/fidelityfx',
-            'FSR4=ReScaleFrame/fidelityfx','XeSS=ReScaleFrame/xess'), [Text.Encoding]::Unicode)
+            'Plugin=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','Log=ReScaleFrame/unity-sr.log'), [Text.Encoding]::Unicode)
     }
     $taskFiles += @{ path=$taskCopy.path; sha256=(Get-FileHash -LiteralPath $taskDestination).Hash }
 }
 foreach ($taskFile in $taskOriginal) {
     $taskPath = Join-Path $taskGame $taskFile.path
     $taskExpectedOriginal = $taskFile.sha256
-    if ($taskOld -and $taskOld.PSObject.Properties.Name -contains 'game_patches') {
-        foreach ($taskPatch in $taskOld.game_patches) {
-            if ($taskPatch.path.Replace('\','/') -eq $taskFile.path.Replace('\','/') -and $taskPatch.original_sha256 -eq $taskFile.sha256) {
-                $taskExpectedOriginal = $taskPatch.patched_sha256
-            }
+    foreach ($taskPatch in $taskPatches) {
+        if ($taskPatch.path.Replace('\','/') -eq $taskFile.path.Replace('\','/') -and $taskPatch.original_sha256 -eq $taskFile.sha256) {
+            $taskExpectedOriginal = $taskPatch.patched_sha256
         }
     }
     if (!(Test-Path -LiteralPath $taskPath) -or (Get-FileHash -LiteralPath $taskPath).Hash -ne $taskExpectedOriginal) {
@@ -102,15 +116,13 @@ foreach ($taskFile in $taskOriginal) {
     }
 }
 $taskDeployment = @{ loader='shared-rsf-shim'; carrier='version.dll'; game='drag-n-wash'; backend=$Backend;
-    files=$taskFiles; original_files=$taskOriginal; original_files_unchanged=$true }
-if ($taskOld -and $taskOld.PSObject.Properties.Name -contains 'game_patches') {
-    $taskDeployment.game_patches = @($taskOld.game_patches)
-    $taskDeployment.original_files_unchanged = @($taskOld.game_patches).Count -eq 0
-}
+    executable=$taskPlayer.Name; executable_sha256=$taskExeHash; unity_version=$taskUnity
+    files=$taskFiles; original_files=$taskOriginal; original_files_unchanged=$taskPatches.Count -eq 0 }
+if ($taskPatches.Count) { $taskDeployment.game_patches = $taskPatches }
 [IO.File]::WriteAllText($taskManifest, ($taskDeployment | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 if ($taskDeployment.original_files_unchanged) {
     Write-Output "Deployed $($taskFiles.Count) RSF files. Verified $($taskOriginal.Count) original files unchanged. Launch normally."
 }
 else {
-    Write-Output "Deployed $($taskFiles.Count) RSF files. Verified $($taskOriginal.Count) original-file hashes with $(@($taskDeployment.game_patches).Count) recorded game patches. Launch normally."
+    Write-Output "Deployed $($taskFiles.Count) RSF files. Verified $($taskOriginal.Count) original-file hashes with $($taskPatches.Count) recorded game patches. Launch normally."
 }

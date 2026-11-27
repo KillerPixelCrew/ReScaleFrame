@@ -1,11 +1,18 @@
 # Runtime shader patch service
 
 The generic C API is `include/rescaleframe/shader_patch.h`. The Runtime exports
-`rsf_get_shader_patch_api`; callers borrow returned metadata/bytes until the stated
+`rsf_get_shader_patch_api`; its owner is
+`runtime/orchestrator/src/shader_patch.rs`.
+Callers borrow returned metadata/bytes until the stated
 session lifetime and release returned D3D11 COM objects themselves. Devices,
 contexts and compiler entry points are borrowed. Calls use the graphics owner
 thread; prepare serializes one session. Root tags and intended bindings are pack
-data, never game switches in core.
+data. Every admitted root is queryable. Omitted patched hashes and tags are
+empty strings, and omitted stages are zero.
+
+Inventory dumps return `RSF_PATCH_INTERNAL` if any entry fails. The service
+continues collecting other entries and records the affected shader hashes and
+operations in `inventory-report.txt`.
 
 `tools/rsf_shader_pack.py build <source-dir> <output.rsfpatch>` builds the raw v1
 container. `inspect <pack>` prints metadata and content hash. Metadata may reference
@@ -18,6 +25,8 @@ Synthetic checks (includes real WARP readback):
 cmake --build --preset windows-release-vs18 --target rsf_shader_patch_device_test
 ctest --preset windows-release-vs18 -R shader_patch_synthetic_device
 ```
+
+`rsf_shader_patch_device_test.exe --cpu` stops before creating the WARP device.
 
 Corpus parity is opt-in and reads only an ignored local corpus. Choose a fresh
 oracle destination, because the development tool refuses to overwrite evidence:

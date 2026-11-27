@@ -5,6 +5,7 @@
 //! header describes. The FFI layer above it does nothing but check pointers and copy.
 
 use egui::{Event, PointerButton, Pos2, RawInput, ViewportId, epaint};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::abi::{
     RSF_OVERLAY_MOUSE_LEFT, RSF_OVERLAY_MOUSE_MIDDLE, RSF_OVERLAY_MOUSE_RIGHT, RsfOverlayDrawCall,
@@ -22,6 +23,8 @@ use crate::panel::{self, Controls, HudDetail, Selection, View};
 /// atlas space and rebuilds the atlas, which costs a whole-texture update and, briefly, wrong
 /// glyphs. Read out of epaint's `TextureAtlas`, not observed here.
 const MAX_TEXTURE_SIDE: usize = 2048;
+
+static NEXT_SR_CHANGE: AtomicU32 = AtomicU32::new(1);
 
 /// Reference display height for the scale heuristic below.
 const REFERENCE_HEIGHT: f32 = 1080.0;
@@ -170,8 +173,8 @@ impl Overlay {
         }
 
         let mut intent = Intent {
-            quality: self.selection.quality(),
-            enabled: self.selection.enabled(),
+            quality: self.selection.quality,
+            enabled: self.selection.enabled,
             ui_preferences: preferences.to_bits(),
             ..Intent::default()
         };
@@ -212,8 +215,7 @@ impl Overlay {
             return intent;
         }
 
-        let points_per_pixel = 1.0 / scale;
-        let raw = self.raw_input(input, display, scale);
+        let (raw, pointer) = self.raw_input(input, display, scale);
 
         let frame = panel::Frame {
             selection: &self.selection,
@@ -225,10 +227,6 @@ impl Overlay {
         let hud = &self.hud;
         let controls = &mut self.controls;
         *controls = Controls::default();
-        let pointer = Pos2::new(
-            sanitise(input.mouse[0], 0.0) * points_per_pixel,
-            sanitise(input.mouse[1], 0.0) * points_per_pixel,
-        );
         let output = self.context.run_ui(raw, |ui| {
             panel::show(ui.ctx(), &frame, view, &mut intent, controls);
             if stats.show_performance_hud {
@@ -240,10 +238,13 @@ impl Overlay {
         // Applied after the layout rather than during it, so every widget in the frame reads the
         // same selection: the one the frame started with. A switch that wrote back into that
         // state mid-layout would toggle twice if the layout ever ran twice over one set of events.
+        if intent.quality_changed || intent.enabled_changed {
+            intent.sr_change_id = NEXT_SR_CHANGE.fetch_add(1, Ordering::Relaxed);
+        }
         self.selection.apply(&intent);
         self.view.apply(&intent);
-        intent.quality = self.selection.quality();
-        intent.enabled = self.selection.enabled();
+        intent.quality = self.selection.quality;
+        intent.enabled = self.selection.enabled;
 
         let pixels_per_point = output.pixels_per_point;
         self.collect_textures(output.textures_delta);
@@ -296,7 +297,7 @@ impl Overlay {
     ///
     /// The header hands over a position and a button mask, not events, so the transitions have to
     /// be recovered by comparing against the previous frame.
-    fn raw_input(&mut self, input: &FrameInput, display: [f32; 2], scale: f32) -> RawInput {
+    fn raw_input(&mut self, input: &FrameInput, display: [f32; 2], scale: f32) -> (RawInput, Pos2) {
         let points_per_pixel = 1.0 / scale;
         let mouse = [sanitise(input.mouse[0], 0.0), sanitise(input.mouse[1], 0.0)];
         let position = Pos2::new(mouse[0] * points_per_pixel, mouse[1] * points_per_pixel);
@@ -369,26 +370,22 @@ impl Overlay {
         let advance = if delta > 0.0 { delta } else { 1.0 / 60.0 };
         self.time += f64::from(advance);
 
-        RawInput {
-            time: Some(self.time),
-            predicted_dt: advance,
-            events,
-            focused: true,
-            ..base_raw_input(display, scale)
-        }
+        (
+            RawInput {
+                time: Some(self.time),
+                predicted_dt: advance,
+                events,
+                focused: true,
+                ..base_raw_input(display, scale)
+            },
+            position,
+        )
     }
 
     fn collect_textures(&mut self, delta: epaint::textures::TexturesDelta) {
         for (id, patch) in delta.set {
             let epaint::ImageData::Color(image) = &patch.image;
             let [width, height] = image.size;
-            // A patch whose pixel count does not match its size would have the renderer walk off
-            // the end of the buffer, and an empty one would hand it a dangling pointer, since an
-            // empty Vec has no allocation to point at. egui produces neither, so this only fires if
-            // egui changes shape under us, and dropping a patch beats a bad memcpy inside a game.
-            if width == 0 || height == 0 || width * height != image.pixels.len() {
-                continue;
-            }
             let mut pixels = Vec::with_capacity(image.pixels.len() * 4);
             for pixel in &image.pixels {
                 pixels.extend_from_slice(&pixel.to_array());
@@ -428,14 +425,6 @@ impl Overlay {
             let Some(clip) = scissor(primitive.clip_rect, pixels_per_point, display) else {
                 continue;
             };
-            // Overflowing a u32 index would need a quarter of a billion vertices from a debug
-            // panel. Stopping is still better than wrapping the offsets.
-            if self.vertices.len() + mesh.vertices.len() > u32::MAX as usize
-                || self.indices.len() + mesh.indices.len() > u32::MAX as usize
-            {
-                break;
-            }
-
             let vertex_offset = self.vertices.len() as u32;
             let index_offset = self.indices.len() as u32;
             self.vertices
@@ -510,7 +499,7 @@ fn paint_startup_hint(ctx: &egui::Context, alpha: f32) {
     );
 }
 
-/// Draw a pointer because AC7 hides the system cursor.
+/// Draw the panel pointer while the overlay owns cursor input.
 fn paint_cursor(ctx: &egui::Context, position: Pos2) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -539,19 +528,14 @@ fn pixels_per_point(display_height: f32) -> f32 {
     (display_height / REFERENCE_HEIGHT).clamp(1.0, 3.0)
 }
 
-/// egui's texture ids as one number.
-///
-/// The overlay only ever produces managed ids, so the high bit is never actually set today. It is
-/// still spelled out, because collapsing the two kinds onto the same numbers would make a user
-/// texture silently alias the font atlas the day one appears.
+/// egui's texture ids as one number. The overlay registers no user textures, so this is the
+/// managed id; the high bit keeps a user id from aliasing the font atlas should one appear.
 fn texture_id_to_u64(id: epaint::TextureId) -> u64 {
     match id {
-        epaint::TextureId::Managed(value) => value & !USER_TEXTURE_BIT,
-        epaint::TextureId::User(value) => (value & !USER_TEXTURE_BIT) | USER_TEXTURE_BIT,
+        epaint::TextureId::Managed(value) => value,
+        epaint::TextureId::User(value) => value | 1 << 63,
     }
 }
-
-const USER_TEXTURE_BIT: u64 = 1 << 63;
 
 /// Turn egui's clip rectangle in points into a scissor rectangle in whole physical pixels.
 ///
@@ -746,6 +730,130 @@ mod tests {
         let [_, release] = click(&mut overlay, &stats, off);
         assert!(release.fg_backend_changed);
         assert_eq!(release.fg_backend, 0);
+    }
+
+    #[test]
+    fn vrr_preset_sends_a_policy_instead_of_a_requested_multiplier() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.available = true;
+        stats.generation.reflex_available = true;
+        stats.generation.requested_mode = 1;
+        stats.generation.requested_generated = 3;
+        stats.generation.display_refresh_mhz = 120_000;
+        on_tab(&mut overlay, Tab::Frames);
+        settle(&mut overlay, &stats);
+        let point = overlay
+            .controls()
+            .fg_enabled
+            .expect("frame controls")
+            .center();
+        overlay.frame(
+            &FrameInput {
+                mouse: [point.x, point.y],
+                scroll_delta: -600.0,
+                ..visible_input()
+            },
+            &stats,
+        );
+        for _ in 0..30 {
+            idle_frame(&mut overlay, &stats);
+        }
+
+        let target = overlay.controls().frame_limit_preset[3].expect("VRR preset");
+        let [_, release] = click(&mut overlay, &stats, target);
+        assert!(release.frame_limit_changed);
+        assert_eq!(
+            release.frame_limit_us,
+            crate::abi::RSF_OVERLAY_FRAME_LIMIT_VRR
+        );
+    }
+
+    #[test]
+    fn automatic_fg_provider_keeps_the_resolved_provider_usable() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.backend = 1;
+        stats.generation.requested_backend = 7;
+        stats.generation.backend_choices = 0x3b | (1 << 7);
+        stats.generation.available = true;
+        on_tab(&mut overlay, Tab::Frames);
+        settle(&mut overlay, &stats);
+
+        let enabled = overlay.controls().fg_enabled.expect("FG enable control");
+        let [_, release] = click(&mut overlay, &stats, enabled);
+        assert!(release.fg_changed);
+        assert!(!release.fg_backend_changed);
+
+        stats.generation.requested_backend = 1;
+        settle(&mut overlay, &stats);
+        let automatic = overlay.controls().fg_backend[5].expect("Auto provider");
+        let [_, release] = click(&mut overlay, &stats, automatic);
+        assert!(release.fg_backend_changed);
+        assert_eq!(release.fg_backend, 7);
+    }
+
+    #[test]
+    fn refused_quality_can_be_retried_and_other_receipts_are_ignored() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.enabled = true;
+        settle(&mut overlay, &stats);
+
+        let target = quality_rect(&overlay, Quality::Balanced);
+        let [_, initial] = click(&mut overlay, &stats, target);
+        assert_ne!(initial.sr_change_id, 0);
+        stats.sr_change_id = initial.sr_change_id.wrapping_add(1);
+        stats.sr_change_status = crate::abi::RSF_OVERLAY_SR_CHANGE_REFUSED;
+        let [_, stale] = click(&mut overlay, &stats, target);
+        assert!(!stale.quality_changed);
+
+        stats.sr_change_id = initial.sr_change_id;
+        settle(&mut overlay, &stats);
+        let target = quality_rect(&overlay, Quality::Balanced);
+        let [_, retry] = click(&mut overlay, &stats, target);
+        assert!(retry.quality_changed);
+        assert_eq!(retry.quality, Quality::Balanced);
+        assert_ne!(retry.sr_change_id, initial.sr_change_id);
+    }
+
+    #[test]
+    fn ultra_quality_is_greyed_until_the_host_advertises_it() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.backend = 5;
+        settle(&mut overlay, &stats);
+        let greyed = overlay.controls().quality[5].expect("Ultra Quality is drawn, greyed");
+        let [press, release] = click(&mut overlay, &stats, greyed);
+        assert!(!press.quality_changed && !release.quality_changed);
+
+        stats.sr_quality_choices |= 1 << Quality::UltraQuality.to_abi();
+        settle(&mut overlay, &stats);
+        let target = quality_rect(&overlay, Quality::UltraQuality);
+        let [_, release] = click(&mut overlay, &stats, target);
+        assert!(release.quality_changed);
+        assert_eq!(release.quality.to_abi(), 5);
+    }
+
+    #[test]
+    fn refused_enable_edit_can_be_retried() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.enabled = true;
+        settle(&mut overlay, &stats);
+        let enabled = overlay.controls().enabled.expect("SR enable control");
+        let [_, change] = click(&mut overlay, &stats, enabled);
+        assert!(change.enabled_changed);
+        assert!(!change.enabled);
+
+        stats.sr_change_id = change.sr_change_id;
+        stats.sr_change_status = crate::abi::RSF_OVERLAY_SR_CHANGE_REFUSED;
+        settle(&mut overlay, &stats);
+        let enabled = overlay.controls().enabled.expect("SR enable control");
+        let [_, retry] = click(&mut overlay, &stats, enabled);
+        assert!(retry.enabled_changed);
+        assert!(!retry.enabled);
+        assert_ne!(retry.sr_change_id, change.sr_change_id);
     }
 
     #[test]
@@ -978,7 +1086,7 @@ mod tests {
         };
         // Nothing found, nothing decoded, no jitter, no sizes, and a quality level from a runtime
         // newer than this build.
-        stats.set_quality(9);
+        stats.quality_raw = 9;
 
         settle(&mut overlay, &stats);
         let intent = idle_frame(&mut overlay, &stats);
@@ -1088,7 +1196,7 @@ mod tests {
         idle_frame(&mut overlay, &stats);
 
         // Something other than this panel changed the level, so the panel shows what is in effect.
-        stats.set_quality(Quality::UltraPerformance.to_abi());
+        stats.quality_raw = Quality::UltraPerformance.to_abi();
         let intent = idle_frame(&mut overlay, &stats);
         assert_eq!(intent.quality, Quality::UltraPerformance);
         assert!(!intent.quality_changed, "following is not asking");
@@ -1102,18 +1210,18 @@ mod tests {
         let target = quality_rect(&overlay, Quality::Quality);
         click(&mut overlay, &stats, target);
 
-        stats.set_quality(Quality::Quality.to_abi());
+        stats.quality_raw = Quality::Quality.to_abi();
         let intent = idle_frame(&mut overlay, &stats);
         assert_eq!(intent.quality, Quality::Quality);
 
         // And a later change by something else is followed rather than fought over.
-        stats.set_quality(Quality::Native.to_abi());
+        stats.quality_raw = Quality::Native.to_abi();
         let intent = idle_frame(&mut overlay, &stats);
         assert_eq!(intent.quality, Quality::Native);
     }
 
     #[test]
-    fn a_host_with_no_sr_choice_gets_no_upscaling_controls() {
+    fn a_host_with_no_sr_choice_shows_every_upscaling_control_disabled() {
         let mut overlay = Overlay::new();
         let stats = Stats {
             backend_loaded: true,
@@ -1121,13 +1229,77 @@ mod tests {
             ..Stats::default()
         };
         settle(&mut overlay, &stats);
-        let controls = overlay.controls();
-        assert!(controls.enabled.is_none(), "no checkbox without a backend");
-        assert!(controls.backend.iter().all(Option::is_none));
-        assert!(controls.quality.iter().all(Option::is_none));
-        // The rest of the panel still lays out and idling requests nothing.
+        let controls = *overlay.controls();
+        assert!(controls.enabled.is_some(), "the switch is drawn, greyed");
+        assert!(controls.backend.iter().all(Option::is_some));
+        assert!(controls.quality.iter().all(Option::is_some));
+        // The rest of the panel still lays out, and no greyed control asks for anything.
         assert!(!overlay.draw_calls().is_empty());
         assert!(idle_frame(&mut overlay, &stats).is_idle());
+        for target in [controls.enabled.unwrap(), controls.backend[0].unwrap()] {
+            let [press, release] = click(&mut overlay, &stats, target);
+            assert!(press.is_idle() && release.is_idle());
+        }
+        let target = quality_rect(&overlay, Quality::Balanced);
+        let [press, release] = click(&mut overlay, &stats, target);
+        assert!(press.is_idle() && release.is_idle());
+    }
+
+    #[test]
+    fn auto_and_unserved_backends_are_drawn_greyed_with_a_reason() {
+        let mut overlay = Overlay::new();
+        // The panel of a game on an AMD GPU: DLSS, FSR1 and Auto are not served.
+        let mut stats = Stats {
+            backend_loaded: true,
+            backend_choices: (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5),
+            backend: 3,
+            ..Stats::default()
+        };
+        settle(&mut overlay, &stats);
+        let controls = *overlay.controls();
+        assert!(
+            controls.backend.iter().all(Option::is_some),
+            "all seven backends are drawn, Auto and FSR1 included"
+        );
+        for index in [0, 5, 6] {
+            let [press, release] = click(&mut overlay, &stats, controls.backend[index].unwrap());
+            assert!(
+                !press.backend_changed && !release.backend_changed,
+                "{index}"
+            );
+        }
+        let [_, release] = click(&mut overlay, &stats, controls.backend[1].unwrap());
+        assert!(release.backend_changed);
+        assert_eq!(release.backend, 2);
+        // Auto becomes selectable as soon as the Runtime offers it.
+        stats.backend_choices |= 1 << 7;
+        settle(&mut overlay, &stats);
+        let auto = overlay.controls().backend[6].unwrap();
+        let [_, release] = click(&mut overlay, &stats, auto);
+        assert!(release.backend_changed);
+        assert_eq!(release.backend, 7);
+        let reasons = crate::panel::sr_reason;
+        assert!(reasons(1).contains("NVIDIA") && reasons(6).contains("engine"));
+    }
+
+    #[test]
+    fn auto_generation_is_drawn_greyed_until_the_runtime_offers_it() {
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.generation.backend_choices = 0x3b;
+        stats.generation.available = true;
+        on_tab(&mut overlay, Tab::Frames);
+        settle(&mut overlay, &stats);
+        let auto = overlay.controls().fg_backend[5].expect("Auto is drawn without being offered");
+        let [press, release] = click(&mut overlay, &stats, auto);
+        assert!(!press.fg_backend_changed && !release.fg_backend_changed);
+        stats.generation.backend_choices |= 1 << 7;
+        settle(&mut overlay, &stats);
+        let auto = overlay.controls().fg_backend[5].unwrap();
+        let [_, release] = click(&mut overlay, &stats, auto);
+        assert!(release.fg_backend_changed);
+        assert_eq!(release.fg_backend, 7);
+        assert!(crate::panel::fg_reason(4).contains("RDNA 4"));
     }
 
     #[test]
@@ -1318,17 +1490,13 @@ mod tests {
         on_tab(&mut overlay, Tab::Sharpen);
         settle(&mut overlay, &stats);
         assert!(
-            overlay.controls().tabs[Tab::Sharpen as usize].is_none(),
-            "no sharpening tab without host support"
+            overlay.controls().tabs[Tab::Sharpen as usize].is_some(),
+            "every game has the sharpening tab"
         );
-        on_tab(&mut overlay, Tab::Sharpen);
-        assert!(
-            overlay
-                .controls()
-                .sharpening_mode
-                .iter()
-                .all(Option::is_none)
-        );
+        // Without a running upscaler the controls are drawn but greyed: a tap changes nothing.
+        let rcas = overlay.controls().sharpening_mode[1].expect("RCAS is drawn, greyed");
+        let [press, release] = click(&mut overlay, &stats, rcas);
+        assert!(!press.sharpening_changed && !release.sharpening_changed);
         stats.sharpening_available = true;
         settle(&mut overlay, &stats);
         assert!(
@@ -1418,6 +1586,62 @@ mod tests {
         settle(&mut overlay, &stats);
         assert!(overlay.controls().fg_backend[0].is_some());
         assert!(overlay.controls().quality[0].is_none());
+    }
+
+    #[test]
+    fn rail_scroll_reaches_adapter_and_display_tabs_at_largest_scale() {
+        use crate::model::{HostOption, PanelSize};
+
+        let mut overlay = Overlay::new();
+        let mut stats = stats_with_backend();
+        stats.sharpening_available = true;
+        stats.host_options[0] = Some(HostOption {
+            label: "Adapter toggle",
+            toggle: true,
+            value: 0,
+            range: [0, 1, 1],
+            divisor: 1,
+            restart: false,
+        });
+        stats.ui_preferences = UiPreferences {
+            size: PanelSize::Larger,
+            ..UiPreferences::default()
+        }
+        .to_bits();
+        settle(&mut overlay, &stats);
+        assert!(overlay.controls().tabs[Tab::Display as usize].is_none());
+        let rail = overlay.controls().tabs[Tab::Frames as usize]
+            .expect("Frames tab")
+            .center()
+            * 1.5;
+        overlay.frame(
+            &FrameInput {
+                mouse: [rail.x, rail.y],
+                scroll_delta: -600.0,
+                ..visible_input()
+            },
+            &stats,
+        );
+        for _ in 0..30 {
+            idle_frame(&mut overlay, &stats);
+        }
+        for tab in [Tab::Game, Tab::Display] {
+            let target = overlay.controls().tabs[tab as usize]
+                .expect("tab reached by scrolling")
+                .center()
+                * 1.5;
+            for mouse_buttons in [RSF_OVERLAY_MOUSE_LEFT, 0] {
+                overlay.frame(
+                    &FrameInput {
+                        mouse: [target.x, target.y],
+                        mouse_buttons,
+                        ..visible_input()
+                    },
+                    &stats,
+                );
+            }
+            assert_eq!(overlay.view.tab, tab);
+        }
     }
 
     #[test]
@@ -1532,6 +1756,9 @@ mod tests {
         let mut overlay = Overlay::new();
         let mut stats = stats_with_backend();
         stats.generation.reflex_available = true;
+        // A host serving every provider: nothing greyed means no reason lines pushing the frame
+        // limit below the 720 px display.
+        stats.generation.backend_choices = 0x3b | (1 << 7);
         stats.generation.frame_limit_us = 25_000; // 40 fps
         on_tab(&mut overlay, Tab::Frames);
         settle(&mut overlay, &stats);

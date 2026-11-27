@@ -44,7 +44,9 @@ Copy-Item -LiteralPath (Join-Path $taskSource 'demo/project.godot'),(Join-Path $
 Copy-Item -LiteralPath (Join-Path $taskSource 'demo/main.gd') -Destination (Join-Path $taskProject 'scene.gd') -Force
 Copy-Item -LiteralPath (Join-Path $taskSource 'demo/visual.gd') -Destination (Join-Path $taskProject 'main.gd') -Force
 Copy-RsfGodotFixtureAddon (Join-Path $taskRoot '.local/godot/package/addons/rescaleframe') (Join-Path $taskProject 'addons/rescaleframe') (Join-Path $taskRoot '.local/godot/payload-cache')
-Add-Content -LiteralPath (Join-Path $taskProject 'project.godot') -Value "`n[rescaleframe]`nenabled=true"
+$taskProjectData = Join-Path $taskProject '.godot'
+New-Item -ItemType Directory -Path $taskProjectData | Out-Null
+Set-Content -LiteralPath (Join-Path $taskProjectData 'extension_list.cfg') -Value 'res://addons/rescaleframe/rescaleframe.gdextension' -Encoding utf8NoBOM
 $taskExe = (Resolve-Path -LiteralPath $EngineExe).Path
 $taskEngineHash = (Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash
 $taskNativeHash = (Get-FileHash -LiteralPath (Join-Path $taskProject 'addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll') -Algorithm SHA256).Hash
@@ -72,7 +74,8 @@ function Run-Capture([string[]]$Arguments, [string]$Name) {
         $taskProcess = [RsfSyncIsolationProcess]::Start($taskExe,$taskArguments,(Get-Location).ProviderPath,
             (Join-Path $taskProject "$Name.log"),(Join-Path $taskProject "$Name.stderr"),$true,[ref]$taskProcessPolicy)
     } else {
-        $taskProcess = Start-Process -FilePath $taskExe -ArgumentList $taskArguments -WindowStyle Normal -PassThru -RedirectStandardOutput (Join-Path $taskProject "$Name.log") -RedirectStandardError (Join-Path $taskProject "$Name.stderr")
+        $taskWindowStyle = if ($Name -eq 'capture') { 'Normal' } else { 'Hidden' }
+        $taskProcess = Start-Process -FilePath $taskExe -ArgumentList $taskArguments -WindowStyle $taskWindowStyle -PassThru -RedirectStandardOutput (Join-Path $taskProject "$Name.log") -RedirectStandardError (Join-Path $taskProject "$Name.stderr")
     }
     $taskMaintain = $MaintainForeground -and $Name -eq 'capture'
     $taskForegroundTimer = [Diagnostics.Stopwatch]::StartNew()
@@ -131,7 +134,10 @@ function Run-Capture([string[]]$Arguments, [string]$Name) {
         }
     }
 }
-Run-Capture @('--headless','--editor','--import','--path',$taskProject,'--quit-after','30') 'import'
+# The text-only demo has no imported resources. Load its staged extension and parse the
+# entry script without starting the editor, which can crash after extension discovery.
+Run-Capture @('--headless','--path',$taskProject,'--check-only','--script','res://main.gd') 'preflight'
+Add-Content -LiteralPath (Join-Path $taskProject 'project.godot') -Value "`n[rescaleframe]`nenabled=true"
 $taskSaved = @{}
 foreach ($taskKey in @('RSF_FRAME_CAPTURE_DIR','RSF_VULKAN_FRAME_CAPTURE_DIR','RSF_FRAME_CAPTURE_FIRST','RSF_FRAME_CAPTURE_COUNT','RSF_FRAME_CAPTURE_RESET_SR')) { $taskSaved[$taskKey] = [Environment]::GetEnvironmentVariable($taskKey) }
 try {

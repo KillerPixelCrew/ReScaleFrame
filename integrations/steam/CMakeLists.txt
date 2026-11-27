@@ -1,7 +1,9 @@
-add_library(rsf_steam_d3d11_chain STATIC src/d3d11_chain.cpp)
-target_include_directories(rsf_steam_d3d11_chain PUBLIC include PRIVATE
+# The native exception guards. The Rust archives that embed rsf-steam as an rlib (Skyrim SE,
+# Fallout 4) link only this.
+add_library(rsf_steam_native INTERFACE)
+target_sources(rsf_steam_native INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/exception_guards.c")
+target_include_directories(rsf_steam_native INTERFACE
     "${CMAKE_SOURCE_DIR}/runtime/orchestrator/include"
     "${CMAKE_SOURCE_DIR}/runtime/graphics/include"
     "${CMAKE_SOURCE_DIR}/runtime/presentation/include")
-target_link_libraries(rsf_steam_d3d11_chain PRIVATE
-    ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon minhook rsf_build_options)
+target_link_libraries(rsf_steam_native INTERFACE ReScaleFrame::GameSDK bcrypt minhook)

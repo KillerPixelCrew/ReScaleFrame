@@ -29,7 +29,7 @@ extern "C" {
 /* 5: input gains a host-timed, noninteractive startup hint opacity. */
 /* 16: the touch panel. Stats carry an opaque layout word the host stores, and intent can ask to
    close the panel and to store a new layout word. */
-#define RSF_OVERLAY_ABI_VERSION 18u
+#define RSF_OVERLAY_ABI_VERSION 21u
 /* 17: latency pacing owner and accepted pacing count follow the layout preferences. */
 #define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
@@ -51,6 +51,16 @@ typedef uint32_t rsf_overlay_quality;
 #define RSF_OVERLAY_QUALITY_BALANCED ((rsf_overlay_quality)2)
 #define RSF_OVERLAY_QUALITY_PERFORMANCE ((rsf_overlay_quality)3)
 #define RSF_OVERLAY_QUALITY_ULTRA_PERFORMANCE ((rsf_overlay_quality)4)
+#define RSF_OVERLAY_QUALITY_ULTRA_QUALITY 5u
+#define RSF_OVERLAY_SR_QUALITY_STANDARD_MASK 0x1fu
+#define RSF_OVERLAY_SR_QUALITY_EXTENDED_MASK 0x3fu
+
+/* SR quality and enable edit result. Zero means no receipt. */
+#define RSF_OVERLAY_SR_CHANGE_APPLIED 1u
+#define RSF_OVERLAY_SR_CHANGE_PENDING 2u
+#define RSF_OVERLAY_SR_CHANGE_REFUSED 3u
+/* Stored in FrameLimitUs to request display-relative pacing. */
+#define RSF_OVERLAY_FRAME_LIMIT_VRR 2147483647u
 
 /* What the overlay is told about the session, once per frame.
 
@@ -70,6 +80,24 @@ typedef struct rsf_overlay_host_option {
     uint32_t restart;
     uint32_t reserved;
 } rsf_overlay_host_option;
+
+/* ABI 20 saved option rows. Text is UTF-16 with an explicit unit count and
+   is borrowed for this frame. The legacy host_options array is unchanged. */
+#define RSF_OVERLAY_SAVED_TOGGLE 0u
+#define RSF_OVERLAY_SAVED_NUMBER 1u
+#define RSF_OVERLAY_SAVED_TEXT 2u
+#define RSF_OVERLAY_SAVED_SET 1u
+#define RSF_OVERLAY_SAVED_PASTE 2u
+#define RSF_OVERLAY_SAVED_CLEAR 3u
+#define RSF_OVERLAY_SAVED_ROW_LIMIT 64u
+typedef struct rsf_overlay_saved_row {
+    const char* label;
+    const uint16_t* text;
+    uint32_t text_length, kind, restart;
+    int32_t value, minimum, maximum, step;
+    uint32_t divisor;
+    int32_t last_result;
+} rsf_overlay_saved_row;
 
 typedef struct rsf_overlay_stats {
     uint32_t struct_size;
@@ -186,6 +214,15 @@ typedef struct rsf_overlay_stats {
     uint32_t pcl_available, pcl_reserved;
     uint64_t input_receipts[3];
     uint64_t pcl_routed, pcl_failed, pcl_unmatched;
+    /* ABI 19. Bit n offers quality n for the active SR backend. */
+    uint32_t sr_quality_choices;
+    /* Last quality or enable edit, keyed by the panel's request ID. */
+    uint32_t sr_change_id, sr_change_status;
+    uint32_t saved_row_count;
+    const rsf_overlay_saved_row* saved_rows;
+    /* ABI 21. Why frame generation is not offered on this host (for example the presentation
+       bridge was refused); null when it is offered or nothing is known. Borrowed for the call. */
+    const char* fg_unavailable_reason;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the
@@ -222,7 +259,8 @@ typedef struct rsf_overlay_intent {
     uint32_t fg_changed, fg_mode, fg_generated;
     uint32_t reflex_changed, reflex_mode;
     uint32_t performance_hud_changed, performance_hud;
-    /* ABI 8. */
+    /* ABI 8. A fixed rendered-frame interval in microseconds, zero for Off,
+       or RSF_OVERLAY_FRAME_LIMIT_VRR for a display-relative limit. */
     uint32_t frame_limit_changed, frame_limit_us;
     uint32_t fg_backend_changed, fg_backend;
     uint32_t dlss_preset_changed, dlss_preset;
@@ -247,6 +285,10 @@ typedef struct rsf_overlay_intent {
     uint32_t close_requested;
     /* ABI 16. Store `ui_preferences` and send it back in the stats. */
     uint32_t ui_preferences_changed, ui_preferences;
+    /* ABI 19. Nonzero for an SR quality or enable request. */
+    uint32_t sr_change_id;
+    uint32_t saved_action, saved_index;
+    int32_t saved_value;
 } rsf_overlay_intent;
 
 /* Mouse buttons, as a bit field. */

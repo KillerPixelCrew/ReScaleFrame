@@ -41,13 +41,9 @@ typedef struct rsf_game_depth_domains {
    Ordered disjoint intervals must cover [0,1], with optional clear-only endpoints/gap.
    Viewport unmapping permits at most one source-format quantization step at endpoints.
    CPU bounds validation guarantees finite arithmetic and positive W; Z/W is explicitly
-   clipped to [0,1]. Unknown versions/partial coverage refuse, never fall back to raw. */
-static inline uint32_t rsf_game_depth_domains_requested(const rsf_game_depth_domains* value) {
-    const unsigned char* bytes = (const unsigned char*)value;
-    uint32_t i;
-    for (i = 0; i < (uint32_t)sizeof(*value); ++i) if (bytes[i]) return 1u;
-    return 0u;
-}
+   clipped to [0,1]. Unknown versions/partial coverage refuse, never fall back to raw.
+   The Runtime defines this predicate; Rust callers use rsf_game_sys::depth_domains_requested. */
+uint32_t rsf_game_depth_domains_requested(const rsf_game_depth_domains* value);
 
 /* Copied engine rendering identity. Keys identify owners and must not be dereferenced by a host.
    native_frame is not an input/simulation frame ID and does not authorize frame generation. */
@@ -135,6 +131,16 @@ typedef struct rsf_game_render_pass {
     /* ABI23: copied current-source depth facts, leased with depth; render_rect and
        camera supply the active raster and target projection/jitter convention. */
     rsf_game_depth_domains depth_domains;
+    /* ABI 26: optional D3D12 ID3D12Resource SR masks, leased with the SR inputs and in
+       NON_PIXEL_SHADER_RESOURCE during process_upscale. 2D single-sample textures covering the
+       render extent from the origin, as colour does; the first channel is read as a value,
+       R8_UNORM, R16_UNORM, R16_FLOAT or R32_FLOAT. reactive_mask is [0, 0.9]: how far the
+       current colour replaces history (FSR reactive, XeSS responsive pixel mask).
+       transparency_mask is [0, 1]: translucent coverage (FSR transparency and composition).
+       Null leaves the provider without that mask. D3D11 hosts ignore both; temporal_mask is
+       the D3D11 hint. */
+    void* reactive_mask;
+    void* transparency_mask;
 } rsf_game_render_pass;
 
 #define RSF_GAME_RENDER_SR 1u
@@ -193,6 +199,13 @@ typedef struct rsf_game_render_config {
     uint32_t output_height;
     uint32_t render_width;
     uint32_t render_height;
+    /* Game ABI 25. The SR backend the plan serves (RSF_SR_*, 0 for none) and its vendor's
+       sampling rule at this ratio (rsf_game_sys::sampling::vendor_sampling): the Halton(2,3)
+       jitter phases (1 means no jitter) and the texture LOD bias the engine's samplers add. The
+       integration applies both; it does not choose them. */
+    uint32_t sr_backend;
+    uint32_t jitter_phases;
+    float lod_bias;
 } rsf_game_render_config;
 /* Read on the engine producer thread. The host publishes a consistent settings snapshot. */
 typedef int (*rsf_game_render_config_fn)(void* user, rsf_game_render_config* config);
@@ -206,6 +219,11 @@ typedef void (*rsf_game_render_pass_fn)(void* user, void* native_command_list,
 #define RSF_GAME_CPU_INPUT_SAMPLE 1u
 #define RSF_GAME_CPU_SIMULATION_BEGIN 2u
 #define RSF_GAME_CPU_SIMULATION_END 3u
+/* The producer thread has finished its work for the source, including recording and queueing its
+   rendering. It says nothing about submission or Present: a render thread that runs behind the
+   producer submits and presents the source later, and the Runtime observes both itself. The
+   Runtime retires an ended source as abandoned only when the engine flags RENDER_SKIPPED or the
+   render path has reported a newer source. */
 #define RSF_GAME_CPU_FRAME_END 4u
 #define RSF_GAME_CPU_INPUT_EVENT 5u
 /* After native BeginFrame was queued, before the engine's time update and input handling. */

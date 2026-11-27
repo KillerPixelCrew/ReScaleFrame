@@ -7,90 +7,20 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import shutil
 import subprocess
+import sys
 import time
-import urllib.error
-import urllib.request
 import uuid
 import zipfile
 
-ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ("sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "sl.pcl.dll",
-           "sl.dlss_g.dll", "sl.reflex.dll", "nvngx_dlss.dll", "nvngx_dlssg.dll")
-
-
-def git(*args: str) -> str:
-    return subprocess.check_output(["git", *args], cwd=ROOT, text=True, encoding="utf-8").strip()
-
-
-def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def copy(source: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, destination)
-
-
-def dependency_notices(stage: Path) -> None:
-    metadata = json.loads(subprocess.check_output(
-        ["cargo", "metadata", "--locked", "--format-version", "1"], cwd=ROOT, encoding="utf-8"))
-    index = ["# Third-party notices", "", "Dependency licenses apply to their respective components.", ""]
-    for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version"])):
-        if not package["source"]:
-            continue
-        root = Path(package["manifest_path"]).parent
-        name = f'{package["name"]}-{package["version"]}'
-        destination = stage / "ReScaleFrame/licenses/rust" / name
-        files = sorted(p for p in root.rglob("*") if p.is_file() and
-                       re.search(r"license|licence|copying|copyright|notice|ofl\.txt|unlicense", p.name, re.I))
-        for path in files:
-            copy(path, destination / path.relative_to(root))
-        provenance = "crate distribution"
-        if not files:
-            # Some workspace crates omit their repository-root license from the crate archive.
-            # Fetch it at the exact source revision recorded by Cargo, never a moving branch.
-            vcs = json.loads((root / ".cargo_vcs_info.json").read_text(encoding="utf-8"))
-            sha = vcs["git"]["sha1"]
-            match = re.match(r"(https://github.com/[\w.-]+/[\w.-]+)(?:/|$)", package.get("repository") or "")
-            if not match or not re.fullmatch(r"[0-9a-f]{40}", sha):
-                raise RuntimeError(f"No verifiable license source for {name}")
-            repository = match[1].removesuffix(".git")
-            base = repository.replace("https://github.com/", "https://raw.githubusercontent.com/") + f"/{sha}/"
-            for filename in ("LICENSE-MIT", "LICENSE-MIT.txt", "LICENSE", "LICENSE.txt", "LICENSE.md"):
-                try:
-                    with urllib.request.urlopen(base + filename, timeout=30) as response:
-                        content = response.read()
-                except urllib.error.HTTPError as error:
-                    if error.code == 404:
-                        continue
-                    raise
-                destination.mkdir(parents=True, exist_ok=True)
-                (destination / filename).write_bytes(content)
-                provenance = base + filename
-                files = [destination / filename]
-                break
-            if not files:
-                raise RuntimeError(f"Missing license text for {name}")
-        index += [f'## {name}', f'License: {package.get("license") or "see included text"}',
-                  f"Source: {provenance}", ""]
-    (stage / "ReScaleFrame/licenses/RUST-DEPENDENCIES.md").write_text("\n".join(index), encoding="utf-8")
-
-
-def release_identity(revision=None):
-    """Standalone calls check cleanliness; a release-set caller supplies its checked commit."""
-    if revision is None and git("status", "--porcelain"):
-        raise RuntimeError("Commit the intended release source before packaging.")
-    current = git("rev-parse", "HEAD")
-    if revision is not None and revision != current:
-        raise RuntimeError("Release source commit changed during packaging.")
-    return current
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from package_common import (ROOT, RUNTIME, STREAMLINE_SDK, VENDOR_HASHES, copy, dependency_notices, digest, git,  # noqa: E402
+                            minhook_source, release_identity)
 
 
 def main(argv=None, *, release_revision=None, game_only=False):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--streamline-root", required=True, type=Path)
+    parser.add_argument("--streamline-root", type=Path, default=STREAMLINE_SDK)
     parser.add_argument("--fidelityfx-root", type=Path, default=ROOT / "vendor/fidelityfx")
     parser.add_argument("--xess-root", type=Path, default=ROOT / "vendor/xess")
     parser.add_argument("--output", type=Path, default=ROOT / "build/releases")
@@ -115,11 +45,8 @@ def main(argv=None, *, release_revision=None, game_only=False):
     # The FSR4 compatibility hook recognizes this exact signed SDK binary.
     fsr = args.fidelityfx_root / "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll"
     xess = args.xess_root / "bin/libxess.dll"
-    for source, expected in (
-        (fsr, "aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace"),
-        (xess, "251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7"),
-    ):
-        if digest(source) != expected:
+    for source in (fsr, xess):
+        if digest(source) != VENDOR_HASHES[source.name]:
             raise RuntimeError(f"{source.name} differs from the validated SR runtime.")
     for source, relative in (
         (native, "dinput8.dll"), (plugin, "ReScaleFrame.Game.AC7.dll"),
@@ -131,7 +58,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
         (ROOT / "sdk/game/LICENSE", "ReScaleFrame/licenses/GameSDK-MIT.txt"),
         (ROOT / "runtime/orchestrator/ANTILAG2-LICENSE.txt", "ReScaleFrame/licenses/AMD-Anti-Lag-2-MIT.txt"),
         (ROOT / "runtime/backends/dlss/third_party/mfg_unlocker/LICENSE", "ReScaleFrame/licenses/MFG-Unlocker-MIT.txt"),
-        (ROOT / "build/windows-x64/_deps/minhook-src/LICENSE.txt", "ReScaleFrame/licenses/MinHook.txt"),
+        (minhook_source() / "LICENSE.txt", "ReScaleFrame/licenses/MinHook.txt"),
         (args.streamline_root / "license.txt", "ReScaleFrame/licenses/Streamline.txt"),
         (args.streamline_root / "3rd-party-licenses.md", "ReScaleFrame/licenses/Streamline-third-party.md"),
         (args.streamline_root / "bin/x64/nvngx_dlss.license.txt", "ReScaleFrame/streamline/nvngx_dlss.license.txt"),
@@ -163,7 +90,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
     (stage / "ReScaleFrame/licenses/RenderDoc-header.txt").write_text(header[:header.index("#pragma once")], encoding="utf-8")
     dependency_notices(stage)
     config = (stage / "ReScaleFrame.ini").read_text()
-    if re.search(r"^RSF_BRIEFING_CAPTURE_PREFIX=|^RSF_DUMP_DIR=|[A-Z]:\\", config, re.M):
+    if re.search(r"^RSF_DUMP_DIR=|[A-Z]:\\", config, re.M):
         raise RuntimeError("A developer capture setting or local path entered the package.")
     # Game-validated DLSS colour defaults on 4 October: transport on, post-DLSS correction off.
     for key, value in (("RSF_DLSS_TONEMAP", "1"), ("RSF_DLSS_COLOUR_CORRECTION", "0")):

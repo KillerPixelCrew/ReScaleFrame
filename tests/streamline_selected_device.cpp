@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 #include "../runtime/vulkan/streamline/sdk-fixes/selected-device-config.h"
+// Native DLSS-G layout assertions for the Rust Streamline callers.
+#include "../runtime/vulkan/streamline/sdk_fg_options_checks.h"
 
 namespace {
 using Luid = std::array<uint8_t, 8>;

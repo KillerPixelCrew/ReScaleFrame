@@ -1,5 +1,52 @@
 # ReScaleFrameCraft native integration
 
+### Rust JNI bridge
+
+`ReScaleFrame.Minecraft.dll` links the `rsf-minecraft` Rust archive and the same
+OrchestratorCore. `native/jni.rs` uses typed JNI definitions from `jni-sys`, and
+`native/jni.def` exports the `NativeBridge` signatures. The bridge calls
+the linked Runtime directly through `native/platform_abi.rs`, generated from the Runtime
+headers. The GL interop fixture still links the Rust message observer. The native target
+can be built without setting a JDK header path.
+
+The bridge reads the Java runtime directory as UTF-16. The log uses the original Windows
+code units and the linked Runtime receives standard UTF-8. The existing 88-float camera
+layout and ten-value configuration result are unchanged. Evaluate and HUD-less return
+a failed surface query directly before constructing a camera pass.
+
+Rust owns the WGL, OpenGL and shared D3D12 resource and fence calls. The pipeline uses
+explicit DXGI facade creation and can retry a failed open with the same SDK paths and engine
+identity after cleanup. The pipeline's remaining native adapter supplies DXGI and vendor leaves.
+
+`eng/generate-native-status.py` defines the status fields in wire order and emits the Rust
+writer and Java getters. It accepts `--check` to verify both outputs. The first 25 positions
+and the minimum length of 14 are preserved. A failed graphics status query writes nothing.
+The appended latency availability flag lets callers read valid graphics status when the
+latency query fails.
+
+### Shared settings handoff
+
+The OpenGL pipeline owns D3D12 presentation on the borrowed child window. The shared overlay
+uses D3D11On12 on the application's D3D12 backbuffer after the composed image copy and before
+Present. The renderer flushes on the same D3D12 source queue. The GLFW parent remains the
+input and focus owner. The panel does not enter SR or the HUD-less capture. See Microsoft's
+[D3D11On12 resource lifetime guidance](https://learn.microsoft.com/en-us/windows/win32/direct3d12/direct3d-11-on-12).
+
+Insert opens the shared panel. Its Render settings persist in the `Render` section of the
+instance's `config/rescaleframecraft.ini`. The existing JSON supplies migration defaults,
+including SR and FG backend, quality, DLSS preset, generated count, latency mode, rendered
+frame limit, FG debug and all twelve sharpening fields. The Runtime resolves FG mode and
+the frame interval. Java checks a native settings revision before simulation and asks the
+Runtime for the resulting surfaces even when display size stays constant.
+
+Sodium and `TaaScreen` retain the game-specific TAA toggle. Iris and native world admission
+use the Runtime's requested status, and native SR use follows the effective backend. The
+shared panel gets FG capability from the D3D12 owner. Stage the panel DLL alongside the JVM
+bridge. The device fixture can check migration and same-size updates with its existing GPU
+gate. Set `RSF_GL_TEST_OVERLAY=1` and point `RSF_OVERLAY_DLL` at the panel DLL to check real
+composition, GLFW input attachment and the next resize. Build, device and live acceptance
+are pending for this handoff.
+
 ### Frame-generation multiplier limits, 1.1.14-dev
 
 Sodium/Reese's multiplier uses the selected FG backend's reported capacity, independently of
@@ -64,10 +111,10 @@ Build 1.1.6-dev is deployed to N1GHT; its new startup/world acceptance is record
 This module imports the accepted `rescaleframecraft` 1.0.2-dev source at `4e45c46`.
 The original standalone checkout remains available as a reference. Native vendor execution,
 interoperability and presentation use the shared C++ runtime; the Java adapter owns Minecraft's
-render targets, camera conventions, input frame and HUD boundary. No overlay is created.
+render targets, camera conventions, input frame and HUD boundary. That imported build did
+not create an overlay.
 
-Build the native tree with `RSF_JAVA_HOME` pointing to a JDK with JNI headers. Build target
-`rsf_minecraft`, then run `eng/stage-native.ps1 -SdkWorkspace <SDK-equipped ReScaleFrame checkout>`
+Build the native target `rsf_minecraft`, then run `eng/stage-native.ps1 -SdkWorkspace <SDK-equipped ReScaleFrame checkout>`
 and the Gradle `test jar` tasks. The package contains the native DLL, an explicit retail vendor
 runtime allowlist, licenses and SHA256 manifest. Extraction is content-addressed within the
 instance, so updating the mod cannot overwrite a loaded native module.

@@ -1,0 +1,58 @@
+[package]
+name = "rsf-presentation-fixtures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# The AC7 render scope exports of rsf-ac7-plugin (WARP overrides), for the D3D11 present bridge
+# launcher: one archive, so rsf-ac7 is linked once.
+ac7-render-scope = ["dep:rsf-ac7-plugin"]
+d3d11-host-device-fixtures = []
+# The GL interop fixture calls the Minecraft observer, carried in its archive.
+gl-device-fixture = [
+  "dep:rsf-minecraft",
+  "windows/Win32_Graphics_OpenGL",
+  "windows/Win32_System_WindowsProgramming",
+]
+
+[lib]
+crate-type = ["staticlib"]
+# A CMake fixture archive. Its unit-test harness would link the Runtime and adapter crates it
+# takes bindings from, with all their native imports.
+test = false
+
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
+
+[lints]
+workspace = true
+
+[target."cfg(windows)".dependencies]
+rsf-ac7 = { path = "../../games/ac7" }
+rsf-ac7-plugin = { path = "../../games/ac7/plugin", features = ["warp-fixture"], optional = true }
+rsf-game-sys = { path = "../../sdk/game" }
+rsf-minecraft = { path = "../../games/minecraft", optional = true }
+rsf-test-support = { path = "../support" }
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
+windows = { workspace = true, features = [
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Environment",
+  "Win32_System_Kernel",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Performance",
+  "Win32_System_Threading",
+  "Win32_UI_HiDpi",
+  "Win32_UI_WindowsAndMessaging",
+] }

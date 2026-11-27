@@ -2,10 +2,12 @@
 import importlib.util
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import unittest
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / 'tools'))
 SOURCE = REPO / '.local/anomaly/vanilla/shaders/r3'
 TOOL = REPO / 'tools/anomaly_temporal_shader.py'
 
@@ -20,6 +22,7 @@ def load_tool():
     return module
 
 
+@unittest.skipUnless(SOURCE.exists(), 'licensed local fixture unavailable')
 class CoreTests(unittest.TestCase):
     def test_refuses_changed_corpus_escaped_output_and_unknown_root(self):
         tool = load_tool()
@@ -71,6 +74,7 @@ class CoreTests(unittest.TestCase):
                 shutil.rmtree(target)
 
 
+@unittest.skipUnless(SOURCE.exists(), 'licensed local fixture unavailable')
 class NativeCompilerTests(unittest.TestCase):
     def test_native_fxc_static_and_skin_and_pixel_contract(self):
         tool = load_tool()

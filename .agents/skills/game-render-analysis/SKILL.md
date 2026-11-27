@@ -11,6 +11,38 @@ run from the repository root. This skill supplies a research workflow, not permi
 launch a game, modify an unrelated installation or publish a release. Follow the current
 user's scope; AC7 testing in this session is user-run, without autonomous launch or termination.
 
+## Decide where the defect lives first
+
+AGENTS.md Rule 5 is the boundary for every change this skill leads to. The integration prepares
+the inputs and presents the output; every technique between them is the core, shared by all games.
+Classify a defect before touching code:
+
+- **Input defect, fix in the integration.** Something that reaches ReScaleFrame is missing, wrong,
+  stale or reported at the wrong moment: no object or camera motion for a material, a depth domain
+  or jitter the engine applies differently, a buffer captured before its producer ran, a shader
+  that lacks a motion pass, a HUD-less frame taken after UI, an engine event reported early or
+  late. Repair it at the source in `games/<id>/` or the engine integration, so the core receives
+  correct inputs. Do not teach the core to compensate for one game's input.
+- **Technique defect, fix in the core.** The inputs are right and an upscaler, frame generator,
+  sharpening mode, latency or pacing technology still misbehaves: marker order, frame-end and
+  pacing rules, history resets and aborts, provider switching, presentation fallback, device
+  creation timing. That is fundamental. Fix it in the Runtime or the shared loader so every game
+  inherits it; never patch around it inside one adapter. The test: would another engine with the
+  same property hit it? Then it is core.
+- **Parity.** Every integrated game offers the same features. A feature or option that works in
+  one game and is absent or greyed in another is a defect unless the hardware or the vendor makes
+  it impossible on that machine. Look for the logic that leaked into an adapter or a host.
+
+To tell the two apart, compare the same technique in a second game or host, and compare the
+inputs against what the vendor requires (the shader-input audit below). A symptom that follows the
+technique across games is core; one that follows the game across techniques is its inputs. A
+symptom that differs per vendor in one game usually means an input that some vendors reconstruct
+and others consume as given (for example frame generators that rebuild camera motion from matrices
+versus ones that use the motion texture alone).
+
+When judging a regression, the reference is the build that was last installed and working in that
+game (its deploy backup), mapped to a commit, not the tip of the main branch.
+
 ## Resume from evidence
 
 Before proposing an experiment, read the current game evidence, implementation tracker and

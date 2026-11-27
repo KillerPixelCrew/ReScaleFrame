@@ -1,0 +1,175 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+
+/* Streamline 2.14.1 value records. The Rust call leaves pass them by pointer
+   where the C++ declarations take references. sdk_records_checks.h checks them
+   against the pinned C++ declarations. */
+typedef struct rsf_slvk_sdk_header {
+    void* next;
+    uint32_t type_lo;
+    uint16_t type_mid, type_hi;
+    uint8_t type_tail[8];
+    size_t version;
+} rsf_slvk_sdk_header;
+
+/* sl::ViewportHandle. */
+typedef struct rsf_slvk_sdk_viewport {
+    rsf_slvk_sdk_header base;
+    uint32_t value;
+} rsf_slvk_sdk_viewport;
+
+/* sl::AdapterInfo. */
+typedef struct rsf_slvk_sdk_adapter {
+    rsf_slvk_sdk_header base;
+    uint8_t* luid;
+    uint32_t luid_size;
+    void* physical_device;
+} rsf_slvk_sdk_adapter;
+
+/* sl::Version. */
+typedef struct rsf_slvk_sdk_version {
+    uint32_t major, minor, build;
+} rsf_slvk_sdk_version;
+
+/* sl::FeatureVersion, written by slGetFeatureVersion. */
+typedef struct rsf_slvk_sdk_feature_version {
+    rsf_slvk_sdk_header base;
+    rsf_slvk_sdk_version streamline, ngx;
+} rsf_slvk_sdk_feature_version;
+
+/* sl::FeatureRequirements v2, written by slGetFeatureRequirements. */
+typedef struct rsf_slvk_sdk_requirements {
+    rsf_slvk_sdk_header base;
+    uint32_t flags, max_cpu_threads, max_viewports, num_required_tags;
+    const uint32_t* required_tags;
+    rsf_slvk_sdk_version os_detected, os_required, driver_detected, driver_required;
+    uint32_t vk_compute_queues, vk_graphics_queues, vk_num_device_extensions;
+    const char** vk_device_extensions;
+    uint32_t vk_num_instance_extensions;
+    const char** vk_instance_extensions;
+    uint32_t vk_num_features12;
+    const char** vk_features12;
+    uint32_t vk_num_features13;
+    const char** vk_features13;
+    uint32_t vk_optical_flow_queues;
+} rsf_slvk_sdk_requirements;
+
+/* sl::ReflexReport. */
+typedef struct rsf_slvk_sdk_reflex_report {
+    rsf_slvk_sdk_header base;
+    uint64_t frame_id, input_sample, simulation_start, simulation_end, submit_start, submit_end,
+        present_start, present_end, driver_start, driver_end, queue_start, queue_end, gpu_start,
+        gpu_end;
+    uint32_t gpu_active_us, gpu_frame_us;
+} rsf_slvk_sdk_reflex_report;
+
+/* sl::ReflexReport2. */
+typedef struct rsf_slvk_sdk_reflex_report2 {
+    rsf_slvk_sdk_header base;
+    uint64_t camera_constructed;
+    uint32_t cross_adapter_copy_us;
+} rsf_slvk_sdk_reflex_report2;
+
+/* sl::ReflexState v2. */
+typedef struct rsf_slvk_sdk_reflex_state {
+    rsf_slvk_sdk_header base;
+    uint8_t low_latency_available, latency_report_available;
+    uint32_t window_message;
+    rsf_slvk_sdk_reflex_report reports[64];
+    uint8_t flash_indicator_driver_controlled;
+    rsf_slvk_sdk_reflex_report2 reports2[64];
+} rsf_slvk_sdk_reflex_state;
+
+/* sl::PCLState. */
+typedef struct rsf_slvk_sdk_pcl_state {
+    rsf_slvk_sdk_header base;
+    uint32_t window_message;
+} rsf_slvk_sdk_pcl_state;
+
+typedef void (*rsf_slvk_sdk_log)(uint32_t, const char*);
+
+typedef struct rsf_slvk_sdk_preferences {
+    rsf_slvk_sdk_header base;
+    uint8_t show_console;
+    uint32_t log_level;
+    const uint16_t** plugin_paths;
+    uint32_t num_plugin_paths;
+    const uint16_t* logs_path;
+    void (*allocate)();
+    void (*release)();
+    rsf_slvk_sdk_log log;
+    uint64_t flags;
+    const uint32_t* features;
+    uint32_t num_features, application_id, engine;
+    const char* engine_version;
+    const char* project;
+    uint32_t render_api;
+} rsf_slvk_sdk_preferences;
+
+typedef struct rsf_slvk_sdk_reflex_options {
+    rsf_slvk_sdk_header base;
+    uint32_t mode, interval_us;
+    uint8_t optimize_markers;
+    uint16_t hotkey;
+    uint32_t thread_id;
+} rsf_slvk_sdk_reflex_options;
+
+typedef struct rsf_slvk_sdk_pcl_options {
+    rsf_slvk_sdk_header base;
+    int16_t hotkey;
+    uint32_t thread_id;
+} rsf_slvk_sdk_pcl_options;
+
+typedef struct rsf_slvk_sdk_constants {
+    rsf_slvk_sdk_header base;
+    float view_to_clip[16], clip_to_view[16], clip_to_lens[16];
+    float clip_to_previous[16], previous_to_clip[16];
+    float jitter[2], motion_scale[2], pinhole[2];
+    float position[3], up[3], right[3], forward[3];
+    float near_plane, far_plane, fov, aspect, invalid_motion;
+    uint8_t depth_inverted, motion_includes_camera, motion_3d, reset;
+    uint8_t orthographic, motion_dilated, motion_jittered;
+    float min_relative_depth_separation;
+} rsf_slvk_sdk_constants;
+
+typedef struct rsf_slvk_legacy_camera {
+    const float* view_to_clip;
+    const float* clip_to_view;
+    const float* clip_to_previous;
+    const float* previous_to_clip;
+    float near_plane, far_plane, fov, aspect;
+    float jitter[2], motion_scale[2];
+    float position[3], up[3], right[3], forward[3];
+    uint32_t reset;
+} rsf_slvk_legacy_camera;
+
+typedef struct rsf_slvk_legacy_image {
+    uint64_t image, view;
+    uint32_t layout, format, width, height, usage;
+} rsf_slvk_legacy_image;
+
+typedef struct rsf_slvk_sdk_resource {
+    rsf_slvk_sdk_header base;
+    uint8_t type;
+    void* image;
+    void* memory;
+    void* view;
+    uint32_t layout, width, height, format, mips, layers;
+    uint64_t address;
+    uint32_t flags, usage;
+    uint16_t internal_flags, reserved;
+} rsf_slvk_sdk_resource;
+
+typedef struct rsf_slvk_sdk_tag {
+    rsf_slvk_sdk_header base;
+    void* resource;
+    uint32_t type, lifecycle;
+    uint32_t top, left, width, height;
+} rsf_slvk_sdk_tag;
+
+typedef struct rsf_slvk_sdk_tag_batch {
+    rsf_slvk_sdk_resource resources[4];
+    rsf_slvk_sdk_tag tags[4];
+} rsf_slvk_sdk_tag_batch;

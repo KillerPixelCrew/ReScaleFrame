@@ -3,6 +3,7 @@
 #include <rescaleframe/gl_shared_surface.h>
 #include <rescaleframe/native_fg.h>
 #include <rescaleframe/sharpening_settings.h>
+#include <stddef.h>
 typedef struct rsf_gl_pipeline rsf_gl_pipeline;
 typedef struct rsf_gl_pipeline_setup {
     uint32_t struct_size;
@@ -12,7 +13,8 @@ typedef struct rsf_gl_pipeline_setup {
     void* user;
     const char* engine_version_utf8;
     const char* project_id_utf8;
-    /* Optional borrowed child created on the GLFW window's event thread. It outlives the pipeline. */
+    /* Optional borrowed DXGI child created on the parent window's event thread.
+       It outlives the pipeline. The parent remains the overlay input window. */
     void* presentation_hwnd;
 } rsf_gl_pipeline_setup;
 typedef struct rsf_gl_pipeline_options {
@@ -39,9 +41,22 @@ extern "C" {
    Destroy routes to that same thread; all DXGI/GL work remains on the graphics thread. */
 RSF_RUNTIME_API void* rsf_gl_window_create(void* parent);
 RSF_RUNTIME_API int rsf_gl_window_destroy(void* window);
+/* A failed open can return a cleanup-only handle. Close it on the graphics owner
+   before releasing the presentation window or GL context. */
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_open(const rsf_gl_pipeline_setup*, rsf_gl_pipeline**);
-/* Graphics owner, drained boundary before beginning the CPU frame. No restart required. */
+/* Graphics owner, drained boundary before beginning the CPU frame. No restart required.
+   Configuration publishes new surfaces only after the replacement and presentation resize succeed. */
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_configure(rsf_gl_pipeline*, const rsf_gl_pipeline_options*, uint32_t width, uint32_t height);
+/* Legacy instance JSON supplied a provider choice and limit in FPS. The Runtime
+   converts them to frame-generation and pacing settings. */
+RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_configure_legacy(rsf_gl_pipeline*, const rsf_gl_pipeline_options*,
+    uint32_t limit_fps, uint32_t width, uint32_t height);
+/* Optional shared panel and instance settings. Apply a changed revision before
+   the engine begins its next CPU frame, including at unchanged dimensions. */
+RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_settings_open(rsf_gl_pipeline*, const wchar_t* path,
+    const wchar_t* section, const char* identity, const rsf_gl_pipeline_options* legacy, uint32_t limit_fps);
+RSF_RUNTIME_API uint64_t rsf_gl_pipeline_settings_revision(rsf_gl_pipeline*);
+RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_configure_settings(rsf_gl_pipeline*, uint32_t width, uint32_t height);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_get_surfaces(rsf_gl_pipeline*, rsf_gl_pipeline_surfaces*);
 RSF_RUNTIME_API void rsf_gl_pipeline_cpu(rsf_gl_pipeline*, uint64_t frame, uint32_t stage);
 /* Input consumer on the CPU frame owner, after acquisition/pacing and before simulation ends. */
@@ -51,7 +66,8 @@ RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_abort(rsf_gl_pipeline*, uint6
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_evaluate(rsf_gl_pipeline*, const rsf_game_render_pass*);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_hudless(rsf_gl_pipeline*, const rsf_game_render_pass*);
 /* Every present carries its nonzero CPU frame ID, including menus. Missing scene
-   captures disable FG; zero is never a substitute for the input frame identity. */
+   captures disable FG; zero is never a substitute for the input frame identity.
+   The composed image and overlay target the acquired backbuffer before DXGI Present. */
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_present(rsf_gl_pipeline*, uint64_t frame, uint32_t vsync);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_status_get(rsf_gl_pipeline*, rsf_gl_pipeline_status*);
 RSF_RUNTIME_API rsf_backend_result rsf_gl_pipeline_close(rsf_gl_pipeline*);

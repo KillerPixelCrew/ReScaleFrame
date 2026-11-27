@@ -23,5 +23,6 @@ interposer SHA-256. A verified handle denies writes and replacement while either
 file is loaded. All closed NVIDIA feature libraries retain Authenticode checks.
 The runtime receipt and applied replacement manifest accompany the package.
 
-`dispatch-tests.cpp` checks first-use layout, combined depth/stencil aspects,
-partial mip initialization and preservation of initialized image contents.
+The `streamline_vulkan_dispatch_contract` test (`tests/streamline_vulkan_dispatch.cpp`) checks first-use layout, combined
+depth/stencil aspects, partial mip initialization, preservation of initialized image
+contents and the NGX scratch-fill dependency.

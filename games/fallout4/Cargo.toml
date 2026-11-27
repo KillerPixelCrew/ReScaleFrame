@@ -1,0 +1,51 @@
+[package]
+name = "rsf-fallout4"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+rsf-game-sys = { path = "../../sdk/game" }
+rsf-minhook-sys = { path = "../../third_party/minhook" }
+
+# The Steam D3D11 chain, embedded so the DLL links one Rust archive (as Skyrim SE does).
+[target."cfg(windows)".dependencies.rsf-steam]
+path = "../../integrations/steam"
+
+[target."cfg(windows)".dependencies.windows]
+workspace = true
+features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+]
+
+[target."cfg(windows)".dependencies.windows-sys]
+workspace = true
+features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Performance",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+]
+
+# Unit tests link the crate whose archive the adapter DLL gets from CMake.
+[target."cfg(windows)".dev-dependencies]
+rsf-runtime-common = { path = "../../runtime/common" }
+
+[build-dependencies]
+cc.workspace = true
+rsf-bindgen = { path = "../../tools/bindgen" }
+
+[lints]
+workspace = true

@@ -146,13 +146,8 @@ typedef struct rsf_dlss_pipeline_frame {
     uint32_t struct_size;
     uint32_t abi_version;
 
-    /* Pre-tonemap scene colour at render resolution.
-
-       Which texture this is cannot be settled from a descriptor. Ace Combat 7 allocates many full
-       resolution `R16G16B16A16_FLOAT` targets and the one temporal AA reads is distinguishable
-       only by what it is bound alongside, so the game's role table marks scene colour as a
-       candidate rather than picking one. The caller resolves that, today by taking slot 0 of the
-       bound set, and that assumption is unverified until a rendered result exists. */
+    /* Pre-tonemap scene colour at render resolution. Which texture this is cannot be settled from a
+       descriptor, so the integration identifies it at its producer; the pipeline uses it as given. */
     void* scene_color;
     void* depth;
     /* The game's own velocity target, still in its own encoding. The decode runs here; handing a
@@ -263,6 +258,11 @@ RSF_RUNTIME_API void* rsf_dlss_pipeline_layer_output(void);
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_start(
     void* d3d11_device, const rsf_dlss_pipeline_setup* setup);
 
+/* Start on a concrete Runtime-selected SR backend. The selected provider owns
+   hardware validation and load failures. Device ownership matches legacy start. */
+RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_start_backend(
+    void* d3d11_device, const rsf_dlss_pipeline_setup* setup, uint32_t backend);
+
 /* Run one frame: decode the motion, assemble the frame, evaluate.
    A nonzero camera.motion_scale declares decoded motion scaled into canonical
    current-minus-previous UV. The pipeline converts that to each vendor's
@@ -298,6 +298,7 @@ RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_request_dump(const ch
 /* Snapshot of what has actually happened. Safe from any thread. */
 RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_dlss_pipeline_get_status(
     rsf_dlss_pipeline_status* status);
+
 
 /* Change the quality level while running, without tearing Streamline down.
 

@@ -1,0 +1,265 @@
+// SPDX-License-Identifier: MIT
+use rsf_game_sys::backend_result::{INIT_FAILED, NOT_READY};
+pub(super) mod device;
+
+use crate::vulkan_fg_frames::FrameSlot as Slot;
+use std::ffi::c_void;
+
+type Device = *mut c_void;
+
+/// A private Vulkan image the Vulkan FG and SR owners allocate through `Platform`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Image {
+    pub(crate) image: u64,
+    pub(crate) memory: u64,
+    pub(crate) view: u64,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format: u32,
+    pub(crate) usage: u32,
+    pub(crate) initialized: u32,
+}
+
+/// The source and consumer completion fences of one recording slot.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Fences {
+    pub(crate) source: u64,
+    pub(crate) consumer: u64,
+}
+
+/// Vulkan image, memory and fence leaves: `device::DEVICE_PLATFORM` in production, CPU
+/// fakes in the unit tests and fixtures. Every entry takes the device handle first.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Platform {
+    pub(crate) local_memory_types: Option<unsafe extern "C" fn(Device) -> u32>,
+    pub(crate) create_image:
+        Option<unsafe extern "C" fn(Device, u32, u32, u32, u32, *mut u64) -> i32>,
+    pub(crate) requirements: Option<unsafe extern "C" fn(Device, u64, *mut u64, *mut u32)>,
+    pub(crate) allocate: Option<unsafe extern "C" fn(Device, u64, u32, *mut u64) -> i32>,
+    pub(crate) bind: Option<unsafe extern "C" fn(Device, u64, u64) -> i32>,
+    pub(crate) create_view: Option<unsafe extern "C" fn(Device, u64, u32, *mut u64) -> i32>,
+    pub(crate) destroy_view: Option<unsafe extern "C" fn(Device, u64)>,
+    pub(crate) destroy_image: Option<unsafe extern "C" fn(Device, u64)>,
+    pub(crate) free_memory: Option<unsafe extern "C" fn(Device, u64)>,
+    pub(crate) create_fence: Option<unsafe extern "C" fn(Device, *mut u64) -> i32>,
+    pub(crate) destroy_fence: Option<unsafe extern "C" fn(Device, u64)>,
+    pub(crate) wait_fence: Option<unsafe extern "C" fn(Device, u64, u64) -> i32>,
+    pub(crate) reset_fence: Option<unsafe extern "C" fn(Device, u64) -> i32>,
+    pub(crate) submit_fence: Option<unsafe extern "C" fn(Device, u64) -> i32>,
+}
+
+const FENCE_TIMEOUT_NS: u64 = 15_000_000_000;
+pub(super) const SAMPLED_TRANSFER: u32 = 0x7;
+
+struct Replacement<'a> {
+    platform: &'a Platform,
+    user: *mut c_void,
+    image: Image,
+}
+
+impl Drop for Replacement<'_> {
+    fn drop(&mut self) {
+        release_image(self.platform, self.user, &mut self.image);
+    }
+}
+
+pub(super) fn release_image(platform: &Platform, user: *mut c_void, image: &mut Image) {
+    unsafe {
+        if image.view != 0 {
+            (platform.destroy_view.unwrap())(user, image.view);
+        }
+        if image.image != 0 {
+            (platform.destroy_image.unwrap())(user, image.image);
+        }
+        if image.memory != 0 {
+            (platform.free_memory.unwrap())(user, image.memory);
+        }
+    }
+    *image = Image::default();
+}
+
+pub(super) fn ensure_image(
+    platform: &Platform,
+    user: *mut c_void,
+    current: &mut Image,
+    [width, height]: [u32; 2],
+    format: u32,
+    usage: u32,
+    with_view: bool,
+) -> Result<(), i32> {
+    ensure_image_with_memory(
+        platform,
+        user,
+        current,
+        [width, height],
+        format,
+        usage,
+        (with_view, MemoryChoice::DeviceLocal),
+    )
+}
+
+pub(super) enum MemoryChoice {
+    DeviceLocal,
+    PreferDeviceLocal { type_count: u32 },
+}
+
+impl MemoryChoice {
+    pub(super) fn select(self, required: u32, local: u32) -> Option<u32> {
+        let compatible = match self {
+            Self::DeviceLocal => required & local,
+            Self::PreferDeviceLocal { type_count } => {
+                required & 1u32.checked_shl(type_count).map_or(u32::MAX, |bit| bit - 1)
+            }
+        };
+        match compatible & local {
+            0 => compatible.checked_ilog2(),
+            preferred => Some(preferred.trailing_zeros()),
+        }
+    }
+}
+
+pub(super) fn ensure_image_with_memory(
+    platform: &Platform,
+    user: *mut c_void,
+    current: &mut Image,
+    [width, height]: [u32; 2],
+    format: u32,
+    usage: u32,
+    (with_view, memory): (bool, MemoryChoice),
+) -> Result<(), i32> {
+    const OUT_OF_DEVICE_MEMORY: i32 = -2;
+    const INITIALIZATION_FAILED: i32 = -3;
+    if current.image != 0
+        && current.width == width
+        && current.height == height
+        && current.format == format
+        && current.usage == usage
+        && (!with_view || current.view != 0)
+    {
+        return Ok(());
+    }
+    let mut replacement = Replacement {
+        platform,
+        user,
+        image: Image::default(),
+    };
+    let image = &mut replacement.image;
+    let result = unsafe {
+        (platform.create_image.unwrap())(user, width, height, format, usage, &mut image.image)
+    };
+    if result != 0 || image.image == 0 {
+        return Err(if result != 0 {
+            result
+        } else {
+            INITIALIZATION_FAILED
+        });
+    }
+    let (mut size, mut types) = (0, 0);
+    unsafe { (platform.requirements.unwrap())(user, image.image, &mut size, &mut types) };
+    let local = unsafe { (platform.local_memory_types.unwrap())(user) };
+    let kind = memory.select(types, local).ok_or(OUT_OF_DEVICE_MEMORY)?;
+    let result = unsafe { (platform.allocate.unwrap())(user, size, kind, &mut image.memory) };
+    if result != 0 || image.memory == 0 {
+        return Err(if result != 0 {
+            result
+        } else {
+            INITIALIZATION_FAILED
+        });
+    }
+    let result = unsafe { (platform.bind.unwrap())(user, image.image, image.memory) };
+    if result != 0 {
+        return Err(result);
+    }
+    if with_view {
+        let result =
+            unsafe { (platform.create_view.unwrap())(user, image.image, format, &mut image.view) };
+        if result != 0 || image.view == 0 {
+            return Err(if result != 0 {
+                result
+            } else {
+                INITIALIZATION_FAILED
+            });
+        }
+    }
+    image.width = width;
+    image.height = height;
+    image.format = format;
+    image.usage = usage;
+    // The caller already retired the old resource. Publish the complete
+    // replacement and retire the old image using the same cleanup path.
+    std::mem::swap(current, image);
+    Ok(())
+}
+
+fn wait_pending(platform: &Platform, user: *mut c_void, fence: u64, pending: bool) -> bool {
+    !pending
+        || (fence != 0
+            && unsafe { (platform.wait_fence.unwrap())(user, fence, FENCE_TIMEOUT_NS) } == 0)
+}
+
+pub(super) fn prepare_fences(
+    platform: &Platform,
+    user: *mut c_void,
+    slot: &mut Slot,
+    fences: &mut Fences,
+) -> i32 {
+    if !wait_pending(platform, user, fences.source, slot.source_pending)
+        || !wait_pending(platform, user, fences.consumer, slot.consumer_pending)
+    {
+        return NOT_READY;
+    }
+    slot.source_pending = false;
+    slot.consumer_pending = false;
+    for fence in [&mut fences.source, &mut fences.consumer] {
+        if *fence != 0 {
+            continue;
+        }
+        let mut candidate = 0;
+        let result = unsafe { (platform.create_fence.unwrap())(user, &mut candidate) };
+        if result != 0 || candidate == 0 {
+            if candidate != 0 {
+                unsafe { (platform.destroy_fence.unwrap())(user, candidate) };
+            }
+            return INIT_FAILED;
+        }
+        *fence = candidate;
+    }
+    0
+}
+
+pub(super) fn fence_submission(
+    platform: &Platform,
+    user: *mut c_void,
+    slot: &mut Slot,
+    fences: &Fences,
+    consumer: bool,
+) {
+    let (fence, pending) = if consumer {
+        (fences.consumer, &mut slot.consumer_pending)
+    } else {
+        (fences.source, &mut slot.source_pending)
+    };
+    if fence == 0
+        || !wait_pending(platform, user, fence, *pending)
+        || unsafe { (platform.reset_fence.unwrap())(user, fence) } != 0
+        || unsafe { (platform.submit_fence.unwrap())(user, fence) } != 0
+    {
+        // The actual engine or provider submission already happened. A
+        // failed completion point must keep the slot unavailable for reuse.
+        slot.completion_unknown = true;
+    } else {
+        *pending = true;
+    }
+}
+
+pub(super) fn release_fences(platform: &Platform, user: *mut c_void, fences: &mut Fences) {
+    for fence in [fences.source, fences.consumer] {
+        if fence != 0 {
+            unsafe { (platform.destroy_fence.unwrap())(user, fence) };
+        }
+    }
+    *fences = Fences::default();
+}

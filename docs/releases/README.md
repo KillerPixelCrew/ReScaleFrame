@@ -16,9 +16,14 @@ Use Python 3.11 or newer. Run the native/Rust gate and the integration checks be
 release-set dry run. The tool checks that the fetched `origin/main` is merged, but cannot prove the remote was just
 fetched. It never fetches, merges, commits, pushes, deploys to a game or publishes a release itself.
 
+The vendor inputs come from the pinned submodules and `eng/fetch-vendor.ps1` (`vendor/streamline-sdk` is the default
+`--streamline-root`; see [Vendor SDKs](../dependencies.md#vendor-sdks)):
+
 ```powershell
-py -3 tools/package-release.py --streamline-root D:/Coding/ReScaleFrame/.local/streamline/sdk --dry-run
-py -3 tools/package-release.py --streamline-root D:/Coding/ReScaleFrame/.local/streamline/sdk
+git submodule update --init --depth 1
+./eng/fetch-vendor.ps1
+py -3 tools/package-release.py --dry-run
+py -3 tools/package-release.py
 ```
 
 Default output is `build/releases/<VERSION>`. Use `--output <unused-directory>` to choose another ignored or external
@@ -36,7 +41,7 @@ Do not package while another process is changing the build outputs.
 An explicit build is available when the normal build directory is free:
 
 ```powershell
-py -3 tools/package-release.py --streamline-root D:/Coding/ReScaleFrame/.local/streamline/sdk --build
+py -3 tools/package-release.py --build
 ```
 
 This builds Cargo Release, native Release, the matched Unity Mono helper, copies the overlay, stages Minecraft's
@@ -47,8 +52,7 @@ must match the Streamline payload passed to the release builder. No game install
 Successful incremental builds may reuse older unchanged binaries; the JSON summary lists them. `--dry-run` and
 `--build` cannot be combined. Never run this build option in a directory another worker has reserved.
 
-The tool writes one `ReScaleFrame-<version>-source.zip` using `git archive` of the recorded commit and adds the
-incorporated yyjson source/header/license after checking their pinned hashes. It never adds local game shader trees,
+The tool writes one `ReScaleFrame-<version>-source.zip` using `git archive` of the recorded commit. It never adds local game shader trees,
 licensed engine source or compiled caches. Archives receive CRC/path/duplicate checks and asset hashes are streamed.
 The JSON summary reports version, commit, tag, names, sizes and SHA-256 values. A dry run reports planned names with
 null sizes/hashes and creates no release files.

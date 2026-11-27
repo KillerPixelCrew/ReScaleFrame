@@ -15,7 +15,24 @@
 #define RSF_XESS_BRIDGE_API
 #endif
 
-typedef struct VulkanStoryXessFg rsf_xess_bridge;
+typedef struct rsf_vk_xess_fg rsf_xess_bridge;
+
+/* Legacy managed Present record. Textures are borrowed in COMMON state.
+   ready follows Vulkan copies and done follows all queued DX12 handoff work.
+   Legacy callers need not initialize the reserved word. */
+typedef uint32_t rsf_xess_bridge_legacy_reserved;
+typedef struct rsf_vk_xess_fg_frame {
+    uint32_t frame_id, reset, vsync;
+    rsf_xess_bridge_legacy_reserved reserved;
+    void* color;
+    void* depth;
+    void* motion;
+    void* hudless;
+    void* ui;
+    float view[16], projection[16];
+    float jitter[2], motion_scale[2];
+    uint64_t ready, done;
+} rsf_vk_xess_fg_frame;
 typedef struct rsf_xess_bridge_create {
     uint32_t struct_size, abi_version;
     uint64_t adapter_luid;
@@ -56,11 +73,6 @@ typedef struct rsf_xess_bridge_present_status {
     int32_t fg_result;
     uint32_t reserved;
 } rsf_xess_bridge_present_status;
-
-static inline int32_t rsf_xess_bridge_check(uint32_t size, uint32_t version, size_t required) {
-    if (size < required) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
-    return version == RSF_XESS_BRIDGE_ABI_VERSION ? 0 : RSF_XESS_BRIDGE_ABI_MISMATCH;
-}
 
 #ifdef __cplusplus
 extern "C" {

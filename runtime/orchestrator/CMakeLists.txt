@@ -1,57 +1,128 @@
-# The orchestrator's code lives in an object library so it can be linked both into the runtime DLL
-# and directly into the research proxy, which is what actually gets loaded into the game today.
-# Compiling it twice, or requiring the runtime DLL beside the game executable before anything works,
-# would both be worse.
-add_library(rsf_frame_dump STATIC src/input_dump.cpp)
-target_include_directories(rsf_frame_dump PUBLIC include "${CMAKE_SOURCE_DIR}/runtime/backends/dlss/include")
-target_compile_definitions(rsf_frame_dump PRIVATE RSF_RUNTIME_BUILD)
-target_link_libraries(rsf_frame_dump PUBLIC ReScaleFrame::Graphics ReScaleFrame::Contract ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon PRIVATE rsf_build_options)
+# The capture readers (rsf_input_dump*) are Rust exports in the Runtime archive; this target carries
+# their headers and that archive.
+add_library(rsf_frame_dump INTERFACE)
+target_include_directories(rsf_frame_dump INTERFACE include "${CMAKE_SOURCE_DIR}/runtime/backends/dlss/include")
+target_link_libraries(rsf_frame_dump INTERFACE ReScaleFrame::Graphics ReScaleFrame::Contract ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon)
 add_library(ReScaleFrame::FrameDump ALIAS rsf_frame_dump)
-# Readback helpers in the backend libraries share the same capture owner as the host.
-foreach(rsf_dump_backend rsf_dlss rsf_fsr rsf_xess)
-    target_link_libraries(${rsf_dump_backend} PRIVATE ReScaleFrame::FrameDump)
-    target_compile_definitions(${rsf_dump_backend} PRIVATE RSF_FRAME_DUMP_STATIC)
-endforeach()
 
-add_library(rsf_native_cpu STATIC src/native_cpu.cpp)
-target_include_directories(rsf_native_cpu PUBLIC include)
-target_compile_definitions(rsf_native_cpu PRIVATE RSF_RUNTIME_BUILD)
-target_link_libraries(rsf_native_cpu PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_build_options)
+# The CPU fact dispatcher is implemented in the Rust core; this target carries its headers and archive.
+add_library(rsf_native_cpu INTERFACE)
+target_include_directories(rsf_native_cpu INTERFACE include)
+target_link_libraries(rsf_native_cpu INTERFACE ReScaleFrame::GameSDK)
 
+# The native leaves the Rust core calls back into. Everything that links the Rust core links them,
+# so Runtime tests and embedded hosts resolve the same functions the DLL does.
+add_library(rsf_runtime_leaves STATIC
+    src/fg12_platform.c
+    src/native_composition_unload.c
+    src/render_host_platform.c
+    src/d3d11_host_foreign.c
+    ../graphics/src/observer_exception_guards.c
+)
+target_include_directories(rsf_runtime_leaves PUBLIC include)
+target_compile_definitions(rsf_runtime_leaves PUBLIC RSF_RUNTIME_BUILD PRIVATE RSF_STREAMLINE_HOST_BUILD)
+target_link_libraries(rsf_runtime_leaves PUBLIC rsf_native_cpu ReScaleFrame::GameSDK ReScaleFrame::DLSS
+    ReScaleFrame::Graphics ReScaleFrame::FSR ReScaleFrame::XeSS ReScaleFrame::Presentation
+    ReScaleFrame::FrameDump PRIVATE rsf_build_options d3dcompiler bcrypt)
+
+# The orchestrator's code lives in an object library so it can be linked both into the runtime DLL
+# and directly into the carriers that embed it, without compiling it twice.
 add_library(rsf_orchestrator_core OBJECT
-    src/runtime.cpp
-    src/plugin_session.cpp
-    src/native_scene.cpp
-    src/native_window.cpp
-    src/native_fg.cpp
-    src/native_fg_d3d12.cpp
-    src/native_composition.cpp
-    src/native_sr.cpp
-    src/native_reinsert.cpp
-    src/native_translucency.cpp
-    src/native_sr_d3d12.cpp
-    src/gl_pipeline.cpp
-    src/gpu_policy.cpp
-    src/callback_render_host.cpp
-    src/render_host.cpp
-    src/overlay_d3d12.cpp
-    src/overlay_native12.cpp
-    ../../loader/proxy/src/overlay_host.cpp
-    src/native_regions.cpp
-    src/frame_sequencer.cpp
-    src/render_links.cpp
-    src/fg_session.cpp
-    src/fg_choice.cpp
-    src/fg_providers.cpp
-    src/fg_leases.cpp
-    src/sr_session.cpp
-    src/sr_bridge.cpp
-    src/sr_legacy_adapter.cpp
-    src/frame_assembly.cpp
-    src/dlss_pipeline.cpp)
+    src/rust_exports.c
+)
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
-target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu)
+target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu rsf_runtime_leaves)
+# The corrected Streamline Vulkan runtime, verified against its receipt. Its interposer digest reaches
+# rsf-streamline-vk through the Cargo build environment, which admits only that file.
+set(RSF_STREAMLINE_VK_RUNTIME "${CMAKE_SOURCE_DIR}/.local/godot/vulkan/host/artifacts/streamline-production-selected-device-reflex/runtime" CACHE PATH "Corrected Streamline Production runtime")
+set(RSF_STREAMLINE_VK_DIGEST)
+set(rsf_orchestrator_env)
+if(RSF_HAVE_VULKAN AND RSF_HAVE_STREAMLINE AND EXISTS "${RSF_STREAMLINE_VK_RUNTIME}/streamline-sdk-build.json")
+    include("${CMAKE_SOURCE_DIR}/runtime/vulkan/streamline/verify-receipt.cmake")
+    rsf_streamline_receipt("${RSF_STREAMLINE_VK_RUNTIME}" RSF_STREAMLINE_VK_DIGEST)
+    set(rsf_orchestrator_env ENV "RSF_CORRECTED_STREAMLINE_SHA256=${RSF_STREAMLINE_VK_DIGEST}")
+endif()
+# The vendor headers cmake/vendor.cmake found select the D3D12 FidelityFX and XeSS providers, the
+# XeSS Vulkan SR table, AMD Anti-Lag 2 for Vulkan and, with a verified runtime, Streamline Vulkan.
+set(rsf_orchestrator_features)
+if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_VK)
+    list(APPEND rsf_orchestrator_features --features xess-vk)
+endif()
+if(RSF_HAVE_VULKAN)
+    list(APPEND rsf_orchestrator_features --features antilag-vk)
+endif()
+if(RSF_HAVE_VULKAN AND RSF_STREAMLINE_VK_DIGEST)
+    list(APPEND rsf_orchestrator_features --features streamline-vk)
+endif()
+# The FidelityFX Vulkan SR table behind rsf_srvk_* (vulkan_sr.rs), as RSF_VULKAN_SR_ENABLED.
+if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_VK)
+    list(APPEND rsf_orchestrator_features --features ffx-vk)
+endif()
+# The Vulkan FSR 4 and XeSS FG providers of vulkan_fg.rs, as RSF_HAVE_FSR4_FG_VK and RSF_HAVE_XESS_FG_VK.
+if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_FG)
+    list(APPEND rsf_orchestrator_features --features fsr4-fg-vk)
+endif()
+if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_FG)
+    list(APPEND rsf_orchestrator_features --features xess-fg-vk)
+endif()
+# The Vulkan FSR 4 SR provider behind rsf_srvk_fsr4_* (vulkan_sr_split.rs), as RSF_VULKAN_FSR4_ENABLED.
+if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_SR)
+    list(APPEND rsf_orchestrator_features --features fsr4-vk)
+endif()
+foreach(rsf_vendor "FFX;ffx" "FFX_FG;ffx-fg" "XESS;xess" "XESS_FG;xess-fg")
+    list(GET rsf_vendor 0 rsf_vendor_flag)
+    list(GET rsf_vendor 1 rsf_vendor_feature)
+    if(RSF_HAVE_${rsf_vendor_flag})
+        list(APPEND rsf_orchestrator_features --features ${rsf_vendor_feature})
+    endif()
+endforeach()
+# The archive carries rsf-runtime-common and rsf-graphics, so the Runtime DLL and the tests that link it drop
+# their archives (cmake/rust_static.cmake). The fixture archives below stand in for this one, by property.
+rsf_add_rust_static(rsf_orchestrator_rust rsf_rust_core rsf-orchestrator rsf_orchestrator ${rsf_orchestrator_env}
+    ${rsf_orchestrator_features} CARRIES "rsf_common_rust;rsf_graphics_rust")
+# An archive that embeds rsf-orchestrator as an rlib (the Minecraft adapter, fixtures that carry the Runtime beside
+# their own code) declares CARRIES rsf_orchestrator_rust: binaries that link it keep the C leaves and system
+# libraries below but not this archive, and it builds with RSF_RUNTIME_EMBED_ARGS, the Runtime archive's features
+# and environment (cmake/rust_static.cmake).
+set(rsf_runtime_embed_args ${rsf_orchestrator_env})
+foreach(rsf_feature IN LISTS rsf_orchestrator_features)
+    if(rsf_feature STREQUAL "--features")
+        list(APPEND rsf_runtime_embed_args --features)
+    else()
+        list(APPEND rsf_runtime_embed_args rsf-orchestrator/${rsf_feature})
+    endif()
+endforeach()
+set_property(GLOBAL PROPERTY RSF_RUNTIME_EMBED_ARGS "${rsf_runtime_embed_args}")
+if(BUILD_TESTING)
+    # The same crate with the test-fixtures feature adds the fixture exports the ctest executables call. A test
+    # target that sets RSF_ORCHESTRATOR_FIXTURES links this archive wherever the shipping one is named, so the
+    # Runtime and the carriers never contain a fixture.
+    rsf_add_rust_static(rsf_orchestrator_fixture_rust rsf_rust_core_fixtures rsf-orchestrator rsf_orchestrator
+        ${rsf_orchestrator_env} --features test-fixtures ${rsf_orchestrator_features})
+    # A target that sets RSF_ORCHESTRATOR_FIXTURE_LEAVES links the fixture archive built with the state
+    # fixtures' CPU doubles in place of the native leaves (the fixture-leaves feature in Cargo.toml).
+    rsf_add_rust_static(rsf_orchestrator_fixture_leaves_rust rsf_rust_core_fixture_leaves rsf-orchestrator
+        rsf_orchestrator ${rsf_orchestrator_env} --features fixture-leaves ${rsf_orchestrator_features})
+    get_target_property(rsf_orchestrator_libs rsf_orchestrator_rust INTERFACE_LINK_LIBRARIES)
+    get_target_property(rsf_orchestrator_archive rsf_orchestrator_rust RSF_ARCHIVE)
+    get_target_property(rsf_orchestrator_fixture_archive rsf_orchestrator_fixture_rust RSF_ARCHIVE)
+    get_target_property(rsf_orchestrator_leaves_archive rsf_orchestrator_fixture_leaves_rust RSF_ARCHIVE)
+    list(POP_FRONT rsf_orchestrator_libs)
+    set_property(TARGET rsf_orchestrator_rust PROPERTY INTERFACE_LINK_LIBRARIES
+        "$<$<NOT:$<IN_LIST:rsf_orchestrator_rust,$<TARGET_PROPERTY:RSF_EMBEDDED_ARCHIVES>>>:$<IF:$<BOOL:$<TARGET_PROPERTY:RSF_ORCHESTRATOR_FIXTURE_LEAVES>>,${rsf_orchestrator_leaves_archive},$<IF:$<BOOL:$<TARGET_PROPERTY:RSF_ORCHESTRATOR_FIXTURES>>,${rsf_orchestrator_fixture_archive},${rsf_orchestrator_archive}>>>"
+        ${rsf_orchestrator_libs})
+endif()
+# version: the provider version reads in mfg_provider.rs (forwarded by the dinput8 proxy itself).
+target_link_libraries(rsf_orchestrator_rust INTERFACE minhook rsf_runtime_leaves version)
+# vulkan_fg.rs creates the XeSS FG provider through rsf_xessgvk_create, the C leaf in rsf_native_vulkan
+# (native_fg_xess_vulkan_present.c) that binds the XeSS bridge.
+if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_FG)
+    target_link_libraries(rsf_orchestrator_rust INTERFACE rsf_native_vulkan)
+endif()
+target_link_libraries(rsf_orchestrator_core PUBLIC rsf_orchestrator_rust)
+target_link_libraries(rsf_native_cpu INTERFACE rsf_orchestrator_rust)
+target_link_libraries(rsf_frame_dump INTERFACE rsf_orchestrator_rust)
 target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # Public because the orchestrator's own headers name a backend's frame structure and the decode
 # pass's parameters.
@@ -61,116 +132,85 @@ target_link_libraries(rsf_orchestrator_core PRIVATE d3dcompiler bcrypt)
 target_link_libraries(rsf_orchestrator_core PUBLIC ReScaleFrame::FrameDump)
 add_library(ReScaleFrame::OrchestratorCore ALIAS rsf_orchestrator_core)
 
-set(RSF_VULKAN_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/engine/thirdparty/vulkan/include" CACHE PATH "Vulkan headers for native Vulkan services")
-set(RSF_FFX_VK_INCLUDE "${CMAKE_SOURCE_DIR}/references/godot/fidelityfx-vulkan/ffx-api/include" CACHE PATH "Pinned FidelityFX Vulkan API headers")
-add_library(rsf_native_vulkan STATIC src/native_sr_vulkan.cpp src/native_dlss_vulkan.cpp src/native_xess_vulkan.cpp src/native_fg_vulkan.cpp src/native_fg_vulkan_dispatch.cpp src/native_fg_dlss_vulkan.cpp src/native_fg_dlss_vulkan_capture.cpp src/native_latency_vulkan.cpp)
-target_sources(rsf_native_vulkan PRIVATE src/latency_amd_vulkan.cpp)
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
-    target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_ANTILAG_VK=1)
+add_library(rsf_native_vulkan STATIC src/native_xess_vulkan.c src/native_vulkan_exports.c)
+if(RSF_HAVE_VULKAN)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
 endif()
 target_include_directories(rsf_native_vulkan PUBLIC include)
-target_sources(rsf_native_vulkan PRIVATE src/native_sr_split_vulkan.cpp)
 target_compile_definitions(rsf_native_vulkan PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_native_vulkan PUBLIC ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_native_cpu PRIVATE rsf_build_options)
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_VK_INCLUDE}/ffx_api/vk/ffx_api_vk.h")
+if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_VK)
+    # native_sr_vulkan.c only checks the configured SDK headers' layouts, so it needs them.
+    target_sources(rsf_native_vulkan PRIVATE src/native_sr_vulkan.c)
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_FFX_VK=1)
+    target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust)
     target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_SR_ENABLED=1)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_FFX_VK_INCLUDE}")
 endif()
-set(RSF_XESS_VK_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/xess/inc" CACHE PATH "XeSS Vulkan API headers")
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND
-   ((EXISTS "${RSF_XESS_VK_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xell/xell_d3d12.h") OR
-    EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h"))
-    target_sources(rsf_native_vulkan PRIVATE src/native_dx12_vulkan_interop.cpp)
+if(RSF_HAVE_VULKAN AND (RSF_HAVE_XESS_FG OR RSF_HAVE_FFX_FG OR RSF_HAVE_FFX_DX12_SR))
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
     target_link_libraries(rsf_native_vulkan PRIVATE d3d12 dxgi)
 endif()
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xess/xess_vk.h")
+if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_VK)
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_XESS_VK=1)
-    target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_XESS_VK_INCLUDE}")
+    target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_XESS_INCLUDE}")
 endif()
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xell/xell_d3d12.h")
-    target_sources(rsf_native_vulkan PRIVATE src/native_fg_xess_vulkan.cpp src/native_fg_xess_vulkan_present.cpp ../vulkan/xess-fg/bridge.cpp)
-    target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_XESS_FG_VK=1 PUBLIC RSF_VULKAN_XESS_FG_ENABLED=1)
-    target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_XESS_VK_INCLUDE}")
-    target_link_libraries(rsf_native_vulkan PRIVATE d3d12 dxgi bcrypt)
+if(RSF_HAVE_VULKAN AND RSF_HAVE_XESS_FG)
+    target_sources(rsf_native_vulkan PRIVATE src/native_fg_xess_vulkan.c src/native_fg_xess_vulkan_present.c ../vulkan/xess-fg/bridge.c)
+    target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_XESS_FG_VK=1 RSF_XESS_BRIDGE_RUNTIME_D3D12=1 PUBLIC RSF_VULKAN_XESS_FG_ENABLED=1)
+    target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_XESS_INCLUDE}")
+    # dxguid defines the DXGI interface IDs that bridge.c passes by address.
+    target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust d3d12 dxgi dxguid bcrypt)
 endif()
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../upscalers/include/ffx_upscale.h")
-    target_sources(rsf_native_vulkan PRIVATE src/native_sr_fsr4_vulkan.cpp ../vulkan/fsr4/bridge.cpp)
-    target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_FSR4_ENABLED=1 PRIVATE RSF_FSR4_VULKAN_STATIC=1)
-    target_include_directories(rsf_native_vulkan PRIVATE ../backends/fsr/src)
-    target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_FFX_INCLUDE}/../..")
-    target_link_libraries(rsf_native_vulkan PRIVATE ReScaleFrame::FSR bcrypt)
+if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_SR)
+    target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_FSR4_ENABLED=1)
+    target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
+    # The FSR 4 SR owner, its bridge and their exports are Rust (vulkan_fsr4_sr.rs, rsf-fsr4-compat).
+    target_link_libraries(rsf_native_vulkan PRIVATE ReScaleFrame::FSR rsf_orchestrator_rust bcrypt d3d12 dxgi)
 endif()
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h")
-    target_sources(rsf_native_vulkan PRIVATE src/native_fg_fsr4_vulkan.cpp ../vulkan/fsr4-fg/bridge.cpp)
+if(RSF_HAVE_VULKAN AND RSF_HAVE_FFX_DX12_FG)
+    # The FSR 4 FG bridge, its platform table and exports are Rust (vulkan_fsr4_fg.rs, runtime/vulkan/fsr4-fg).
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_FSR4_FG_VK=1 PUBLIC RSF_VULKAN_FSR4_FG_ENABLED=1)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_FFX_INCLUDE}" "${RSF_FFX_INCLUDE}/../../framegeneration/include")
-    target_link_libraries(rsf_native_vulkan PRIVATE d3d12 dxgi)
+    target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust d3d12 dxgi)
 endif()
-set(RSF_STREAMLINE_VK_RUNTIME "${CMAKE_SOURCE_DIR}/.local/godot/vulkan/host/artifacts/streamline-production-selected-device-reflex/runtime" CACHE PATH "Corrected Streamline Production runtime")
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h" AND EXISTS "${RSF_STREAMLINE_VK_RUNTIME}/streamline-sdk-build.json")
-    file(READ "${RSF_STREAMLINE_VK_RUNTIME}/streamline-sdk-build.json" rsf_sl_receipt)
-    string(JSON rsf_sl_revision GET "${rsf_sl_receipt}" sdkCommit)
-    if(NOT rsf_sl_revision STREQUAL "2122257e0fce486f91b385aa63b9a09b0a34b363")
-        message(FATAL_ERROR "Unexpected corrected Streamline source revision")
-    endif()
-    foreach(rsf_sl_input "patchSha256|sdk-fixes/prepare.py" "dispatchSha256|sdk-fixes/ngx-vulkan-dispatch.h" "recipeSha256|build-sdk.ps1" "presentCaptureSha256|present-capture.h" "selectedDevicePatchSha256|sdk-fixes/selected_device.py" "selectedDeviceConfigSha256|sdk-fixes/selected-device-config.h")
-        string(REPLACE "|" ";" rsf_sl_fields "${rsf_sl_input}")
-        list(GET rsf_sl_fields 0 rsf_sl_field)
-        list(GET rsf_sl_fields 1 rsf_sl_file)
-        file(SHA256 "${CMAKE_SOURCE_DIR}/runtime/vulkan/streamline/${rsf_sl_file}" rsf_sl_hash)
-        string(JSON rsf_sl_expected GET "${rsf_sl_receipt}" "${rsf_sl_field}")
-        string(TOLOWER "${rsf_sl_expected}" rsf_sl_expected)
-        if(NOT rsf_sl_hash STREQUAL rsf_sl_expected)
-            message(FATAL_ERROR "Corrected Streamline receipt differs from ${rsf_sl_file}")
-        endif()
-    endforeach()
-    foreach(rsf_sl_binary sl.interposer.dll sl.common.dll)
-        file(SHA256 "${RSF_STREAMLINE_VK_RUNTIME}/${rsf_sl_binary}" rsf_sl_hash)
-        string(JSON rsf_sl_expected GET "${rsf_sl_receipt}" binaries "${rsf_sl_binary}")
-        string(TOLOWER "${rsf_sl_expected}" rsf_sl_expected)
-        if(NOT rsf_sl_hash STREQUAL rsf_sl_expected)
-            message(FATAL_ERROR "Corrected Streamline binary differs from receipt: ${rsf_sl_binary}")
-        endif()
-    endforeach()
-    file(SHA256 "${RSF_STREAMLINE_VK_RUNTIME}/sl.interposer.dll" rsf_sl_hash)
-    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," rsf_sl_bytes "${rsf_sl_hash}")
-    target_sources(rsf_native_vulkan PRIVATE ../vulkan/streamline/bridge.cpp)
-    target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_STREAMLINE_VK=1 RSF_STREAMLINE_VULKAN_STATIC=1 "VULKANSTORY_CORRECTED_STREAMLINE_SHA256=${rsf_sl_bytes}")
+if(RSF_STREAMLINE_VK_DIGEST)
+    target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_STREAMLINE_VK=1 RSF_STREAMLINE_VULKAN_STATIC=1)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_STREAMLINE_INCLUDE}")
-    target_link_libraries(rsf_native_vulkan PRIVATE wintrust advapi32)
+    # The interposer lifecycle is Rust (rsf-streamline-vk, inside the Runtime archive); the standalone
+    # bridge links the same crate.
+    target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust wintrust advapi32)
 endif()
 add_library(ReScaleFrame::NativeVulkan ALIAS rsf_native_vulkan)
-find_path(RSF_FRAME_DUMP_VULKAN_INCLUDE vulkan/vulkan.h
-    HINTS "${RSF_VULKAN_INCLUDE}" "$ENV{VULKAN_SDK}/Include")
 if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
-    target_sources(rsf_native_vulkan PRIVATE src/input_dump_vulkan.cpp)
+    # The C file only carries export directives. Link it as an object in each
+    # consumer so the linker sees the exports before extracting the Rust archive.
+    target_sources(rsf_native_vulkan INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/input_dump_vulkan_exports.c")
     target_include_directories(rsf_native_vulkan SYSTEM PUBLIC "${RSF_FRAME_DUMP_VULKAN_INCLUDE}")
     target_compile_definitions(rsf_native_vulkan PUBLIC RSF_FRAME_DUMP_VULKAN=1)
 endif()
 
 add_library(rsf_orchestrator SHARED $<TARGET_OBJECTS:rsf_orchestrator_core>)
-target_link_libraries(rsf_orchestrator PUBLIC rsf_orchestrator_core)
+target_link_libraries(rsf_orchestrator PRIVATE rsf_orchestrator_core)
+# Consumers link the DLL's exports. They get the core's headers and definitions, not its static
+# archives, which would define the same exports a second time.
+target_include_directories(rsf_orchestrator INTERFACE
+    $<TARGET_PROPERTY:rsf_orchestrator_core,INTERFACE_INCLUDE_DIRECTORIES>)
+target_compile_definitions(rsf_orchestrator INTERFACE
+    $<TARGET_PROPERTY:rsf_orchestrator_core,INTERFACE_COMPILE_DEFINITIONS>)
 # Native Vulkan services are public C entry points used by external engines.
 # Keep every service object in the DLL even when no embedded host references it.
 target_link_libraries(rsf_orchestrator PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,rsf_native_vulkan>")
 target_link_libraries(rsf_orchestrator PRIVATE rsf_build_options)
 set_target_properties(rsf_orchestrator PROPERTIES OUTPUT_NAME "ReScaleFrame.Runtime")
-target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.cpp)
-target_sources(rsf_orchestrator PRIVATE src/overlay_api.cpp)
-target_sources(rsf_orchestrator PRIVATE src/d3d11_host.cpp)
-target_sources(rsf_orchestrator PRIVATE src/auxiliary_sr.cpp)
-target_sources(rsf_orchestrator PRIVATE src/sampler_bias.cpp)
-target_sources(rsf_orchestrator PRIVATE src/d3d11_sr_api.cpp)
-target_sources(rsf_orchestrator PRIVATE src/d3d11_fg_api.cpp)
+target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.c src/dll_exports.c)
+target_sources(rsf_orchestrator PRIVATE src/d3d11_host_exports.c)
 add_subdirectory(../shader_patch "${CMAKE_CURRENT_BINARY_DIR}/shader_patch")
-
-# Optional AMD driver SDK; the Runtime remains available when it is absent.
-set(RSF_ANTILAG2_INCLUDE "${PROJECT_SOURCE_DIR}/vendor/antilag2" CACHE PATH "Pinned Anti-Lag 2 SDK headers")
-target_sources(rsf_orchestrator_core PRIVATE src/latency_antilag.cpp)
-if(EXISTS "${RSF_ANTILAG2_INCLUDE}/ffx_antilag2_dx11.h" AND EXISTS "${RSF_ANTILAG2_INCLUDE}/ffx_antilag2_dx12.h")
-    target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_HAVE_ANTILAG2=1)
-    target_include_directories(rsf_orchestrator_core SYSTEM PRIVATE "${RSF_ANTILAG2_INCLUDE}")
+target_include_directories(rsf_orchestrator PUBLIC "${CMAKE_SOURCE_DIR}/runtime/shader_patch/include")
+target_link_libraries(rsf_orchestrator PRIVATE rsf_shader_patch)
+if(MSVC)
+    target_link_options(rsf_orchestrator PRIVATE "LINKER:/EXPORT:rsf_get_shader_patch_api")
+else()
+    target_sources(rsf_orchestrator PRIVATE "${CMAKE_SOURCE_DIR}/runtime/shader_patch/shader_patch.def")
+    target_link_options(rsf_orchestrator PRIVATE "LINKER:--undefined,rsf_get_shader_patch_api")
 endif()

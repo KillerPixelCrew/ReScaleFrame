@@ -1,0 +1,283 @@
+// SPDX-License-Identifier: MIT
+use crate::com_ref;
+use crate::d3d11_output::SavedBindings;
+use crate::graphics_d3d11::{
+    GROUP_EDGE, Handle, SourceInfo, SourceViews, compute_shader, compute_texture, constant_buffer,
+    context_matches, copy_params, describe_source, dispatch_compute, prepare_compute,
+    rsf_d3d11_state_restore, rsf_d3d11_state_save, shader_code, source_view, target_view,
+};
+use crate::sys::rsf_motion_resolve_params as Params;
+use std::ptr::{self, null_mut};
+use std::sync::{Mutex, TryLockError};
+use windows::Win32::Graphics::Direct3D11::{
+    ID3D11Buffer, ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext,
+};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R32_FLOAT};
+use windows::core::IUnknown;
+use windows::core::Interface;
+use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+
+const PARAMS_V1: usize = std::mem::offset_of!(Params, jitter_pixels);
+const R32_FLOAT: u32 = DXGI_FORMAT_R32_FLOAT.0 as u32;
+
+type Resources = [Handle; 6];
+
+#[repr(C)]
+struct Constants {
+    matrix: [f32; 16],
+    scale: [f32; 2],
+    sentinel: f32,
+    has_sentinel: u32,
+    size: [u32; 2],
+    has_layer: u32,
+    padding: u32,
+    jitter: [f32; 2],
+    padding2: [f32; 2],
+}
+
+const SHADER: &[u8] = include_bytes!("../../graphics/shaders/motion_resolve.hlsl");
+
+fn make_resources(device: &ID3D11Device, width: u32, height: u32) -> Option<[IUnknown; 6]> {
+    let code = shader_code(SHADER, c"motion_resolve", c"main", c"cs_5_0", 0).ok()?;
+    let shader = compute_shader(device, &code)?;
+    let constants = constant_buffer(device, size_of::<Constants>() as u32, false)?;
+    // R16G16_FLOAT crosses into D3D12. Upstream decoding retains R32G32_FLOAT precision.
+    let motion = compute_texture(device, width, height, DXGI_FORMAT_R16G16_FLOAT)?;
+    let motion_view = target_view(device, &motion, 0)?;
+    let depth = compute_texture(device, width, height, DXGI_FORMAT_R32_FLOAT)?;
+    let depth_view = target_view(device, &depth, 0)?;
+    Some([
+        shader.into(),
+        constants.into(),
+        motion.into(),
+        depth.into(),
+        motion_view.into(),
+        depth_view.into(),
+    ])
+}
+
+unsafe fn dispatch(
+    context: Handle,
+    resources: &Resources,
+    sources: &[Handle; 3],
+    constants: &Constants,
+    groups: [u32; 2],
+) -> bool {
+    let raw = context;
+    let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.expect("live context");
+    let shader =
+        unsafe { ID3D11ComputeShader::from_raw_borrowed(&resources[0]) }.expect("live shader");
+    let buffer = unsafe { ID3D11Buffer::from_raw_borrowed(&resources[1]) }.expect("live buffer");
+    unsafe { context.UpdateSubresource(buffer, 0, None, ptr::from_ref(constants).cast(), 0, 0) };
+    let Some(_saved) =
+        (unsafe { SavedBindings::new(raw, rsf_d3d11_state_save, rsf_d3d11_state_restore) })
+    else {
+        return false;
+    };
+    prepare_compute(context);
+    dispatch_compute(
+        context,
+        shader,
+        sources,
+        &[resources[4], resources[5]],
+        None,
+        groups,
+        false,
+        Some(resources[1]),
+    );
+    true
+}
+
+const _: () = {
+    assert!(size_of::<Constants>() == 112 && PARAMS_V1 == 96);
+};
+
+pub(super) struct Pass {
+    sources: Mutex<SourceViews<8>>,
+    resources: [IUnknown; 6],
+    device: IUnknown,
+    width: u32,
+    height: u32,
+}
+
+impl Pass {
+    fn source(&self, texture: Handle) -> Option<SourceInfo> {
+        unsafe { describe_source(self.device.as_raw(), texture) }.filter(|info| {
+            info.single_surface() && info.width >= self.width && info.height >= self.height
+        })
+    }
+}
+
+fn constants(params: &Params, width: u32, height: u32) -> Option<Constants> {
+    if !params
+        .clip_to_previous
+        .into_iter()
+        .chain(params.decoded_to_pixels)
+        .chain([params.sentinel])
+        .chain(params.jitter_pixels)
+        .all(f32::is_finite)
+    {
+        return None;
+    }
+    Some(Constants {
+        matrix: params.clip_to_previous,
+        scale: params.decoded_to_pixels,
+        sentinel: params.sentinel,
+        has_sentinel: params.has_sentinel,
+        size: [width, height],
+        has_layer: 0,
+        padding: 0,
+        jitter: params.jitter_pixels,
+        padding2: [0.0; 2],
+    })
+}
+
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_motion_resolve_create(
+    device: Handle,
+    width: u32,
+    height: u32,
+    out: *mut *mut Pass,
+) -> i32 {
+    if device.is_null() || out.is_null() || width == 0 || height == 0 {
+        return 0;
+    }
+    unsafe { out.write(null_mut()) };
+    let native = unsafe { ID3D11Device::from_raw_borrowed(&device) }.expect("live device");
+    let Some(resources) = make_resources(native, width, height) else {
+        return 0;
+    };
+    let pass = crate::allocate_handle(Pass {
+        sources: Mutex::new(SourceViews::new()),
+        resources,
+        device: unsafe { com_ref::retain(device) },
+        width,
+        height,
+    });
+    unsafe { out.write(pass) };
+    i32::from(!pass.is_null())
+}
+
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_motion_resolve_run(
+    pass: *const Pass,
+    context: Handle,
+    motion: Handle,
+    depth: Handle,
+    params: *const Params,
+) -> i32 {
+    let Some(pass) = (unsafe { pass.as_ref() }) else {
+        return 0;
+    };
+    if context.is_null() || motion.is_null() || depth.is_null() {
+        return 0;
+    }
+    let Some(params) = (unsafe { copy_params(params, PARAMS_V1) }) else {
+        return 0;
+    };
+    let Some(mut constants) = constants(&params, pass.width, pass.height) else {
+        return 0;
+    };
+    let device = pass.device.as_raw();
+    if !unsafe { context_matches(device, context) } {
+        return 0;
+    }
+    let (Some(motion_info), Some(depth_info)) = (pass.source(motion), pass.source(depth)) else {
+        return 0;
+    };
+    let layer = params.depth_layer;
+    if !layer.is_null()
+        && pass
+            .source(layer)
+            .is_none_or(|info| info.format != R32_FLOAT)
+    {
+        return 0;
+    }
+    let mut sources = match pass.sources.try_lock() {
+        Ok(sources) => sources,
+        Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(TryLockError::WouldBlock) => return 0,
+    };
+    let now = unsafe { GetTickCount64() };
+    // A later lookup may replace a selected cache slot. Own the view
+    // through dispatch even when it is no longer in the cache.
+    let Some(motion_view) =
+        (unsafe { sources.get(device, motion, motion_info.view_format, now, source_view) })
+            .cloned()
+    else {
+        return 0;
+    };
+    let Some(depth_view) =
+        (unsafe { sources.get(device, depth, depth_info.view_format, now, source_view) }).cloned()
+    else {
+        return 0;
+    };
+    let layer_view = if layer.is_null() {
+        None
+    } else {
+        let Some(view) =
+            (unsafe { sources.get(device, layer, R32_FLOAT, now, source_view) }).cloned()
+        else {
+            return 0;
+        };
+        Some(view)
+    };
+    constants.has_layer = layer_view.is_some().into();
+    let bindings = [
+        motion_view.as_raw(),
+        depth_view.as_raw(),
+        layer_view.as_ref().map_or(null_mut(), Interface::as_raw),
+    ];
+    let resources = pass.resources.each_ref().map(Interface::as_raw);
+    let groups = [pass.width, pass.height].map(|size| size.div_ceil(GROUP_EDGE));
+    i32::from(unsafe { dispatch(context, &resources, &bindings, &constants, groups) })
+}
+
+unsafe fn resolve_texture(pass: *const Pass, output: usize) -> Handle {
+    let Some(pass) = (unsafe { pass.as_ref() }) else {
+        return null_mut();
+    };
+    pass.resources[output].as_raw()
+}
+
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_motion_resolve_motion(pass: *const Pass) -> Handle {
+    unsafe { resolve_texture(pass, 2) }
+}
+
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_motion_resolve_depth(pass: *const Pass) -> Handle {
+    unsafe { resolve_texture(pass, 3) }
+}
+
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_motion_resolve_destroy(pass: *mut Pass) {
+    if !pass.is_null() {
+        drop(unsafe { Box::from_raw(pass) });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_resolve_parameters_keep_zero_jitter() {
+        let input = Params {
+            struct_size: PARAMS_V1 as u32,
+            clip_to_previous: [0.0; 16],
+            decoded_to_pixels: [1.0; 2],
+            sentinel: -1000.0,
+            has_sentinel: 1,
+            depth_layer: null_mut(),
+            jitter_pixels: [f32::NAN; 2],
+        };
+        let legacy = unsafe { copy_params(&input, PARAMS_V1) }.unwrap();
+        assert_eq!(constants(&legacy, 8, 8).unwrap().jitter, [0.0; 2]);
+        let full = Params {
+            struct_size: size_of::<Params>() as u32,
+            ..input
+        };
+        assert!(constants(&unsafe { copy_params(&full, PARAMS_V1) }.unwrap(), 8, 8).is_none());
+    }
+}

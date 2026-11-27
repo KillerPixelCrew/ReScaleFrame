@@ -4,20 +4,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import time
 import uuid
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-# Reuse the AC7 packager's hashing, copying and Rust notice collection rather than forking them.
-_spec = importlib.util.spec_from_file_location("package_ac7", ROOT / "tools/package-ac7.py")
-ac7 = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(ac7)
-git, digest, copy = ac7.git, ac7.digest, ac7.copy
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from package_common import (RUNTIME, STREAMLINE_SDK, VENDOR_HASHES, copy, dependency_notices, digest, git,  # noqa: E402
+                            release_identity)
 
 # Portable defaults. Overlay changes are written back to this file; diagnostics stay off.
 CONFIG = """[RDR2]
@@ -33,12 +31,12 @@ StatusOverlay=1
 
 def main(argv=None, *, release_revision=None, game_only=False):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--streamline-root", required=True, type=Path)
+    parser.add_argument("--streamline-root", type=Path, default=STREAMLINE_SDK)
     parser.add_argument("--fidelityfx-root", type=Path, default=ROOT / "vendor/fidelityfx")
     parser.add_argument("--xess-root", type=Path, default=ROOT / "vendor/xess")
     parser.add_argument("--output", type=Path, default=ROOT / "build/releases/rdr2")
     args = parser.parse_args(argv)
-    revision = ac7.release_identity(release_revision)
+    revision = release_identity(release_revision)
     version = (ROOT / "VERSION").read_text().strip()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -47,11 +45,8 @@ def main(argv=None, *, release_revision=None, game_only=False):
     fsr = args.fidelityfx_root / "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll"
     xess = args.xess_root / "bin/libxess.dll"
     # Same validated SR runtimes as AC7; the FSR4 compatibility hook recognizes this exact binary.
-    for source, expected in (
-        (fsr, "aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace"),
-        (xess, "251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7"),
-    ):
-        if digest(source) != expected:
+    for source in (fsr, xess):
+        if digest(source) != VENDOR_HASHES[source.name]:
             raise RuntimeError(f"{source.name} differs from the validated SR runtime.")
     release = ROOT / "build/windows-x64/bin/Release"
     for source, relative in (
@@ -84,7 +79,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
         (args.xess_root / "third-party-programs.txt", "ReScaleFrame/xess/third-party-programs.txt"),
     ):
         copy(source, stage / relative)
-    for name in ac7.RUNTIME:
+    for name in RUNTIME:
         copy(args.streamline_root / "bin/x64" / name, stage / "ReScaleFrame/streamline" / name)
     (stage / "ReScaleFrame.ini").write_text(CONFIG, encoding="utf-8")
     (stage / "ReScaleFrame/licenses/README.md").write_text(
@@ -95,7 +90,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
         "or in this directory. Vendor binaries are unmodified. Rust dependency notices and\n"
         "MinHook are also included. ScriptHookRDR2 and the ASI loader are not redistributed.\n",
         encoding="utf-8")
-    ac7.dependency_notices(stage)
+    dependency_notices(stage)
     engine = json.loads((ROOT / "games/rdr2/engine.json").read_text(encoding="utf-8"))
     manifest = {
         "product": "ReScaleFrame for Red Dead Redemption 2", "version": version, "source_commit": revision,
@@ -124,7 +119,7 @@ def main(argv=None, *, release_revision=None, game_only=False):
             if hashlib.sha256(bundle.read(name)).hexdigest() != expected:
                 raise RuntimeError(f"Archive hash mismatch: {name}")
     if game_only:
-        ac7.release_identity(revision)
+        release_identity(revision)
         return {"archive": str(archive), "revision": revision}
     source = output / f"ReScaleFrame-{version}-RDR2-source.zip"
     subprocess.run(["git", "archive", "--format=zip", f"--prefix=ReScaleFrame-{version}/",

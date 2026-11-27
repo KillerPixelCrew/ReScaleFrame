@@ -1,23 +1,23 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 #pragma once
-#include "options.h"
-#include <d3d11.h>
-#include <wrl/client.h>
-namespace rsf::sharpening {
-// Internal device helper. Call on the owning immediate context; output is updated only on success.
-// No shader compilation, allocation, dispatch or copy occurs when disabled.
-class D3D11 {
-public:
-    bool run(ID3D11DeviceContext* context, ID3D11Texture2D* output, ID3D11Texture2D* motion,
-        ID3D11Texture2D* depth, ID3D11Texture2D* exposure, const Options& options, Frame frame);
-    uint64_t dispatches() const { return dispatches_; }
-private:
-    bool prepare(ID3D11Device* device, const D3D11_TEXTURE2D_DESC& output);
-    Microsoft::WRL::ComPtr<ID3D11Device> device_;
-    Microsoft::WRL::ComPtr<ID3D11ComputeShader> shaders_[3];
-    Microsoft::WRL::ComPtr<ID3D11Buffer> constants_;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> scratch_;
-    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> target_;
-    uint64_t dispatches_ = 0;
-};
+#include <stdint.h>
+#include <rescaleframe/sharpening_settings.h>
+
+typedef struct rsf_sharpen11_frame {
+    uint32_t depth_linear, depth_inverted, hdr;
+    float near_plane, far_plane, exposure, motion_x, motion_y;
+} rsf_sharpen11_frame;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint32_t rsf_sharpening_requested(const rsf_sharpening_options*);
+/* Internal immediate-context pass. Inputs are output, motion, depth and exposure.
+   The caller serializes access to the handle. Off succeeds with null resources. */
+uint32_t rsf_core_sharpen11_run(void** owner, void* context, void* const* inputs,
+    const rsf_sharpening_options*, const rsf_sharpen11_frame*);
+uint64_t rsf_core_sharpen11_count(const void* owner);
+void rsf_core_sharpen11_destroy(void* owner);
+#ifdef __cplusplus
 }
+#endif

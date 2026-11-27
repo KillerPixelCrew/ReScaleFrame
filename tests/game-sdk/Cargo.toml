@@ -1,0 +1,56 @@
+[package]
+name = "rsf-game-sdk-fixtures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# The Anomaly SR temporal device fixture calls the Runtime's motion passes, so it links rsf-anomaly's
+# fixture entries and the Runtime from one archive.
+anomaly-sr-device-fixture = ["rsf-anomaly/sr-fixtures"]
+unity-sr-d3d12-fixture = [
+  "dep:rsf-rdr2", "dep:rsf-unity", "dep:windows", "windows-sys/Win32_System_Threading",
+  "windows-sys/Win32_System_WindowsProgramming",
+]
+vk-latency-fixtures = ["dep:ash", "windows-sys/Win32_System_Threading", "windows-sys/Win32_UI_WindowsAndMessaging"]
+cpu-fixtures = ["windows-sys/Win32_System_Memory", "windows-sys/Win32_System_SystemInformation"]
+d3d11-host-fixture = []
+plugin-session-fixture = []
+render-host-fixtures = ["windows-sys/Win32_System_WindowsProgramming"]
+
+[lib]
+crate-type = ["staticlib"]
+# A CMake fixture archive. Its unit-test harness would link the Runtime and adapter crates it
+# takes bindings from, with all their native imports.
+test = false
+
+[target.'cfg(windows)'.dependencies]
+ash = { workspace = true, optional = true }
+rsf-anomaly = { path = "../../games/anomaly" }
+rsf-game-sys = { path = "../../sdk/game" }
+rsf-graphics = { path = "../../runtime/graphics/rust" }
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
+# The RDR2 runtime setup the Unity SR D3D12 fixture calls.
+rsf-rdr2 = { path = "../../games/rdr2", optional = true }
+rsf-test-support = { path = "../support" }
+rsf-unity = { path = "../../integrations/unity", optional = true }
+windows = { workspace = true, optional = true, features = [
+  "std",
+  "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Security",
+  "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging",
+] }
+windows-sys = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemServices",
+] }
+
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
+
+[lints]
+workspace = true

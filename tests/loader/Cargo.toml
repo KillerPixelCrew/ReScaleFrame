@@ -1,0 +1,56 @@
+[package]
+name = "rsf-loader-fixtures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+# The fake vendor DLLs' exports (vendor_census_fixture.rs). Only those DLLs link this archive: the
+# census test imports the same names from them.
+vendor-dll-fixtures = []
+
+[dependencies]
+rsf-game-sys = { path = "../../sdk/game" }
+
+[target.'cfg(windows)'.dependencies]
+# The loader the census and module dump fixtures call, carried in this archive.
+rsf-loader = { path = "../../loader" }
+rsf-test-support = { path = "../support" }
+windows-sys = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Security_Cryptography",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Environment",
+  "Win32_System_IO",
+  "Win32_System_Ioctl",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemInformation",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+  "Win32_UI_Input_XboxController",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(all(windows, target_env = "msvc"))'.dependencies]
+serde_json = "=1.0.154"
+windows = { workspace = true, features = [
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
+
+[lints]
+workspace = true

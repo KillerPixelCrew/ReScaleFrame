@@ -1,5 +1,180 @@
 # Implementation tracker
 
+This page tracks what is built, synthetic-tested, game-tested and device-tested. Dated entries below
+record each result with its failures and later corrections; a pending statement in an earlier entry
+applies to that entry. [Current status](current-status.md) is the maintained summary of claims, and
+the Rust port of the former C++ is recorded by the Git history and [the migration note](rust-migration.md),
+not here.
+
+| Integration | Built | Synthetic-tested | Game-tested | Device-tested | Dated entries |
+| --- | --- | --- | --- | --- | --- |
+| AC7 (D3D11) | Native renderer hooks, pre-tonemap SR, DLSS, FSR2/3/4, XeSS, D3D12 FG facade | Velocity, render scope and native graph fixtures | User accepted corrected SR, UI and cloud rendering and DLSS-G; FSR3 and XeSS FG have no live acceptance | DLSS, FSR and XeSS on RTX 4070 Laptop and Intel UHD | [First working target](#first-working-target), [AC7 shared frame generation](#ac7-shared-frame-generation-5-october-2026), [AC7 motion and velocity](#ac7-motion-and-velocity-improvements) |
+| Drag'n Wash and Unity Mono (D3D12) | Shared shim, Mono hooks, pre-DoF SR, overlay, FG switching | Package and layout fixtures | Live SR and improved post-processing order recorded; user accepted XeSS and DLSS-G and the final FSR correction | Not recorded for MSI Claw | [Unity UI regression](#unity-ui-regression-touch-and-fg-startup-10-october-2026), [Drag'n Wash character motion](#dragn-wash-character-motion-20-october-2026) |
+| Project Wingman | XInput carrier and guarded native temporal graph observer | Camera and observer contracts | User-run mission verifies readable inputs, history and rectangles | None; SR, FG and latency unimplemented | [Wingman native observation](#wingman-native-observation-11-october-2026) |
+| Red Dead Redemption 2 | Common-SR adapter, scene and pacing markers, shared FG presentation, forced-DX12 ASI | Camera and capture fixtures | Four SR providers and DLSS and XeSS FG intervals accepted; shared overlay and runtime presets confirmed | Non-NVIDIA hardware unproven | [RDR2 scaffold](#red-dead-redemption-2-scaffold-25-october-2026), [FSR2 input route](#rdr2-on-intel-fsr2-input-route-orchestrator-auto-sr-and-fidelityfx-240-30-october-2026) |
+| Fallout 4 AE | Native render callbacks without F4SE or ENB | Camera and host ABI fixtures | DLSS SR and FG accepted in the tested moving scene; XeSS FG interval correction accepted | NVIDIA only | [Fallout 4 AE native render callbacks](#fallout-4-ae-native-render-callbacks-16-november-2026) |
+| Skyrim SE | Experimental no-SKSE pre-HDR path | Camera and host ABI fixtures | Bounded vanilla runs evaluated DLSS at native resolution; reduced-resolution SR and FG incomplete | Vendor telemetry only, no physical scanout or latency | [Skyrim SE reduced-resolution SR](#skyrim-se-experimental-reduced-resolution-sr-15-november-2026) |
+| Anomaly | SR stages 1 to 5, foliage motion, shader patching | DLSS, FSR3, FSR4 and XeSS 24/24 frames on RTX 4070 | Stage 2 motion run recorded; later stages not game-tested; signature discovery not yet game-run | RTX 4070 | [Anomaly SR Stages 3-5](#anomaly-sr-stages-3-5-and-foliage-motion-12-november-2026), [Anomaly signature discovery](#anomaly-signature-discovery-24-november-2026) |
+| Godot | Standard and .NET engines, Vulkan SR and FG provider fixtures | Controller and export fixtures | Not a shipped game path | Generated-image comparisons against independent midpoints; some FSR2/FSR3 object-motion cases fail | [Godot developer integration](#godot-developer-integration-in-progress-25-october-2026) |
+| Minecraft (OpenGL) | Java mod with SR and FG and motion producers | Java and offscreen OpenGL checks | World geometry confirmed in the 1.1.8-dev correction; shader-pack acceptance open | None recorded | [Minecraft OpenGL SR and FG](#minecraft-opengl-sr-and-fg-17-october-2026) |
+
+## Frame dump projection without camera matrices, input dump ABI 2, 27 November 2026
+
+Built and unit-tested (orchestrator `input_dump::abi` tests), not game-run.
+
+- A source that knows near, far and the vertical field of view but not its camera matrices (an
+  upscaler dispatch's parameters, say) could not record them: `frame.json` writes camera fields only
+  for a complete `rsf_camera_frame`, and filling one with zero matrices would make
+  `camera_available` lie to the analyzers.
+- `rsf_input_dump_projection(record, projection)` (input dump ABI 2) takes `rsf_dump_projection`
+  (`struct_size`, `abi_version` 1, `near_plane`, `far_plane`, `vertical_fov_radians`, `aspect_ratio`,
+  `depth_inverted`, `far_infinite`). Each value is optional (zero or non-finite is not known; the two
+  conventions are known only as 0 or 1). A short structure, another version or a missing record is
+  refused. It writes `projection.json` into the bundle of the armed record and never makes
+  `camera_available` true; a complete camera in the record supersedes it.
+- The frame record and `rsf_sr_frame` are unchanged: their versions are checked for equality across
+  every integration, so the projection is an appended entry point of the dumper instead.
+- Tests: `the_projection_layout_is_the_headers`,
+  `a_projection_without_matrices_is_written_and_a_bad_call_is_refused`.
+
+## Final scene on the engine's own list, 27 November 2026
+
+Built and unit-tested (synthetic host fixtures), not game-run or device-tested. No integration uses it yet.
+
+- The fence-retired D3D12 render host took a FINAL_SCENE pass only on the command list that carries the
+  frame's SR evaluation: it looked for a pending command slot with that list and frame number, and the
+  scene counted as submitted when that recording was. An engine that evaluates SR in its render lists and
+  composes its final picture in a separate present list (the scene without the UI, then the UI over it)
+  could not hand over its HUD-less image: the pass matched no slot and was dropped, so generation never
+  got `fg_hudless` and the WINDOW pass never matched.
+- A FINAL_SCENE pass on another list is now taken when a command slot holds an SR evaluation of the same
+  `native_frame`, pending or already submitted. The scene remembers that list, the host calls `fg_hudless`
+  on it, and the scene is submitted (`fg_submitted`) when a `submit` end carries that list. It retires no SR
+  slot and signals no fence. The SR capture stays with the evaluation's slot and is not taken for such a
+  scene. A list reused for a newer scene before the earlier one was submitted carries only the newer one.
+- Nothing changes for a scene on the SR recording's list, and a final scene of a frame with no SR
+  evaluation is still dropped.
+- Test: `a_final_scene_on_the_engines_own_list_pairs_by_frame_and_submits_with_that_list`.
+
+## Explicit render-host presentation, 27 November 2026
+
+Built and unit-tested, not game-run or device-tested. No integration uses it yet.
+
+- The fence-retired render host (`render_host.h`) had two presentation modes and both hook: OWNS installs
+  frame generation with DXGI factory detours, ENGINE creates a MinHook observer of the engine's factory, device,
+  queue and chain. An engine that creates its own D3D12 window and swap chain and wants no hooks could only use the
+  separate Godot route (`rsf_fg12_install_explicit` plus `rsf_d3d11_present_create_for_hwnd`), without the host's
+  services (SR through `process_upscale`, fence retirement, scene and Present matching, latency, feedback).
+- `RSF_RENDER_HOST_EXPLICIT_PRESENTATION` (2) is the third mode: the host installs generation with
+  `rsf_fg12_install_explicit` (the bridge is prepared, no detours) and creates no observer. The engine calls the new
+  `rsf_render_host_create_swapchain(host, factory, queue, window, desc, out)` at its own creation site; the host
+  checks the mode, the DIRECT queue and the adapter's window filter, calls the bridge's explicit creation, keeps the
+  queue for the overlay and reports graphics ready. The engine presents on the chain it got and reports every
+  boundary through the host services, as an OWNS engine does.
+- An engine may instead create its own native chain (or the host refuses creation because generation was not
+  installed, `RSF_ERROR_NOT_READY`): SR, submission, latency and feedback still work and frame generation has no
+  chain to present on. `rsf_render_host_graphics` accepts the presentation queue in this mode;
+  `rsf_render_host_device` and `rsf_render_host_factory` accept with nothing to attach. The setup struct and
+  `RSF_RENDER_HOST_ABI_VERSION` are unchanged; a runtime without the mode refuses value 2 as an invalid argument.
+- Unit tests: the explicit host installs explicitly, never the observer or the detour install; creation refuses
+  other modes, a non-DIRECT queue, a missing window or one the filter refuses, and a host whose generation install
+  failed, each before the bridge is called; a failed creation returns its HRESULT and hands out no chain; device,
+  factory and graphics reports behave as described. The bridge's own explicit creation is exercised by the existing
+  presentation fixture (`tests/presentation/src/fg_fixture.rs`), which was not run for this change.
+
+## D3D12 render host publishes render_config, 27 November 2026
+
+Built and unit-tested (synthetic host fixtures), not game-run or device-tested.
+
+- The fence-retired D3D12 render host (`rsf_render_host_create`) now fills `render_config`, as the
+  callback and D3D11 hosts already did. An integration that sizes its engine from RSF's plan sends a
+  `process_upscale` pass flagged RECONFIGURE with the output extent. The host resolves the saved backend, creates
+  the provider's context for the saved SR quality without engine extents, reads the provider's render
+  extent (`rsf_sr12_plan`), and publishes it with that vendor's jitter phases and LOD bias
+  (`rsf_game_render_config::plan`). The pass keeps native evaluation. Later passes at the planned extents
+  reuse that context at the planned quality.
+- The plan is native extents with `enabled` 0 when SR is off, the provider is not served or its plan does
+  not fit the output, or the saved backend, quality or enable state changed after planning.
+- Without a RECONFIGURE pass nothing changes: the engine keeps its own extents and the quality is still
+  inferred from the received ratio (RDR2).
+- Tests: `reconfigure_plans_the_saved_quality_and_publishes_the_render_config`,
+  `reconfigure_publishes_native_when_sr_is_off_or_refused`; the full orchestrator library suite passes.
+
+## D3D12 reactive and transparency masks, game ABI 26, 27 November 2026
+
+Built and unit-tested (synthetic sr12 fixtures), not game-run or device-tested.
+
+- `rsf_game_render_pass` gains `reactive_mask` and `transparency_mask` (game ABI 26): optional D3D12
+  resources leased with the SR inputs, in NON_PIXEL_SHADER_RESOURCE during `process_upscale`, covering
+  the render extent from the origin with one readable channel (R8_UNORM, R16_UNORM, R16_FLOAT or
+  R32_FLOAT). The ranges are those of `rsf_sr_frame`: reactive [0, 0.9], transparency [0, 1].
+- Before, the D3D12 path could take neither: `temporal_mask` is a D3D11 texture and `rsf_sr12_evaluate`
+  left `rsf_sr_frame.reactive` and `.transparency` null, although the FSR and XeSS D3D12 providers
+  already consume them. sr12 now validates each mask (device, single 2D texture, extent, format),
+  refuses the pass for an unusable one, hands both to the provider at the render extent, holds them per
+  command slot until that slot is reused, and records them in captures (`sr-reactive-mask`,
+  `sr-transparency-mask`).
+- D3D11 hosts ignore the new fields; `temporal_mask` stays the D3D11 hint. DLSS ignores both masks.
+- Test: `reactive_and_transparency_masks_reach_the_provider`.
+
+## One D3D12 host, Runtime FSR1 and Unity settings, 25 November 2026
+
+Built and unit-tested, not game-run or device-tested. Rule 5 audit F4 and overlay-parity follow-up 1, on
+`NightHammer1000/wave-d3d12`.
+
+- Drag'n Wash FSR1 switch: a change of SR provider waited for a scene packet flagged RECONFIGURE, which the managed
+  side records only as an inputs-only probe with depth and motion present, and the pre-UI frame-generation copy kept
+  admission busy every frame; with FG on, the switch to the engine's FSR1 never completed. The Mono bridge now
+  delivers the pending change at the window event once its command ring is idle, and the host applies it there.
+- One D3D12 host module: `callback_host.rs` is gone; the Unity entry is `render_host/callback.rs`. Vendor packages,
+  engine identity, SR context setup and the overlay's SR card are one implementation for RDR2 and Unity. Two C
+  entries remain because the integrations report different retirement facts (host-fenced recordings for RDR2,
+  adapter-retired command ring for Unity).
+- Runtime FSR1: sr12 serves Spatial itself with an FSR1 EASU kernel (`sr12/easu.hlsl`, after AMD's MIT
+  `ffx_fsr1.h`) where the engine has no spatial scaler, sampled at the jitter-free position. RDR2 now offers FSR1;
+  Unity keeps URP's own FSR1, which its adapter reports. D3D11 hosts do not have it yet.
+- Unity settings: SR backend, quality and enable state, generation mode, generated frames, latency, frame limit,
+  status overlay, DLSS model and sharpening are `rsf_render_settings` in the preferences `[Rendering]` section,
+  written on every accepted change. A key never saved keeps the adapter's `[UnitySR]` start value; the provider
+  keeps fg_choice's key.
+- Unity package on the same host: the D3D12 callback host gained per-view SR contexts and an attach mode, and the
+  package now attaches it per session instead of keeping its own SR views, plan, settings checks, provider
+  requests and view setup. `rsfu_configure`, `rsfu_settings` and `rsfu_status` translate onto the host's settings
+  (stored in `preferences.ini` in the package's SDK root) and status, with the C# contract unchanged; package
+  games get the shared overlay on the D3D12 route. sr12 plans FSR1 from the shared `fsr1.rs` table.
+
+Game runs must confirm: Drag'n Wash FSR1 on and off at run time with FG on and off, and settings restored after a
+restart; RDR2 upscaling unchanged and its new FSR1 image stable (jitter sign) with sharpening; a Unity package test
+project on D3D12, D3D11 and Vulkan (SR per camera, the C# options and the overlay changing one setting,
+status, Editor preview); FG providers and
+the overlay in both. Rule 5 F9 (RDR2 screen class) and F10 (RDR2 masks) wait for a game run; the Unity package
+host's generation install still happens in the integration (see the audit's F4).
+
+## Overlay parity across games, 25 November 2026
+
+Built and unit-tested, not game-run. Every game's overlay now offers the same controls and values, and a value
+the machine cannot serve is drawn greyed with its reason instead of being absent. One Runtime source decides the
+offer: `sr_choices.rs` (SR backends from the GPU vendor and the package files, quality per backend) and
+`fg_choice::resolve` (FG Auto per GPU). SR Auto, FSR2 and FG Auto are wired where they were missing (AC7, Skyrim
+SE, Fallout 4, RDR2, Unity Mono, Anomaly), the per-adapter lists are gone, and the panel always draws the Sharpen
+tab, Ultra Quality, the DLSS model and the empty-SR controls, greyed. Audit table, per-game results and the
+follow-ups that could not be finished (Runtime FSR1, Fallout 4 reduced frame, Wingman host, Anomaly bridge default)
+are in [overlay-parity-20261125.md](research/overlay-parity-20261125.md). `loader/proxy/src/dlss_bridge.c` changed
+and was not compiled.
+
+## Anomaly signature discovery, 24 November 2026
+
+Built and synthetic-tested, not game-tested. The adapter no longer admits an executable by its SHA-256 or name or
+reads per-build address tables: `games/anomaly/src/discovery.rs` resolves all 122 sites from the running executable
+(104 patterns that each resolve uniquely in both 1.5.3 DX11 builds, vtable slots, the position binder object and
+decoded first-person calls), matches each site's expected code at the found address and builds the profile records
+from the found sites. A missing site refuses only its feature and is named in the logs; the hash is logged. The
+per-build records are fixture data behind `recorded-profiles`. Checks: `cargo test -p rsf-anomaly` (171, including
+the installed-executable proof for both builds), clippy with the shipping and all fixture features, the four
+evidence scripts on both builds and `tools/anomaly_profile_evidence.py` (74 checks). Native CTest fixtures, a full
+`eng/verify.ps1` and a game run on each build are pending. Research:
+[anomaly-native-hooks.md](research/anomaly-native-hooks.md#signature-discovery-24-november-2026).
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with
@@ -714,7 +889,7 @@ chooses the phase_sunshafts/phase_blur prologue with FP16 render-size targets an
 inverse/forward tonemap; all Stage 0 sites are byte-guarded and verified against the exe.
 The shared motion decode gained an optional validity channel. Release VS2026: 173 discovered,
 162 passed, 11 optional skips, fmt/Clippy. Overlay and coverage are not yet game-tested.
-[Progress](../games/anomaly/PROGRESS.md), [SR seam](research/anomaly-sr-seam.md).
+[Acceptance matrix and SR seam](research/anomaly-sr-seam.md#integration-goal-and-acceptance-matrix-from-the-former-progressmd).
 
 ## Anomaly wave 1, 12 November 2026
 
@@ -722,13 +897,13 @@ Resumed on request. The geometry producer is audited and built into the adapter 
 two registered contracts. The Runtime exports a generic `rsf_get_overlay_api` with DLL-import
 and hardware D3D11 fixture tests. The Debug Godot CRT mismatch is fixed at its CMake cache
 source. Release VS2026: 168 discovered, 157 passed, 11 optional skips, fmt/Clippy. Built and
-synthetic-tested only; nothing was deployed or game-tested. [Progress](../games/anomaly/PROGRESS.md).
+synthetic-tested only; nothing was deployed or game-tested. [Acceptance matrix](research/anomaly-sr-seam.md#integration-goal-and-acceptance-matrix-from-the-former-progressmd).
 
 ## Anomaly checkpoint, 12 November 2026
 
 Implementation was paused for the day. The detailed acceptance matrix, build/device evidence,
 installation cleanup, overlay requirement and ordered resumption checklist are in
-[`games/anomaly/PROGRESS.md`](../games/anomaly/PROGRESS.md). Full in-game SR/FG and overlay
+[the acceptance matrix in the SR seam note](research/anomaly-sr-seam.md#integration-goal-and-acceptance-matrix-from-the-former-progressmd). Full in-game SR/FG and overlay
 integration remain incomplete. No RSF DLLs or shader replacements were deployed to Anomaly.
 
 ## Anomaly DLL-only integration research, 11 November 2026
@@ -773,7 +948,7 @@ the expected-failure unknown-selection check, and all eight Python shader-tool c
 the local FXC byte-identity regression. CPU history and declaration-only shader staging do not
 produce GPU motion or establish a usable SR seam. The reviewed r3 tree contains 449 files;
 55 geometry-stage roots are identified, 44 stage roots remain unclassified, and one tree wrapper
-has a blocked recursive include. See `tools/anomaly_shader_README.md` for source evidence.
+has a blocked recursive include. See `docs/research/anomaly-shader-inventory.md` for source evidence.
 
 ## FidelityFX Vulkan static line width, 8 November 2026
 
@@ -1599,7 +1774,7 @@ still require a fresh game run. [Evidence and limits](research/shared-fg-2026100
 See [current status](current-status.md) for the source/release/acceptance summary checked on
 7 October 2026. This tracker preserves dated increments, test counts and superseded failures;
 earlier unchecked or pending entries are not automatically current blockers. No new game/device
-experiment was performed for the documentation audit; [scope and checks](documentation-audit.md).
+experiment was performed for the documentation audit.
 
 ## REA development tooling, 8 October 2026
 
@@ -2046,7 +2221,7 @@ this overlay preflight is not a gameplay test.
 - [x] Streamline DLSS adapter: loading, device handover, support/render-size queries, tags, constants, and evaluation. Runs in AC7.
 - [x] View layout mapped through matrix identities, including camera basis, projection, and `ClipToPrevClip`. Offline check: 11 captured perspective views, no failures.
 - [x] D3D11 motion decode with bias/scale parameters, unwritten sentinel, and compute-state handling. Cross-built and tested under Wine/DXVK with source-encoded values and an axis flip. Game-buffer dumps matched the reference range and unwritten fraction.
-- [x] AC7 view reader with matrix/size checks, main-view classification, pixel jitter, and unjittered projection. Recorded dataset: 50 recognized buffers, ten perspective views, secondary views marked. [Review](review.md) identifies remaining validation defects.
+- [x] AC7 view reader with matrix/size checks, main-view classification, pixel jitter, and unjittered projection. Recorded dataset: 50 recognized buffers, ten perspective views, secondary views marked. The 7 September review (since removed) identified remaining validation defects.
 - [x] `TemporalAAJitter` located at `0x720` by comparing pre/post-patch captures, then checked against projection entries and live pixel offsets.
 - [x] Orchestrator frame assembly converts plugin camera/resource data into a DLSS frame and rejects unusable combinations. Unit-tested without GPU work.
 - [x] Live DLSS evaluation. Initial run: 2,176 recognized passes, 2,175 evaluations, no refusals. Mission run on 7 September: 7,917 evaluations, no refusals, 1024Ã—576 input and 2048Ã—1152 output. Recorded images show recovered detail and a complete scene; flight showed no obvious smearing. F7 is a debug display; reinsertion, grading, HUD, and controlled motion validation remain pending. [Evidence](research/ac7-frame-capture.md).
@@ -2208,7 +2383,7 @@ classes are the tracker's: built, synthetic-tested, game-tested, device-tested.
 - [ ] M1. Classify every UI draw per screen, change nothing. The mechanism is built and
       synthetic-tested; the run that answers the question has not happened.
   - [x] The classifier as a pure function over shadowed facts, in `games/ac7/src/ui_rules.cpp`
-        with a no-device test (`445fc54`).
+        with a no-device test (`445fc54`). That file no longer exists in the tree.
   - [x] Vertex declaration and widget-target fingerprints, verified against UE 4.18.3 at
         `0a14a8d537a3` rather than the checkout's default 5.8.2 branch, where the same structures
         have a different shape (`0b16d2c`).
@@ -2550,16 +2725,18 @@ producer extensions have not been game-tested.
       use the verified ordinary total-motion path or AC7's unidentified custom projection path.
       Preserve valid zero motion separately from unwritten pixels, and never add camera movement
       twice. Verify the sentinel handling against the Streamline version actually loaded.
-- [ ] Reconcile the Rust and live C/C++ motion conversions. `MotionToPixels::unreal` in
-      `runtime/backends/rsf-upscaler/src/frame.rs` uses half the viewport extent and a vertical
-      sign flip, while `loader/proxy/src/dlss_bridge.c` and
-      `runtime/orchestrator/src/dlss_pipeline.cpp` currently default output/backend scales to
-      one. Trace clip displacement, normalized UV displacement, pixel units, and temporal
+- [ ] Reconcile the Rust and live C motion conversions. At the time of this entry
+      `MotionToPixels::unreal` (the `rsf-upscaler` crate, since removed) used half the viewport
+      extent and a vertical sign flip, while `loader/proxy/src/dlss_bridge.c` and the DLSS
+      pipeline (now `runtime/orchestrator/src/dlss_pipeline/`, with the conversions in
+      `motion_decode.rs` and `motion_resolve.rs`) defaulted output/backend scales to
+      one. Re-check against those files, then trace clip displacement, normalized UV displacement, pixel units, and temporal
       direction end to end. Measure aircraft or missile displacement on both axes before applying
       the proposed ordinary-path Streamline scale `(0.5, -0.5)`. Rust's helper expresses the
       opposite temporal direction from the FSR/XeSS resolve; distinguish direction from units.
       Matching a numeric range alone does not establish matching units.
-- [ ] Verify jitter throughout reprojection. In `games/ac7/src/view_uniforms.cpp`, establish
+- [ ] Verify jitter throughout reprojection. In the AC7 view code (formerly
+      `view_uniforms.cpp`, now `games/ac7/src/view.rs`), establish
       whether the captured unjittered `ClipToPrevClip` result holds in stationary and flight views,
       and identify the custom producer's projection/jitter selection.
       Removing jitter from `ViewToClip` alone does not prove this. With a stationary camera and
@@ -2781,7 +2958,7 @@ backend evaluation is not evidence that the supplied scene includes intact light
 - [ ] Reassess remaining hangar banding using an intact input scene. Keep driver preset selection
       unrestricted. Post-tonemap SR is a possible experiment, not the established correction.
 
-Open defects from the [7 September review](review.md). These are not fixed by the documentation rewrite.
+Open defects from the 7 September review (since removed). These are not fixed by the documentation rewrite.
 
 - [ ] Move F8 startup and F7 state changes to a render-thread command boundary; eliminate concurrent immediate-context use.
 - [ ] Reject non-finite camera, projection, reprojection, and jitter data in the reader/assembly path; add poisoned-input regressions.
@@ -3105,7 +3282,7 @@ backup `.local/deploy-backups/ac7-pair-20261004-132153-981`; not yet seen in gam
 
 ## Codebase review pass (2026-10-09)
 
-Implemented the [codebase review](reviews/codebase-review-20261009.md): shared helpers for D3D12, logging, shader compile, SRV formats and plugin boilerplate; the FG bridge reads engine identity from setup and has one retire export; the frame tap uses a game-supplied role table; per-frame cost reductions in the tap, SR bridge and Unity managed code; dead code removed. The full item table is section 8 of the review.
+Implemented the 9 October codebase review (since removed): shared helpers for D3D12, logging, shader compile, SRV formats and plugin boilerplate; the FG bridge reads engine identity from setup and has one retire export; the frame tap uses a game-supplied role table; per-frame cost reductions in the tap, SR bridge and Unity managed code; dead code removed.
 
 Status: built (Release, MSVC) and synthetic-tested (ctest 49/49, 7 hardware-gated tests skipped; cargo fmt, clippy and test clean; RTX shared-host test passed). NOT game-tested.
 

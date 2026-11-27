@@ -7,9 +7,7 @@ use crate::abi;
 
 /// How aggressively to reconstruct.
 ///
-/// The order matches `rsf_overlay_quality` in the header and `rsf_upscaler::Quality`. A value that
-/// means different things in three places is a bug waiting for someone to add a level, so
-/// [`Quality::to_abi`] and [`Quality::from_abi`] are the only places the numbers appear.
+/// [`Quality::to_abi`] and [`Quality::from_abi`] map to the values of `rsf_overlay_quality`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Quality {
     /// Render at output resolution. Antialiasing without upscaling.
@@ -23,16 +21,19 @@ pub enum Quality {
     Performance,
     /// Ultra performance preset.
     UltraPerformance,
+    /// Ultra Quality for providers that offer an additional preset.
+    UltraQuality,
 }
 
 impl Quality {
     /// Every level, in the order the panel offers them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Native,
         Self::Quality,
         Self::Balanced,
         Self::Performance,
         Self::UltraPerformance,
+        Self::UltraQuality,
     ];
 
     /// The value the C header gives this level.
@@ -44,6 +45,7 @@ impl Quality {
             Self::Balanced => abi::RSF_OVERLAY_QUALITY_BALANCED,
             Self::Performance => abi::RSF_OVERLAY_QUALITY_PERFORMANCE,
             Self::UltraPerformance => abi::RSF_OVERLAY_QUALITY_ULTRA_PERFORMANCE,
+            Self::UltraQuality => abi::RSF_OVERLAY_QUALITY_ULTRA_QUALITY,
         }
     }
 
@@ -54,14 +56,7 @@ impl Quality {
     /// panel exists to avoid.
     #[must_use]
     pub fn from_abi(value: abi::RsfOverlayQuality) -> Option<Self> {
-        match value {
-            abi::RSF_OVERLAY_QUALITY_NATIVE => Some(Self::Native),
-            abi::RSF_OVERLAY_QUALITY_QUALITY => Some(Self::Quality),
-            abi::RSF_OVERLAY_QUALITY_BALANCED => Some(Self::Balanced),
-            abi::RSF_OVERLAY_QUALITY_PERFORMANCE => Some(Self::Performance),
-            abi::RSF_OVERLAY_QUALITY_ULTRA_PERFORMANCE => Some(Self::UltraPerformance),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|level| level.to_abi() == value)
     }
 
     /// What the panel calls this level.
@@ -73,6 +68,7 @@ impl Quality {
             Self::Balanced => "Balanced",
             Self::Performance => "Performance",
             Self::UltraPerformance => "Ultra perf",
+            Self::UltraQuality => "Ultra Quality",
         }
     }
 }
@@ -94,8 +90,6 @@ pub struct GenerationStats {
     pub requested_mode: u32,
     /// Requested generated count.
     pub requested_generated: u32,
-    /// Configured mode after suspension policy.
-    pub effective_mode: u32,
     /// Configured generated count.
     pub effective_generated: u32,
     /// SDK-observed generation activity.
@@ -146,10 +140,16 @@ pub struct Stats<'a> {
     pub backend_loaded: bool,
     /// Why the backend is unusable, when it is.
     pub refusal_reason: Option<&'a str>,
-    /// The quality in effect, or `None` when the runtime named one this build does not know.
-    pub quality: Option<Quality>,
-    /// The raw quality value, kept so an unknown one can be shown as the number it was.
+    /// Why the host offers no frame generation, when it says.
+    pub fg_unavailable_reason: Option<&'a str>,
+    /// The quality in effect, including numeric values this panel build does not recognize.
     pub quality_raw: abi::RsfOverlayQuality,
+    /// Available presets, keyed by their ABI values.
+    pub sr_quality_choices: u32,
+    /// Request ID of the host's latest SR quality or enable result.
+    pub sr_change_id: u32,
+    /// Host acknowledgment status in the panel ABI.
+    pub sr_change_status: u32,
     /// Requested DLSS model.
     pub dlss_preset: u32,
     /// The runtime implements DLSS model selection.
@@ -177,6 +177,8 @@ pub struct Stats<'a> {
     pub fg_present_count_valid: bool,
     /// Options the host defines, in the host's order. `None` past the last one.
     pub host_options: [Option<HostOption<'a>>; MAX_HOST_OPTIONS],
+    /// Saved options offered by the owner of this panel.
+    pub saved_options: [Option<SavedOption<'a>>; abi::RSF_OVERLAY_SAVED_ROW_LIMIT as usize],
     /// Host implements shared sharpening.
     pub sharpening_available: bool,
     /// The current frame has a depth input.
@@ -261,16 +263,12 @@ impl UiPreferences {
     /// Encode for the host.
     #[must_use]
     pub fn to_bits(self) -> u32 {
-        let size = PanelSize::ALL
-            .iter()
-            .position(|candidate| *candidate == self.size)
-            .unwrap_or(0) as u32;
-        size | (u32::from(self.right) << 2) | (u32::from(self.detailed_hud) << 3)
+        self.size as u32 | (u32::from(self.right) << 2) | (u32::from(self.detailed_hud) << 3)
     }
 }
 
 /// How many host options the panel draws.
-pub const MAX_HOST_OPTIONS: usize = 24;
+pub const MAX_HOST_OPTIONS: usize = rsf_game_sys::RSF_OVERLAY_SERVICE_OPTION_LIMIT as usize;
 
 /// One host-defined option.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -289,6 +287,17 @@ pub struct HostOption<'a> {
     pub restart: bool,
 }
 
+/// A borrowed saved option and the result of its latest edit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SavedOption<'a> {
+    /// Label, number range and restart information.
+    pub option: HostOption<'a>,
+    /// The current text value when this is a text row.
+    pub text: Option<&'a [u16]>,
+    /// Result code for the most recent save or live edit.
+    pub last_result: i32,
+}
+
 impl Default for Stats<'_> {
     /// Nothing loaded, nothing found, nothing counted. The state the runtime is actually in before
     /// it has established anything, which makes it the right starting point for a test as well.
@@ -296,8 +305,11 @@ impl Default for Stats<'_> {
         Self {
             backend_loaded: false,
             refusal_reason: None,
-            quality: Some(Quality::Native),
+            fg_unavailable_reason: None,
             quality_raw: abi::RSF_OVERLAY_QUALITY_NATIVE,
+            sr_quality_choices: abi::RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+            sr_change_id: 0,
+            sr_change_status: 0,
             dlss_preset: 0,
             dlss_preset_available: false,
             sr_quality_locked: false,
@@ -311,6 +323,7 @@ impl Default for Stats<'_> {
             show_performance_hud: false,
             fg_present_count_valid: false,
             host_options: [None; MAX_HOST_OPTIONS],
+            saved_options: [None; abi::RSF_OVERLAY_SAVED_ROW_LIMIT as usize],
             sharpening_available: false,
             sharpening_depth_available: false,
             sharpening: Sharpening::default(),
@@ -322,10 +335,10 @@ impl Default for Stats<'_> {
 }
 
 impl Stats<'_> {
-    /// Set the quality in effect from a raw ABI value, keeping the raw number.
-    pub fn set_quality(&mut self, raw: abi::RsfOverlayQuality) {
-        self.quality_raw = raw;
-        self.quality = Quality::from_abi(raw);
+    /// Decode the reported quality when this panel recognizes it.
+    #[must_use]
+    pub fn quality(&self) -> Option<Quality> {
+        Quality::from_abi(self.quality_raw)
     }
 }
 
@@ -360,18 +373,18 @@ pub struct Sharpening {
 impl Default for Sharpening {
     fn default() -> Self {
         Self {
-            mode: 0,
-            sharpness: 0.4,
-            mas: 0,
-            motion_sharpness: 0.2,
-            motion_threshold: 0.0,
-            motion_scale_limit: 10.0,
-            contrast_enabled: 0,
-            contrast: 0.0,
-            depth_scale: 35.0,
-            depth_bias: 0.001,
-            clamp_output: 0,
-            debug: 0,
+            mode: rsf_game_sys::RSF_SHARPENING_DEFAULT_MODE,
+            sharpness: rsf_game_sys::RSF_SHARPENING_DEFAULT_SHARPNESS as f32,
+            mas: rsf_game_sys::RSF_SHARPENING_DEFAULT_MAS,
+            motion_sharpness: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_SHARPNESS as f32,
+            motion_threshold: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_THRESHOLD as f32,
+            motion_scale_limit: rsf_game_sys::RSF_SHARPENING_DEFAULT_MOTION_SCALE_LIMIT as f32,
+            contrast_enabled: rsf_game_sys::RSF_SHARPENING_DEFAULT_CONTRAST_ENABLED,
+            contrast: rsf_game_sys::RSF_SHARPENING_DEFAULT_CONTRAST as f32,
+            depth_scale: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEPTH_SCALE as f32,
+            depth_bias: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEPTH_BIAS as f32,
+            clamp_output: rsf_game_sys::RSF_SHARPENING_DEFAULT_CLAMP_OUTPUT,
+            debug: rsf_game_sys::RSF_SHARPENING_DEFAULT_DEBUG,
         }
     }
 }
@@ -394,6 +407,8 @@ pub struct Intent {
     pub enabled: bool,
     /// Whether the enable state changed in this frame.
     pub enabled_changed: bool,
+    /// Request ID the host returns with a quality or enable result.
+    pub sr_change_id: u32,
     /// Whether the user chose an SR backend.
     pub backend_changed: bool,
     /// Backend requested by the user.
@@ -422,6 +437,12 @@ pub struct Intent {
     pub frame_limit_us: u32,
     /// A host option changed.
     pub host_option_changed: bool,
+    /// Saved-option action, or zero when no edit was requested.
+    pub saved_action: u32,
+    /// Index of the saved option in this frame's snapshot.
+    pub saved_index: u32,
+    /// Value for a numeric saved-option action.
+    pub saved_value: i32,
     /// Which one, as an index into the host's options.
     pub host_option_index: u32,
     /// Its new value.
@@ -452,6 +473,7 @@ impl Intent {
             && !self.performance_hud_changed
             && !self.frame_limit_changed
             && !self.host_option_changed
+            && self.saved_action == 0
             && !self.sharpening_changed
             && !self.close_requested
             && !self.ui_preferences_changed
@@ -523,6 +545,7 @@ mod tests {
         assert_eq!(Quality::Balanced.to_abi(), 2);
         assert_eq!(Quality::Performance.to_abi(), 3);
         assert_eq!(Quality::UltraPerformance.to_abi(), 4);
+        assert_eq!(Quality::UltraQuality.to_abi(), 5);
 
         for (index, level) in Quality::ALL.iter().enumerate() {
             assert_eq!(level.to_abi(), index as u32);
@@ -532,12 +555,14 @@ mod tests {
 
     #[test]
     fn an_unknown_quality_stays_unknown() {
-        assert_eq!(Quality::from_abi(5), None);
+        assert_eq!(Quality::from_abi(6), None);
         assert_eq!(Quality::from_abi(u32::MAX), None);
 
-        let mut stats = Stats::default();
-        stats.set_quality(7);
-        assert_eq!(stats.quality, None);
+        let stats = Stats {
+            quality_raw: 7,
+            ..Stats::default()
+        };
+        assert_eq!(stats.quality(), None);
         assert_eq!(stats.quality_raw, 7);
     }
     #[test]

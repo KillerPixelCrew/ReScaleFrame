@@ -1,5 +1,69 @@
+import subprocess
+
+from SCons.Script import Action
+
 Import("env")
 Import("env_modules")
 
+
+def build_viewport_object(target, source, env):
+    return subprocess.run(
+        [
+            "rustc",
+            "--edition=2024",
+            "--crate-type=lib",
+            "--emit=obj",
+            "--target",
+            env["RSF_RUST_TARGET"],
+            "-Cpanic=abort",
+            "-Copt-level=2",
+            "-Ccodegen-units=1",
+            "-Dwarnings",
+            source[0].get_abspath(),
+            "-o",
+            target[0].get_abspath(),
+        ],
+        cwd=source[1].get_dir().get_abspath(),
+        check=False,
+    ).returncode
+
+
 env_rsf = env_modules.Clone()
 env_rsf.add_source_files(env.modules_sources, "*.cpp")
+
+rust_arch = {"x86_64": "x86_64", "x86_32": "i686", "arm64": "aarch64", "arm32": "thumbv7a"}[env["arch"]]
+if env.msvc:
+    rust_abi = "msvc"
+elif rust_arch == "aarch64":
+    rust_abi = "gnullvm"
+elif rust_arch == "thumbv7a":
+    raise ValueError("The ReScaleFrame module has no Rust target for ARM32 MinGW.")
+else:
+    rust_abi = "gnu"
+
+# Archive the Rust object with the C++ module objects. It needs no Rust runtime. Its only
+# imports are the kernel32 library and timing calls that Godot's Windows link already provides.
+env.modules_sources += env_rsf.CommandNoCache(
+    "#modules/rsf_godot_viewport" + env["OBJSUFFIX"],
+    [
+        "viewport.rs",
+        "../../../../rust-toolchain.toml",
+        "frame_event_abi.rs",
+        "frame_abi.rs",
+        "camera.rs",
+        "cpu_facts.rs",
+        "frame.rs",
+        "graph.rs",
+        "host.rs",
+        "motion.rs",
+        "motion.glsl",
+        "native.rs",
+        "packet.rs",
+        "packet_abi.rs",
+        "pass.rs",
+        "present.rs",
+        "primary.rs",
+    ],
+    Action(build_viewport_object, "Compiling $SOURCE", varlist=["RSF_RUST_TARGET"]),
+    RSF_RUST_TARGET=f"{rust_arch}-pc-windows-{rust_abi}",
+)

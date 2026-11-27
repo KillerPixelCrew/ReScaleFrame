@@ -1,0 +1,23 @@
+[package]
+name = "rsf-translucency-fixtures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[lints]
+workspace = true
+
+[target."cfg(windows)".dependencies]
+rsf-game-sys = { path = "../../sdk/game" }
+rsf-test-support = { path = "../support" }
+windows = { workspace = true, features = [
+  "std",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi_Common",
+] }

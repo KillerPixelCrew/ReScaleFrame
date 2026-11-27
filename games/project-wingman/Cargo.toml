@@ -1,0 +1,32 @@
+[package]
+name = "rsf-project-wingman"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+rsf-game-sys = { path = "../../sdk/game" }
+
+[target."cfg(windows)".dependencies]
+rsf-windows = { path = "../../integrations/windows" }
+
+[target."cfg(windows)".dependencies.windows-sys]
+workspace = true
+features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+]
+
+[build-dependencies]
+cc.workspace = true
+
+[lints]
+workspace = true

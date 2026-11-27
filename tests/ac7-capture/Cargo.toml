@@ -1,0 +1,36 @@
+[package]
+name = "rsf-ac7-capture-fixture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+rsf-ac7 = { path = "../../games/ac7" }
+
+[target."cfg(windows)".dependencies]
+# AC7 motion capture and the Runtime's D3D11 observer, carried in this archive so the fixture
+# executable links one Rust archive.
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
+rsf-test-support = { path = "../support" }
+windows = { workspace = true, features = [
+  "Win32_Globalization",
+  "Win32_Graphics_Direct3D_Fxc",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+# Unit tests link the crate whose archive the fixture executable gets from CMake.
+[target."cfg(windows)".dev-dependencies]
+rsf-runtime-common = { path = "../../runtime/common" }
+
+[lints]
+workspace = true

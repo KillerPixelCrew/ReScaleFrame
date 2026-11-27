@@ -42,7 +42,7 @@ namespace ReScaleFrame.Unity
                 Native.ReportState(1);
                 MethodInfo boundary = AccessTools.Method(typeof(RenderPipelineManager), "DoRenderLoop_Internal");
                 if (boundary == null || boundary.GetMethodBody() == null)
-                    throw new MissingMethodException("Managed render-loop boundary unavailable.");
+                    throw new MissingMethodException(typeof(RenderPipelineManager).FullName, "DoRenderLoop_Internal");
                 Harmony.Patch(boundary, postfix: new HarmonyMethod(typeof(Bootstrap), nameof(RenderLoop)));
                 Native.Log("Mono helper loaded; awaiting Unity main-thread render loop.");
                 return 0;
@@ -68,9 +68,10 @@ namespace ReScaleFrame.Unity
             try
             {
                 if (!(GraphicsSettings.currentRenderPipeline is UniversalRenderPipelineAsset)) return;
-                if (!Application.unityVersion.StartsWith("6000.3.", StringComparison.Ordinal) ||
-                    SystemInfo.graphicsDeviceType != GraphicsDeviceType.Direct3D12)
-                    throw new NotSupportedException("Initial adapter requires Unity 6000.3 URP on native D3D12.");
+                // The Unity version is evidence; the URP contract below decides compatibility.
+                Native.Log("Unity " + Application.unityVersion + " URP player on " + SystemInfo.graphicsDeviceType + ".");
+                if (SystemInfo.graphicsDeviceType != GraphicsDeviceType.Direct3D12)
+                    throw new NotSupportedException("The adapter requires URP on native D3D12; the player runs " + SystemInfo.graphicsDeviceType + ".");
                 mainThread = Thread.CurrentThread.ManagedThreadId;
                 Native.Api.RenderEvent = Native.rsf_unity_get_render_event();
                 if (Native.Api.RenderEvent == IntPtr.Zero)

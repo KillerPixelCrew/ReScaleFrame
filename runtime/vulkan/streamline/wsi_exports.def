@@ -1,0 +1,21 @@
+EXPORTS
+    rsf_vk_sl_get_instance_proc_addr
+    rsf_vk_sl_get_device_proc_addr
+    rsf_vk_sl_create_instance
+    rsf_vk_sl_enumerate_physical_devices
+    rsf_vk_sl_create_device
+    rsf_vk_sl_create_win32_surface
+    rsf_vk_sl_destroy_surface
+    rsf_vk_sl_create_swapchain
+    rsf_vk_sl_destroy_swapchain
+    rsf_vk_sl_get_swapchain_images
+    rsf_vk_sl_acquire
+    rsf_vk_sl_present
+    rsf_vk_sl_device_wait_idle
+    rsf_vk_sl_queue_present_synchronized
+    rsf_vk_sl_vulkan_wsi_call
+    rsf_vk_sl_without_dlss_g
+    rsf_vk_sl_current_frame_token
+    rsf_vk_sl_module
+    rsf_vk_sl_take_present_error
+    rsf_vk_sl_worker_timeout_epoch

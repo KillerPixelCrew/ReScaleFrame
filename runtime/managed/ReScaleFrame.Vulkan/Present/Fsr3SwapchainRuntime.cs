@@ -23,7 +23,8 @@ internal sealed unsafe class Fsr3SwapchainRuntime : IDisposable
     }
 
     /// <summary>Creates the FidelityFX swapchain context when the renderer has the required distinct queues.</summary>
-    /// <returns>Whether the SDK created a nonzero context; reason records queue or SDK failure detail.</returns>
+    /// <returns>Whether the SDK created a usable context. On failed rollback,
+    /// runtime holds a cleanup-only owner that must be disposed before releasing the device.</returns>
     public static bool TryCreate(IVulkanProviderContext vk, SwapchainCreateInfoKHR* info,
         out Fsr3SwapchainRuntime? runtime, out string reason)
     {
@@ -45,6 +46,8 @@ internal sealed unsafe class Fsr3SwapchainRuntime : IDisposable
             vk.GraphicsQueueFamily, info, &context);
         if (code != 0 || context == 0)
         {
+            if (context != 0)
+                runtime = new Fsr3SwapchainRuntime(api, context);
             reason = "FidelityFX swapchain context failed (" + code + ")";
             return false;
         }

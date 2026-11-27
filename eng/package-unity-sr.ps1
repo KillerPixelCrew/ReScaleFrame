@@ -10,8 +10,9 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
-# The Streamline SDK with bin/x64 (vendor/streamline may hold headers only).
-$taskStreamline = if ($StreamlineRoot) { (Resolve-Path -LiteralPath $StreamlineRoot).Path } else { Join-Path $taskRoot 'vendor/streamline' }
+. (Join-Path $PSScriptRoot 'common.ps1')
+# The Streamline release with bin/x64 (eng/fetch-vendor.ps1 fills vendor/streamline-sdk).
+$taskStreamline = if ($StreamlineRoot) { (Resolve-Path -LiteralPath $StreamlineRoot).Path } else { Join-Path $taskRoot 'vendor/streamline-sdk' }
 $taskGame = if ($GameDirectory) { (Resolve-Path -LiteralPath $GameDirectory).Path } else { $null }
 $taskDeployment = if ($taskGame) { Get-Content -Raw -LiteralPath (Join-Path $taskGame 'ReScaleFrame/deployment.json') | ConvertFrom-Json } else { $null }
 $taskVersion = (Get-Content -LiteralPath "$taskRoot/VERSION" -Raw).Trim()
@@ -24,26 +25,13 @@ $taskStage = Join-Path $taskOutput $taskName
 $taskZip = Join-Path $taskOutput "$taskName.zip"
 if ((Test-Path -LiteralPath $taskStage) -or (Test-Path -LiteralPath $taskZip)) { throw 'Package destination already exists.' }
 if ($taskDeployment -and $taskDeployment.game -ne 'drag-n-wash') { throw 'Expected the DragNWash deployment manifest.' }
+$taskVendor = Get-RsfVendorPayload $taskRoot $taskStreamline
 $taskExpected = @(
     'version.dll', 'ReScaleFrame.ini',
     'ReScaleFrame/ReScaleFrame.Runtime.dll', 'ReScaleFrame/ReScaleFrame.Game.UnityMono.dll',
     'ReScaleFrame/ReScaleFrame.Unity.Managed.dll', 'ReScaleFrame/rescaleframe_overlay.dll',
-    'ReScaleFrame/0Harmony.dll', 'ReScaleFrame/Harmony-LICENSE.txt',
-    'ReScaleFrame/streamline/sl.interposer.dll', 'ReScaleFrame/streamline/sl.common.dll',
-    'ReScaleFrame/streamline/sl.dlss.dll', 'ReScaleFrame/streamline/sl.pcl.dll',
-    'ReScaleFrame/streamline/sl.dlss_g.dll', 'ReScaleFrame/streamline/sl.reflex.dll',
-    'ReScaleFrame/streamline/nvngx_dlssg.dll',
-    'ReScaleFrame/streamline/nvngx_dlss.dll', 'ReScaleFrame/streamline/nvngx_dlss.license.txt',
-    'ReScaleFrame/streamline/license.txt', 'ReScaleFrame/streamline/3rd-party-licenses.md',
-    'ReScaleFrame/fidelityfx/amd_fidelityfx_loader_dx12.dll',
-    'ReScaleFrame/fidelityfx/amd_fidelityfx_upscaler_dx12.dll',
-    'ReScaleFrame/fidelityfx/amd_fidelityfx_framegeneration_dx12.dll',
-    'ReScaleFrame/fidelityfx/license.md', 'ReScaleFrame/fidelityfx/3rdpartynotice.md',
-    'ReScaleFrame/xess/libxess.dll', 'ReScaleFrame/xess/libxess_fg.dll', 'ReScaleFrame/xess/libxell.dll',
-    'ReScaleFrame/xess/LICENSE.txt', 'ReScaleFrame/xess/third-party-programs.txt',
-    'ReScaleFrame/MFG-Unlocker-LICENSE.txt',
-    'ReScaleFrame/AMD-Anti-Lag-2-MIT.txt'
-)
+    'ReScaleFrame/0Harmony.dll', 'ReScaleFrame/Harmony-LICENSE.txt'
+) + @($taskVendor.Keys | ForEach-Object { "ReScaleFrame/$_" })
 if (!$taskDeployment) {
     if (& git -C $taskRoot status --porcelain) { throw 'Commit the intended source before packaging Release artifacts.' }
     # Assemble an explicit build-output payload. No game installation or deployment is involved.
@@ -52,25 +40,13 @@ if (!$taskDeployment) {
     $taskInputs = @()
     foreach ($taskRelative in $taskExpected) {
         $taskLeaf = [IO.Path]::GetFileName($taskRelative)
-        $taskSource = switch -Wildcard ($taskRelative) {
+        $taskSource = switch ($taskRelative) {
             'version.dll' { Join-Path $taskBin 'ReScaleFrame.Loader.dll'; break }
             'ReScaleFrame.ini' { $null; break }
-            'ReScaleFrame/streamline/*' {
-                if ($taskLeaf -in @('license.txt','3rd-party-licenses.md')) { Join-Path $taskStreamline $taskLeaf }
-                else { Join-Path $taskStreamline "bin/x64/$taskLeaf" }; break
+            default {
+                $taskVendorKey = $taskRelative -replace '^ReScaleFrame/', ''
+                if ($taskVendor.Contains($taskVendorKey)) { $taskVendor[$taskVendorKey] } else { Join-Path $taskBin $taskLeaf }
             }
-            'ReScaleFrame/fidelityfx/*' {
-                if ($taskLeaf -eq 'license.md') { Join-Path $taskRoot 'vendor/fidelityfx/Kits/FidelityFX/docs/license.md' }
-                elseif ($taskLeaf -eq '3rdpartynotice.md') { Join-Path $taskRoot 'vendor/fidelityfx/3rdpartynotice.md' }
-                else { Join-Path $taskRoot "vendor/fidelityfx/Kits/FidelityFX/signedbin/$taskLeaf" }; break
-            }
-            'ReScaleFrame/xess/*' {
-                if ($taskLeaf -in @('LICENSE.txt','third-party-programs.txt')) { Join-Path $taskRoot "vendor/xess/$taskLeaf" }
-                else { Join-Path $taskRoot "vendor/xess/bin/$taskLeaf" }; break
-            }
-            'ReScaleFrame/MFG-Unlocker-LICENSE.txt' { Join-Path $taskRoot 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE'; break }
-            'ReScaleFrame/AMD-Anti-Lag-2-MIT.txt' { Join-Path $taskRoot 'runtime/orchestrator/ANTILAG2-LICENSE.txt'; break }
-            default { Join-Path $taskBin $taskLeaf }
         }
         $taskDestination = Join-Path $taskGame $taskRelative
         New-Item -ItemType Directory -Path (Split-Path -Parent $taskDestination) -Force | Out-Null
@@ -79,9 +55,7 @@ if (!$taskDeployment) {
                 'EntryModule=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','EntryPoint=rsf_unity_start',
                 '[UnitySR]','Backend=7','Quality=1',
                 'FrameGeneration=7','GeneratedFrames=1','GraphicsDebug=0',
-                'Plugin=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','Log=ReScaleFrame/unity-sr.log',
-                'Streamline=ReScaleFrame/streamline','FSR2=ReScaleFrame/fidelityfx','FSR3=ReScaleFrame/fidelityfx',
-                'FSR4=ReScaleFrame/fidelityfx','XeSS=ReScaleFrame/xess'), [Text.Encoding]::Unicode)
+                'Plugin=ReScaleFrame/ReScaleFrame.Game.UnityMono.dll','Log=ReScaleFrame/unity-sr.log'), [Text.Encoding]::Unicode)
         } else { Copy-Item -LiteralPath $taskSource -Destination $taskDestination }
         $taskInputs += @{ path=$taskRelative; sha256=(Get-FileHash -LiteralPath $taskDestination).Hash }
     }
@@ -128,7 +102,8 @@ $taskFgId = @{ Off=0; DLSS=1; FSR3=3; FSR4=4; XeSS=5; Auto=7 }[$FrameGeneration]
 $taskSettings = [regex]::Replace($taskSettings, '(?m)^FrameGeneration=\d+', "FrameGeneration=$taskFgId")
 [IO.File]::WriteAllText($taskIni, $taskSettings, [Text.Encoding]::Unicode)
 Copy-Item -LiteralPath "$taskRoot/LICENSE" -Destination "$taskStage/LICENSE.txt"
-Copy-Item -LiteralPath "$taskRoot/build/windows-x64/_deps/minhook-src/LICENSE.txt" -Destination "$taskStage/MinHook-LICENSE.txt"
+$taskMinHook = if (Test-Path -LiteralPath "$taskRoot/vendor/minhook/src/hook.c") { "$taskRoot/vendor/minhook" } else { "$taskRoot/build/windows-x64/_deps/minhook-src" }
+Copy-Item -LiteralPath "$taskMinHook/LICENSE.txt" -Destination "$taskStage/MinHook-LICENSE.txt"
 Copy-Item -LiteralPath "$taskRoot/sdk/game/LICENSE" -Destination "$taskStage/GameSDK-MIT.txt"
 Copy-Item -LiteralPath "$taskStreamline/bin/x64/reflex.license.txt" -Destination "$taskStage/ReScaleFrame/streamline/reflex.license.txt"
 & $Python "$taskRoot/tools/package-unity-notices.py" $taskStage
@@ -162,8 +137,10 @@ refusal and keep a spatial fallback. DLSS requires supported NVIDIA hardware.
 FSR4 uses the experimental INT8 compatibility path on non-native hardware;
 support and image quality depend on the hardware and runtime.
 
-This is a Unity Mono/URP DX12 build for Steam build 25286774,
-Unity 6000.3.14f1. It refuses an unrecognized executable or native player.
+This is a Unity Mono/URP DX12 build, made on Unity 6000.3.14f1. It does not
+need one exact game build: at start-up it finds the Unity player, its Mono
+runtime and the URP methods it hooks. If one is missing or changed after a game
+update, it stays off and ReScaleFrame/unity-sr.log names what is missing.
 Temporal SR runs before DoF/blur, bloom and tone mapping. UI is drawn afterward.
 This build includes independent DLSS-G, FSR3/4 and XeSS FG selection in Insert,
 with live provider changes and SDK-limited multiplier controls. FG defaults to
@@ -210,8 +187,9 @@ decompiles, logs or machine-specific deployment baseline are included.
 '@
 [IO.File]::WriteAllText("$taskStage/README.txt", $taskReadme, [Text.UTF8Encoding]::new($false))
 $taskManifest = [ordered]@{
-    format = 1; version = $taskVersion; game = 'drag-n-wash'; steam_build = '25286774'
-    executable_sha256 = '5fdfffe386a2f43b77626cd3d70554d84c6588c94d309544924d6fab088ddafc'
+    format = 1; version = $taskVersion; game = 'drag-n-wash'
+    # Evidence of the deployment the payload came from, when there was one; it gates nothing.
+    deployed_executable_sha256 = if ($taskDeployment -and $taskDeployment.PSObject.Properties.Name -contains 'executable_sha256') { $taskDeployment.executable_sha256 } else { $null }
     artifact_source = 'Release artifacts and hash-verified vendor payload'; backend = $Backend; quality = $Quality
     source_baseline = (& git -C $taskRoot rev-parse HEAD).Trim()
     source_has_uncommitted_changes = [bool](& git -C $taskRoot status --porcelain)

@@ -1,0 +1,225 @@
+// SPDX-License-Identifier: MIT
+use super::{bundles, contents, directory_argument, entry, root, utf8};
+use crate::sys::*;
+use rsf_game_sys::{RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR, backend_result, rsf_frame_record};
+use rsf_test_support::d3d12::{
+    buffer, committed, copy_location, footprint, transition, validation_errors, wait_for_signal,
+};
+use rsf_test_support::frame_record;
+use std::ffi::{c_char, c_int};
+use std::{fs, path::Path, ptr};
+use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
+use windows::core::Interface;
+use windows_sys::Win32::System::Environment::SetEnvironmentVariableW;
+
+const PIXELS: [u32; 8] = [
+    0x00ff0000, 0x8000ff00, 0xffff0000, 0xffffffff, 0, 0xff112233, 0xff445566, 0xff778899,
+];
+
+fn warp() -> Option<ID3D12Device> {
+    rsf_test_support::enable_d3d12_debug_layer();
+    rsf_test_support::warp_d3d12()
+        .ok()
+        .map(|(_, device)| device)
+}
+
+fn texture(device: &ID3D12Device) -> ID3D12Resource {
+    committed(
+        device,
+        D3D12_HEAP_TYPE_DEFAULT,
+        &D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            Width: 4,
+            Height: 2,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            ..Default::default()
+        },
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+    )
+    .expect("allocate fixture resource")
+}
+
+fn upload(
+    device: &ID3D12Device,
+    list: &ID3D12GraphicsCommandList,
+    source: &ID3D12Resource,
+) -> ID3D12Resource {
+    let (footprint, bytes) = footprint(device, &unsafe { source.GetDesc() });
+    let upload = buffer(device, bytes, D3D12_HEAP_TYPE_UPLOAD).expect("allocate fixture resource");
+    let mut mapped = ptr::null_mut();
+    unsafe { upload.Map(0, None, Some(&mut mapped)) }.expect("map padded source upload");
+    assert!(!mapped.is_null());
+    for (y, row) in PIXELS.chunks_exact(4).enumerate() {
+        unsafe {
+            ptr::copy_nonoverlapping(
+                row.as_ptr().cast::<u8>(),
+                mapped
+                    .cast::<u8>()
+                    .add(footprint.Offset as usize + y * footprint.Footprint.RowPitch as usize),
+                16,
+            )
+        };
+    }
+    unsafe { upload.Unmap(0, None) };
+    transition(
+        list,
+        source,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+    );
+    let from = copy_location(&upload, Some(footprint));
+    let to = copy_location(source, None);
+    unsafe { list.CopyTextureRegion(&to, 0, 0, 0, &from, None) };
+    transition(
+        list,
+        source,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+    );
+    upload
+}
+
+fn run(path: &Path) -> i32 {
+    unsafe {
+        SetEnvironmentVariableW(
+            windows::core::w!("RSF_FRAME_CAPTURE_DIR").as_ptr(),
+            ptr::null(),
+        )
+    };
+    let Some(device) = warp() else { return 77 };
+    let kind = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    let queue: ID3D12CommandQueue = unsafe {
+        device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
+            Type: kind,
+            ..Default::default()
+        })
+    }
+    .unwrap();
+    let allocator: ID3D12CommandAllocator = unsafe { device.CreateCommandAllocator(kind) }.unwrap();
+    let list: ID3D12GraphicsCommandList =
+        unsafe { device.CreateCommandList(0, kind, &allocator, None::<&ID3D12PipelineState>) }
+            .unwrap();
+    let source = texture(&device);
+    let _upload = upload(&device, &list, &source);
+    let root = root(path, "core-dump-dx12");
+    let root_utf8 = utf8(&root);
+    let mut frame = rsf_frame_record {
+        flags: RSF_FRAME_FLAG_NO_SR | RSF_FRAME_FLAG_NO_FG,
+        ..frame_record(13, 17, 3, [4, 2], [4, 2])
+    };
+    unsafe {
+        rsf_input_dump_configure(
+            root_utf8.as_ptr(),
+            c"FixtureD3D12".as_ptr(),
+            c"fixture".as_ptr(),
+            None,
+            ptr::null_mut(),
+        );
+        rsf_input_dump_request();
+        assert_ne!(rsf_input_dump_begin_record(&frame, 3), 0);
+        let other = rsf_frame_record {
+            view_id: 4,
+            ..frame
+        };
+        assert_eq!(rsf_input_dump_wants(&other), 0);
+        assert_eq!(
+            rsf_input_dump_reserve(&frame, c"../escape".as_ptr(), c"invalid".as_ptr(), 0, 1.0),
+            0
+        );
+        let mut capture = ptr::null_mut();
+        assert_eq!(rsf_input_dump12_create(&mut capture), 0);
+        assert!(!capture.is_null());
+        for name in [c"sr_source_jittered", c"final_color"] {
+            assert_eq!(
+                rsf_input_dump12_record(
+                    capture,
+                    list.as_raw(),
+                    source.as_raw(),
+                    &frame,
+                    name.as_ptr(),
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE.0 as u32,
+                    0,
+                    RSF_FIXTURE_DUMP_VIEW_RAW as u32,
+                    1.0
+                ),
+                0
+            );
+        }
+        assert_eq!(rsf_input_dump12_destroy(capture), backend_result::NOT_READY);
+        drop(source);
+        let bundle = bundles(&root).next().unwrap();
+        rsf_input_dump_complete(&frame, 0);
+        assert!(contents(&bundle, "manifest.json").contains("waiting_for_gpu"));
+        assert!(!bundle.join("final_color.bin").exists());
+        list.Close().unwrap();
+        queue.ExecuteCommandLists(&[Some(list.cast::<ID3D12CommandList>().unwrap())]);
+        assert_eq!(rsf_input_dump12_submitted(capture, queue.as_raw(), 0), 0);
+        let fence: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE).unwrap();
+        assert!(
+            wait_for_signal(&queue, &fence, 1, 15_000),
+            "observe submitted GPU completion"
+        );
+        assert_eq!(rsf_input_dump12_poll(capture), 0);
+        let expected: Vec<_> = PIXELS.into_iter().flat_map(u32::to_le_bytes).collect();
+        assert_eq!(fs::read(bundle.join("final_color.bin")).unwrap(), expected);
+        assert!(contents(&bundle, "manifest.json").contains("\"status\":\"complete\""));
+        assert!(
+            fs::read(bundle.join("final_color.png"))
+                .unwrap()
+                .starts_with(b"\x89PNG\r\n\x1a\n")
+        );
+        assert_eq!(
+            rsf_input_dump_reserve(&frame, c"stale".as_ptr(), c"closed".as_ptr(), 0, 1.0),
+            0
+        );
+        assert_eq!(rsf_input_dump12_destroy(capture), 0);
+
+        rsf_input_dump_request();
+        frame.frame_id += 1;
+        assert_ne!(rsf_input_dump_begin_record(&frame, 0), 0);
+        assert_eq!(rsf_input_dump12_create(&mut capture), 0);
+        let discarded = texture(&device);
+        allocator.Reset().unwrap();
+        list.Reset(&allocator, None::<&ID3D12PipelineState>)
+            .unwrap();
+        assert_eq!(
+            rsf_input_dump12_record(
+                capture,
+                list.as_raw(),
+                discarded.as_raw(),
+                &frame,
+                c"abandoned".as_ptr(),
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS.0 as u32,
+                1,
+                RSF_FIXTURE_DUMP_VIEW_RAW as u32,
+                1.0
+            ),
+            0
+        );
+        list.Close().unwrap();
+        allocator.Reset().unwrap();
+        list.Reset(&allocator, None::<&ID3D12PipelineState>)
+            .unwrap();
+        list.Close().unwrap();
+        rsf_input_dump12_abandon(capture, 1);
+        assert_eq!(rsf_input_dump12_destroy(capture), 0);
+        rsf_input_dump_cancel(frame.session_id);
+        println!("D3D12 core dump fixture: {}", bundle.display());
+    }
+    let errors = validation_errors(&device).unwrap_or_default();
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+    0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fixture_input_dump_d3d12(argc: c_int, argv: *const *const c_char) -> i32 {
+    entry(unsafe { directory_argument(argc, argv) }, run)
+}

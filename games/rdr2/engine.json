@@ -3,7 +3,6 @@
     "audited": "2026-10-26",
     "scope": "Normal SDR native SR/FG has recorded acceptance. All five real input resolutions and runtime transitions are accepted in permanent PID140840 and user-confirmed. Native UI insertion cancelled. HDR, complete HUD modes and non-NVIDIA hardware remain unproven.",
     "continuation_record": "RESEARCH-HANDOFF.md",
-    "game_abi": 19,
     "frontend_validation": "Shared Rust/DX12 panel and runtime quality controls user-confirmed. FG-Off now displays Off while retaining the saved provider for re-enable; frontend regression passes. Busy settings observation and GPU-ring UI omissions corrected; native WARP backlog test passes.",
     "frontend_evidence": ".local/rdr2-tools/quality-overlay-20261026/{permanent-game.log,permanent-result.json,deployment.json}; .local/rdr2-tools/rdr2-fg-off-selection-verify.log",
     "plugin_rendering_ready": false,
@@ -105,6 +104,20 @@
     "platform": "windows-x64",
     "examined": "2026-10-25"
   },
+  "site_discovery": {
+    "status": "Every RDR2.exe site the adapter hooks, patches, calls or reads is found by signature; the build id, hash, PE timestamp and SizeOfImage are evidence only and gate nothing",
+    "implementation": "games/rdr2/src/discovery.rs with the rsf-game-sys signature scanner; patterns from tools/derive-site-patterns.py run on dumps/rdr2-20261025/RDR2.exe.dump (the code is encrypted on disk)",
+    "method": "36 patterns unique in the executable sections (41 with the research probes; rel32 branches and RIP displacements wildcarded): hooked entries, settings functions and the four API reads matched at the site; six return addresses from their calls; latency mode, settings manager and settings owner through a distinctive call with their entries checked; the renderer table and seven globals decoded from RIP-relative operands",
+    "derived": {
+      "api_parameter": "the common target of all four discovered API reads",
+      "fsr2_import": "ffx_fsr2_api_x64.dll!ffxFsr2ContextDispatch IAT slot from the import directory",
+      "native_texture": "renderer table + 0x318 (documented slot), checked as mov rax,[rdx+48]; ret"
+    },
+    "other_modules": "ffx_fsr2_api_x64.dll is used through its exports and their entry bytes (no timestamp or RVA); SocialClubD3D12Renderer.dll frame entry and gate are discovered in that module when it loads, and the gate pattern fixes the cmp byte [rcx+40C],0 the relay repeats",
+    "refusal": "a missing, ambiguous or changed site refuses with its name in the startup or prepare log",
+    "verified": "2026-11-24: all sites resolved uniquely to the recorded RVAs in the 1.0.1491.50 dump (installed RDR2.exe has the same PE timestamp), and both Social Club sites in the installed 2.4.0.240 renderer (discovery::tests)",
+    "needs_game_run": "live-memory discovery at ASI attach and plugin prepare, and every hook at its discovered address"
+  },
   "plugin": {
     "target": "rsf_game_rdr2",
     "dll": "ReScaleFrame.Game.RDR2.dll",
@@ -154,7 +167,7 @@
     "vulkan": "game default on many systems; RSF does not target it",
     "dx12_forcing": {
       "status": "measured",
-      "method": "pointer write of \"d3d12\" to the engine API parameter at RVA 0x57abf10 before settings load, guarded by PE timestamp 0x65eec92e, SizeOfImage 0x7397600, four expected read sites and a null value",
+      "method": "pointer write of \"d3d12\" to the engine API parameter (RVA 0x57abf10 in 1.0.1491.50) before settings load, guarded by site discovery, the parameter lying in .data, all four discovered read sites addressing it and a null value; the PE timestamp and SizeOfImage are logged, not compared",
       "result": "engine wrote a D3D12 pipeline cache and saved kSettingAPI_DX12 after one self-restart",
       "limits": "API forcing and active D3D12 device measured; not proof of RSF SR/FG implementation"
     },
@@ -261,7 +274,7 @@
     "public_ui_layout_leads": "ultrawide-camera 0a000d93 signatures match UI boxing RVA 0x1cbd30 and letterbox anchor store 0x320545 -> 0x39751b4; layout and eligibility leads, not a proven colour boundary",
     "sdr_output": "B8G8R8A8_UNORM with signalled RGB_FULL_G22_NONE_P709. Linear temporal R16G16B16A16_FLOAT is distinct from presentation HDR.",
     "unverified_modes": "Photo mode, cinematic camera, letterboxed cutscenes and visible Social Club overlay. No HDR display available; complete native UI-only extraction unverified.",
-    "scene_producer_source": "scene_boundary.cpp: postfx output scope 0x5f1e08 called at 0x5caafc/0x5cad96/0x5cadec, inline blit 0x5c1254; exact scene target matched to actual swapchain buffers. Marker0x26d4674 associates actual input/simulation/render/Present identities. Newly implemented, not game-tested.",
+    "scene_producer_source": "src/scene.rs (Rust crate rsf-rdr2; formerly scene_boundary.cpp, same sites and checks): postfx output scope 0x5f1e08 called at 0x5caafc/0x5cad96/0x5cadec, inline blit 0x5c1254; exact scene target matched to actual swapchain buffers. Marker0x26d4674 associates actual input/simulation/render/Present identities. Newly implemented, not game-tested.",
     "render_target_owner": "TLS draw context +0xca48 colour-view array, +0xca94 count, +0xca88 depth view. Colour view+8 texture; texture+0x48 native ID3D12Resource. Live renderer vtable+0x248 resolves 0x26b4250 (48 8b 42 48 c3). Matched static cache writers 0x26d4964 and 0x26ddf80.",
     "source_validation": ".local/rdr2-tools/scene-producer-fixture.log: later RT-state copy on accepted SR recording, original pixels identical to reinserted output, fenced retirement, debug-layer pass and retained NGX across DLSS/FSR3/DLSS. Engine hook execution and all-mode HUD separation remain unverified."
   },

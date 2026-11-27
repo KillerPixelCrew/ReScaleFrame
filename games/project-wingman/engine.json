@@ -4,10 +4,9 @@
     "source_base_commit": "38ebf179245de730b37c355023e49375426a6cb8",
     "observer_source_sha256": "f7d754fe0d50ad8a5c2fe26fdd8ee2ad0d31a91db7c95f8102f6faf680876fd4",
     "scope": "Release MSVC build; 43 native checks, seven skips, Rust formatting/lint; deployed carrier and temporal observer; user-run desktop mission produced 197 readable samples. VR unavailable. No GPU processing or image-quality acceptance.",
-    "game_abi": 13,
     "plugin_rendering_ready": false,
     "current_status": "../../docs/current-status.md",
-    "status": "Exact-build XInput carrier and guarded temporal graph observer; GPU leases, SR, FG, latency and VR processing unimplemented.",
+    "status": "Guarded temporal graph observer whose sites are discovered by signature, loaded by the generic XInput carrier; SR, FG, latency and VR processing unimplemented.",
     "research": "../../docs/research/project-wingman-renderer.md"
   },
   "game": {
@@ -32,13 +31,14 @@
     "built_windows_msvc": true,
     "contract_tested": true,
     "hooks_implemented": true,
-    "hook_scope": "Default temporal-upscaler AddPasses observation only; native execution preserved.",
+    "hook_scope": "Default temporal-upscaler AddPasses observation, plus TAA pass construction, compute pass setup and execution and graph-allocator retirement for the RHI-stream input leases; native execution preserved.",
     "game_tested": true,
     "game_test_scope": "Desktop mission: loading, native invocation and readable graph/view/history facts only.",
     "device_tested": false,
     "automatic_loading_implemented": true,
-    "carrier": "xinput1_3.dll, ordinal 2/3 imports, opt-in ObserveNative startup",
-    "prepare_result": "RSF_OK on matching loaded executable and entry; RSF_ERROR_NATIVE_REFUSED otherwise",
+    "carrier": "xinput1_3.dll, ordinal 2/3 imports",
+    "detection": "Executable name (ASCII case-insensitive) and x64 machine; SHA-256 and PE timestamp are logged at prepare, never compared",
+    "prepare_result": "RSF_OK when every site is discovered in the loaded executable and still matches in live memory; RSF_ERROR_NATIVE_REFUSED naming the missing, ambiguous or changed site otherwise",
     "research": "../../docs/research/project-wingman-renderer.md"
   },
   "engine": {
@@ -122,9 +122,32 @@
     },
     "notes": "UWingmanWidgetComponent shares stock allocation and draw slots. World-space HUD can be composited before TAA; head-following does not prove a final separate HUD layer."
   },
+  "discovery": {
+    "how": "games/project-wingman/src/discovery.rs: patterns unique in the executable sections, rel32 and RIP displacements wildcarded; derived with tools/derive-site-patterns.py, the template-instance sites by hand",
+    "proven": "2026-11-24: every pattern resolves uniquely to the RVAs below in build 16671873, recovered byte-exact (SHA256 match) from the user's Ghidra project with tools/ghidra/file-bytes.py after the game was uninstalled. Not yet exercised in a running game.",
+    "refusal": "A missing or ambiguous site refuses prepare and names the site; the game runs natively",
+    "sites_build_16671873": {
+      "FDefaultTemporalUpscaler_AddPasses": "0x5c442b0 entry pattern",
+      "FMemStackBase_FreeChunks": "0x53821d0 entry pattern",
+      "AddTemporalAAPass": "0x5c44910 entry pattern",
+      "TAA_compute_pass_helper": "0x5c2d4a0 through its call in AddTemporalAAPass; entry checked (five sibling instances share it)",
+      "RDG_pass_setup": "0x6569660 entry pattern",
+      "tracked_allocation_vtable": "0x8390f78 lea in the helper's first 0x180 bytes",
+      "compute_pass_vtable": "0x83f6838 lea in the helper's first 0x180 bytes",
+      "tracked_allocation_destructor": "0x591d000 tracked vtable slot 0; entry checked",
+      "compute_pass_execute": "0x5c4c9c0 compute vtable slot 1; entry checked (an identical twin follows at 0x5c4ca00)"
+    },
+    "view_fields_decoded": {
+      "camera_cut": "0xd90 from the cut test displacement at 0x5c449d8",
+      "temporal_jitter_pixels_xy": "0x4fa4 from the jitter read displacement at 0x5c44ecc",
+      "view_state": "0x1680 from the Gen4 helper read displacement at 0x5c4120b",
+      "view_rect": "0x1670 from the Gen4 helper entry read displacement at 0x5c41065"
+    },
+    "fixed_by_patterns": "graph allocator at graph + 0x10 and 0x120-byte tracked allocation, compute pass at owner + 8, pass parameters at pass + 0xf0, FViewInfo + 0x4fac test at the helper call",
+    "documented_constants": "Camera matrices and family frame fields (camera decode refuses non-camera matrices), TAA parameter and UAV fields (bind_pass checks both vtables first), RHI command list and RDG texture fields"
+  },
   "native_candidates": {
-    "status": "Default temporal-upscaler entry fingerprint and desktop invocation verified; other RVAs remain static candidates.",
-    "FDefaultTemporalUpscaler_AddPasses_entry_bytes": "48895c24084889742410574883ec40488b05da508d03498bf9498bd8488bf283",
+    "status": "Static candidates of build 16671873; the hooked sites are found by signature (see discovery).",
     "AddPostProcessingPasses": "0x5bbfd00",
     "FDefaultTemporalUpscaler_AddPasses": "0x5c442b0",
     "AddTemporalAAPass": "0x5c44910",

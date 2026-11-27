@@ -35,7 +35,7 @@ observer already hooks. No new detour was needed.
 `frame.ui` (a separate UI layer) is still not transported by native_fg. Anomaly does not need it: the bridge runs in
 `RSF_UI_MODE_BACKBUFFER_HUDLESS` and every provider derives the interface from the final frame and the HUD-less copy.
 
-## Engine sites (verified by `tests/anomaly_fg_evidence.py --verify` against the installed exe)
+## Engine sites (verified by `tools/anomaly_fg_evidence.py --verify` against the installed exe)
 
 | Site | RVA | FG use |
 | --- | --- | --- |
@@ -175,7 +175,7 @@ Not exercised: the fixtures and every game run so far are windowed. Prefer windo
 
 ## Diagnostics and keys
 
-INI (`[Anomaly]`, Observe mode): `FG`, `FGBridge` (default 1, so FG can be switched on live from the overlay), `FGBackend` (1, 3, 4, 5, 7 Auto), `FGGeneratedFrames`, `Latency`,
+INI (`[Anomaly]`, Observe mode): `FG` (the bridge is installed whenever the FG stage runs, so FG can be switched on live from the overlay; the former `FGBridge` switch is gone), `FGBackend` (1, 3, 4, 5, 7 Auto), `FGGeneratedFrames`, `Latency`,
 `FrameLimitUs`, `FGScopeHold`, `FGDebug`, `FGDevelopment`, `FGCapture` (+`Start`, `Count`, `Interval`, `Dir`); vendor
 directories are SR's (`SRStreamlineDir`, `SRFidelityFXDir`, `SRXeSSDir`). The bridge installs only at cold start.
 

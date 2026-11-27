@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 """Bounded foreground-only relative mouse motion with sampled RSF status evidence."""
 import argparse
 import ctypes as c

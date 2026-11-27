@@ -1,0 +1,278 @@
+// SPDX-License-Identifier: MIT
+use crate::com_ref;
+use crate::d3d11_output::{FullscreenBlit, GraphicsCache, SavedBindings, texture_desc};
+use crate::d3d11_output_platform::{
+    rsf_d3d11_output_child_device, rsf_d3d11_output_clear_state, rsf_d3d11_output_copy_region,
+    rsf_d3d11_output_create_rtv, rsf_d3d11_output_create_texture, rsf_d3d11_output_device_ok,
+    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_output_unbind_targets,
+};
+use crate::graphics_d3d11::{rsf_d3d11_state_restore, rsf_d3d11_state_save};
+use crate::native_regions::{Region as Rect, SourceView};
+use crate::sys::*;
+use std::ffi::c_void;
+use std::ptr::NonNull;
+use windows::core::{IUnknown, Interface};
+
+fn float_colour(format: u32) -> bool {
+    matches!(
+        format,
+        RSF_D3D11_FORMAT_RGBA32_FLOAT
+            | RSF_D3D11_FORMAT_RGBA16_FLOAT
+            | RSF_D3D11_FORMAT_R11G11B10_FLOAT
+    )
+}
+
+#[derive(Clone, Copy)]
+struct Output {
+    texture: NonNull<c_void>,
+    convert_to: Option<u32>,
+}
+
+impl Output {
+    unsafe fn preflight(
+        texture: NonNull<c_void>,
+        device: &IUnknown,
+        source: &rsf_d3d11_texture_desc,
+        rect: &Rect,
+    ) -> Option<Self> {
+        let ptr = texture.as_ptr();
+        let owner = unsafe { com_ref::owned(rsf_d3d11_output_child_device(ptr)) }?;
+        let dest = unsafe { texture_desc(ptr) };
+        if owner.as_raw() != device.as_raw()
+            || dest.layers != 1
+            || dest.samples != 1
+            || dest.width < rect.bounds[2]
+            || dest.height < rect.bounds[3]
+            || dest.usage == RSF_D3D11_USAGE_IMMUTABLE
+        {
+            return None;
+        }
+        let mut convert_to = None;
+        if dest.format != source.format {
+            let format = rsf_d3d11_output_srv_format(dest.format);
+            if !float_colour(source.format)
+                || !float_colour(format)
+                || source.bind_flags & RSF_D3D11_BIND_SHADER_RESOURCE == 0
+            {
+                return None;
+            }
+            convert_to = Some(format);
+        }
+        Some(Self {
+            texture,
+            convert_to,
+        })
+    }
+}
+
+struct Conversion {
+    target: IUnknown,
+    texture: IUnknown,
+    format: u32,
+    width: u32,
+    height: u32,
+}
+
+struct Conversions {
+    blit: FullscreenBlit,
+    slots: [Option<Conversion>; 2],
+    source: Option<SourceView>,
+    device: IUnknown,
+}
+
+// SAFETY: this cache owns D3D11 device children and the fullscreen pass.
+// Calls and teardown are serialized by the graphics owner.
+unsafe impl Send for Conversions {}
+
+impl Conversions {
+    unsafe fn prepare(&mut self, formats: [Option<u32>; 2], rect: &Rect) -> Option<()> {
+        let [width, height] = rect.extent;
+        for (slot, format) in self.slots.iter_mut().zip(formats) {
+            let Some(format) = format else { continue };
+            if slot.as_ref().is_some_and(|entry| {
+                entry.format == format && entry.width == width && entry.height == height
+            }) {
+                continue;
+            }
+            let desc = rsf_d3d11_texture_desc {
+                width,
+                height,
+                format,
+                mips: 1,
+                layers: 1,
+                samples: 1,
+                usage: RSF_D3D11_USAGE_DEFAULT,
+                bind_flags: RSF_D3D11_BIND_RENDER_TARGET,
+                ..Default::default()
+            };
+            let device = self.device.as_raw();
+            let texture =
+                unsafe { com_ref::owned(rsf_d3d11_output_create_texture(device, &desc)) }?;
+            let target =
+                unsafe { com_ref::owned(rsf_d3d11_output_create_rtv(device, texture.as_raw())) }?;
+            *slot = Some(Conversion {
+                texture,
+                target,
+                format,
+                width,
+                height,
+            });
+        }
+        Some(())
+    }
+
+    unsafe fn render(
+        &mut self,
+        context: *mut c_void,
+        source: NonNull<c_void>,
+        source_format: u32,
+        formats: [Option<u32>; 2],
+        rect: &Rect,
+    ) -> Option<[*mut c_void; 2]> {
+        let view = unsafe {
+            SourceView::get(
+                &mut self.source,
+                self.device.as_raw(),
+                source.as_ptr(),
+                source_format,
+            )
+        }?;
+        unsafe { self.prepare(formats, rect) }?;
+        let mut copies = [source.as_ptr(); 2];
+        for ((format, slot), copy) in formats.into_iter().zip(&self.slots).zip(&mut copies) {
+            if format.is_none() {
+                continue;
+            }
+            let output = slot.as_ref()?;
+            if !unsafe {
+                self.blit.draw(
+                    context,
+                    output.target.as_raw(),
+                    view,
+                    rect.extent[0],
+                    rect.extent[1],
+                )
+            } {
+                return None;
+            }
+            *copy = output.texture.as_raw();
+        }
+        Some(copies)
+    }
+}
+
+static REINSERT: GraphicsCache<Option<Conversions>> = GraphicsCache::new(None);
+
+unsafe fn reinsert(
+    cache: &mut Option<Conversions>,
+    context: *mut c_void,
+    source: NonNull<c_void>,
+    destination: NonNull<c_void>,
+    readable: Option<NonNull<c_void>>,
+    rect: Rect,
+) -> Option<()> {
+    if unsafe { rsf_d3d11_output_is_immediate(context) } == 0 {
+        return None;
+    }
+    let src = unsafe { texture_desc(source.as_ptr()) };
+    if [src.width, src.height] != rect.extent || src.layers != 1 || src.samples != 1 {
+        return None;
+    }
+    let device = unsafe { com_ref::owned(rsf_d3d11_output_child_device(context)) }?;
+    let source_device = unsafe { com_ref::owned(rsf_d3d11_output_child_device(source.as_ptr())) }?;
+    if source_device.as_raw() != device.as_raw() {
+        return None;
+    }
+    let target = unsafe { Output::preflight(destination, &device, &src, &rect) }?;
+    let mirror = match readable.filter(|readable| *readable != destination) {
+        Some(texture) => Some(unsafe { Output::preflight(texture, &device, &src, &rect) }?),
+        None => None,
+    };
+    let formats = [
+        target.convert_to,
+        mirror.and_then(|output| output.convert_to),
+    ];
+    let _bindings =
+        unsafe { SavedBindings::new(context, rsf_d3d11_state_save, rsf_d3d11_state_restore) }?;
+    // Remove conflicting UAVs, native shader stages and predication. The
+    // shared state scope restores the bindings and preserves UAV counters.
+    unsafe { rsf_d3d11_output_clear_state(context) };
+    let copies = if formats.iter().any(Option::is_some) {
+        let conversions = if let Some(conversions) = cache
+            .as_mut()
+            .filter(|entry| entry.device.as_raw() == device.as_raw())
+        {
+            conversions
+        } else {
+            *cache = None;
+            let blit = unsafe { FullscreenBlit::new_copy(&device, true) }?;
+            cache.insert(Conversions {
+                blit,
+                slots: [None, None],
+                source: None,
+                device: device.clone(),
+            })
+        };
+        // All conversions must succeed before either native output is written.
+        unsafe { conversions.render(context, source, src.format, formats, &rect) }?
+    } else {
+        [source.as_ptr(); 2]
+    };
+    unsafe { rsf_d3d11_output_unbind_targets(context) };
+    for (output, copy) in [Some(target), mirror].into_iter().zip(copies) {
+        let Some(output) = output else { continue };
+        let dest = output.texture.as_ptr();
+        if dest != copy {
+            unsafe {
+                rsf_d3d11_output_copy_region(
+                    context,
+                    dest,
+                    copy,
+                    rect.bounds[0],
+                    rect.bounds[1],
+                    rect.extent[0],
+                    rect.extent[1],
+                )
+            };
+        }
+    }
+    (unsafe { rsf_d3d11_output_device_ok(device.as_raw()) } != 0).then_some(())
+}
+
+#[unsafe(no_mangle)]
+pub(super) unsafe extern "C" fn rsf_native_reinsert(
+    context: *mut c_void,
+    source: *mut c_void,
+    destination: *mut c_void,
+    readable: *mut c_void,
+    rect: *const [i32; 4],
+) -> bool {
+    if context.is_null() || rect.is_null() {
+        return false;
+    }
+    let (Some(source), Some(destination), Some(rect)) = (
+        NonNull::new(source),
+        NonNull::new(destination),
+        Rect::new(unsafe { rect.read() }),
+    ) else {
+        return false;
+    };
+    REINSERT
+        .with(|cache| unsafe {
+            reinsert(
+                cache,
+                context,
+                source,
+                destination,
+                NonNull::new(readable),
+                rect,
+            )
+        })
+        .flatten()
+        .is_some()
+}
+
+#[unsafe(no_mangle)]
+pub(super) extern "C" fn rsf_native_reinsert_release() {
+    REINSERT.with(|cache| *cache = None);
+}

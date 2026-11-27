@@ -1,24 +1,13 @@
 #!/usr/bin/env bash
-# Builds VulkanStory's NGX shim (see vulkanstory_ngx.h for why it exists).
+# Builds the Rust NGX caller module.
 #
 #   build.sh <output directory>
 #
-# The first positional argument is the output directory (created if needed).
-# CC selects one compiler executable, default cc. The output name is
-# VulkanStoryNgx.dll on MinGW/MSYS/Cygwin and libVulkanStoryNgx.so otherwise;
-# Linux additionally links libdl. A target newer than source/header is reused.
-# Missing arguments exit 2. Missing compiler or compilation failure exits 0
-# after removing target/temporary output, so callers must inspect the artifact.
-# Successful compilation replaces the target through its sibling .tmp file.
-#
-# The shim is the only call site NGX will accept: libnvidia-ngx.so.1 resolves
-# its caller's module from the return address, and a .NET P/Invoke stub lives in
-# anonymous JIT memory, which aborts the process inside the driver.
-#
-# Degrades, never fails the build: with no C compiler on the host it prints one
-# line and exits 0, and the managed side then reports NGX as unavailable
-# (NgxShim.Availability). That is the documented behaviour - a machine without
-# cc can still build and run VulkanStory, just without DLSS.
+# The output name is
+# VulkanStoryNgx.dll on MinGW/MSYS/Cygwin and libVulkanStoryNgx.so otherwise.
+# A target newer than the build inputs is reused. Missing arguments exit 2.
+# Missing tools or a failed build exit 0 and preserve any previous library.
+# Only a successful link publishes a new library.
 set -u
 
 out="${1:-}"
@@ -27,56 +16,62 @@ if [ -z "$out" ]; then
     exit 2
 fi
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-src="$here/vulkanstory_ngx.c"
-
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 0
+workspace="$(cd "$here/../../.." && pwd)" || exit 0
+rust_args=()
+rust_release=release
 case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) name="VulkanStoryNgx.dll" ;;
-    *) name="libVulkanStoryNgx.so" ;;
+    MINGW*|MSYS*|CYGWIN*)
+        name="VulkanStoryNgx.dll"
+        rust_target=x86_64-pc-windows-gnu
+        rust_args=(--target "$rust_target")
+        rust_release="$rust_target/release"
+        artifact=rsf_vulkanstory_ngx.dll
+        ;;
+    Linux)
+        name="libVulkanStoryNgx.so"
+        artifact=librsf_vulkanstory_ngx.so
+        ;;
+    Darwin) name="libVulkanStoryNgx.so"; artifact=librsf_vulkanstory_ngx.dylib ;;
+    *) name="libVulkanStoryNgx.so"; artifact=librsf_vulkanstory_ngx.so ;;
 esac
 
-cc="${CC:-cc}"
 target="$out/$name"
-if ! command -v "$cc" >/dev/null 2>&1; then
-    # Same reason as the failed-compile path below: a library left over from a
-    # build on a host that still had a compiler would be packaged by the
-    # native bundle staging and shipped beside a managed side it no longer
-    # matches. Without a compiler the only correct output is no output.
-    rm -f "$target" "$target.tmp"
-    echo "vulkanstory-ngx: no C compiler ($cc) on this host; skipping the NGX shim - DLSS will report unavailable."
-    exit 0
+if [ -f "$target" ]; then
+    fresh=1
+    for input in "$here/vulkanstory_ngx.h" "$here/src/lib.rs" "$here/src/loader.rs" "$here/src/parameters.rs" "$here/Cargo.toml" \
+            "$workspace/integrations/vulkanstory/native/ngx.rs" "$workspace/Cargo.toml" "$workspace/Cargo.lock" "$workspace/rust-toolchain.toml" "$here/build.sh"; do
+        if [ ! -f "$input" ] || [ ! "$target" -nt "$input" ]; then
+            fresh=0
+            break
+        fi
+    done
+    if [ "$fresh" -eq 1 ]; then
+        exit 0
+    fi
 fi
 
-mkdir -p "$out" || exit 0
-
-# Only relink when the source or header is newer during explicit bridge builds.
-if [ -f "$target" ] && [ "$target" -nt "$src" ] && [ "$target" -nt "$here/vulkanstory_ngx.h" ]; then
+skip_build() {
+    echo "vulkanstory-ngx: $1; any previous library was retained." >&2
     exit 0
+}
+
+if ! command -v cargo >/dev/null 2>&1; then
+    skip_build "no Cargo on this host"
 fi
 
-libs=""
-[ "$(uname -s)" = "Linux" ] && libs="-ldl"
-
-# shellcheck disable=SC2086
-# -fno-optimize-sibling-calls is load-bearing, not tidiness: a tail call pops
-# the shim's frame before entering NGX, and NGX then reads the *managed*
-# caller's return address and aborts - exactly the failure the shim exists to
-# prevent (measured 2026-09-12). The source also stores every forwarded result
-# in a volatile local, so this flag is the second of two guards.
-#
-# It compiles to a temporary file and only replaces the shipped library once the
-# compiler said yes: a failed compile that left the previous library in place
-# would be picked up by native bundle staging and shipped beside a
-# managed side it no longer matches.
-if ! "$cc" -std=c99 -O2 -fPIC -shared -fvisibility=hidden \
-        -fno-optimize-sibling-calls \
-        -Wall -Wextra -Wno-unused-parameter \
-        "$src" -o "$target.tmp" $libs; then
-    echo "vulkanstory-ngx: $cc failed to build the NGX shim; DLSS will report unavailable." >&2
-    rm -f "$target.tmp" "$target"
-    exit 0
+mkdir -p -- "$out" || exit 0
+output="$(cd -- "$out" && pwd)" || exit 0
+scratch="$(mktemp -d "$output/.vulkanstory-ngx.XXXXXXXX")" || exit 0
+trap 'rm -rf -- "$scratch"' EXIT
+if ! (cd "$workspace" && cargo build --locked --release -p rsf-vulkanstory-ngx \
+        "${rust_args[@]}" --target-dir "$scratch/cargo"); then
+    skip_build "Rust caller module build failed"
 fi
-mv -f "$target.tmp" "$target"
+temporary="$scratch/cargo/$rust_release/$artifact"
+if ! mv -f -- "$temporary" "$target"; then
+    skip_build "could not publish the NGX shim"
+fi
 
 echo "vulkanstory-ngx: built $target"
 exit 0

@@ -1,6 +1,7 @@
 # Loader and research proxy
 
-`rsf_bootstrap` exports a version only; product launching and frontend IPC remain pending.
+Product launching and frontend IPC remain pending (the version-only bootstrap DLL and launcher
+scaffolds were removed; Git history keeps them).
 Current game loading uses the AC7 DirectInput carrier and shared Unity version shim. Runtime-owned
 plugin preparation/start/quiesce/stop and renderer/CPU callbacks are implemented. The published
 v0.1.0 AC7 ZIP is SR-only; FG/Reflex below describe current source/development deployments.
@@ -69,22 +70,23 @@ working and makes a one-off override a launch option rather than an edit.
 
 Numbers accept hexadecimal with an `0x` prefix, and a setting present and zero is that value rather
 than an absence, so `RSF_DECODE_MOTION=0` disables decoding and quality `0` selects Native. Both
-were [review findings](../docs/review.md) against the old parser.
+were review findings against the old parser.
 
 The vendor runtime is found at `ReScaleFrame\streamline` beside the proxy, and `renderdoc.dll`
 beside the proxy, so neither path normally needs setting at all.
 
 ## AC7 environment settings
 
-These keys belong to the AC7 carrier. Several observer/promotion overrides describe the retained
-compatibility path; the default native plugin sizes engine views/targets and inserts SR in its
-post-process graph. Do not apply this flat AC7 configuration format to Unity's `[UnitySR]` INI.
+These keys belong to the AC7 carrier and cover its input work: the observer, motion capture,
+jitter and translucency patches, and diagnostics. SR, frame generation, latency, the frame limit,
+DLSS colour transport and SR colour correction are the shared overlay's settings, saved in
+`%LOCALAPPDATA%\ReScaleFrame\AC7.ini` `[Rendering]` by the core D3D11 host like every other game.
+Do not apply this flat AC7 configuration format to Unity's `[UnitySR]` INI.
 
 | Variable | Default / purpose |
 | --- | --- |
 | `RSF_DUMP_DIR` | Logs/captures; defaults to `%LOCALAPPDATA%\ReScaleFrame\AC7` |
 | `RSF_DUMP_MODULE` | `0`; opt in to executable dumps and module sampling |
-| `RSF_DLSS_ENABLE` | `1`; initial enable choice before saved preferences |
 | `RSF_OBSERVE` | `1`; install the D3D11 observer |
 | `RSF_OBSERVE_FORMAT` | `35`, `R16G16_UNORM` |
 | `RSF_OBSERVE_MIN_WIDTH` | `512` |
@@ -92,44 +94,30 @@ post-process graph. Do not apply this flat AC7 configuration format to Unity's `
 | `RSF_VIEW_CB_MIN`, `RSF_VIEW_CB_MAX` | `1024`, `8192` bytes |
 | `RSF_RENDERDOC_DLL` | Explicit Windows RenderDoc DLL path |
 | `RSF_CAPTURE_PREFIX` | RenderDoc output prefix |
-| `RSF_UI_CLASSIFY` | `1`; name pipeline objects as the game creates them and classify the draws made from them. Reports through the `ui:` lines and changes nothing |
-| `RSF_UI_SHADER_FORCE`, `RSF_UI_SHADER_SKIP` | hex hash lists naming shaders the rules got wrong, in either direction. The hashes are printed by the `ui draw:` trace lines |
-| `RSF_UI_ENCODE` | `1`; which transfer function the composite applies to the extracted interface. `0` none, `1` sRGB, `2` gamma 2.2 |
 | `RSF_ENABLE_JITTER` | Default `1`; `0` off; `1` patches the AA gate but opens it only while a reconstruction runs; `2` opens it from decryption to exit, which is what every result before this used |
-| `RSF_JITTER_RVA` | Default address `0x112b1f3` |
 | `RSF_TRANSLUCENT_VELOCITY` | `0`; set `1` to let translucent draws reach the velocity pass |
-| `RSF_TRANSLUCENT_VELOCITY_RVA` | Default address `0x11823de` |
-| `RSF_SCREEN_PERCENTAGE` | Legacy diagnostic setting; consumer startup uses the selected DLSS preset |
-| `RSF_DLSS_PRESET` | DLSS model request: 0 Default, 5 E, 6 F, 10 J, 11 K, 12 L, 13 M. Separate from quality/render scale. Insert saves this in the user's AC7 preferences. Driver overrides may replace the request. |
-| `RSF_CONSOLE_SINGLETON_RVA` | Default address `0x3a8b290` |
-| `RSF_CONSOLE_FIND_SLOT` | Default byte offset `0x90` |
-| `RSF_STREAMLINE_BIN` | Directory containing the vendor runtime |
-| `RSF_DLSS_QUALITY` | `3`: Performance; backend enum is Native=0, Quality=1, Balanced=2, Performance=3, Ultra Performance=4 |
-| `RSF_DLSS_TONEMAP` | `1`: DLSS receives an invertible display-range encoding with HDR input off, decoded back to linear; removes the dark banding of DLSS 310's auto-exposing presets on any preset or driver override. `0` sends linear HDR, for comparison only |
-| `RSF_DLSS_COLOUR_CORRECTION` | `0`: the post-DLSS colour correction stays off. `1` re-enables it for comparison; it adds edge shimmer in the hangar |
-| `RSF_DLSS_OUTPUT_WIDTH`, `RSF_DLSS_OUTPUT_HEIGHT` | Observer's presented dimensions |
+
 | `RSF_DECODE_MOTION` | `1`; controls decoded diagnostic dumps |
 | `RSF_OVERLAY_DLL` | Explicit path to `rescaleframe_overlay.dll`; otherwise looked for beside the proxy |
 | `RSF_RENDERDOC` | `0`; set `1` to load RenderDoc at attach for a capture session |
 | `RSF_FULL_TRANSLUCENCY` | `1`; patches the separate translucency halving out and carries the scale as a rewritable immediate |
-| `RSF_FULL_TRANSLUCENCY_RVA` | Default address `0x10be329` |
 | `RSF_TRANSLUCENCY_TARGET` | `100`; percent of output, independent of the scene preset. `0` explicitly matches the scene |
-| `RSF_TRANSLUCENCY_UNJITTER` | `1`; unjitter VS/PS and bypass layer DLSS. `0` retains the experimental 1:1 temporal route |
 | `RSF_TRANSLUCENCY_SCALE` | `0`; a direct multiplier in percent overriding the target |
-| `RSF_REINSERT_DEPTH` | `0`; what reinsertion does when a promoted target meets the game's render-resolution depth: drop, keep, refuse |
+
+The jitter, translucent velocity and separate translucency sites are discovered by signature in the decrypted executable (`games/ac7/src/discovery.rs`); there is no address override.
 
 The keys the [representation plan](../docs/representation-plan.md) introduces (`RSF_UI_*`, `RSF_POLICY_*`, `RSF_PRESENTATION`, `RSF_FG*`, `RSF_SR_VENDOR`, vendor runtime directories) are documented here as each milestone lands, not before.
 
-Quality selection derives input dimensions from the selected SDK. Native mode sizes the renderer
-through engine-owned views; compatibility mode applies the planned percentage. `RSF_SCREEN_PERCENTAGE`
-is a legacy diagnostic override, not a second independent consumer quality setting.
+Quality selection derives input dimensions from the selected SDK and sizes the renderer
+through engine-owned views. A refused native activation leaves the game running without SR.
 
 ## Startup and diagnostics
 
-The worker waits for decrypted code before applying expected-byte-checked patches. The Present
-callback starts the backend once the device and dimensions are known; it does not repeatedly load
-a failing vendor runtime. Use Enable DLSS to retry after a failure. Renderer maintenance runs on
-the render thread. Module dumps are opt-in; vendor informational spam is not forwarded to the log.
+The worker waits for decrypted code before applying expected-byte-checked patches. The carrier
+reports to the core D3D11 host (`runtime/orchestrator/src/d3d11_host.rs`): the first Present binds
+the presentation, the next one after the patches starts the native renderer once, and the host
+plans and starts SR from the presenting chain's extent. Renderer maintenance runs on the render
+thread. Module dumps are opt-in; vendor informational spam is not forwarded to the log.
 Warnings, errors and state changes remain available in `rsf-dump.log`.
 
 The carriers implement current plugin lifecycle loading, while the general product bootstrap and
@@ -144,51 +132,19 @@ The corrected published v0.1.0 package includes DLSS, FSR2/3/4 and XeSS SR. The 
 and FSR4 INT8 SR path received user acceptance on 2 October. New source work does not update
 that published ZIP; later FG/Reflex changes are separate.
 
-`RSF_FFX_BIN` selects the absolute directory containing `amd_fidelityfx_upscaler_dx12.dll`.
-It defaults to `ReScaleFrame\fidelityfx` beside the proxy. SDK 2.3.0 can supply all three FSR
-families. `RSF_FSR2_BIN`, `RSF_FSR3_BIN` and `RSF_FSR4_BIN` optionally select separate SDK runtime
-directories. `RSF_XESS_BIN` selects the directory containing `libxess.dll`, defaulting to
-`ReScaleFrame\xess`. Settings use the existing INI/environment precedence. No new vendor binaries
-are installed by building or testing; preserve their distribution terms when preparing a package.
+The vendor runtimes come from `ReScaleFrame\streamline`, `ReScaleFrame\fidelityfx` and
+`ReScaleFrame\xess` beside the proxy, as for every D3D11 game. No new vendor binaries are
+installed by building or testing; preserve their distribution terms when preparing a package.
 
 [Architecture, SDK revisions, device checks and remaining validation](../docs/research/orchestrator-sr-switching.md).
 
 ## AC7 frame generation
 
-Set `RSF_FG_ENABLE=1` in `ReScaleFrame.ini` before starting AC7. This selects the cold D3D12
-presentation/SR host while keeping the game-facing D3D11 renderer. `RSF_FG_MODE=0` starts Off;
-`1` requests fixed generation. `RSF_FG_GENERATED=1` requests 2x, clamped to the SDK maximum.
-`RSF_FG_BACKEND=1/3/4/5` selects DLSS-G, FSR3 FG, FSR4 FG or XeSS FG before startup,
-independently of SR. The default is DLSS-G. FSR uses `RSF_FSR3_BIN` / `RSF_FSR4_BIN`, then
-`RSF_FFX_BIN`, then `ReScaleFrame/fidelityfx`; XeSS uses `RSF_XESS_BIN`, then
-`ReScaleFrame/xess`. Unsupported creation preserves original presentation. Change provider
-in the overlay during play. The multiplier control applies immediately and uses the provider's
-queried maximum. `RSF_FG_GENERATED=3` requests 4x when supported. The pinned FidelityFX FG API
-provides 2x; DLSS-G and XeSS limits come from the SDK/hardware query and can be higher on supported
-hardware. Unsupported provider creation retains the current provider. AC7 supplies completed
-HUD-less scene colour and preserves depth/motion through interpolation, independently of the
-chosen SR vendor.
-`RSF_REFLEX_MODE=0/1/2` selects Off/On/On + Boost. Sleep and PCL markers remain integrated in Off mode.
-Reflex controls apply to DLSS-G. XeSS uses XeLL. FSR does not apply the Reflex frame limiter.
-
-Insert exposes requested/effective/active FG and runtime Reflex controls. These FG/Reflex
-settings include Show FPS overlay. The compact top-right HUD remains visible with the panel
-closed and separately displays real application/rendered FPS and SDK aggregate presented FPS.
-It never multiplies the rendered rate by a requested FG setting; the badge reports actual activity.
-Reported presents are SDK/DXGI counters, not physical scanout or input-latency measurements.
-FG provider choice is saved per user; mode, multiplier, Reflex and frame-limit changes are session
-settings. `RSF_FRAME_LIMIT_FPS` limits rendered frames per second before
-generation, through Reflex's limiter; the panel's Frame limit control changes it while running.
-With 2x generation a limit of 80 presents up to 160. `RSF_REFLEX_LIMIT_US` is the same limit
-written as a microsecond interval between rendered frames.
-Choose Off in Insert to stop generation through the stable facade. For a cold start, clear the
-saved `[Rendering] FrameGeneration` choice to 0 as well as `RSF_FG_ENABLE=0`; saved provider choice
-can override that default. Live provider changes no longer require restart. Default runtime mode is
-production; development requires `RSF_FG_DEVELOPMENT=1` and `RSF_STREAMLINE_BIN` pointing
-at development DLLs. `RSF_FG_DEBUG=1` records a bounded marker trace after tagged frames begin.
-The Reflex sleep waits for the previous frame's Present and still precedes input.
-`RSF_REFLEX_ASYNC=1` restores the earlier sleep that overlaps the previous frame, for comparison.
-
+Frame generation, its provider and multiplier, the latency technology and the frame limit are
+chosen in the overlay (Insert) while the game runs and saved per user, as in every game. The
+presentation bridge is installed at startup with FG Off, so FG can be switched on at any time.
+AC7 supplies completed HUD-less scene colour and preserves depth/motion through interpolation,
+independently of the chosen SR vendor. Unsupported provider creation retains the current provider.
 The user accepts deployed DLSS-FG. FSR3/XeSS pass synthetic D3D11/D3D12 generation checks;
 their AC7 moving-scene quality, HUD and pacing have not been game-tested. Cuts, unmatched inputs
 and unsupported VSync suspend generation. Compatible native AC7 family

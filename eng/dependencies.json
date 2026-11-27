@@ -1,0 +1,87 @@
+{
+  "engine": {
+    "version": "4.7.2",
+    "repository": "https://github.com/godotengine/godot.git",
+    "revision": "ed1daf0bf001b61586d9930840f2f1394092c079",
+    "tag": "4.7.2-stable"
+  },
+  "bindings": {
+    "repository": "https://github.com/godotengine/godot-cpp.git",
+    "revision": "8070599885b6df675fcad033dd032ce44be2b850",
+    "api": "4.7"
+  },
+  "vendor": {
+    "streamline": {
+      "version": "2.14.1",
+      "url": "https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.14.1/streamline-sdk-v2.14.1.zip",
+      "sha512": "317aeeae2e692b6e8b5df183471dff3f884822bd8aa681ac50f3a6ef4136f758c59dac8bdaf94db48990a97b434d81e7c0bea3782c5825b76c3450ebf6f7f584",
+      "sha256": {
+        "sl.interposer.dll": "8c87c9499461da561edd529aa9bf7831d67d7b94ebb1c1a5ed54ef4934e1ea4c",
+        "sl.common.dll": "82924a8954dd671e09351c5de0eb87ad0eb25b944cc9f9ab955ca1d9950de15d",
+        "sl.dlss.dll": "73bf52c0cfaa5900a8f3f4a91306e4625e7cca696dfb305aae44c9f97b582e1f",
+        "sl.pcl.dll": "f13d51cfa05f4cd514df2026049e2db8adf359221713170ad386fd499915b582",
+        "sl.dlss_g.dll": "f4a6b2b14dcc0b1485989e430d3b4e3a44ac1800b92ba1ad74f476e64fb2b09c",
+        "sl.reflex.dll": "0ce9725e3e03ea9e7f81d008b57f33ee365973d2e349131c8b1c3e3378fe2db0",
+        "nvngx_dlss.dll": "3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983",
+        "nvngx_dlssg.dll": "ff6e90eb78b827927dff5b4ecc6b1c870c2e9bca29ed9f48c7d348cc9e170b82"
+      }
+    },
+    "streamline_source": {
+      "repository": "https://github.com/NVIDIA-RTX/Streamline.git",
+      "revision": "2122257e0fce486f91b385aa63b9a09b0a34b363",
+      "path": "vendor/streamline"
+    },
+    "fidelityfx": {
+      "repository": "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git",
+      "revision": "7539ae8b6568ad29ed78a753404351daf3b5cca7",
+      "path": "vendor/fidelityfx",
+      "sha256": {
+        "amd_fidelityfx_upscaler_dx12.dll": "aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace",
+        "amd_fidelityfx_loader_dx12.dll": "e2191d3c0828be45eb8affd4e3ec0378f2293adc345b772a7170edcf3b021ecb",
+        "amd_fidelityfx_framegeneration_dx12.dll": "e6843252f58b0341a0d80f6a20bc0d840643ee95bc48c22cac08745344577bb6"
+      }
+    },
+    "fidelityfx_vulkan": {
+      "repository": "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git",
+      "revision": "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55",
+      "path": "vendor/fidelityfx-vulkan"
+    },
+    "xess": {
+      "repository": "https://github.com/intel/xess.git",
+      "revision": "8fe81bdbbaf00b3c1b733fd0d830c333dc84e6f0",
+      "path": "vendor/xess",
+      "sha256": {
+        "libxess.dll": "251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7",
+        "libxess_fg.dll": "ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27",
+        "libxell.dll": "d2030dcd694fda8f2ec7e044b13e6db8f0b56d4ba9113a5efad334e3f3ded8c7"
+      }
+    },
+    "minhook": {
+      "repository": "https://github.com/TsudaKageyu/minhook.git",
+      "revision": "c3fcafdc10146beb5919319d0683e44e3c30d537",
+      "path": "vendor/minhook",
+      "release": "v1.3.4"
+    }
+  },
+  "mesa": {
+    "version": "25.3.1-3",
+    "url": "https://github.com/godotengine/godot-nir-static/releases/download/25.3.1-3/godot-nir-static-x86_64-msvc-release.zip",
+    "sha512": "768ecb33a9d3cf6e3652708b2ca397850c243cc0a1d22fdb4a036d0712cdedcd8b266cf007b256dec26c39304fff697bfe64c38b58d55587a74b409efeda141b"
+  },
+  "archives": [
+    {
+      "edition": "standard",
+      "file": "Godot_v4.7.2-stable_win64.exe.zip",
+      "sha512": "83decd58fdf67b9d657958a1ae6bf1929c20785315a81effe245874cdc57acb709bf868e00778a96984338c1b29dafdb453c6847747694621c6ecf5da2259993",
+      "directory": "standard",
+      "executable": "Godot_v4.7.2-stable_win64_console.exe"
+    },
+    {
+      "edition": "mono",
+      "file": "Godot_v4.7.2-stable_mono_win64.zip",
+      "sha512": "79229fd112b0c9cbeab82363a4ef7be18ea70f1caf86bf912789335b136fbe7e01db0053a33461438c5da1c680c17bbb10040bd09bedc51221cd4423d0367757",
+      "directory": "mono",
+      "executable": "Godot_v4.7.2-stable_mono_win64/Godot_v4.7.2-stable_mono_win64_console.exe"
+    }
+  ]
+}

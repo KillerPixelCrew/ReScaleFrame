@@ -62,28 +62,28 @@ internal sealed unsafe class Fsr3Native
     {
         this.sdk = sdk;
         this.bridge = bridge;
-        Open = (delegate* unmanaged[Cdecl]<nint, int>)Export("VulkanStoryFsr3Open");
-        Plan = (delegate* unmanaged[Cdecl]<uint, uint, uint, uint*, uint*, int>)Export("VulkanStoryFsr3Plan");
-        Create = (delegate* unmanaged[Cdecl]<nint, nint, uint, uint, uint, uint, nint*, int>)Export("VulkanStoryFsr3Create");
-        Evaluate = (delegate* unmanaged[Cdecl]<nint, Fsr3Frame*, int>)Export("VulkanStoryFsr3EvaluateWithComposition");
-        Destroy = (delegate* unmanaged[Cdecl]<nint, int>)Export("VulkanStoryFsr3Destroy");
-        CreateFrameGeneration = (delegate* unmanaged[Cdecl]<nint, nint, uint, uint, uint, nint*, int>)Export("VulkanStoryFsr3FgCreate");
-        EvaluateFrameGeneration = (delegate* unmanaged[Cdecl]<nint, Fsr3FgFrame*, int>)Export("VulkanStoryFsr3FgEvaluate");
-        EvaluateDirectFrameGeneration = (delegate* unmanaged[Cdecl]<nint, Fsr3FgFrame*, int>)Export("VulkanStoryFsr3FgEvaluateDirect");
-        DisableFrameGeneration = (delegate* unmanaged[Cdecl]<nint, nint, int>)Export("VulkanStoryFsr3FgDisable");
-        DestroyFrameGeneration = (delegate* unmanaged[Cdecl]<nint, int>)Export("VulkanStoryFsr3FgDestroy");
+        Open = (delegate* unmanaged[Cdecl]<nint, int>)Export("rsf_vk_fsr3_open");
+        Plan = (delegate* unmanaged[Cdecl]<uint, uint, uint, uint*, uint*, int>)Export("rsf_vk_fsr3_plan");
+        Create = (delegate* unmanaged[Cdecl]<nint, nint, uint, uint, uint, uint, nint*, int>)Export("rsf_vk_fsr3_create");
+        Evaluate = (delegate* unmanaged[Cdecl]<nint, Fsr3Frame*, int>)Export("rsf_vk_fsr3_evaluate_with_composition");
+        Destroy = (delegate* unmanaged[Cdecl]<nint, int>)Export("rsf_vk_fsr3_destroy");
+        CreateFrameGeneration = (delegate* unmanaged[Cdecl]<nint, nint, uint, uint, uint, nint*, int>)Export("rsf_vk_fsr3_fg_create");
+        EvaluateFrameGeneration = (delegate* unmanaged[Cdecl]<nint, Fsr3FgFrame*, int>)Export("rsf_vk_fsr3_fg_evaluate");
+        EvaluateDirectFrameGeneration = (delegate* unmanaged[Cdecl]<nint, Fsr3FgFrame*, int>)Export("rsf_vk_fsr3_fg_evaluate_direct");
+        DisableFrameGeneration = (delegate* unmanaged[Cdecl]<nint, nint, int>)Export("rsf_vk_fsr3_fg_disable");
+        DestroyFrameGeneration = (delegate* unmanaged[Cdecl]<nint, int>)Export("rsf_vk_fsr3_fg_destroy");
         CreateSwapchain = (delegate* unmanaged[Cdecl]<PhysicalDevice, Device, Queue, Queue, Queue, Queue, uint,
-            SwapchainCreateInfoKHR*, nint*, int>)Export("VulkanStoryFsr3SwapchainCreate");
-        SwapchainHandle = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR>)Export("VulkanStoryFsr3SwapchainHandle");
-        RecreateSwapchain = (delegate* unmanaged[Cdecl]<nint, SwapchainCreateInfoKHR*, SwapchainKHR*, Result>)Export("VulkanStoryFsr3SwapchainRecreate");
-        GetSwapchainImages = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR, uint*, Image*, Result>)Export("VulkanStoryFsr3SwapchainGetImages");
-        AcquireSwapchain = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR, ulong, Semaphore, Fence, uint*, Result>)Export("VulkanStoryFsr3SwapchainAcquire");
-        PresentSwapchain = (delegate* unmanaged[Cdecl]<nint, Queue, PresentInfoKHR*, Result>)Export("VulkanStoryFsr3SwapchainPresent");
+            SwapchainCreateInfoKHR*, nint*, int>)Export("rsf_vk_fsr3_swapchain_create");
+        SwapchainHandle = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR>)Export("rsf_vk_fsr3_swapchain_handle");
+        RecreateSwapchain = (delegate* unmanaged[Cdecl]<nint, SwapchainCreateInfoKHR*, SwapchainKHR*, Result>)Export("rsf_vk_fsr3_swapchain_recreate");
+        GetSwapchainImages = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR, uint*, Image*, Result>)Export("rsf_vk_fsr3_swapchain_get_images");
+        AcquireSwapchain = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR, ulong, Semaphore, Fence, uint*, Result>)Export("rsf_vk_fsr3_swapchain_acquire");
+        PresentSwapchain = (delegate* unmanaged[Cdecl]<nint, Queue, PresentInfoKHR*, Result>)Export("rsf_vk_fsr3_swapchain_present");
         // Required symbols prevent pairing checked teardown with an old bridge.
-        PrepareSwapchainDestroy = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR, int>)Export("VulkanStoryFsr3SwapchainPrepareDestroy");
-        DestroySwapchainChain = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR, int>)Export("VulkanStoryFsr3SwapchainDestroyChainChecked");
-        SwapchainLastPresentCount = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR, ulong>)Export("VulkanStoryFsr3SwapchainLastPresentCount");
-        DestroySwapchain = (delegate* unmanaged[Cdecl]<nint, int>)Export("VulkanStoryFsr3SwapchainDestroy");
+        PrepareSwapchainDestroy = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR, int>)Export("rsf_vk_fsr3_swapchain_prepare_destroy");
+        DestroySwapchainChain = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR, int>)Export("rsf_vk_fsr3_swapchain_destroy_chain_checked");
+        SwapchainLastPresentCount = (delegate* unmanaged[Cdecl]<nint, SwapchainKHR, ulong>)Export("rsf_vk_fsr3_swapchain_last_present_count");
+        DestroySwapchain = (delegate* unmanaged[Cdecl]<nint, int>)Export("rsf_vk_fsr3_swapchain_destroy");
     }
     private nint Export(string symbol) => NativeLibrary.GetExport(bridge, symbol);
 

@@ -1,33 +1,26 @@
 # Explicit local SDK deployment. This is never called by verify.ps1.
+# Deploys the canonical vendor payload every game carries (eng/common.ps1 Get-RsfVendorPayload)
+# under the game's ReScaleFrame folder.
 param(
     [Parameter(Mandatory = $true)][string]$GameDirectory,
-    [string]$FidelityFxRoot = '',
-    [string]$XeSSRoot = '',
+    [string]$StreamlineRoot = '',
     [switch]$ValidateOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'common.ps1')
 $gameRoot = (Resolve-Path -LiteralPath $GameDirectory).Path
 if (-not (Test-Path -LiteralPath (Join-Path $gameRoot 'Ace7Game.exe') -PathType Leaf)) {
     throw 'GameDirectory must contain Ace7Game.exe.'
 }
-if (-not $FidelityFxRoot) { $FidelityFxRoot = Join-Path $repoRoot 'vendor/fidelityfx' }
-if (-not $XeSSRoot) { $XeSSRoot = Join-Path $repoRoot 'vendor/xess' }
-$inventory = @(
-    @{ Source = (Join-Path $FidelityFxRoot 'Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll'); Relative = 'ReScaleFrame/fidelityfx/amd_fidelityfx_upscaler_dx12.dll' },
-    @{ Source = (Join-Path $FidelityFxRoot 'Kits/FidelityFX/signedbin/amd_fidelityfx_framegeneration_dx12.dll'); Relative = 'ReScaleFrame/fidelityfx/amd_fidelityfx_framegeneration_dx12.dll' },
-    @{ Source = (Join-Path $FidelityFxRoot 'Kits/FidelityFX/docs/license.md'); Relative = 'ReScaleFrame/fidelityfx/LICENSE.md' },
-    @{ Source = (Join-Path $FidelityFxRoot '3rdpartynotice.md'); Relative = 'ReScaleFrame/fidelityfx/3rdpartynotice.md' },
-    @{ Source = (Join-Path $XeSSRoot 'bin/libxess.dll'); Relative = 'ReScaleFrame/xess/libxess.dll' },
-    @{ Source = (Join-Path $XeSSRoot 'bin/libxess_fg.dll'); Relative = 'ReScaleFrame/xess/libxess_fg.dll' },
-    @{ Source = (Join-Path $XeSSRoot 'bin/libxell.dll'); Relative = 'ReScaleFrame/xess/libxell.dll' },
-    @{ Source = (Join-Path $XeSSRoot 'LICENSE.txt'); Relative = 'ReScaleFrame/xess/LICENSE.txt' }
-)
+$inventory = @((Get-RsfVendorPayload $repoRoot $StreamlineRoot).GetEnumerator() | ForEach-Object {
+    @{ Source = $_.Value; Relative = "ReScaleFrame/$($_.Key)" }
+})
 # Validate every source before touching the installation. No SDK discovery or downloads.
 foreach ($file in $inventory) {
-    $file.Source = (Resolve-Path -LiteralPath $file.Source).Path
     if (-not (Test-Path -LiteralPath $file.Source -PathType Leaf)) { throw "Missing SDK file: $($file.Source)" }
+    $file.Source = (Resolve-Path -LiteralPath $file.Source).Path
     $file.Hash = (Get-FileHash -LiteralPath $file.Source -Algorithm SHA256).Hash
     if ([IO.Path]::GetExtension($file.Source) -eq '.dll') {
         $signature = Get-AuthenticodeSignature -LiteralPath $file.Source
@@ -82,4 +75,4 @@ catch {
     Files = $inventory
     Validation = 'Unmodified signed SR DLLs and notices copied; SHA256 readback matched. Game switching pending.'
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $backup 'deployment.json') -Encoding utf8
-Write-Output "Deployed FidelityFX SR and XeSS SR runtimes. Backup: $backup"
+Write-Output "Deployed the Streamline, FidelityFX and XeSS runtimes. Backup: $backup"

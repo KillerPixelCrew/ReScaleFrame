@@ -12,7 +12,7 @@ draws that do? Standard 1.5.3 DX11 only (`AnomalyDX11.exe`, SHA-256 `c857b6f4...
 The log shows counts, not causes. The hooked `Render` overrides are reached through the dsgraph maps, so the
 engine source (`r__dsgraph_build.cpp`, `r__dsgraph_render.cpp`, `r4_R_render.cpp`) says which visual enters which
 map and with which world matrix. The installed binary then confirms each address, byte guard, global and call
-order with `tests/anomaly_geometry_evidence.py --verify`. Nothing here was run in the game.
+order with `tools/anomaly_geometry_evidence.py --verify`. Nothing here was run in the game.
 
 ## What the 5.5% is (source and log)
 
@@ -36,7 +36,7 @@ instance identity. The log cannot split the two; the new counters do.
 
 ## What was added
 
-All in `games/anomaly/src/{native_geometry,geometry_profile,geometry_feed}.*` plus a two-line change to
+All in `games/anomaly/src/{native_geometry.rs,native_geometry_platform.c,geometry_profile.rs}` plus a two-line change to
 `native_observer.cpp`. Every new site is an expected-16-bytes guard installed through `HookSet`, refused on
 mismatch before any byte is written.
 
@@ -71,7 +71,7 @@ mismatch before any byte is written.
 
 ## Evidence
 
-`py -3 tests/anomaly_geometry_evidence.py --verify` against the installed exe passes. It re-checks all 21
+`py -3 tools/anomaly_geometry_evidence.py --verify` against the installed exe passes. It re-checks all 21
 expected-16 guards, the CRender RTTI slots (36-39 lifecycle, 55 `rmNear`, 57 `rmNormal`), the 128 flush callers
 and the `DrawIndexed` that follows each flush in the five draw bodies, `CRender::phase` at `0xd64f90` (the
 `Fvisual::Render` compare, the two `mov [rsi+0x150]` stores in `CRender::Render`, and `RImplementation` =

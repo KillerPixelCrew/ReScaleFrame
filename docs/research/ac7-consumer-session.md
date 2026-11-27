@@ -1,9 +1,5 @@
 # AC7 briefing isolation and consumer session controls
 
-Research history: findings, hook addresses and pending statuses below apply to their recorded
-experiments. Later increments can supersede earlier conclusions. See
-[current implementation and validation](../current-status.md) before using this as a feature list.
-
 29 September 2026. Source review and implementation against `37360603681ce20e6afff86745384173872a5df0`
 plus the existing local gate tracing additions. No new binary addresses were discovered. The
 inherited AC7 evidence names Steam build 9855922, `Ace7Game.exe`, SHA-256
@@ -132,7 +128,7 @@ pixel-to-clip times ClipToTranslatedWorld relationship at offset 0x240. They car
 1600x900 views, so they corroborate matrix construction, not the full-resolution briefing's
 per-draw jitter or shader use. Their error against the old fixture's construction is about 2.98.
 
-`rsf_ac7_view_remove_jitter` now corrects row 3 using ClipToTranslatedWorld rows 0/1, leaving the
+`rsf_ac7_view_remove_jitter` (since removed: nothing consumed it) corrected row 3 using ClipToTranslatedWorld rows 0/1, leaving the
 linear-depth screen matrices' row-2 correction intact. The regression also unprojects sample
 pixels at device depths 0.01, 0.2 and 0.8 for 800x450, 1600x900, and an offset rectangle in a
 1600x904 layer. The corrected results agree with independently constructed unjittered matrices.

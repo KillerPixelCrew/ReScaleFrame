@@ -1,12 +1,12 @@
 # Red Dead Redemption 2
 
 Read [RESEARCH-HANDOFF.md](RESEARCH-HANDOFF.md) before continuing integration or requesting
-captures. It retains the Mor3a reference findings, measured camera/HUD evidence, current probe
-and deployment state, failed approaches, and remaining work from 26 October.
+captures. It retains the Mor3a reference findings, measured camera/HUD evidence and failed
+approaches from 26 October.
 
-The Windows x64 plugin recognizes the fingerprinted Steam executable and exposes game-plugin
-ABI 18. Its guarded native DLSS and FSR paths feed a common SR adapter; preparation refuses
-without the runtime host or matching native instructions. The ASI forces DX12 and supports an optional vendor census and HRESULT
+The Windows x64 plugin recognizes `RDR2.exe` and exposes game-plugin ABI 18. Its guarded native
+DLSS and FSR paths feed a common SR adapter; preparation refuses without the runtime host or when
+a native site is not found. The ASI forces DX12 and supports an optional vendor census and HRESULT
 trace. A guarded Social Club correction preserves the game's recording-frame backbuffer index.
 Forced DX12 with reused caches and RTSS has run successfully, including a Story-mode DLSS/FSR2
 census. RSF SR has live pixel evidence for DLSS, FSR3, FSR4 INT8 and XeSS; the persistent NGX
@@ -20,14 +20,61 @@ The engine resolution producer, complete HUD modes and native graphics-menu repl
 | Plugin ID | `rdr2` |
 | CMake targets | `rsf_game_rdr2`, `rsf_asi_rdr2` |
 | Outputs | `ReScaleFrame.Game.RDR2.dll`, `ReScaleFrame.RDR2.asi` |
-| Executable | `RDR2.exe` 1.0.1491.50, Steam build 13773296 |
-| SHA256 | `b56c9548f670654a9b73bf25def3cd73af12e269f6e47dba28a34079adaf465e` |
+| Executable | `RDR2.exe`; researched on 1.0.1491.50, Steam build 13773296 |
+| Researched SHA256 | `b56c9548f670654a9b73bf25def3cd73af12e269f6e47dba28a34079adaf465e` (evidence, not a gate) |
 | Engine | RAGE, from executable strings |
 | Rendering readiness | `0` |
 
-Detection requires the executable basename, x64 PE machine and exact hash, with ASCII case
-insensitivity for the name and hex digest. A different build is unknown. Recognition establishes
-identity only.
+Detection requires the executable basename (ASCII case-insensitive) and the x64 PE machine; the
+hash is logged, not compared. Whether a build is usable is decided by site discovery
+(`src/discovery.rs`): the ASI scans the decrypted executable once at attach, before it hooks
+anything, and resolves every hooked function, return address, called engine function and read
+global from a pattern that is unique in its code sections, with relocations and displacements as
+wildcards. The plugin does not scan live code, because the ASI has by then replaced the first
+bytes of the entries it hooks: it takes the ASI's table through the `rsf_rdr2_asi_sites` export
+(`src/asi.def`, found by the ASI's file name) when its length matches the plugin's site list, and
+scans itself only without an ASI (the research attach DLL, the fixtures). Every ASI hook is
+installed after the ASI resolved, so the exported table always comes from unhooked code; the sites
+the plugin hooks and verifies are ones the ASI leaves alone. The API parameter must be the target of all four of
+its reads, the FSR2 import slot comes from the import directory and the native-texture accessor
+from the renderer table. Each site re-matches its pattern in live memory before it is hooked,
+patched or called. A missing, ambiguous or changed site refuses and the log names it; ForceD3D12,
+the settings hooks, the SR hooks and the scene producer refuse as before. The private FSR2 DLL is
+used through its exports and entry bytes, and the Social Club renderer's frame entry and gate are
+discovered in that module the same way. Because the code is encrypted on disk, the patterns are
+tested against the decrypted dump (`discovery::tests`); they have not yet run inside the game.
+At ASI attach the discovery runs in DllMain under the loader lock: about 0.11 s in a release
+build (12 ms to copy 73.6 MB of code, about 100 ms to scan). It only reads its own process and
+computes, so it cannot deadlock. It stays there because ForceD3D12 and the settings hooks must
+land before the engine's settings load, see the research note.
+
+## Source ownership
+
+`rsf_game_rdr2` links the Rust crate `rsf-rdr2` (`Cargo.toml`, `src/*.rs`) as a static library.
+The crate owns the plugin policy: recognition and lifecycle validation (`lib.rs`), site discovery
+(`discovery.rs`), native layouts (`layout.rs`), the worker-view camera decode
+(`camera.rs`), DLSS/FSR2 SR routing, refusals, queue/Present observers and hook lifecycle
+(`renderer.rs`), and the completed-scene producer with its native marker, sleep, mode and input
+facts (`scene.rs`). `src/native_platform.rs` keeps only typed leaves the crate calls through a
+table: MinHook, D3D12/DXGI COM calls, ReadProcessMemory, TLS, QPC, window-message and XInput
+observation, and return-address capture. `src/lib.rs` supplies the `rsf_get_game_plugin_api` export.
+The `rsf_rdr2_camera` fixture and capture-file CLI share the Rust camera decoder and the
+versioned synthetic fixture parser.
+[The port note](../../docs/research/rust-rdr2-plugin.md) records what moved, the deliberate
+differences and the remaining work.
+
+The ASI (`rsf_asi_rdr2`) links the same crate for its startup slice: `asi.rs` owns process
+admission, the `[RDR2]` configuration gates read under the loader lock, the ForceD3D12 parameter
+write, the D3D12 trace guard and the order in which the startup owners are armed, and
+`engine_settings.rs` owns the settings-collection carrier, refresh-rate storage and the
+ScriptHook quality request. Rust owns the Win32 startup leaves, ASI and research-attach
+workers, settings probe, DXGI adapter discovery and diagnostic adapters. `src/asi_entry.c`
+binds the linked capture and diagnostic services through `asi_platform.h`. The Social Club
+diagnostic calls the borrowed swapchain through the SEH leaf in `social_club_guard.c`.
+`runtime_setup.h` declares the
+C bridge also used by the Unity D3D12 fixture. The engine-settings vector suite lives in
+`src/engine_settings/tests.rs`.
+[The ASI note](../../docs/research/rust-rdr2-asi.md) records that slice.
 
 ## Deployment
 
@@ -55,7 +102,10 @@ The `.asi` lands in `build/windows-x64/rdr2/bin/<Config>/`; the runtime and plug
 `build/windows-x64/bin/<Config>/`. The measured loader entry is after decryption, during CRT
 startup and before renderer creation. `[RDR2] Census=1` enables the vendor probe;
 `TraceD3D12=1` logs failing game HRESULTs to `ReScaleFrame/rdr2-d3d12-errors.log` without changing
-the results. Both diagnostics default off.
+the results. Both diagnostics default off and, with the F10 frame capture (`NativeCapture`), the
+camera and native-settings probes, module dumps and the RenderDoc frame probe, exist only in
+developer builds configured with `-DRSF_RDR2_RESEARCH=ON` (the crate's `research` feature).
+Release builds ignore those keys.
 
 ## Target
 

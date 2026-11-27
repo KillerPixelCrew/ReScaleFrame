@@ -1,5 +1,5 @@
 EXPORTS
-    DirectInput8Create @1
+    DirectInput8Create=rsf_shim_create @1
     GetFileVersionInfoA @2
     GetFileVersionInfoByHandle @3
     GetFileVersionInfoExA @4

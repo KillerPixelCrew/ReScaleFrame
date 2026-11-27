@@ -11,6 +11,7 @@ import net.minecraft.client.Minecraft;
 /** Graphics calls stay on the render thread. Images remain on the GPU; JNI carries metadata and handles. */
 final class NativeBridge {
     static final int FRAME_BEGIN=0,INPUT_SAMPLE=1,SIMULATION_BEGIN=2,SIMULATION_END=3,FRAME_END=4;
+    static final int BACKEND_NOT_READY=-8;
     private static Path loadedRoot;
     static Path load() throws Exception {
         if(loadedRoot!=null)return loadedRoot;
@@ -45,11 +46,14 @@ final class NativeBridge {
     static native void destroySurface(long window);
     static native long open(long hwnd,long surface,String root);
     static native int[] configure(long handle,int width,int height,int sr,int quality,int preset,int fg,int count,int reflex,int limit,boolean debug,float[] sharpening);
+    static native int openSettings(long handle,String path,int sr,int quality,int preset,int fg,int count,int reflex,int limit,boolean debug,float[] sharpening);
+    static native long settingsRevision(long handle);
+    static native int[] configureSettings(long handle,int width,int height);
     static native void cpu(long handle,long frame,int stage);
     static native void abort(long handle,long frame);
     static native int evaluate(long handle,long frame,FloatBuffer camera,boolean reset,int screen);
     static native int hudless(long handle,long frame,FloatBuffer camera);
     static native int present(long handle,long frame,boolean vsync);
-    static native void status(long handle,long[] destination);
+    static native int statusCount(long handle,long[] destination);
     static native int close(long handle);
 }

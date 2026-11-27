@@ -10,6 +10,9 @@ For shared renderer concepts, use [unreal4-render-integration](../unreal4-render
 This skill adds the version-specific evidence for ReScaleFrame's AC7 integration. Read
 [the ownership reference](references/ac7-native-ownership.md) and the latest game evidence for an
 AC7 change. Build-specific RVAs/private layouts are not portable UE4.18 APIs.
+What this skill covers is input and output work, which belongs to the AC7 integration. A defect in
+how a technique behaves once its inputs are right belongs to the core (AGENTS.md Rule 5), even when
+AC7 is where it was found.
 
 ## Match the right source and program
 

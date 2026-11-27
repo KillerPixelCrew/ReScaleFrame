@@ -157,11 +157,12 @@ internal sealed class LatencySession(ILatencyHost host)
         StreamlineRuntime? streamline = host.Streamline;
         bool streamlineActive = streamline != null &&
             (_streamlinePclReady || _streamlineReflexReady || _streamlineFrameGenerationReady);
-        int tokenResult = streamlineActive ? streamline!.BeginFrame(frameId) : -1;
+        nint token = 0;
+        int tokenResult = streamlineActive ? streamline!.BeginFrame(frameId, out token) : -1;
         bool streamlineFrameBegun = tokenResult == 0;
         _streamlineFrameTokenReady = streamlineFrameBegun;
         _streamlineTokenFrameId = streamlineFrameBegun ? frameId : 0;
-        _streamlineTokenPointer = streamlineFrameBegun ? streamline!.CurrentFrameToken() : 0;
+        _streamlineTokenPointer = streamlineFrameBegun ? token : 0;
         if (streamlineActive)
         {
             RequireLatencyProtocol("Streamline", tokenResult, "frame-token creation");

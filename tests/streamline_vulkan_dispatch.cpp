@@ -4,6 +4,9 @@
 #include "../runtime/vulkan/streamline/sdk-fixes/ngx-vulkan-dispatch.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+
+using namespace sl::chi::ngxDispatch;
 
 namespace {
 uint32_t sequence = 0;
@@ -37,9 +40,44 @@ PFN_vkVoidFunction VKAPI_CALL resolve(VkDevice, const char* name) {
     if (!std::strcmp(name, "vkCmdPipelineBarrier")) return reinterpret_cast<PFN_vkVoidFunction>(dependency);
     return nullptr;
 }
+
+// SDK-created images enter their first layout once per mip, layer and aspect, keep combined depth and
+// stencil aspects together, and keep the contents of initialized subresources.
+void first_use_barriers() {
+    const VkImage image = reinterpret_cast<VkImage>(uintptr_t{1});
+    constexpr VkImageAspectFlags both = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    fresh[image] = {2, 2, both, std::vector<VkImageAspectFlags>(4)};
+    VkImageMemoryBarrier requested{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    requested.image = image;
+    requested.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    requested.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    requested.subresourceRange = {both, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+    const auto initialized = initializedBarriers(1, &requested);
+    require(initialized.size() == 4, "one first-use barrier per mip and layer");
+    for (const auto& first : initialized) {
+        // Combined aspects stay combined without separateDepthStencilLayouts.
+        require(first.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && first.subresourceRange.aspectMask == both &&
+            first.subresourceRange.levelCount == 1 && first.subresourceRange.layerCount == 1,
+            "first-use barriers start undefined with combined aspects");
+    }
+    require(fresh.empty(), "a fully initialized image is no longer tracked");
+    requested.oldLayout = requested.newLayout;
+    const auto reused = initializedBarriers(1, &requested);
+    require(reused.size() == 1 && reused[0].oldLayout == VK_IMAGE_LAYOUT_GENERAL, "an initialized image keeps its layout");
+    fresh[image] = {2, 1, VK_IMAGE_ASPECT_COLOR_BIT, std::vector<VkImageAspectFlags>(2)};
+    requested.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 0, 1};
+    const auto partial = initializedBarriers(1, &requested);
+    require(partial.size() == 1 && partial[0].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && fresh.count(image),
+        "a partial first use leaves the rest tracked");
+    const auto same_mip = initializedBarriers(1, &requested);
+    require(same_mip[0].oldLayout == requested.oldLayout, "an initialized mip keeps its contents");
+    requested.subresourceRange.baseMipLevel = 0;
+    const auto remaining = initializedBarriers(1, &requested);
+    require(remaining[0].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && fresh.empty(), "the last mip ends tracking");
 }
+}
+
 int main() {
-    using namespace sl::chi::ngxDispatch;
     auto owner = reinterpret_cast<VkDevice>(3);
     configure(owner, nullptr, resolve);
     const auto wrapped_fill = reinterpret_cast<PFN_vkCmdFillBuffer>(GetDeviceProcAddr(owner, "vkCmdFillBuffer"));
@@ -48,5 +86,6 @@ int main() {
         "foreign device dispatch remains its original entry");
     for (uint32_t i = 0; i < 3; ++i) wrapped_fill(reinterpret_cast<VkCommandBuffer>(1), reinterpret_cast<VkBuffer>(2), 16, 1024, 0x12345678);
     require(sequence == 9, "successive MFG scratch fills each receive both dependencies");
-    std::puts("Streamline NGX fill-buffer dependency checks passed");
+    first_use_barriers();
+    std::puts("Streamline NGX fill-buffer dependency and first-use layout checks passed");
 }

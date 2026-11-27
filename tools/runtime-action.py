@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 """Bounded public-API actions for a caller-owned, readiness-verified Runtime module.
 
 Usage: PID MODULE_BASE RUNTIME_DLL ACTION SHA256 [PATCH_JSON for apply].

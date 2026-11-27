@@ -18,6 +18,11 @@ typedef uint32_t rsf_sr_backend;
 #define RSF_SR_SPATIAL 6u
 /* Settings value, not a backend: let the host choose per GPU. Never reaches a session. */
 #define RSF_SR_AUTO 7u
+/* What a host passes as its SR choices when it has no limit of its own: every backend id and Auto.
+   The Runtime offers the ones this GPU, this package and the host's engine scaler serve. */
+#define RSF_SR_CHOICES_ALL                                                                         \
+    ((1u << RSF_SR_DLSS) | (1u << RSF_SR_FSR2) | (1u << RSF_SR_FSR3) | (1u << RSF_SR_FSR4) |       \
+     (1u << RSF_SR_XESS) | (1u << RSF_SR_SPATIAL) | (1u << RSF_SR_AUTO))
 
 typedef struct rsf_sr_session rsf_sr_session;
 typedef struct rsf_sr_session_setup {

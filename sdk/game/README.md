@@ -1,10 +1,16 @@
 # Game SDK
 
-The MIT-licensed native C ABI joins the orchestrator and game plugins. Current game ABI is **13**,
+The MIT-licensed native C ABI joins the orchestrator and game plugins. Current game ABI is **24**,
 defined in [game_api.h](include/rescaleframe/game_api.h). It includes executable recognition and
 `prepare`, `start`, `quiesce`, `stop` and `status` hooks. [game_renderer.h](include/rescaleframe/game_renderer.h)
 defines host services, CPU events and rendering callbacks; [game_frame.h](include/rescaleframe/game_frame.h)
-defines frame/camera records with its own ABI version 1.
+defines frame ABI 2 and camera ABI 1.
+
+Rust callers use the workspace crate `rsf-game-sys`. Its `build.rs` binds every public
+`rescaleframe/*.h` header outside the games and integrations (the list is
+`PUBLIC_INCLUDE_DIRS` in `tools/bindgen`) at build time, with compile-time Windows x64 size,
+alignment and field-offset checks. Other crates use these items instead of binding the headers
+again. The build needs libclang; see [docs/tooling.md](../../docs/tooling.md).
 
 Use fixed-width fields, `struct_size`, and ABI versions. Keep STL/Rust types and allocator ownership inside their DLLs. The header must compile as C and C++.
 
@@ -19,6 +25,4 @@ AC7 and Unity implement lifecycle/rendering paths; Project Wingman refuses prepa
 All three currently return `rendering_ready = 0`, even where individual deployed paths have user
 acceptance. Recognition is separate from capability and validation.
 
-See [current status](../../docs/current-status.md) and [contract fixtures](../../tests/plugin_contract.cpp).
-The ABI 2 sketches in the [representation plan](../../docs/representation-plan.md) are historical
-design, superseded by these headers.
+See [current status](../../docs/current-status.md) and [contract fixtures](../../tests/game-sdk/src/contract.rs).

@@ -67,8 +67,6 @@ RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create(const rsf_fgvk_setup*, rsf_fg
    providers/counts are refused. In the exceptional case of failed cleanup after
    partial creation, nonnull owner/chain outputs retain ownership for destroy
    retry even though this call fails. Never discard those retained outputs. */
-RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create_for_backend(const rsf_fgvk_setup*, uint32_t backend,
-    uint32_t generated_count, rsf_fgvk**, uint64_t* chain);
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_create_with_host(const rsf_fgvk_setup*, uint32_t backend,
     uint32_t generated_count, const rsf_fgvk_host_options*, rsf_fgvk**, uint64_t* chain);
 RSF_RUNTIME_API int32_t rsf_fgvk_images(rsf_fgvk*, uint32_t* count, uint64_t* images);
@@ -91,14 +89,16 @@ RSF_RUNTIME_API rsf_backend_result rsf_fgvk_latency_get_status(rsf_fgvk*, rsf_fg
    tonemapping before canvas. Inputs are leased until actual GPU completion. */
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_prepare(rsf_fgvk*, void* commands, const rsf_fgvk_frame*);
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_hudless(rsf_fgvk*, void* commands, const rsf_fgvk_frame*);
-/* Call only after a successful engine queue submission. This binds recorded
+/* Report recorded FG command buffers after a successful engine submission to
+   setup.queues[0], the queue used by graphics_submit. This binds recorded
    source identity to submitted work; recording alone never enables FG. */
 RSF_RUNTIME_API void rsf_fgvk_submitted(rsf_fgvk*, void* const* commands, uint32_t count);
 RSF_RUNTIME_API int32_t rsf_fgvk_present(rsf_fgvk*, const void* present_info);
 /* Present this output's copied identity, independently of newer prepared work.
-   The identity prefix through resource_generation is sufficient. A null/zero or
-   unmatched identity presents normally with interpolation disabled. Never falls
-   back to the latest source. Header/version errors return WSI initialization failure. */
+   The identity prefix through resource_generation is sufficient. If flags are present,
+   NO_FG and AMBIGUOUS_ID also disable interpolation. A null/zero or unmatched identity
+   presents normally with interpolation disabled. Never falls back to the latest source.
+   Header/version errors return WSI initialization failure. */
 RSF_RUNTIME_API int32_t rsf_fgvk_present_source(rsf_fgvk*, const void* present_info, const rsf_frame_record* identity);
 RSF_RUNTIME_API rsf_backend_result rsf_fgvk_get_status(rsf_fgvk*, rsf_fgvk_status*);
 /* Drain deferred SDK presentation and engine work before retiring engine views.

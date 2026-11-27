@@ -11,12 +11,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $taskRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'godot-artifacts.ps1')
-$taskLock = Get-Content -Raw -LiteralPath (Join-Path $taskRoot 'integrations/godot/dependencies.json') | ConvertFrom-Json
+$taskLock = Get-Content -Raw -LiteralPath (Join-Path $taskRoot 'eng/dependencies.json') | ConvertFrom-Json
 $taskEngine = Join-Path $taskRoot 'references/godot/engine'
-$taskSdk = Join-Path $taskRoot 'references/godot/fidelityfx-vulkan'
+$taskSdk = Join-Path $taskRoot $taskLock.vendor.fidelityfx_vulkan.path
 foreach ($taskInput in @(@{path=$taskEngine; revision=$taskLock.engine.revision}, @{path=$taskSdk; revision=$taskLock.vendor.fidelityfx_vulkan.revision})) {
     $taskRevision = & git -C $taskInput.path rev-parse HEAD
-    if ($LASTEXITCODE -ne 0 -or $taskRevision -ne $taskInput.revision) { throw 'Run eng/prepare-godot.ps1 to obtain the pinned sources.' }
+    if ($LASTEXITCODE -ne 0 -or $taskRevision -ne $taskInput.revision) { throw 'Run git submodule update --init --depth 1 and eng/prepare-godot.ps1 to obtain the pinned sources.' }
 }
 $taskHeaders = Join-Path $taskEngine 'thirdparty/vulkan/include'
 $taskHeaderChanges = & git -C $taskEngine status --porcelain -- thirdparty/vulkan/include
@@ -64,7 +64,7 @@ foreach ($taskFile in @('amd_fidelityfx_vk.dll','LICENSE.txt','sdk-LICENSE.txt',
     Copy-RsfGodotArtifact (Join-Path $taskOutput "runtime/$taskFile") (Join-Path $taskLocal "runtime/$taskFile")
 }
 & (Join-Path $taskRoot 'runtime/vulkan/streamline/build-sdk.ps1') -HostRoot $taskHost `
-    -SdkRoot (Join-Path $taskRoot 'references/godot/streamline') `
+    -SdkRoot (Join-Path $taskRoot $taskLock.vendor.streamline_source.path) `
     -OutputDirectory (Join-Path $taskHost 'artifacts/streamline-production-selected-device-reflex') `
     -Python (Join-Path $taskRoot '.local/godot/build-env/Scripts/python.exe')
 Write-Output 'Vulkan SR/FG/PCL payloads built. Run eng/build-godot.ps1 -StageRuntime to include them in the add-on.'

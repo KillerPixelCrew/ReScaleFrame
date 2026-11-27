@@ -1,9 +1,5 @@
 # Independent PCL and Reflex services
 
-Research history: findings, hook addresses and pending statuses below apply to their recorded
-experiments. Later increments can supersede earlier conclusions. See
-[current implementation and validation](../current-status.md) before using this as a feature list.
-
 30 September 2026, following FG foundation commit `38e5aaf`. This extends the reusable runtime;
 it does not install AC7 input hooks or claim measured physical latency.
 
@@ -32,7 +28,7 @@ Configuration/status are graphics-owner-thread operations; marker and begin use 
 
 ## Device experiment
 
-`tests/latency_host.cpp` creates a hidden 256x256 plain D3D12 chain, samples Space, updates a small
+`tests/generation/src/latency.rs` creates a hidden 256x256 plain D3D12 chain, samples Space, updates a small
 simulation value, renders a changing clear color, submits, presents and drains its queue for
 12 source frames. It marks the actual boundaries of that fixture. Logical IDs are
 `4294967297..4294967308`, deliberately above the SDK's 32-bit range. Reflex changes Off -> On -> Boost

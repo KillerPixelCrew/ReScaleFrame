@@ -124,7 +124,8 @@ typedef struct rsf_observer_options {
     /* Ignore anything narrower than this, which filters out the small targets that share a
        format with the one being looked for. */
     uint32_t minimum_width;
-    /* Upper bound on retained textures, so a misconfigured filter cannot hold the whole frame. */
+    /* Retained texture limit per device. Before the first Present the observer keeps
+       candidates for up to four recently observed devices. Present selects one inventory. */
     uint32_t capacity;
     /* Retain the most recent constant buffer of each distinct size in this range, so the view
        uniform data can be found and its layout checked against what engine source predicts.
@@ -190,11 +191,12 @@ typedef struct rsf_observer_status {
 } rsf_observer_status;
 
 /* Patch the shared vtables. Safe to call from a worker thread; not from DllMain, because it
-   creates a device. */
+   creates a device. Returns NOT_READY during a lifecycle change or from a creation callback. */
 rsf_observer_result rsf_observer_install(const rsf_observer_options* options);
 
 /* Restore entries/release retained resources after graphics producers are quiescent.
-   Returns NOT_READY while a Present callback/forwarding call is still in flight. */
+   Returns NOT_READY during another lifecycle change, from a creation callback, or while a
+   Present callback/forwarding call is still in flight. */
 rsf_observer_result rsf_observer_uninstall(void);
 
 /* Hand out the device the observer found, and its immediate context.

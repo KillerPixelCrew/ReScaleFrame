@@ -47,7 +47,10 @@ def main():
     groups, inputs = {}, []
     for path in sorted((args.capture / "frames").glob("*sr-*.json")):
         meta, image = capture.load_image(path)
-        groups.setdefault(meta["frame"], {})[meta["role"]] = (meta, image)
+        resources = groups.setdefault(meta["frame"], {})
+        if meta["role"] in resources:
+            raise ValueError(f"Multiple captures for frame {meta['frame']} role {meta['role']}")
+        resources[meta["role"]] = (meta, image)
         inputs.append({"file": path.name,
                        "metadata_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                        "raw_sha256": hashlib.sha256(path.with_suffix(".raw").read_bytes()).hexdigest()})
@@ -94,7 +97,7 @@ def main():
     if len(findings) != 4:
         raise ValueError("Expected four complete captured SR frames")
     report = {"scope": "CPU replay of pinned FSR2 2.3.3 reverse-depth motion selection; no GPU intermediate readback or quality acceptance",
-              "model_sdk_commit": "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55",
+              "model_sdk_commit": json.loads((Path(__file__).resolve().parents[1] / "eng/dependencies.json").read_text(encoding="utf-8"))["vendor"]["fidelityfx_vulkan"]["revision"],
               "model_source": "sdk/include/FidelityFX/gpu/fsr2/ffx_fsr2_reconstruct_dilated_velocity_and_previous_depth.h:FindNearestDepth",
               "capture": str(args.capture.resolve()), "inputs": inputs, "frames": findings}
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,4 @@
-"""Strict standalone FXC + MSVC + D3D11 execution. Writes only local evidence."""
+"""Strict standalone FXC + Rust + D3D11 execution. Writes only local evidence."""
 import argparse
 import importlib.util
 import json
@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / 'tools'))
 SPEC = importlib.util.spec_from_file_location('anomaly_temporal_shader', REPO / 'tools/anomaly_temporal_shader.py')
 assert SPEC is not None and SPEC.loader is not None
 TOOL = importlib.util.module_from_spec(SPEC)
@@ -20,8 +21,11 @@ def run_device(result, root):
     relative = root.relative_to(REPO / '.local/anomaly')
     if not relative.parts[0].startswith('core') or '..' in relative.parts:
         raise ValueError('device output must remain local to core evidence')
-    native = REPO / 'tests/anomaly_temporal_shader_device.cpp'
-    output = root / 'device.exe'
+    example = 'anomaly_temporal_shader_device'
+    target = 'x86_64-pc-windows-msvc'
+    fixture = REPO / 'games/anomaly/examples'
+    cargo_dir = root / 'cargo'
+    output = cargo_dir / target / 'release/examples' / (example + '.exe')
     configured = os.environ.get('RSF_VCVARS64')
     candidates = sorted(Path('C:/Program Files/Microsoft Visual Studio').glob('*/**/vcvars64.bat'), reverse=True)
     if configured:
@@ -30,12 +34,11 @@ def run_device(result, root):
         vcvars = str(candidates[0])
     else:
         raise RuntimeError('MSVC required; set RSF_VCVARS64')
-    command = ('call "' + vcvars + '" >nul && cl /nologo /EHsc /W4 /WX /std:c++20 "' + str(native) +
-               '" /Fo"' + str(root / 'device.obj') + '" /Fe"' + str(output) +
-               '" /link d3d11.lib d3dcompiler.lib dxgi.lib')
+    command = (f'call "{vcvars}" >nul && cargo build --locked --release -p rsf-anomaly '
+               f'--example {example} --target {target} --target-dir "{cargo_dir}"')
     build_script = root / 'build-device.cmd'
     build_script.write_text('@echo off\n' + command + '\n')
-    build = subprocess.run(['cmd.exe', '/d', '/c', str(build_script)], capture_output=True, text=True)
+    build = subprocess.run(['cmd.exe', '/d', '/c', str(build_script)], cwd=REPO, capture_output=True, text=True)
     (root / 'device-build.log').write_text(build.stdout + build.stderr)
     if build.returncode:
         raise RuntimeError(build.stdout + build.stderr)
@@ -52,10 +55,17 @@ def run_device(result, root):
     report = json.loads(run.stdout)
     expected_vs = sum(x['changed'] and x['stage'] == 'vs' for x in result['variants'])
     expected_ps = sum(x['changed'] and x['stage'] == 'ps' for x in result['variants'])
-    if (report['vs_checks'] != expected_vs * 2 or report['zero_motion_checks'] != expected_ps or
+    expected_ps_checks = sum(
+        3 if 'MSAA_ALPHATEST_DX10_0_ATOC=1' in x['defines'] or '_aref_' in x['shader'] else 1
+        for x in result['variants'] if x['changed'] and x['stage'] == 'ps'
+    )
+    if (report['vs_checks'] != expected_vs * 2 or report['ps_checks'] != expected_ps_checks or
+            report['zero_motion_checks'] != expected_ps or
             report['invalid_checks'] != expected_vs + expected_ps * 2):
         raise RuntimeError('device coverage counts do not match the FXC case list')
-    report.update({'native_fixture_sha256': TOOL.digest(native.read_bytes()), 'msvc_environment': vcvars,
+    sources = [fixture / (example + '.rs'), fixture / 'temporal_shader_device/mod.rs']
+    report.update({'native_fixture_sha256': TOOL.digest(b''.join(path.read_bytes() for path in sources)),
+                   'msvc_environment': vcvars,
                    'cache_namespace': result['cache_namespace'], 'runtime_ready': False,
                    'changed_vs_variants': expected_vs, 'changed_ps_variants': expected_ps})
     (root / 'device-report.json').write_text(json.dumps(report, indent=2) + '\n')

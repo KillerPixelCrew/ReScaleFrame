@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'common.ps1')
 $gameRoot = (Resolve-Path -LiteralPath $GameDirectory).Path
 if (-not (Test-Path -LiteralPath (Join-Path $gameRoot 'Ace7Game.exe') -PathType Leaf)) {
     throw 'GameDirectory must contain Ace7Game.exe.'
@@ -14,10 +15,6 @@ function Assert-GameStopped {
     if (Get-Process -Name Ace7Game -ErrorAction SilentlyContinue) {
         throw 'Close AC7 before deploying the proxy and overlay.'
     }
-}
-function Invoke-Checked([string]$Program, [string[]]$Arguments) {
-    & $Program @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "$Program failed with exit code $LASTEXITCODE" }
 }
 Assert-GameStopped
 Push-Location -LiteralPath $repoRoot
@@ -44,15 +41,14 @@ try {
     Copy-Item -LiteralPath (Join-Path $nativeBin 'rsf_overlay_host.exe') -Destination $overlayFixture
     Invoke-Checked $overlayFixture @($panel)
     Assert-GameStopped
-    # The overlay exposes FSR and XeSS; deploy their SR DLLs and notices too.
+    # The vendor runtimes and notices every game carries, FidelityFX's loader included.
     & (Join-Path $PSScriptRoot 'deploy-ac7-sr-runtimes.ps1') -GameDirectory $gameRoot
     $backup = Join-Path $repoRoot ('.local/deploy-backups/ac7-pair-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
     New-Item -ItemType Directory -Path $backup | Out-Null
     $files = @(
         @{ Name = 'dinput8.dll'; Source = $ac7Proxy },
         @{ Name = 'ReScaleFrame.Game.AC7.dll'; Source = (Join-Path $nativeBin 'ReScaleFrame.Game.AC7.dll') },
-        @{ Name = 'rescaleframe_overlay.dll'; Source = $panel },
-        @{ Name = 'MFG-Unlocker-LICENSE.txt'; Source = (Join-Path $repoRoot 'runtime/backends/dlss/third_party/mfg_unlocker/LICENSE') }
+        @{ Name = 'rescaleframe_overlay.dll'; Source = $panel }
     )
     foreach ($file in $files) {
         $destination = Join-Path $gameRoot $file.Name

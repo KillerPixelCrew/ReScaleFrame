@@ -35,7 +35,7 @@ The host chooses its backend quality from actual consumed dimensions, so it does
 a new vendor mode against old inputs while a change is pending. Brief native fallback while
 old submitted slots retire was observed, followed by accepted resized RSF output.
 
-New guarded entries (all exact1491.50; complete guard arrays remain in engine_settings.cpp):
+New guarded entries (all exact1491.50; complete guard arrays are in `games/rdr2/src/layout.rs`, module `asi`):
 
 | RVA | Purpose | Expected entry bytes |
 | --- | --- | --- |
@@ -1194,3 +1194,123 @@ advancing source frames. The dispatch detour now routes every caller and names t
 because a forwarding hook on the import slot would not return into `RDR2.exe`; that case was not
 observed. A menu-only run shows context creation without dispatch, which explains a session
 with an FSR2 carrier but no SR line. Image quality on Intel is not assessed.
+
+## Site discovery instead of build 13773296, 24 November 2026
+
+Question: can the ASI and the game plugin find every RDR2.exe site without accepting only Steam
+build 13773296, so an update that moves code keeps working and a real change still refuses?
+
+Approach: `games/rdr2/src/discovery.rs` holds one byte pattern per site, unique in the
+executable sections, with rel32 branches and RIP displacements as `??`. The ASI (ForceD3D12 at
+attach) copies the decrypted code sections of the loaded image once (unreadable pages stay zero)
+and resolves every pattern in one pass with the `rsf_game_sys::signature` scanner; the plugin takes
+that table (see the 25 November correction below). Each site's pattern is matched again in live
+memory before it is hooked, patched or called. The PE timestamp, SizeOfImage and file SHA-256 are
+logged and gate nothing; detection matches `RDR2.exe` by name. A missing, ambiguous or changed
+site refuses with its name ("RDR2 native sites refused: site 'scene blit' was not found."), and
+ForceD3D12, the settings hooks, the SR hooks and the scene producer refuse as they did for a
+foreign build.
+
+How the patterns were found: the code is encrypted on disk, so `tools/derive-site-patterns.py
+--mapped` ran on `dumps/rdr2-20261025/RDR2.exe.dump` (RVA equals offset, same PE timestamp as the
+installed executable). It grew the shortest unique pattern from each recorded RVA, or for a global
+from an instruction that addresses it. Three functions whose entries would need long,
+function-crossing patterns (latency mode, settings manager accessor, settings owner) are found
+through a distinctive call and their entries are checked separately.
+
+| Kind | Sites | How found |
+| --- | --- | --- |
+| Hooked or called entries | DLSS evaluate, queue pop, scene blit, frame marker, postfx output, latency sleep, Social Club dispatcher, seven settings hooks, settings find | pattern at the entry |
+| Through a call | latency mode, settings manager, settings owner | rel32 target of the call, entry pattern checked |
+| Return addresses | three postfx output calls, scene blit call, queue submit call, FSR2 wrapper call | pattern at the call; site = call + 5 |
+| API parameter | 4 reads, 1 global | each read matched at the site; all four must address the same global |
+| Globals | swapchain, TLS index, frame counter and pointer, frame time, render input/output sizes, renderer table | RIP-relative operand of a using instruction |
+| FSR2 import | 1 | `ffx_fsr2_api_x64.dll!ffxFsr2ContextDispatch` IAT slot from the import directory |
+| Native-texture accessor | 1 | renderer table + 0x318 (slot 99, documented offset), checked as `mov rax,[rdx+48]; ret` |
+| Research probes | camera FSR/DLSS upscale, settings bind/read, D3D12 result check | pattern at the entry, only with the `research` feature |
+
+The texture accessor's table: the earlier note named it "vtable+248". The pointer to `+26b4250`
+sits at `+362b4e8`, 0xf8 past `+362b3f0`, but no instruction addresses `+362b3f0`. The contiguous
+table of code pointers starts at `+362b1d0`, which one instruction loads (`lea rax,[rip+...]` at
+`+269a8b4`, followed by the store of the table into the object), so discovery uses that table and
+slot offset 0x318.
+
+Other modules: `ffx_fsr2_api_x64.dll` is now used through its two exports and their entry bytes
+only; its PE timestamp, image size and export RVAs no longer gate. `SocialClubD3D12Renderer.dll`'s
+frame entry and external-command-list gate are discovered in that module when the dispatcher
+first sees it. The gate pattern fixes `cmp byte [rcx+40C],0`, which the relay repeats, and the
+relay resumes at gate + 7.
+
+Evidence: `discovery::tests::every_site_resolves_in_the_decrypted_executable` (dump from
+`RSF_RDR2_DUMP` or the repository's `dumps/`, skipped without one) resolves all sites, with and
+without the `research` feature, to the RVAs recorded for 1.0.1491.50. It checks every entry
+pattern at its site, that the three postfx calls target the discovered output, and that the
+installed RDR2.exe is the dump's build. `social_club_sites_resolve_in_the_installed_renderer`
+finds `+4b70` and `+4b89` in the installed 2.4.0.240 renderer.
+
+Correction, 25 November 2026: the first game run refused at prepare ("site 'Social Club
+dispatcher' was not found", result -5) although the ASI had resolved every site. The plugin
+DLL has its own copy of the discovery table and scanned live code, but the ASI had by then
+replaced the first bytes of the seven settings entries and the Social Club dispatcher with
+MinHook's `jmp`, so their patterns no longer matched. The plugin now takes the ASI's table
+through the ASI's `rsf_rdr2_asi_sites` export (module definition `src/asi.def`) when its length
+equals the plugin's site list, and scans only without an ASI. `discovery::tests::
+the_plugin_takes_the_asi_table_over_hooked_entries` overwrites the eight hooked entries of the
+dump with a `jmp rel32`, shows the scan refusing by name, and checks the exported table and the
+plugin's verification of the sites it hooks itself.
+
+Social Club 2.4.0.302 (25 November 2026): the installed `SocialClubD3D12Renderer.dll` (PE size
+205,944 bytes, installed 4 November) has no `+4b70`/`+4b89` shape, so the backbuffer fix refuses
+by name ("site 'Social Club frame entry' was not found"). Read from disk with
+`tools/derive-site-patterns.py`'s image loader and capstone: the renderer interface vtable
+(`.rdata` +1f8b8: slot 0x20 initialize at `+4d50`, slot 0x48 at `+56a0`) now holds a frame
+function that reads the mode at `[rcx+1a0]`, takes the external command list in r8 (`mov rbp,r8`),
+returns early for mode 2 without a non-null rdx, then **unconditionally** loads the swapchain from
+`[rcx+10]` and calls `[rax+120]` (`IDXGISwapChain3::GetCurrentBackBufferIndex`) at `+56e9`, the
+only such call in the module. There is no `cmp byte [rcx+40c],0` selector, no index argument (r9
+and the stack argument are never read) and the swapchain is no longer at `+20`. That equals the
+2.4.0.240 behaviour with `+40c` set, the case run T measured as supplied index 1 against current
+index 0; the old gate cannot repair it because the game's index no longer reaches this function.
+Only 2.4.0.302 is installed here; no 2.4.0.240 copy exists to cross-check.
+
+Static follow-up on a 2.4.0.302 replacement for the gate (no code was written; the evidence stops
+short). Established from the installed files and the decrypted RDR2 dump:
+
+- RDR2's dispatcher (`RDR2+27f09e8`) passes nothing to Social Club: it tests `[this+8]` and calls
+  `(*[this+8])->vtable[1]()` with no arguments. Any index therefore reaches Social Club through a
+  callback Social Club makes into the game, not through the dispatcher.
+- The renderer object has no index state: the only writers in its vtable are the mode setters
+  (`+59f0` exchanges `[rcx+1a0]`, `+5a30` stores a byte at `[rcx+1a4]`, both only when
+  `[rcx+1bc]` is set), `+4b10` and `+4d50` are initializers, and `+56a0` reads no index
+  argument. So the single `call [rax+120]` at `+56e9` is the only place the index is chosen, and
+  a substitute value would have to come from RDR2 itself.
+- In socialclub.dll 2.4.0.302 the call into renderer slot `+48` sits in a command interpreter
+  (`+1e4888`, switch on the command byte at `[node+10]`) that passes `rdx = [node+8] + base` and
+  `r8` = the interpreter's own third argument, or zero when a process-wide byte is not one. So
+  the list reaches the renderer as r8; no index travels with it.
+
+Not established, and needed before a substitution can be built: (1) which socialclub.dll
+function receives the game's command list for external mode and whether it still calls the game's
+index callback (the 2.4.0.240 caller at `+d9390` read the list and index through game callbacks at
+vtable `+50` and `+58`); (2) RDR2's implementation of that index callback, that is the field or
+function holding the recording index at the moment the renderer runs, which is what a hook at
+`+56e9` would return; (3) whether that value is the same one the 2.4.0.240 relay used (run T saw
+supplied 1 against current 0). Without (2) a hook at `+56e9` has nothing correct to return.
+
+Startup cost and the loader lock: ForceD3D12 at ASI attach is the first owner that needs a site,
+so discovery runs in `DllMain` (`rsf_rdr2_asi_process_attach` -> `attach` -> `force_d3d12` ->
+`discovery::admit`) while the loader lock is held. Measured on the dump in a release build, it takes
+12 ms to copy the 73.6 MB of executable sections and about 100 ms to scan them, about 0.11 s in
+total. It only reads its own process (ReadProcessMemory) and computes; it neither waits on another
+thread nor loads a module, so it cannot deadlock. It delays other threads' module loads for that
+time. The previous exact-build attach already created and enabled MinHook hooks under the same
+lock. It cannot move: the ASI loader loads ASIs from inside the CRT's `GetSystemTimeAsFileTime`
+call, before `WinMain`, and the API parameter write and the settings hooks must be in place
+before the engine's settings load reads them. A worker thread cannot start until the lock is
+released and would then race the main thread to settings load, and `DllMain` cannot wait on it.
+Running later on the main thread would need a call between the loader's return and `WinMain`, but
+the entry point is Arxan-obfuscated (it jumps into the encrypted second `.text`), so none can be
+named without a game run.
+Uncertainty: discovery has not yet run in the game. The live copy of the decrypted sections at ASI
+attach and prepare, and every hook at a discovered address, need a game run. Patterns derived from
+one build are untested across an update until one ships.

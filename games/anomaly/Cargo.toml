@@ -1,0 +1,95 @@
+[package]
+name = "rsf-anomaly"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+# rlib so tests/game-sdk can use the observer records this crate binds.
+crate-type = ["staticlib", "rlib"]
+
+[features]
+# Tests and fixtures run on the two 1.5.3 builds' recorded profiles instead of discovering the running
+# executable's sites (src/discovery.rs). Every fixture feature enables it; the shipping plugin never does.
+recorded-profiles = []
+fg-fixture = ["recorded-profiles", "dep:rsf-test-support", "windows/Win32_Graphics_Dxgi"]
+input-hook-fixture = ["recorded-profiles"]
+overlay-device-fixture = [
+  "recorded-profiles",
+  "dep:rsf-test-support",
+  "windows/std",
+  "windows/Win32_Devices_HumanInterfaceDevice",
+  "windows/Win32_Graphics_Dxgi",
+  "windows/Win32_Graphics_Imaging",
+  "windows/Win32_System_Com",
+]
+motion-hooks-fixture = ["recorded-profiles"]
+motion-binder-fixture = ["recorded-profiles"]
+motion-device-fixture = [
+  "recorded-profiles",
+  "dep:rsf-test-support",
+  "windows/Win32_Graphics_Direct3D_Fxc",
+  "windows/Win32_Graphics_Dxgi",
+  "windows-sys/Win32_System_Kernel",
+]
+native-entry = []
+native-hook-fixture = ["recorded-profiles"]
+sr-fixtures = ["recorded-profiles", "dep:rsf-test-support", "windows/Win32_Graphics_Dxgi"]
+
+[dependencies]
+rsf-game-sys = { path = "../../sdk/game" }
+
+[target."cfg(windows)".dependencies]
+# The D3D11 state leaves the adapter's C leaves call. The archive carries them so a binary links one
+# Rust archive, not this one beside rsf-graphics' (both would define rsf-game-sys' exports).
+rsf-graphics = { path = "../../runtime/graphics/rust" }
+rsf-windows = { path = "../../integrations/windows" }
+# MinHook declarations; linked unbundled, so the CMake binaries keep their one `minhook` target.
+rsf-minhook-sys = { path = "../../third_party/minhook" }
+rsf-shader-compiler = { path = "../../runtime/shader_patch/compiler" }
+# The fixtures' D3D11 devices and WARP swap chain; absent from the shipping build.
+rsf-test-support = { path = "../../tests/support", optional = true }
+windows = { workspace = true, features = [
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi_Common",
+] }
+
+[target."cfg(windows)".dependencies.windows-sys]
+workspace = true
+features = [
+  "Win32_Foundation",
+  "Win32_Globalization",
+  "Win32_Graphics_Gdi",
+  "Win32_Security_Cryptography",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Performance",
+  "Win32_System_SystemInformation",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+  "Win32_System_WindowsProgramming",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+]
+
+[build-dependencies]
+rsf-bindgen = { path = "../../tools/bindgen" }
+
+[lints]
+workspace = true
+
+[target."cfg(windows)".dev-dependencies]
+# The device examples' D3D11 device helper.
+rsf-test-support = { path = "../../tests/support" }
+windows = { workspace = true, features = [
+  "std",
+  "Win32_Graphics_Direct3D_Fxc",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+] }

@@ -5,6 +5,30 @@ shader processing; adapters supply game rules, source acquisition and draw data.
 No game source or reconstructed shader bodies are distributed. This is a packaging
 rule, not a security subsystem. No game launch, deployment or commit is authorized.
 
+## Public DLL baseline for the Rust port
+
+The existing C++ service passed a CPU-only probe through
+`rsf_get_shader_patch_api`. The probe generated a small synthetic
+RSFPATCH pack with the existing pack builder and loaded System32
+D3DCompiler 47. It checked short and mismatched API tables, borrowed
+pack and root metadata, same-pack overlap, conflicting claims and
+last-close release, source and original bytecode proof, cache reuse,
+and truncated-pack refusal. The 676-byte variant matched the
+independently compiled patched source byte for byte.
+
+A separate process reopened a copy of the C++ cache. Its first
+prepare hit the cache and left the filename and DXBC hash unchanged.
+It also passed genuinely short four-byte records to the API query,
+root, prepare request, prepare output and counter calls. Each
+received the size refusal. The copied cache and reopen probe provide
+the compatibility check for existing artifacts after the Rust port.
+
+The probe retained the exact Runtime hash, pack, input sources,
+cache filename and DXBC hash under
+`.local/rust-1.94.1-verification/shader-patch-public-api-probe/`.
+The documented Anomaly source corpus was absent from this checkout.
+This run used synthetic source and no D3D device.
+
 ## Scope
 
 Implement Anomaly's X-Ray source path. DXBC rewriting is synthetic-tested only;
@@ -210,7 +234,9 @@ rule representations. Only actual client requirements can add these pieces later
 
 ## Implementation evidence, first milestone
 
-Source engine and API live under runtime/shader_patch/. The sole shipped rule
+Source engine and API live under runtime/shader_patch/. Since the Rust port, the
+owner is runtime/orchestrator/src/shader_patch.rs and only its native leaves stay in C++
+([port notes](rust-shader-patch.md)). The sole shipped rule
 representation is JSON in games/anomaly/patches/motion. Native output matches
 all 454 files of the Python merged output byte for byte, including skin clones,
 foliage clones, shared IO and hull/domain stages. There are 73 allowlisted roots,
@@ -244,7 +270,7 @@ RIP-relative LEA selects the includer vtable. Open begins 40534881ec40020000;
 Close begins 4883ec284885d274. The adapter checks these before creating a stack
 object containing that table. Source review establishes that the includer has no
 data members and ignores object state; the exact-build PE checks establish the
-selected functions. tests/anomaly_shader_provider_evidence.py verifies both files
+selected functions. tools/anomaly_shader_provider_evidence.py verifies both files
 and hashes without execution. No game call or runtime FS acquisition is claimed
 tested here. A source mismatch/provider failure leaves the shader stock.
 

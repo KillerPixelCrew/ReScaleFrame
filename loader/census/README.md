@@ -27,7 +27,7 @@ options.output_dir_utf8 = "C:\\captures\\rdr2-census";
 rsf_census_result r = rsf_census_install(&options); /* safe from DllMain */
 ```
 
-Link `ReScaleFrame::VendorCensus` (static, C++20, MSVC only) and call `rsf_census_install` as early as
+Link `ReScaleFrame::VendorCensus` (static, Rust with C11 platform leaves, MSVC only) and call `rsf_census_install` as early as
 the process allows. For RDR2 that is the ASI plugin's `DLL_PROCESS_ATTACH`, which runs during CRT
 startup after the image is decrypted.
 

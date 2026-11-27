@@ -39,21 +39,21 @@ internal sealed unsafe class XessFgRuntime : IDisposable, IDx12SharedRuntime
     {
         _module = module;
         _context = context;
-        _destroy = (delegate* unmanaged[Cdecl]<nint, int>)Export("VulkanStoryXessFgDestroyChecked");
-        _prepareDestroy = (delegate* unmanaged[Cdecl]<nint, int>)Export("VulkanStoryXessFgPrepareDestroy");
-        _lastCreateStage = NativeLibrary.TryGetExport(module, "VulkanStoryXessFgLastCreateStage", out nint stage)
+        _destroy = (delegate* unmanaged[Cdecl]<nint, int>)Export("rsf_vk_xess_fg_destroy_checked");
+        _prepareDestroy = (delegate* unmanaged[Cdecl]<nint, int>)Export("rsf_vk_xess_fg_prepare_destroy");
+        _lastCreateStage = NativeLibrary.TryGetExport(module, "rsf_vk_xess_fg_last_create_stage", out nint stage)
             ? (delegate* unmanaged[Cdecl]<nint>)stage : null;
-        _start = (delegate* unmanaged[Cdecl]<nint, nint, uint, uint, uint, int>)Export("VulkanStoryXessFgStart");
-        _setEnabled = (delegate* unmanaged[Cdecl]<nint, uint, int>)Export("VulkanStoryXessFgSetEnabled");
-        _setGeneratedFrames = (delegate* unmanaged[Cdecl]<nint, uint, uint*, uint*, int>)Export("VulkanStoryXessFgSetGeneratedFrames");
-        _setLatencyMode = (delegate* unmanaged[Cdecl]<nint, uint, uint, int>)Export("VulkanStoryXessFgSetLatencyMode");
-        _sleep = (delegate* unmanaged[Cdecl]<nint, uint, int>)Export("VulkanStoryXessFgSleep");
-        _marker = (delegate* unmanaged[Cdecl]<nint, uint, int, int>)Export("VulkanStoryXessFgMarker");
-        _createSharedImage = (delegate* unmanaged[Cdecl]<nint, uint, uint, uint, nint*, nint*, int>)Export("VulkanStoryXessFgCreateSharedImage");
-        _releaseImage = (delegate* unmanaged[Cdecl]<nint, void>)Export("VulkanStoryXessFgReleaseImage");
-        _createSharedFence = (delegate* unmanaged[Cdecl]<nint, nint*, int>)Export("VulkanStoryXessFgCreateSharedFence");
-        _present = (delegate* unmanaged[Cdecl]<nint, XessPresentationFrame*, uint*, int*, uint*, int>)Export("VulkanStoryXessFgPresent");
-        _waitIdle = (delegate* unmanaged[Cdecl]<nint, int>)Export("VulkanStoryXessFgWaitIdle");
+        _start = (delegate* unmanaged[Cdecl]<nint, nint, uint, uint, uint, int>)Export("rsf_vk_xess_fg_start");
+        _setEnabled = (delegate* unmanaged[Cdecl]<nint, uint, int>)Export("rsf_vk_xess_fg_set_enabled");
+        _setGeneratedFrames = (delegate* unmanaged[Cdecl]<nint, uint, uint*, uint*, int>)Export("rsf_vk_xess_fg_set_generated_frames");
+        _setLatencyMode = (delegate* unmanaged[Cdecl]<nint, uint, uint, int>)Export("rsf_vk_xess_fg_set_latency_mode");
+        _sleep = (delegate* unmanaged[Cdecl]<nint, uint, int>)Export("rsf_vk_xess_fg_sleep");
+        _marker = (delegate* unmanaged[Cdecl]<nint, uint, int, int>)Export("rsf_vk_xess_fg_marker");
+        _createSharedImage = (delegate* unmanaged[Cdecl]<nint, uint, uint, uint, nint*, nint*, int>)Export("rsf_vk_xess_fg_create_shared_image");
+        _releaseImage = (delegate* unmanaged[Cdecl]<nint, void>)Export("rsf_vk_xess_fg_release_image");
+        _createSharedFence = (delegate* unmanaged[Cdecl]<nint, nint*, int>)Export("rsf_vk_xess_fg_create_shared_fence");
+        _present = (delegate* unmanaged[Cdecl]<nint, XessPresentationFrame*, uint*, int*, uint*, int>)Export("rsf_vk_xess_fg_present");
+        _waitIdle = (delegate* unmanaged[Cdecl]<nint, int>)Export("rsf_vk_xess_fg_wait_idle");
     }
 
     private nint Export(string symbol) => NativeLibrary.GetExport(_module, symbol);
@@ -78,7 +78,7 @@ internal sealed unsafe class XessFgRuntime : IDisposable, IDx12SharedRuntime
             // cannot silently fall back to unchecked destruction.
             instance = new XessFgRuntime(module, 0);
             var create = (delegate* unmanaged[Cdecl]<PhysicalDevice, nint*, int>)
-                NativeLibrary.GetExport(module, "VulkanStoryXessFgCreateFromVulkan");
+                NativeLibrary.GetExport(module, "rsf_vk_xess_fg_create_from_vulkan");
             int result = create(vulkan.PhysicalDevice, &context);
             instance._context = context;
             if (result != 0 || context == 0)

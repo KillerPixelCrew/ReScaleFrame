@@ -1,0 +1,9 @@
+EXPORTS
+    rsf_get_game_plugin_api
+    rsf_unity_start
+    rsf_unity_fg_start
+    rsf_unity_sr_start
+    rsf_unity_sr_stop
+    rsf_unity_get_render_event
+    rsf_unity_get_event_id
+    rsf_unity_set_engine_spatial

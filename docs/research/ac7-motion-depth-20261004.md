@@ -1,9 +1,5 @@
 # AC7 motion and depth inputs, 4 October
 
-Research history: findings, hook addresses and pending statuses below apply to their recorded
-experiments. Later increments can supersede earlier conclusions. See
-[current implementation and validation](../current-status.md) before using this as a feature list.
-
 The question was what limits the motion and depth AC7 hands its upscalers after the native SR
 path settled, and which of the remaining gaps engine patches, shader work or 4.27 systems can
 close. The user also asked for the translucency hint buffers (`BiasCurrentColorHint`,
@@ -200,7 +196,9 @@ already composited into the SR input, while RR expects it to be left out.
   - The kernel restores compute state.
 - *The handover.* The plugin hands the texture over as `RSF_GAME_RENDER_CLOUD_DEPTH`. The
   runtime gives it to the next scene-colour translucency pass with the same rectangle and
-  otherwise discards it.
+  otherwise discards it. Since the Rust cutover the session must match too, and a composite
+  arriving after a frame's first translucency pass, before that view's SR pass, is refused as
+  late ([rust-native-translucency-cutover.md](rust-native-translucency-cutover.md)).
 - *The resolve.* Pixels without object velocity now reproject at the nearer of cloud and scene
   depth. The depth given to backends stays scene depth.
 - *Prerequisite.* The relay needs the device that TrueSky's depth producer relay recorded. If

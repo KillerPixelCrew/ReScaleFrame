@@ -6,11 +6,12 @@ shader expressions are obtained from the caller's pinned licensed local corpus.
 Shared v2p / pixel augmentation belongs to the independent core worker.
 """
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import re
 import shutil
+
+from anomaly_corpus import Refusal, corpus_hash, digest, tree
 
 REPO = Path(__file__).resolve().parents[1]
 CORPUS_SHA256 = "fdc260e0608f259d876c4ae0f11a6f2d8c03c001cf1fe82548794af1c6826a67"
@@ -18,10 +19,6 @@ OWNERS = ("deffer_tree_flat.vs", "deffer_tree_bump.vs",
           "deffer_tree_s_flat.vs", "deffer_tree_s_bump.vs",
           "deffer_detail_w_flat.vs", "deffer_detail_s_flat.vs")
 HEADER = REPO / "games/anomaly/shaders/foliage/rsf_anomaly_foliage.h"
-
-
-class Refusal(ValueError):
-    """The input is not the reviewed corpus or operation."""
 
 
 def entrypoint(text, name="main"):
@@ -48,18 +45,11 @@ def _read_corpus(source):
     for parent in (source, *source.parents):
         if parent.is_symlink() or parent.is_junction():
             raise Refusal("linked source")
-    blobs = {}
-    for path in sorted(source.rglob("*")):
-        if path.is_symlink() or path.is_junction():
-            raise Refusal("linked source")
-        if path.is_file():
-            blobs[path.relative_to(source).as_posix()] = path.read_bytes()
-    rows = [[key, hashlib.sha256(value).hexdigest()] for key, value in sorted(blobs.items())]
-    sha = hashlib.sha256(json.dumps(rows, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+    blobs = tree(source)
+    sha = corpus_hash(blobs)
     if len(blobs) != 449 or sha != CORPUS_SHA256:
         raise Refusal("foliage transformation requires pinned vanilla corpus")
     return blobs, sha
-
 
 def transform(source):
     return _transform(*_read_corpus(source))
@@ -120,11 +110,10 @@ def stage(source, destination):
     patches, report = _transform(originals, sha)
     report["abi"] = 1
     report["previous_valid_member"] = "rsf_valid"
-    report["tool_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    report["changed_files"] = [{"path": name, "sha256": hashlib.sha256(payload).hexdigest()}
+    report["tool_sha256"] = digest(Path(__file__).read_bytes())
+    report["changed_files"] = [{"path": name, "sha256": digest(payload)}
                                for name, payload in sorted(patches.items())]
-    report["cache_namespace"] = hashlib.sha256(
-        json.dumps(report, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    report["cache_namespace"] = digest(json.dumps(report, sort_keys=True, separators=(",", ":")).encode())
     created = False
     try:
         destination.mkdir(parents=True)

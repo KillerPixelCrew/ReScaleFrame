@@ -267,3 +267,49 @@ Both D3D11 bridge variants and RDR2 D3D12 host backends 1/3/4/5 passed with the
 release overlay. Foreground-game DLSS activity acceptance in the switch fixture
 was not run because Windows denied foreground ownership. No game deployment or
 new visual game acceptance is claimed.
+
+## Depth-mode color preservation
+
+A user reported a warm tint with Depth RCAS and Depth DAS. Both shaders
+could change channel ratios when Debug View was off. Depth RCAS mixed
+perceptually encoded RGB from adjacent pixels. Depth DAS applied a common
+gain in that encoded space, where the inverse nonlinear transform changes
+the ratio between channels. For example, a synthetic 10% gain in the
+working space changes linear G/R and B/R from 0.5 and 0.25 to 0.448541
+and 0.213294 for RGB (3.2, 1.6, 0.8).
+
+The shared depth-shader output step now decodes the filter candidate,
+uses its luminance as the target and applies one gain to the original
+linear RGB. The same synthetic calculation restores both ratios while
+preserving the candidate's luminance. The gain respects the original
+local HDR channel ranges. Explicit output clamping clips each decoded
+channel, as the C++ shaders did. The shader retains alpha, and Debug View still shows
+the selected diagnostics. The source preamble is shared by the D3D11 and
+D3D12 builds and by the Vulkan SPIR-V generator.
+
+FXC compiled both depth shaders as `cs_5_0` with warnings treated as
+errors. DXC and `spirv-val` regenerated and validated the Vulkan variants.
+The D3D11 regression fixture adds a colored HDR ramp and a colored clamp
+case. All three device fixtures built in MSVC Debug and Release, and
+four CPU contracts passed per configuration.
+
+The merged MSVC Release build at `58fe95acdca6` passed all three offscreen
+device fixtures. D3D11 passed 16 dispatches, including the colored HDR ramp
+and clamp cases that check channel ratios and alpha for both depth modes.
+D3D12 passed 21 dispatches with zero debug messages. Vulkan passed 30
+dispatches on an RTX 4070 Laptop GPU. Fixture hashes and the CTest transcript
+are in `.local/anomaly/staging/58fe95acdca6/device-evidence/`.
+The [C++ adapter baseline](rust-anomaly-cpp-baseline.md) records a fixed-view
+comparison of the three modes in Anomaly. The merged Rust adapter also
+switched live among RCAS, Depth RCAS and Depth DAS in the same indoor
+view at sharpness 0.75, with Clamp Output enabled for the depth modes
+and Debug View off. The observed view showed no visible warm shift
+between modes. The panel saved all three changes while DLSS-G stayed
+active. The device ramp supplies the channel-ratio measurement.
+
+That indoor view had no channel above one. Outdoors, with Clamp Output
+on, the depth modes turned blue sky grey. The clamp then scaled each
+pixel by its brightest channel, so a sky pixel with blue at 2.5 kept 40%
+of its luminance. The output step clips each channel again, as the C++
+shaders did. Clamp Output still clips HDR highlights by design, so it
+stays off by default.

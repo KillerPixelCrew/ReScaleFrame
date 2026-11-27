@@ -10,11 +10,10 @@ recorded acceptance from plans and the published SR-only AC7 package.
 | Component | Owns |
 | --- | --- |
 | Launcher or WSGM, planned | Game selection, profile storage, early loading, session lifetime |
-| Bootstrap, currently version-only | Intended general runtime-loading entry point |
 | Current carriers | AC7 DirectInput entry and Unity version shim; runtime/plugin loading |
 | Orchestrator | Plugin lifecycle, vendor SDKs, resources, settings, latency and presentation |
 | Game plugin | Build recognition, engine hooks, frame data and SR reinsertion |
-| Game SDK | Versioned C contract, currently game ABI 13, with leased native resources |
+| Game SDK | Versioned C contract (`sdk/game/include/rescaleframe/game_api.h` holds the current ABI version), with leased native resources |
 | egui | Settings intents, effective status and FPS display; inspection/capture expansion planned |
 
 First-party components share a repository and release version. C interfaces keep ownership explicit.
@@ -38,6 +37,19 @@ Full-resolution widgets are not proof of a compositable FG UI layer. Current sou
 native family colour before Slate as an optional guide, retaining unclassified-UI fallback.
 Unity's SDR pre-UI hook captures completed colour after post-processing; HDR refuses that guide path.
 Neither route establishes every provider's moving-scene/HUD quality.
+
+## Retained native code
+
+The Rust crates own the runtime; native C remains only where Rust cannot express the work: MinHook
+calls, COM calls on vendor objects, and guards for foreign C++ exceptions. MSVC raises a C++ throw
+as SEH code `0xE06D7363`, so each C11 guard is a `__try` whose filter accepts only that code, the
+filter `runtime/orchestrator/src/plugin_callbacks.c` uses for what a `catch (...)` stopped under
+`/EHsc`. Access violations and other faults still propagate to the caller. A Rust panic is also
+raised as `0xE06D7363` on MSVC, so panics stay contained. Scopes that C++ destructors closed on
+unwind use `__try/__finally`. One guard deliberately keeps `EXCEPTION_EXECUTE_HANDLER`: the Wingman
+`acquire_texture` engine/COM probe, which treats any fault as "no texture". Moving the Wingman report
+and the D3D11 observer COM calls into Rust was considered and rejected: they are single vendor-vtable
+calls whose only purpose is to sit inside the exception frame.
 
 ## Backends and frontends
 

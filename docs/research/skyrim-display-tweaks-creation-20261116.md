@@ -5,6 +5,10 @@ successfully but refuse RSF start, and which creation boundary preserves both
 mods? This audit uses the installed shipped binary and matching Address Library;
 the old `references/skyrim-display-tweaks` checkout is0.5.12 and was used only
 as a search lead. No reference code was copied.
+
+Since 2026-11-24 the module RVAs below are those of the researched 0.5.25 build only: the wrapper,
+its call of the retained thunk and the retained slot are discovered by signature in the loaded
+module (`games/skyrim-se/src/discovery.rs`) and the file SHA-256 is logged, not compared.
 The game is SkyrimSE1.7.104, SHA256
 `846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f`.
 

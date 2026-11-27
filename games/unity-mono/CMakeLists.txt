@@ -1,8 +1,18 @@
-set(RSF_UNITY_NATIVE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/unity-native/include" CACHE PATH
-    "Unity native-plugin headers; untracked, see docs/dependencies.md")
-add_library(rsf_game_unity_mono SHARED src/plugin.cpp src/bridge.cpp src/mono_runtime.cpp src/runtime_host.cpp src/runtime_config.cpp)
-target_include_directories(rsf_game_unity_mono PRIVATE include)
-target_link_libraries(rsf_game_unity_mono PRIVATE ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon rsf_build_options)
+# The plugin archive bundles the shared Unity bridge state (rsf-unity, its mono-plugin subset).
+rsf_add_rust_static(rsf_unity_mono_plugin_rust rsf_rust_unity_mono_plugin rsf-unity-mono rsf_unity_mono)
+add_library(rsf_game_unity_mono SHARED src/plugin.def ../../integrations/unity/native/render_bridge.c)
+set(unity_mono_exports rsf_get_game_plugin_api rsf_unity_start rsf_unity_fg_start rsf_unity_sr_start rsf_unity_sr_stop
+    rsf_unity_get_render_event rsf_unity_get_event_id rsf_unity_set_engine_spatial)
+foreach(symbol IN LISTS unity_mono_exports)
+    if(MSVC)
+        target_link_options(rsf_game_unity_mono PRIVATE "LINKER:/INCLUDE:${symbol}")
+    elseif(MINGW)
+        target_link_options(rsf_game_unity_mono PRIVATE "LINKER:--undefined=${symbol}")
+    endif()
+endforeach()
+target_include_directories(rsf_game_unity_mono PRIVATE ../../integrations/unity/include)
+# minhook: the archive's rsf-windows hooks link the adapter's own MinHook instance.
+target_link_libraries(rsf_game_unity_mono PRIVATE rsf_unity_mono_plugin_rust ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon minhook rsf_build_options)
 target_link_libraries(rsf_game_unity_mono PRIVATE rsf_orchestrator)
 target_compile_definitions(rsf_game_unity_mono PRIVATE RSF_GAME_UNITY_HOST_BUILD _CRT_SECURE_NO_WARNINGS)
 if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")

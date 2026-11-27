@@ -1,0 +1,470 @@
+// SPDX-License-Identifier: MIT
+use super::Ids;
+use super::hooks::{bind_named, rsf_census_hook_original};
+use super::json::Json;
+use super::memory::{read, u32_at, u64_at};
+use super::platform;
+use super::session::{Call, rsf_census_active};
+use super::stats::{
+    rsf_census_present_enter, rsf_census_present_leave, rsf_census_stats_queue_describe,
+    rsf_census_stats_queue_submit,
+};
+use crate::sys::*;
+use std::ffi::{CStr, c_char, c_void};
+use std::mem::MaybeUninit;
+use std::ptr::null_mut;
+
+type Handle = *mut c_void;
+type Info = *const c_void;
+type VkResult = i32;
+type Entry = rsf_census_vk_entry;
+const COUNT: usize = RSF_CENSUS_VK_COUNT as usize;
+const VULKAN_QUEUE: u8 = 2;
+
+static IDS: Ids<COUNT> = Ids::new();
+
+fn id(entry: Entry) -> u16 {
+    IDS.get(entry as usize)
+}
+
+fn read_name(source: u64, output: &mut [u8; 96]) -> bool {
+    unsafe {
+        platform().read_string.unwrap()(source as _, output.as_mut_ptr().cast(), output.len())
+    }
+}
+
+fn name_list(json: &mut Json<'_>, key: &CStr, names: u64, count: u32) {
+    json.open(Some(key), b'[');
+    for index in 0..count.min(96) as usize {
+        let Some(entry) = read::<8>(names, index * 8) else {
+            break;
+        };
+        let mut name = [0; 96];
+        if !read_name(u64::from_le_bytes(entry), &mut name) {
+            break;
+        }
+        if let Ok(name) = CStr::from_bytes_until_nul(&name) {
+            json.text(None, name);
+        }
+    }
+    json.close(b']');
+}
+
+fn proc_addr(entry: Entry, caller: Handle, handle: Handle, name: *const c_char) -> Handle {
+    let original = original!(
+        entry,
+        unsafe extern "system" fn(Handle, *const c_char) -> Handle
+    );
+    let mut storage = MaybeUninit::uninit();
+    let mut record = Call::begin(&mut storage, id(entry), caller);
+    let mut copied_name = [0; 96];
+    let have_name = read_name(name as u64, &mut copied_name);
+    let result = original.map_or(null_mut(), |call| unsafe { call(handle, name) });
+    if let Some(mut json) = record.json() {
+        json.hex(Some(c"handle"), handle as u64);
+        if let Ok(name) = CStr::from_bytes_until_nul(&copied_name) {
+            json.text(Some(c"name"), name);
+        }
+        json.hex(Some(c"result"), result as u64);
+    }
+    record.finish(result as u64);
+    if !result.is_null() && have_name {
+        CStr::from_bytes_until_nul(&copied_name)
+            .ok()
+            .and_then(|name| bind_named(c"vulkan", name, result))
+            .unwrap_or(result)
+    } else {
+        result
+    }
+}
+
+#[inline(never)]
+extern "system" fn get_instance_proc(instance: Handle, name: *const c_char) -> Handle {
+    proc_addr(RSF_CENSUS_VkGetInstanceProcAddr, caller!(), instance, name)
+}
+
+#[inline(never)]
+extern "system" fn get_device_proc(device: Handle, name: *const c_char) -> Handle {
+    proc_addr(RSF_CENSUS_VkGetDeviceProcAddr, caller!(), device, name)
+}
+
+fn instance_info(json: &mut Json<'_>, info: Info) {
+    let Some(info) = read::<64>(info as u64, 0) else {
+        json.raw(c"create_info_unreadable", c"true");
+        return;
+    };
+    if let Some(app) = read::<48>(u64_at(&info, 24), 0) {
+        for (key, offset) in [(c"application", 16), (c"engine", 32)] {
+            let mut name = [0; 96];
+            if read_name(u64_at(&app, offset), &mut name)
+                && let Ok(name) = CStr::from_bytes_until_nul(&name)
+            {
+                json.text(Some(key), name);
+            }
+        }
+        json.hex(Some(c"application_version"), u32_at(&app, 24).into());
+        json.hex(Some(c"engine_version"), u32_at(&app, 40).into());
+        let api = u32_at(&app, 44);
+        json.number(Some(c"api_major"), (api >> 22) & 0x7f);
+        json.number(Some(c"api_minor"), (api >> 12) & 0x3ff);
+    }
+    name_list(json, c"layers", u64_at(&info, 40), u32_at(&info, 32));
+    name_list(json, c"extensions", u64_at(&info, 56), u32_at(&info, 48));
+}
+
+#[inline(never)]
+extern "system" fn create_instance(info: Info, allocator: Info, out: *mut Handle) -> VkResult {
+    let entry = RSF_CENSUS_VkCreateInstance;
+    let caller = caller!();
+    let original = original!(
+        entry,
+        unsafe extern "system" fn(Info, Info, *mut Handle) -> VkResult
+    );
+    let mut storage = MaybeUninit::uninit();
+    let mut record = Call::begin(&mut storage, id(entry), caller);
+    if let Some(mut json) = record.json() {
+        instance_info(&mut json, info);
+    }
+    let result = original.map_or(0, |call| unsafe { call(info, allocator, out) });
+    if let Some(mut json) = record.json() {
+        json.output(c"instance", out as u64);
+    }
+    record.finish(u64::from(result as u32));
+    result
+}
+
+fn device_info(json: &mut Json<'_>, physical: Handle, info: Info) {
+    json.hex(Some(c"physical_device"), physical as u64);
+    let Some(info) = read::<72>(info as u64, 0) else {
+        json.raw(c"create_info_unreadable", c"true");
+        return;
+    };
+    json.open(Some(c"queue_families"), b'[');
+    for index in 0..u32_at(&info, 20).min(16) as usize {
+        let Some(queue) = read::<40>(u64_at(&info, 24), index * 40) else {
+            break;
+        };
+        json.open(None, b'{');
+        json.number(Some(c"family"), u32_at(&queue, 20));
+        json.number(Some(c"count"), u32_at(&queue, 24));
+        json.close(b'}');
+    }
+    json.close(b']');
+    name_list(json, c"layers", u64_at(&info, 40), u32_at(&info, 32));
+    name_list(json, c"extensions", u64_at(&info, 56), u32_at(&info, 48));
+}
+
+#[inline(never)]
+extern "system" fn create_device(
+    physical: Handle,
+    info: Info,
+    allocator: Info,
+    out: *mut Handle,
+) -> VkResult {
+    let entry = RSF_CENSUS_VkCreateDevice;
+    let caller = caller!();
+    let original = original!(
+        entry,
+        unsafe extern "system" fn(Handle, Info, Info, *mut Handle) -> VkResult
+    );
+    let mut storage = MaybeUninit::uninit();
+    let mut record = Call::begin(&mut storage, id(entry), caller);
+    if let Some(mut json) = record.json() {
+        device_info(&mut json, physical, info);
+    }
+    let result = original.map_or(0, |call| unsafe { call(physical, info, allocator, out) });
+    if let Some(mut json) = record.json() {
+        json.output(c"device", out as u64);
+    }
+    record.finish(u64::from(result as u32));
+    result
+}
+
+#[inline(never)]
+extern "system" fn get_queue(device: Handle, family: u32, index: u32, out: *mut Handle) {
+    let caller = caller!();
+    let entry = RSF_CENSUS_VkGetDeviceQueue;
+    let original = original!(
+        entry,
+        unsafe extern "system" fn(Handle, u32, u32, *mut Handle)
+    );
+    let mut storage = MaybeUninit::uninit();
+    let mut record = Call::begin(&mut storage, id(entry), caller);
+    if let Some(mut json) = record.json() {
+        json.hex(Some(c"device"), device as u64);
+        json.number(Some(c"family"), family);
+        json.number(Some(c"index"), index);
+    }
+    if let Some(call) = original {
+        unsafe { call(device, family, index, out) };
+    }
+    if let Some(mut json) = record.json() {
+        json.output(c"queue", out as u64);
+    }
+    if let Some(queue) = get_queue_handle(out) {
+        describe_queue(queue, family, index);
+    }
+    record.finish(0);
+}
+
+fn get_queue_handle(out: *mut Handle) -> Option<Handle> {
+    read::<8>(out as u64, 0)
+        .map(u64::from_le_bytes)
+        .filter(|&queue| queue != 0)
+        .map(|queue| queue as Handle)
+}
+
+fn describe_queue(queue: Handle, family: u32, index: u32) {
+    if rsf_census_active() {
+        rsf_census_stats_queue_describe(VULKAN_QUEUE, queue, family, index, 0);
+    }
+}
+
+#[inline(never)]
+extern "system" fn get_queue2(device: Handle, info: Info, out: *mut Handle) {
+    let entry = RSF_CENSUS_VkGetDeviceQueue2;
+    let caller = caller!();
+    let original = original!(entry, unsafe extern "system" fn(Handle, Info, *mut Handle));
+    let mut storage = MaybeUninit::uninit();
+    let mut record = Call::begin(&mut storage, id(entry), caller);
+    if let Some(mut json) = record.json() {
+        json.hex(Some(c"device"), device as u64);
+        if let Some(info) = read::<32>(info as u64, 0) {
+            json.number(Some(c"family"), u32_at(&info, 20));
+            json.number(Some(c"index"), u32_at(&info, 24));
+        }
+    }
+    if let Some(call) = original {
+        unsafe { call(device, info, out) };
+    }
+    if let Some(mut json) = record.json() {
+        json.output(c"queue", out as u64);
+    }
+    if let Some(queue) = get_queue_handle(out)
+        && let Some(info) = read::<32>(info as u64, 0)
+    {
+        describe_queue(queue, u32_at(&info, 20), u32_at(&info, 24));
+    }
+    record.finish(0);
+}
+
+fn sum_submit<const STRIDE: usize>(info: Info, count: u32, offsets: [usize; 3]) -> [u32; 3] {
+    let mut totals = [0u32; 3];
+    for index in 0..count.min(16) as usize {
+        let Some(batch) = read::<STRIDE>(info as u64, index * STRIDE) else {
+            break;
+        };
+        for (total, offset) in totals.iter_mut().zip(offsets) {
+            *total = total.wrapping_add(u32_at(&batch, offset));
+        }
+    }
+    totals
+}
+
+fn submit(
+    entry: Entry,
+    caller: Handle,
+    queue: Handle,
+    count: u32,
+    info: Info,
+    fence: u64,
+) -> VkResult {
+    let original = original!(
+        entry,
+        unsafe extern "system" fn(Handle, u32, Info, u64) -> VkResult
+    );
+    let mut storage = MaybeUninit::uninit();
+    let mut record = Call::begin(&mut storage, id(entry), caller);
+    if let Some(mut json) = record.json() {
+        json.hex(Some(c"queue"), queue as u64);
+        json.number(Some(c"batches"), count);
+        json.hex(Some(c"fence"), fence);
+        let [commands, waits, signals] = if entry == RSF_CENSUS_VkQueueSubmit {
+            sum_submit::<72>(info, count, [40, 16, 56])
+        } else {
+            sum_submit::<64>(info, count, [32, 20, 48])
+        };
+        json.number(Some(c"command_buffers_in_first_16"), commands);
+        json.number(Some(c"wait_semaphores"), waits);
+        json.number(Some(c"signal_semaphores"), signals);
+    }
+    let result = original.map_or(0, |call| unsafe { call(queue, count, info, fence) });
+    if rsf_census_active() {
+        rsf_census_stats_queue_submit(VULKAN_QUEUE, queue, count);
+    }
+    record.finish(u64::from(result as u32));
+    result
+}
+
+#[inline(never)]
+extern "system" fn queue_submit(queue: Handle, count: u32, info: Info, fence: u64) -> VkResult {
+    submit(
+        RSF_CENSUS_VkQueueSubmit,
+        caller!(),
+        queue,
+        count,
+        info,
+        fence,
+    )
+}
+
+#[inline(never)]
+extern "system" fn queue_submit2(queue: Handle, count: u32, info: Info, fence: u64) -> VkResult {
+    submit(
+        RSF_CENSUS_VkQueueSubmit2,
+        caller!(),
+        queue,
+        count,
+        info,
+        fence,
+    )
+}
+
+#[inline(never)]
+extern "system" fn queue_submit2_khr(
+    queue: Handle,
+    count: u32,
+    info: Info,
+    fence: u64,
+) -> VkResult {
+    submit(
+        RSF_CENSUS_VkQueueSubmit2KHR,
+        caller!(),
+        queue,
+        count,
+        info,
+        fence,
+    )
+}
+
+fn present_info(json: &mut Json<'_>, queue: Handle, info: Info) {
+    json.hex(Some(c"queue"), queue as u64);
+    if let Some(info) = read::<64>(info as u64, 0) {
+        let count = u32_at(&info, 32);
+        json.number(Some(c"wait_semaphores"), u32_at(&info, 16));
+        json.number(Some(c"swapchain_count"), count);
+        json.open(Some(c"swapchains"), b'[');
+        for index in 0..count.min(4) as usize {
+            let Some(chain) = read::<8>(u64_at(&info, 40), index * 8) else {
+                break;
+            };
+            json.hex(None, u64::from_le_bytes(chain));
+        }
+        json.close(b']');
+        json.open(Some(c"image_indices"), b'[');
+        for index in 0..count.min(4) as usize {
+            let Some(image) = read::<4>(u64_at(&info, 48), index * 4) else {
+                break;
+            };
+            json.number(None, u32::from_le_bytes(image));
+        }
+        json.close(b']');
+    }
+}
+
+#[inline(never)]
+extern "system" fn queue_present(queue: Handle, info: Info) -> VkResult {
+    let entry = RSF_CENSUS_VkQueuePresentKHR;
+    let caller = caller!();
+    let original = original!(entry, unsafe extern "system" fn(Handle, Info) -> VkResult);
+    rsf_census_present_enter(false);
+    let mut storage = MaybeUninit::uninit();
+    let mut record = Call::begin(&mut storage, id(entry), caller);
+    if let Some(mut json) = record.json() {
+        present_info(&mut json, queue, info);
+    }
+    let result = original.map_or(0, |call| unsafe { call(queue, info) });
+    record.finish(u64::from(result as u32));
+    rsf_census_present_leave();
+    result
+}
+
+fn swapchain_info(json: &mut Json<'_>, device: Handle, info: Info) {
+    json.hex(Some(c"device"), device as u64);
+    let Some(info) = read::<104>(info as u64, 0) else {
+        json.raw(c"create_info_unreadable", c"true");
+        return;
+    };
+    json.hex(Some(c"surface"), u64_at(&info, 24));
+    for (name, offset) in [
+        (c"min_image_count", 32),
+        (c"image_format", 36),
+        (c"image_color_space", 40),
+        (c"width", 44),
+        (c"height", 48),
+        (c"array_layers", 52),
+    ] {
+        json.number(Some(name), u32_at(&info, offset));
+    }
+    json.hex(Some(c"image_usage"), u32_at(&info, 56).into());
+    json.number(Some(c"sharing_mode"), u32_at(&info, 60));
+    json.hex(Some(c"pre_transform"), u32_at(&info, 80).into());
+    json.hex(Some(c"composite_alpha"), u32_at(&info, 84).into());
+    let mode = u32_at(&info, 88);
+    const MODES: [&CStr; 4] = [c"IMMEDIATE", c"MAILBOX", c"FIFO", c"FIFO_RELAXED"];
+    json.number(Some(c"present_mode"), mode);
+    json.text(
+        Some(c"present_mode_name"),
+        MODES.get(mode as usize).copied().unwrap_or(c"other"),
+    );
+    json.raw(
+        c"clipped",
+        if u32_at(&info, 92) != 0 {
+            c"true"
+        } else {
+            c"false"
+        },
+    );
+    json.hex(Some(c"old_swapchain"), u64_at(&info, 96));
+}
+
+#[inline(never)]
+extern "system" fn create_swapchain(
+    device: Handle,
+    info: Info,
+    allocator: Info,
+    out: *mut u64,
+) -> VkResult {
+    let entry = RSF_CENSUS_VkCreateSwapchainKHR;
+    let caller = caller!();
+    let original = original!(
+        entry,
+        unsafe extern "system" fn(Handle, Info, Info, *mut u64) -> VkResult
+    );
+    let mut storage = MaybeUninit::uninit();
+    let mut record = Call::begin(&mut storage, id(entry), caller);
+    if let Some(mut json) = record.json() {
+        swapchain_info(&mut json, device, info);
+    }
+    let result = original.map_or(0, |call| unsafe { call(device, info, allocator, out) });
+    if let Some(mut json) = record.json()
+        && let Some(chain) = read::<8>(out as u64, 0)
+    {
+        json.hex(Some(c"swapchain"), u64::from_le_bytes(chain));
+    }
+    record.finish(u64::from(result as u32));
+    result
+}
+
+pub(super) unsafe fn rsf_census_vk_bind(ids: &[u16; COUNT], wrappers: &mut [Handle; COUNT]) {
+    IDS.bind(ids);
+    let entries: [(Entry, Handle); COUNT] = [
+        (
+            RSF_CENSUS_VkGetInstanceProcAddr,
+            get_instance_proc as Handle,
+        ),
+        (RSF_CENSUS_VkGetDeviceProcAddr, get_device_proc as Handle),
+        (RSF_CENSUS_VkCreateInstance, create_instance as Handle),
+        (RSF_CENSUS_VkCreateDevice, create_device as Handle),
+        (RSF_CENSUS_VkGetDeviceQueue, get_queue as Handle),
+        (RSF_CENSUS_VkGetDeviceQueue2, get_queue2 as Handle),
+        (RSF_CENSUS_VkQueueSubmit, queue_submit as Handle),
+        (RSF_CENSUS_VkQueueSubmit2, queue_submit2 as Handle),
+        (RSF_CENSUS_VkQueueSubmit2KHR, queue_submit2_khr as Handle),
+        (RSF_CENSUS_VkQueuePresentKHR, queue_present as Handle),
+        (RSF_CENSUS_VkCreateSwapchainKHR, create_swapchain as Handle),
+    ];
+    for (index, wrapper) in entries {
+        wrappers[index as usize] = wrapper;
+    }
+}

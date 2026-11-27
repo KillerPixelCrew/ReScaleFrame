@@ -63,6 +63,7 @@ extern "C" {
 /* DLSS requires an early shared rsf_slvk_initialize session with DLSS SR
    selected. Its inputs must support transfer-source usage; depth is R32F.
    Only one DLSS SR owner is admitted per SDK session, on viewport one. */
+// On failure a non-null output is cleanup-only. Retain it until rsf_srvk_destroy succeeds.
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_create(const rsf_srvk_setup*, rsf_srvk**);
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_plan(const rsf_srvk*, uint32_t* width, uint32_t* height);
 /* DLSS model request, applied on subsequent evaluations. The owner serializes
@@ -71,10 +72,11 @@ RSF_RUNTIME_API rsf_backend_result rsf_srvk_dlss_preset(rsf_srvk*, uint32_t pres
 /* Inputs: SHADER_READ_ONLY_OPTIMAL. Engine output: TRANSFER_DST_OPTIMAL. SDK
    output is private and reaches the engine only after an accepted dispatch.
    The owner serializes calls, leases images until GPU completion, and submits
-   this command buffer even on failure, or retires the context instead of reuse.
+   command buffers in recording order, including this buffer on failure, or
+   retires the context instead of reuse.
    Drain all referencing GPU work before destroy. This API never submits a queue.
-   RSF_VULKAN_FRAME_CAPTURE_DIR enables bounded readbacks, flushed at drained
-   destruction. FIRST/COUNT use the RSF_FRAME_CAPTURE_* variables (at most 16).
+   RSF_VULKAN_FRAME_CAPTURE_DIR enables bounded readbacks, flushed after the
+   owner's completion proof. FIRST/COUNT use the RSF_FRAME_CAPTURE_* variables (at most 16).
    Capturing an input requires copy_source and the corresponding image usage. */
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk*, void* command_buffer, const rsf_srvk_frame*);
 /* Spatial failure recovery, independent of an SDK context. Both images are
@@ -85,7 +87,8 @@ RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk*, void* command_bu
    completion, and retains the original SR failure in its provider status. */
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_spatial_fallback(const rsf_srvk_fallback*);
 /* Call only after GPU completion and reset of every prior use of commands.
-   Releases borrowed views and makes its per-recording UBO/descriptor slots reusable. */
+   Releases borrowed views, makes per-recording UBO/descriptor slots reusable
+   and retires readbacks recorded on this command buffer. */
 RSF_RUNTIME_API void rsf_srvk_retire_commands(rsf_srvk*, void* commands);
 /* Failure preserves the context and its module/resources for a later retry. */
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_destroy(rsf_srvk*);

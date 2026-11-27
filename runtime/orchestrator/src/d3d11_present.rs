@@ -1,0 +1,3881 @@
+// SPDX-License-Identifier: MIT
+// Shared D3D11/native D3D12 presentation owner and typed DXGI facade.
+// This module decides admission and
+// publication, provider switching, frame and slot sequencing, accepted Present,
+// fallback, resize and retirement, status and callback order, and latency routing.
+use crate::com_ref;
+use crate::copy_c_string;
+use crate::d3d11_host_abi::{
+    RSF_D3D11_DISPATCH_PRESENT, RSF_D3D11_DISPATCH_PRESENT1, RSF_D3D11_DISPATCH_RELEASE,
+    RSF_D3D11_DISPATCH_RESIZE_BUFFERS, RSF_D3D11_DISPATCH_RESIZE_BUFFERS1,
+    RSF_D3D11_DISPATCH_SET_COLOR_SPACE1, RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE,
+    rsf_d3d11_chain_dispatch,
+};
+use crate::d3d11_present_abi::*;
+use crate::fg_choice::known;
+use crate::fg_choice::rsf_fg_select_auto_backend;
+use crate::shared_surface::{self, Surface, SurfaceSetup};
+use crate::sr_session::{has_capacity, valid_unit_scale};
+use crate::sync::lock;
+use crate::sys::rsf_d3d11_present_status as PresentStatus;
+use crate::sys::rsf_observer_present_event as Event;
+use crate::sys::{
+    RSF_BACKEND_ABI_VERSION, RSF_FG_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO,
+    RSF_FG_OFF, RSF_FG_STAT_GENERATED_PRESENTED, RSF_FG_STAT_TOTAL_PRESENTED, RSF_PACING_REFLEX,
+    RSF_PACING_XELL, RSF_REFLEX_OFF, rsf_fg_options, rsf_fg_retirement, rsf_fg_status,
+    rsf_generation_provider as Provider, rsf_generation_setup,
+};
+use crate::sys::{rsf_d3d11_present_setup as Setup, rsf_streamline_host};
+use rsf_game_sys::backend_result::{
+    ABI_MISMATCH, INIT_FAILED, INVALID_ARGUMENT, NOT_READY, NOT_SUPPORTED, OK,
+};
+use std::cell::Cell;
+use std::ffi::{CStr, CString, c_char, c_void};
+use std::fmt::Write as _;
+use std::ptr::{self, NonNull, null_mut};
+use std::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering,
+};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
+use windows::core::{GUID, IUnknown, Interface};
+
+// Under unit tests the fakes replace these modules' leaves.
+#[cfg_attr(test, allow(dead_code))]
+#[path = "d3d11_present_device.rs"]
+mod device;
+#[cfg_attr(test, allow(dead_code))]
+#[path = "d3d11_present_dxgi.rs"]
+mod dxgi;
+#[path = "d3d11_present_facade.rs"]
+mod facade;
+#[path = "d3d11_present_factory.rs"]
+mod factory;
+#[cfg(not(test))]
+pub(crate) use factory::rsf_d3d11_present_install;
+#[cfg_attr(test, allow(dead_code))]
+#[path = "d3d11_present_gpu.rs"]
+mod gpu;
+#[cfg_attr(test, allow(dead_code))]
+#[path = "d3d11_present_native.rs"]
+mod native;
+
+/// The native DXGI, D3D12, Win32 and SDK steps the owner calls. Unit tests swap in fakes with the
+/// same names (d3d11_present_tests.rs).
+#[cfg(not(test))]
+mod leaf {
+    pub(super) use super::facade::rsf_d3d11p_facade_chain as bridge_chain;
+    pub(super) use super::provider_table;
+    use super::{Event as rsf_observer_present_event, Raw};
+    pub(super) use super::{device::verify_outer, dxgi::*, gpu::*, native::*};
+    pub(super) use crate::d3d11_d3d12::close_event;
+    pub(super) use crate::shared_surface::rsf_shared_surface_native_platform as shared_surface_platform;
+    pub(super) use crate::streamline_host::{
+        rsf_streamline_host_abort as host_abort, rsf_streamline_host_acquire as host_acquire,
+        rsf_streamline_host_generation_load as host_generation_load,
+        rsf_streamline_host_input as host_input, rsf_streamline_host_marker as host_marker,
+        rsf_streamline_host_present_common as host_present_common,
+        rsf_streamline_host_sleep as host_sleep,
+    };
+
+    pub(super) unsafe fn observer_present(event: *mut rsf_observer_present_event) {
+        unsafe { crate::d3d11_observer_present::rsf_observer_notify_application_present(event) };
+    }
+
+    pub(super) unsafe fn host_reflex_off(host: Raw) -> i32 {
+        unsafe {
+            crate::streamline_host::rsf_streamline_host_reflex(
+                host.cast(),
+                super::RSF_REFLEX_OFF,
+                0,
+            )
+        }
+    }
+}
+#[cfg(test)]
+use tests as leaf;
+
+type Graphics = rsf_streamline_graphics;
+// No graphics published.
+const NO_GRAPHICS: Graphics = unsafe { std::mem::zeroed() };
+
+pub(crate) const S_OK: i32 = 0;
+pub(crate) const E_FAIL: i32 = 0x8000_4005_u32 as i32;
+const E_POINTER: i32 = 0x8000_4003_u32 as i32;
+pub(crate) const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
+pub(crate) const E_OUTOFMEMORY: i32 = 0x8007_000E_u32 as i32;
+pub(crate) const E_UNEXPECTED: i32 = 0x8000_FFFF_u32 as i32;
+pub(crate) const DXGI_ERROR_INVALID_CALL: i32 = 0x887A_0001_u32 as i32;
+pub(crate) const DXGI_ERROR_UNSUPPORTED: i32 = 0x887A_0004_u32 as i32;
+pub(crate) const DXGI_ERROR_DEVICE_REMOVED: i32 = 0x887A_0005_u32 as i32;
+pub(crate) const DXGI_ERROR_WAS_STILL_DRAWING: i32 = 0x887A_000A_u32 as i32;
+const DXGI_PRESENT_TEST: u32 = 0x1;
+const DXGI_PRESENT_ALLOW_TEARING: u32 = 0x200;
+const DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT: u32 = 64;
+const DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING: u32 = 2048;
+const DXGI_SWAP_EFFECT_FLIP_DISCARD: u32 = 4;
+const DXGI_USAGE_RENDER_TARGET_OUTPUT: u32 = 0x20;
+const DXGI_USAGE_UNORDERED_ACCESS: u32 = 0x400;
+const FORMATS: [u32; 4] = [28, 87, 24, 10]; // R8G8B8A8, B8G8R8A8, R10G10B10A2 UNORM, R16G16B16A16 FLOAT
+// Present returned without showing the frame: DXGI_STATUS_OCCLUDED and the mode-change statuses.
+const DXGI_STATUS_FIRST: i32 = 0x087A_0001;
+const DXGI_STATUS_LAST: i32 = 0x087A_0009;
+// A window frame's caption and sizing border, and the popup style that replaces them. The minimize
+// box stays, so the taskbar button still minimizes the window.
+const WS_POPUP: u32 = 0x8000_0000;
+const WS_VISIBLE: u32 = 0x1000_0000;
+const WS_FRAME: u32 = 0x00C0_0000 | 0x0004_0000 | 0x0008_0000 | 0x0001_0000; // CAPTION, THICKFRAME, SYSMENU, MAXIMIZEBOX
+const WS_EX_FRAME: u32 = 0x0000_0001 | 0x0000_0100 | 0x0000_0200 | 0x0002_0000; // DLGMODALFRAME, WINDOWEDGE, CLIENTEDGE, STATICEDGE
+
+// A top-level window's styles and screen rectangle.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(crate) struct WindowFrame {
+    pub(crate) style: u32,
+    pub(crate) ex_style: u32,
+    pub(crate) left: i32,
+    pub(crate) top: i32,
+    pub(crate) right: i32,
+    pub(crate) bottom: i32,
+}
+
+impl WindowFrame {
+    // The same window without caption or border, covering `output`.
+    fn borderless(self, output: Self) -> Self {
+        Self {
+            style: (self.style & !WS_FRAME) | WS_POPUP | WS_VISIBLE,
+            ex_style: self.ex_style & !WS_EX_FRAME,
+            ..output
+        }
+    }
+}
+
+pub(crate) const DLSS: u32 = 1;
+pub(crate) const FSR3: u32 = 3;
+pub(crate) const FSR4: u32 = 4;
+pub(crate) const XESS: u32 = 5;
+const AUTO: u32 = RSF_FG_BACKEND_AUTO;
+const NO_REQUEST: u32 = u32::MAX;
+const PACING_LAST: u32 = 3; // RSF_PACING_ANTILAG2
+const LATENCY_INPUT_SAMPLE: u32 = 6;
+const UI_MODE_NONE: u32 = 1;
+const STATUS_VERSION: u32 = 1;
+const MAX_BUFFERS: u32 = 8;
+const SLOTS: usize = 3;
+const APPLICATION_FENCES: usize = 16;
+const STEPS: [&str; 3] = ["slot fence wait", "allocator reset", "command list reset"];
+// The direct D3D11 chain: the application's frame needs no generated-frame headroom.
+const DIRECT_BUFFERS: u32 = 2;
+// Seconds between presentation summary lines.
+const LEDGER_SECONDS: u64 = 5;
+
+#[repr(u8)]
+enum PhysicalCreation {
+    Idle,
+    Pending,
+    Creating,
+}
+
+pub(super) const FG_OFF: rsf_fg_options = rsf_fg_options {
+    struct_size: size_of::<rsf_fg_options>() as u32,
+    abi_version: RSF_FG_ABI_VERSION,
+    mode: RSF_FG_OFF,
+    generated_frames: 1,
+    dynamic_target_fps: 0.0,
+    reflex_mode: RSF_REFLEX_OFF,
+    frame_limit_us: 0,
+};
+
+fn failed(result: i32) -> bool {
+    result < 0
+}
+
+fn acquire_resource(create: impl FnOnce(*mut Raw) -> i32) -> Result<IUnknown, i32> {
+    let mut resource = null_mut();
+    let result = create(&mut resource);
+    let owned = unsafe { com_ref::owned(resource) };
+    if failed(result) {
+        Err(result)
+    } else {
+        owned.ok_or(E_UNEXPECTED)
+    }
+}
+
+fn bit(backend: u32) -> u32 {
+    1u32.checked_shl(backend).unwrap_or(0)
+}
+
+// The single backend to provider family mapping. FidelityFX serves FSR3 and FSR4.
+pub(crate) fn family(backend: u32) -> Option<u32> {
+    match backend {
+        DLSS => Some(FAMILY_DLSS),
+        FSR3 | FSR4 => Some(FAMILY_FIDELITYFX),
+        XESS => Some(FAMILY_XESS),
+        _ => None,
+    }
+}
+
+use crate::d3d12_generation::{rsf_generation_fsr, rsf_generation_xess};
+use crate::streamline_host::rsf_generation_dlss;
+
+/// The SDK provider table of a family.
+#[cfg_attr(test, allow(dead_code))]
+unsafe fn provider_table(family: u32) -> *const Provider {
+    match family {
+        FAMILY_DLSS => rsf_generation_dlss(),
+        FAMILY_FIDELITYFX => rsf_generation_fsr(),
+        FAMILY_XESS => rsf_generation_xess(),
+        _ => ptr::null(),
+    }
+}
+
+/// rsf_fg_get_provider's provider, shared with the orchestrator.
+pub(crate) fn provider_for(backend: u32) -> *const Provider {
+    family(backend).map_or(ptr::null(), |family| unsafe { provider_table(family) })
+}
+
+fn hex(value: *const c_void) -> String {
+    format!("{:016X}", value as usize)
+}
+
+// Settings ----------------------------------------------------------------------------------
+
+struct Prepared {
+    setup: Setup,
+    _strings: [CString; 7],
+    // The adapter named a non-empty Streamline directory of its own.
+    streamline_explicit: bool,
+    identity: bool,
+}
+
+// The copies hold only pointers to their own strings and the caller's callbacks.
+unsafe impl Send for Prepared {}
+unsafe impl Sync for Prepared {}
+
+struct Empty(Setup);
+unsafe impl Sync for Empty {}
+static EMPTY: Empty = Empty(unsafe { std::mem::zeroed() });
+static SETTINGS: AtomicPtr<Prepared> = AtomicPtr::new(null_mut());
+// Every prepared copy stays allocated: callbacks may hold its strings across a re-prepare.
+// Boxed so each copy keeps its address when the vector grows.
+#[allow(clippy::vec_box)]
+static RETAINED: Mutex<Vec<Box<Prepared>>> = Mutex::new(Vec::new());
+
+fn prepared() -> Option<&'static Prepared> {
+    unsafe { SETTINGS.load(Ordering::Acquire).as_ref() }
+}
+
+fn settings() -> &'static Setup {
+    prepared().map_or(&EMPTY.0, |value| &value.setup)
+}
+
+fn switching() -> bool {
+    settings().runtime_switching != 0
+}
+
+fn log(text: &str) {
+    let setup = settings();
+    if let Some(log) = setup.log {
+        let text = CString::new(text.replace('\0', " ")).unwrap_or_default();
+        unsafe { log(setup.user, text.as_ptr()) };
+    }
+}
+
+fn sdk_directory(backend: u32) -> *const c_char {
+    let setup = settings();
+    match backend {
+        DLSS => setup.streamline_directory_utf8,
+        FSR4 => setup.fsr4_directory_utf8,
+        XESS => setup.xess_directory_utf8,
+        _ => setup.fsr3_directory_utf8,
+    }
+}
+
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_prepare(
+    setup: *const Setup,
+    installed: u32,
+) -> i32 {
+    let Some(input) = (unsafe { setup.as_ref() }) else {
+        return 0;
+    };
+    if (input.struct_size as usize) < size_of::<Setup>()
+        || input.runtime_directory_utf8.is_null()
+        || input.accept_window.is_none()
+        || installed != 0
+    {
+        return 0;
+    }
+    // Depth units are the plugin's to state; the bridge never guesses them from the API.
+    if !valid_unit_scale(input.units_to_meters) {
+        if let Some(log) = input.log {
+            let text =
+                c"presentation bridge: units_to_meters must be finite and positive; interception refused";
+            unsafe { log(input.user, text.as_ptr()) };
+        }
+        return 0;
+    }
+    if input.backend != 0
+        && !known(input.backend)
+        && !(input.backend == AUTO && input.runtime_switching != 0)
+    {
+        return 0;
+    }
+    let allowed = input.allowed_backend_choices;
+    if allowed != 0 && allowed & !RSF_FG_BACKEND_ALL != 0 {
+        return 0;
+    }
+    if allowed != 0
+        && input.backend != 0
+        && input.backend != AUTO
+        && allowed & bit(input.backend) == 0
+    {
+        return 0;
+    }
+    let runtime = unsafe { CStr::from_ptr(input.runtime_directory_utf8) }.to_owned();
+    let empty = CString::default();
+    let strings = unsafe {
+        [
+            copy_c_string(input.fsr3_directory_utf8, &runtime),
+            copy_c_string(input.fsr4_directory_utf8, &runtime),
+            copy_c_string(input.xess_directory_utf8, &runtime),
+            copy_c_string(input.streamline_directory_utf8, &runtime),
+            copy_c_string(input.engine_version_utf8, &empty),
+            copy_c_string(input.project_id_utf8, &empty),
+            runtime,
+        ]
+    };
+    let mut copy: Setup = unsafe { ptr::read(setup) };
+    copy.struct_size = size_of::<Setup>() as u32;
+    copy.fsr3_directory_utf8 = strings[0].as_ptr();
+    copy.fsr4_directory_utf8 = strings[1].as_ptr();
+    copy.xess_directory_utf8 = strings[2].as_ptr();
+    copy.streamline_directory_utf8 = strings[3].as_ptr();
+    copy.engine_version_utf8 = strings[4].as_ptr();
+    copy.project_id_utf8 = strings[5].as_ptr();
+    copy.runtime_directory_utf8 = strings[6].as_ptr();
+    let value = Box::new(Prepared {
+        setup: copy,
+        streamline_explicit: !input.streamline_directory_utf8.is_null() && !strings[3].is_empty(),
+        identity: !strings[4].is_empty() && !strings[5].is_empty(),
+        _strings: strings,
+    });
+    let pointer = ptr::from_ref(value.as_ref()).cast_mut();
+    lock(&RETAINED).push(value);
+    SETTINGS.store(pointer, Ordering::Release);
+    let backend = match input.backend {
+        0 if input.runtime_switching != 0 => 0,
+        0 => DLSS,
+        value => value,
+    };
+    ACTIVE_BACKEND.store(backend, Ordering::SeqCst);
+    1
+}
+
+// Process owner -----------------------------------------------------------------------------
+
+static ACTIVE_BACKEND: AtomicU32 = AtomicU32::new(DLSS);
+static REQUESTED_BACKEND: AtomicU32 = AtomicU32::new(NO_REQUEST);
+static BACKEND_CHOICES: AtomicU32 = AtomicU32::new((RSF_FG_BACKEND_ALL | 1) & !(1 << FSR4));
+static SWITCH_RESULT: AtomicI32 = AtomicI32::new(0);
+static CHAIN_GENERATION: AtomicU64 = AtomicU64::new(1);
+static ACTIVE_HOST: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static ACTIVE_CHAIN: AtomicPtr<Owner> = AtomicPtr::new(null_mut());
+static ACTIVE_BRIDGE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+static ACTIVE_SESSION: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+// An unpublished owner still owns its provider until its queues have drained.
+static RETIREMENT_PENDING: AtomicBool = AtomicBool::new(false);
+// The active provider paces through the shared Streamline host (Reflex), so latency calls go
+// to the host once rather than to both. Changes only with ACTIVE_SESSION, under PROVIDER_GUARD.
+static HOST_PACED: AtomicBool = AtomicBool::new(false);
+static ACTIVE_GRAPHICS: Mutex<SendGraphics> = Mutex::new(SendGraphics(NO_GRAPHICS));
+// Main-thread latency calls share the provider lifetime; only replacement and retirement
+// write-lock it, so a caller arriving mid-switch is turned away instead of blocking.
+static PROVIDER_GUARD: RwLock<()> = RwLock::new(());
+static CREATION_GUARD: Mutex<()> = Mutex::new(());
+static STATUS: Mutex<Snapshot> = Mutex::new(Snapshot::new());
+static SCOPED: AtomicBool = AtomicBool::new(false);
+static CREATION_TOKENS: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_CREATION_TOKEN: AtomicU64 = AtomicU64::new(0);
+static OUTER_ALIAS: AtomicPtr<c_void> = AtomicPtr::new(null_mut()); // Retained after admission.
+static SCOPED_ADMITTED: AtomicBool = AtomicBool::new(false);
+// Generation objects alive in the process, for the periodic window line. A retired provider or
+// chain that is never released shows as a count above one after a switch.
+static LIVE_PROVIDERS: AtomicI32 = AtomicI32::new(0);
+static LIVE_PHYSICAL: AtomicI32 = AtomicI32::new(0);
+// Seconds between window lines.
+const WINDOW_SECONDS: f64 = 5.0;
+
+struct SendGraphics(Graphics);
+unsafe impl Send for SendGraphics {}
+
+struct Captured {
+    object: Raw,
+    release: Option<unsafe extern "C" fn(Raw)>,
+}
+
+impl Drop for Captured {
+    fn drop(&mut self) {
+        if let (false, Some(release)) = (self.object.is_null(), self.release) {
+            unsafe { release(self.object) };
+        }
+    }
+}
+
+thread_local! {
+    // A nested native creation from a provider or plain chain must forward unchanged.
+    static CREATING: Cell<bool> = const { Cell::new(false) };
+    static SCOPE_TOKEN: Cell<u64> = const { Cell::new(0) };
+    static SCOPE_WINDOW: Cell<Raw> = const { Cell::new(null_mut()) };
+    static SCOPE_CAPTURED: std::cell::RefCell<Captured> =
+        const { std::cell::RefCell::new(Captured { object: null_mut(), release: None }) };
+}
+
+fn generation() -> u64 {
+    CHAIN_GENERATION.load(Ordering::SeqCst)
+}
+
+// A refused facade initialization: the factory keeps the application's native chain.
+fn refused_initialization(step: &str, observed: i32, returned: i32) -> i32 {
+    log(&format!(
+        "presentation bridge: initialization step '{step}' failed HRESULT=0x{:08x}; native presentation retained",
+        observed as u32
+    ));
+    returned
+}
+
+// A nested native creation, which the factory hooks forward unchanged.
+fn creating<T>(create: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CREATING.set(self.0);
+        }
+    }
+    let _restore = Restore(CREATING.replace(true));
+    create()
+}
+
+fn provider_api(backend: u32) -> Option<&'static Provider> {
+    let family = family(backend)?;
+    let table = unsafe { leaf::provider_table(family) };
+    if table.is_null() || unsafe { table.cast::<u32>().read() } < size_of::<Provider>() as u32 {
+        return None;
+    }
+    unsafe { table.as_ref() }
+}
+
+fn destroy_provider(api: Option<&Provider>, session: Raw) -> i32 {
+    if session.is_null() {
+        return OK;
+    }
+    let Some(api) = api else {
+        return NOT_SUPPORTED;
+    };
+    let result = if let Some(destroy) = api.destroy_checked {
+        unsafe { destroy(session) }
+    } else if let Some(destroy) = api.destroy {
+        unsafe { destroy(session) };
+        OK
+    } else {
+        NOT_SUPPORTED
+    };
+    if result == OK {
+        LIVE_PROVIDERS.fetch_sub(1, Ordering::Relaxed);
+    }
+    result
+}
+
+// Counts a session a provider's create returned, whether or not creation succeeded; every
+// non-null session goes through destroy_provider.
+fn created_provider(session: Raw) {
+    if !session.is_null() {
+        LIVE_PROVIDERS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+// Vendor presents or generated frames per application frame since the window began. A provider
+// switch restarts the vendor counter, so a smaller count is unavailable rather than a wrap.
+fn per_frame(
+    state: Option<&rsf_fg_status>,
+    flag: u32,
+    now: u64,
+    start: u64,
+    frames: u64,
+) -> String {
+    state
+        .filter(|state| state.valid_statistics & flag != 0)
+        .and_then(|_| now.checked_sub(start))
+        .map_or_else(
+            || "unavailable".to_owned(),
+            |count| format!("{:.2}", count as f64 / frames as f64),
+        )
+}
+
+// One line every WINDOW_SECONDS of presented application frames. It shows whether the vendor
+// presents or generates more frames per application frame than its effective count, the RTX 40
+// unlock admission the provider reports, and whether retired providers or physical chains are
+// still alive after a switch.
+fn window_line(
+    window: &mut Window,
+    now: u64,
+    frequency: u64,
+    state: Option<&rsf_fg_status>,
+    backend: u32,
+) -> Option<String> {
+    let (presented, generated) = state.map_or((0, 0), |state| {
+        (state.total_presented, state.generated_presented)
+    });
+    if window.start_qpc == 0 || frequency == 0 {
+        *window = Window {
+            start_qpc: now,
+            frames: 0,
+            presented,
+            generated,
+        };
+        return None;
+    }
+    window.frames += 1;
+    if (now.wrapping_sub(window.start_qpc) as f64) < WINDOW_SECONDS * frequency as f64 {
+        return None;
+    }
+    let seconds = now.wrapping_sub(window.start_qpc) as f64 / frequency as f64;
+    let frames = window.frames;
+    let status = state.copied().unwrap_or(EMPTY_STATUS);
+    let line = format!(
+        "FG bridge window: frames={frames} fps={:.1} backend={backend} generation={} configured_mode={} \
+        effective_mode={} effective_generated={} max_generated={} active={} presents_per_frame={} \
+        generated_per_frame={} mfg_unlock={} pacing={} live_providers={} live_physical={}",
+        frames as f64 / seconds,
+        generation(),
+        status.configured_mode,
+        status.effective_mode,
+        status.effective_generated_frames,
+        status.max_generated_frames,
+        status.active,
+        per_frame(
+            state,
+            RSF_FG_STAT_TOTAL_PRESENTED,
+            presented,
+            window.presented,
+            frames
+        ),
+        per_frame(
+            state,
+            RSF_FG_STAT_GENERATED_PRESENTED,
+            generated,
+            window.generated,
+            frames
+        ),
+        status.mfg_unlock_status,
+        status.pacing_owner,
+        LIVE_PROVIDERS.load(Ordering::Relaxed),
+        LIVE_PHYSICAL.load(Ordering::Relaxed),
+    );
+    *window = Window {
+        start_qpc: now,
+        frames: 0,
+        presented,
+        generated,
+    };
+    Some(line)
+}
+
+fn read_guard() -> Option<std::sync::RwLockReadGuard<'static, ()>> {
+    match PROVIDER_GUARD.try_read() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(guard)) => Some(guard.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
+
+// Copied provider status -------------------------------------------------------------------
+
+// Owns copies only. No provider or COM lifetime and no vendor call crosses its lock.
+pub(crate) struct Snapshot {
+    valid: u32,
+    backend: u32,
+    generation: u64,
+    state: rsf_fg_status,
+    accepting: bool,
+}
+
+const EMPTY_STATUS: rsf_fg_status = unsafe { std::mem::zeroed() };
+
+impl Snapshot {
+    pub(crate) const fn new() -> Self {
+        Self {
+            valid: 0,
+            backend: 0,
+            generation: 0,
+            state: EMPTY_STATUS,
+            accepting: false,
+        }
+    }
+
+    pub(crate) fn activate(&mut self, backend: u32, generation: u64) {
+        *self = Self {
+            backend,
+            generation,
+            accepting: true,
+            ..Self::new()
+        };
+    }
+
+    pub(crate) fn invalidate(&mut self) {
+        self.valid = 0;
+        self.state = EMPTY_STATUS;
+        self.accepting = false;
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.valid = 0;
+        self.state = EMPTY_STATUS;
+    }
+
+    pub(crate) fn publish(&mut self, backend: u32, generation: u64, state: &rsf_fg_status) -> bool {
+        if !self.accepting
+            || generation == 0
+            || backend != self.backend
+            || generation != self.generation
+            || (state.struct_size as usize) < size_of::<rsf_fg_status>()
+        {
+            return false;
+        }
+        self.state = *state;
+        self.valid = 1;
+        true
+    }
+
+    pub(crate) unsafe fn read(&self, output: *mut PresentStatus) -> i32 {
+        let Some(output) = (unsafe { output.as_mut() }) else {
+            return INVALID_ARGUMENT;
+        };
+        if (output.struct_size as usize) < size_of::<PresentStatus>() {
+            return INVALID_ARGUMENT;
+        }
+        if output.version != STATUS_VERSION {
+            return ABI_MISMATCH;
+        }
+        output.struct_size = size_of::<PresentStatus>() as u32;
+        output.version = STATUS_VERSION;
+        output.valid = self.valid;
+        output.backend = self.backend;
+        output.generation = self.generation;
+        output.state = self.state;
+        if self.valid != 0 { OK } else { NOT_READY }
+    }
+}
+
+// Facade sequencing ------------------------------------------------------------------------
+
+#[derive(Default)]
+struct Timing {
+    tick_ms: f64,
+    epoch: u64,
+    previous: u64,
+    frames: u64,
+    sdk_start: u64,
+    interval_min: f64,
+    interval_max: f64,
+    sum: [f64; 5],
+    max: [f64; 5],
+    slots: u32,
+}
+
+impl Timing {
+    // Clears one reporting window. A zero epoch also restarts the clock on the next frame.
+    fn reset(&mut self) {
+        self.frames = 0;
+        self.sum = [0.0; 5];
+        self.max = [0.0; 5];
+        self.interval_min = 0.0;
+        self.interval_max = 0.0;
+        self.slots = 0;
+    }
+}
+
+enum ApplicationBuffer {
+    Shared(Surface),
+    Render(IUnknown),
+}
+
+impl ApplicationBuffer {
+    fn application(&self) -> &IUnknown {
+        match self {
+            Self::Shared(surface) => &surface.texture11,
+            Self::Render(resource) => resource,
+        }
+    }
+
+    fn copy_source(&self) -> Option<&IUnknown> {
+        match self {
+            Self::Shared(surface) => surface.texture12.as_ref(),
+            Self::Render(resource) => Some(resource),
+        }
+    }
+}
+
+type ApplicationBuffers = [Option<ApplicationBuffer>; MAX_BUFFERS as usize];
+
+pub(crate) struct Physical {
+    // Release the chain before its creation queue.
+    chain: IUnknown,
+    queue: IUnknown,
+}
+
+// The DXGI chain and D3D12 queue can be referenced from the render and window threads.
+// A lease pins their lifetime. DXGI and the caller still govern operation ordering.
+unsafe impl Send for Physical {}
+unsafe impl Sync for Physical {}
+
+impl Physical {
+    fn new(chain: IUnknown, queue: IUnknown) -> Self {
+        LIVE_PHYSICAL.fetch_add(1, Ordering::Relaxed);
+        Self { chain, queue }
+    }
+}
+
+impl Drop for Physical {
+    fn drop(&mut self) {
+        LIVE_PHYSICAL.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+// Application frames and vendor presents since the last window line.
+#[derive(Default)]
+struct Window {
+    start_qpc: u64,
+    frames: u64,
+    presented: u64,
+    generated: u64,
+}
+
+// One direct allocator and closed list on the graphics device (Streamline's proxy device when a
+// host exists). The list is declared first so it releases before its allocator.
+struct Commands {
+    list: IUnknown,
+    allocator: IUnknown,
+}
+
+// The slot pairs in slot order, fewer than SLOTS only after a refused initialization.
+struct CommandSlots(Vec<Commands>);
+
+// Created before publication, recorded and submitted under Present's pin, and released or
+// retained by the facade's final Release, when no pin remains.
+unsafe impl Send for CommandSlots {}
+unsafe impl Sync for CommandSlots {}
+
+// A Win32 event from the platform leaf. The other handle returned to the application
+// by DuplicateHandle has its own lifetime.
+struct EventLease {
+    handle: NonNull<c_void>,
+}
+
+impl EventLease {
+    fn create(initially_signaled: bool) -> Option<Self> {
+        let handle = unsafe { leaf::create_event(u32::from(initially_signaled)) };
+        NonNull::new(handle).map(|handle| Self { handle })
+    }
+
+    fn as_ptr(&self) -> Raw {
+        self.handle.as_ptr()
+    }
+}
+
+impl Drop for EventLease {
+    fn drop(&mut self) {
+        unsafe { leaf::close_event(self.as_ptr()) };
+    }
+}
+
+#[derive(Default)]
+struct PresentationSync {
+    // Borrowed for drain. The facade or its host owns this queue.
+    graphics_queue: Option<NonNull<c_void>>,
+    interop_queue: Option<IUnknown>,
+    completion_event: Option<EventLease>,
+    completion_fence: Option<IUnknown>,
+    application_ready: Option<EventLease>,
+}
+
+impl PresentationSync {
+    // Store each acquisition before checking the result so an unpublished facade retires
+    // the same partial state as a published one.
+    fn initialize(&mut self, facts: &rsf_d3d11p_facts, ready: bool) -> i32 {
+        self.graphics_queue = NonNull::new(facts.graphics.queue);
+        if facts.native12 != 0 {
+            self.interop_queue = Some(unsafe { com_ref::retain(facts.direct_queue) });
+        } else {
+            let mut queue = null_mut();
+            let result = unsafe { leaf::create_interop_queue(facts.graphics.device, &mut queue) };
+            self.interop_queue = unsafe { com_ref::owned(queue) };
+            if failed(result) {
+                return E_FAIL;
+            }
+        }
+        self.completion_event = EventLease::create(false);
+        if self.completion_event.is_none() {
+            return E_FAIL;
+        }
+        let mut fence = null_mut();
+        let result = unsafe { leaf::create_completion_fence(facts.graphics.device, &mut fence) };
+        self.completion_fence = unsafe { com_ref::owned(fence) };
+        if failed(result) {
+            return E_FAIL;
+        }
+        if ready {
+            self.application_ready = EventLease::create(true);
+            if self.application_ready.is_none() {
+                return E_FAIL;
+            }
+        }
+        S_OK
+    }
+
+    fn queue(&self) -> Raw {
+        self.interop_queue
+            .as_ref()
+            .map_or(null_mut(), Interface::as_raw)
+    }
+
+    fn completion(&self) -> (Raw, Raw) {
+        (
+            self.completion_fence
+                .as_ref()
+                .map_or(null_mut(), Interface::as_raw),
+            self.completion_event
+                .as_ref()
+                .map_or(null_mut(), EventLease::as_ptr),
+        )
+    }
+
+    fn ready_event(&self) -> Raw {
+        self.application_ready
+            .as_ref()
+            .map_or(null_mut(), EventLease::as_ptr)
+    }
+}
+
+// What decides independent flip and VRR for the window: the presenting chain's swap effect and
+// tearing creation flag, the last Present's interval and tearing flag, and the driver's last
+// reported VRR and independent flip. Each is "unknown" until it has been read.
+fn presentation_facts(
+    chain: Option<(u32, u32)>,
+    last_present: u64,
+    driver: Option<(bool, bool)>,
+) -> String {
+    let known = |value: Option<u32>| value.map_or_else(|| "unknown".to_owned(), |v| v.to_string());
+    let flags = last_present as u32;
+    format!(
+        "swap_effect={} chain_tearing={} present_sync={} present_tearing={} driver_vrr={} driver_iflip={}",
+        known(chain.map(|(effect, _)| effect)),
+        known(chain.map(|(_, flags)| u32::from(flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING != 0))),
+        last_present >> 32,
+        u32::from(flags & DXGI_PRESENT_ALLOW_TEARING != 0),
+        known(driver.map(|(vrr, _)| u32::from(vrr))),
+        known(driver.map(|(_, iflip)| u32::from(iflip))),
+    )
+}
+
+// Application Presents of one summary window, so a log always shows whether presentation ran.
+#[derive(Default, Debug, PartialEq, Eq)]
+struct PresentLedger {
+    attempted: u64,
+    completed: u64,
+    // Successful Presents that DXGI did not show (an occluded or mode-changing output).
+    unshown: u64,
+    failed: u64,
+    last_failure: i32,
+    since: u64,
+}
+
+impl PresentLedger {
+    // Counts one Present; returns the closed window once it has lasted LEDGER_SECONDS.
+    fn record(&mut self, result: i32, now: u64, frequency: u64) -> Option<Self> {
+        if self.since == 0 {
+            self.since = now.max(1);
+        }
+        self.attempted += 1;
+        if failed(result) {
+            self.failed += 1;
+            self.last_failure = result;
+        } else if (DXGI_STATUS_FIRST..=DXGI_STATUS_LAST).contains(&result) {
+            self.unshown += 1;
+        } else {
+            self.completed += 1;
+        }
+        let elapsed = now.wrapping_sub(self.since);
+        (frequency != 0 && elapsed >= frequency.saturating_mul(LEDGER_SECONDS)).then(|| {
+            std::mem::replace(
+                self,
+                Self {
+                    since: now.max(1),
+                    ..Self::default()
+                },
+            )
+        })
+    }
+}
+
+#[derive(Default)]
+struct ProviderRetirement {
+    fence: Option<IUnknown>,
+    serial: u64,
+}
+
+// DXGI serializes the application's frame calls. Provider callbacks and the retire
+// lease can reenter on the same thread.
+pub(crate) struct Owner {
+    bridge: AtomicPtr<c_void>,
+    native12: AtomicBool,
+    tearing: AtomicBool,
+    host: AtomicPtr<c_void>,
+    provider: AtomicPtr<c_void>,
+    provider_backend: AtomicU32,
+    physical: Mutex<Option<Arc<Physical>>>,
+    physical_creation: AtomicU8,
+    faulted: AtomicBool,
+    // A D3D11 bridge step failed on a live D3D11 device: present the application's own frame
+    // through a D3D11 chain from the next call on.
+    direct_pending: AtomicBool,
+    direct: AtomicBool,
+    reported_steps: Mutex<Vec<&'static str>>,
+    buffer_queries: AtomicU32,
+    ledger: Mutex<PresentLedger>,
+    // The last application Present's interval (high half) and physical Present flags.
+    last_present: AtomicU64,
+    serial: AtomicU64,
+    next_slot: AtomicU32,
+    slot_fences: [AtomicU64; SLOTS],
+    sync: Mutex<PresentationSync>,
+    commands: Mutex<Option<Arc<CommandSlots>>>,
+    buffers: Mutex<ApplicationBuffers>,
+    render_index: AtomicU32,
+    application_serial: AtomicU64,
+    application_fences: [AtomicU64; APPLICATION_FENCES],
+    application_latency: AtomicU32,
+    application_presents: AtomicU32,
+    provider_retirement: Mutex<ProviderRetirement>,
+    // A provider switch released the old chain but could not finish its teardown.
+    switch_incomplete: AtomicBool,
+    // The application's fullscreen, shown as a borderless window: the frame it replaced.
+    borderless: Mutex<Option<WindowFrame>>,
+    unpublished_provider: Mutex<Option<(u32, usize)>>,
+    failed_buffer_reports: AtomicU32,
+    post_switch_frames: AtomicU32,
+    last_normalized_sync: AtomicU32,
+    timing: Mutex<Timing>,
+    window: Mutex<Window>,
+}
+
+unsafe impl Send for Owner {}
+unsafe impl Sync for Owner {}
+
+impl Owner {
+    fn new() -> Self {
+        Self {
+            bridge: AtomicPtr::new(null_mut()),
+            native12: AtomicBool::new(false),
+            tearing: AtomicBool::new(false),
+            host: AtomicPtr::new(null_mut()),
+            provider: AtomicPtr::new(null_mut()),
+            provider_backend: AtomicU32::new(0),
+            physical: Mutex::default(),
+            physical_creation: AtomicU8::new(PhysicalCreation::Idle as u8),
+            faulted: AtomicBool::new(false),
+            direct_pending: AtomicBool::new(false),
+            direct: AtomicBool::new(false),
+            reported_steps: Mutex::default(),
+            buffer_queries: AtomicU32::new(0),
+            ledger: Mutex::default(),
+            last_present: AtomicU64::new(0),
+            serial: AtomicU64::new(0),
+            next_slot: AtomicU32::new(0),
+            slot_fences: Default::default(),
+            sync: Mutex::default(),
+            commands: Mutex::default(),
+            buffers: Mutex::default(),
+            render_index: AtomicU32::new(0),
+            application_serial: AtomicU64::new(0),
+            application_fences: Default::default(),
+            application_latency: AtomicU32::new(1),
+            application_presents: AtomicU32::new(0),
+            provider_retirement: Mutex::default(),
+            switch_incomplete: AtomicBool::new(false),
+            borderless: Mutex::default(),
+            unpublished_provider: Mutex::default(),
+            failed_buffer_reports: AtomicU32::new(0),
+            post_switch_frames: AtomicU32::new(0),
+            last_normalized_sync: AtomicU32::new(0),
+            timing: Mutex::new(Timing::default()),
+            window: Mutex::default(),
+        }
+    }
+
+    fn b(&self) -> Raw {
+        self.bridge.load(Ordering::Acquire)
+    }
+
+    fn provider(&self) -> Raw {
+        self.provider.load(Ordering::Acquire)
+    }
+
+    fn host(&self) -> Raw {
+        self.host.load(Ordering::Acquire)
+    }
+
+    fn native12(&self) -> bool {
+        self.native12.load(Ordering::Relaxed)
+    }
+
+    fn direct(&self) -> bool {
+        self.direct.load(Ordering::Acquire)
+    }
+
+    // The removal reasons of the application's D3D11 device and the bridge's D3D12 device.
+    fn removed_reasons(&self) -> (i32, i32) {
+        let (mut d3d11, mut d3d12) = (S_OK, S_OK);
+        unsafe { leaf::removed_reasons(self.b(), &mut d3d11, &mut d3d12) };
+        (d3d11, d3d12)
+    }
+
+    // The first failure of each named step, with the removal reasons of both devices.
+    fn report_step(&self, step: &'static str, result: i32) {
+        {
+            let mut reported = lock(&self.reported_steps);
+            if reported.contains(&step) {
+                return;
+            }
+            reported.push(step);
+        }
+        let (d3d11, d3d12) = self.removed_reasons();
+        let facts = self.facts();
+        log(&format!(
+            "presentation bridge: step '{step}' failed HRESULT=0x{:08x} d3d11_removed_reason=0x{:08x} d3d12_removed_reason=0x{:08x} backend={} native12={} direct={} size={}x{} buffers={} windowed={}",
+            result as u32,
+            d3d11 as u32,
+            d3d12 as u32,
+            ACTIVE_BACKEND.load(Ordering::SeqCst),
+            facts.native12,
+            u32::from(self.direct()),
+            facts.width,
+            facts.height,
+            facts.buffer_count,
+            facts.windowed
+        ));
+    }
+
+    // A failed D3D11 bridge step. A removed D3D11 device faults the facade, which then returns
+    // DXGI_ERROR_DEVICE_REMOVED as DXGI does; otherwise the next call presents the application's
+    // own frame directly.
+    fn retreat(&self, step: &'static str, result: i32) {
+        self.report_step(step, result);
+        let (d3d11, _) = self.removed_reasons();
+        if failed(d3d11) {
+            self.fault(d3d11);
+        } else {
+            self.direct_pending.store(true, Ordering::Release);
+        }
+    }
+
+    fn fault(&self, reason: i32) {
+        if !self.faulted.swap(true, Ordering::AcqRel) {
+            log(&format!(
+                "presentation bridge: application D3D11 device removed reason=0x{:08x}; Present returns DXGI_ERROR_DEVICE_REMOVED",
+                reason as u32
+            ));
+        }
+    }
+
+    fn record_present(&self, result: i32) {
+        let closed = lock(&self.ledger).record(result, crate::now_qpc(), crate::qpc_frequency());
+        if let Some(window) = closed {
+            let mode = if self.faulted.load(Ordering::Acquire) {
+                "faulted"
+            } else if self.direct() {
+                "direct"
+            } else {
+                "bridge"
+            };
+            let chain = self.physical().and_then(|physical| {
+                let (mut effect, mut flags) = (0, 0);
+                let result = unsafe {
+                    leaf::chain_presentation(physical.chain.as_raw(), &mut effect, &mut flags)
+                };
+                (!failed(result)).then_some((effect, flags))
+            });
+            let facts = presentation_facts(
+                chain,
+                self.last_present.load(Ordering::Relaxed),
+                crate::reflex_audit::driver_presentation(),
+            );
+            log(&format!(
+                "presentation bridge: presents in {LEDGER_SECONDS}s attempted={} completed={} unshown={} failed={} last_failure=0x{:08x} mode={mode} {facts}",
+                window.attempted,
+                window.completed,
+                window.unshown,
+                window.failed,
+                window.last_failure as u32
+            ));
+        }
+    }
+
+    // Retires the bridge's physical chain and provider and presents the application's frame
+    // through a flip chain on its own D3D11 device. FG and SR stay unavailable for the facade.
+    fn enter_direct(&self) -> Result<(), i32> {
+        let _guard = match PROVIDER_GUARD.try_write() {
+            Ok(guard) => guard,
+            Err(TryLockError::Poisoned(guard)) => guard.into_inner(),
+            Err(TryLockError::WouldBlock) => return Err(DXGI_ERROR_WAS_STILL_DRAWING),
+        };
+        if !self.direct_pending.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let outgoing = {
+            let mut current = lock(&self.physical);
+            // DXGI needs the old HWND chain released before its replacement.
+            if current
+                .as_ref()
+                .is_some_and(|pair| Arc::strong_count(pair) != 1)
+            {
+                return Err(DXGI_ERROR_WAS_STILL_DRAWING);
+            }
+            current.take()
+        };
+        // Best effort: a removed D3D12 device completes its fences.
+        let _ = self.drain();
+        // Bridge chains stay windowed, so the window keeps its borderless frame across the change.
+        drop(outgoing);
+        if destroy_provider(self.api(), self.provider()) != OK {
+            log(
+                "presentation bridge: provider teardown refused at direct presentation; session retained",
+            );
+        }
+        self.provider.store(null_mut(), Ordering::Release);
+        self.provider_backend.store(0, Ordering::Relaxed);
+        ACTIVE_SESSION.store(null_mut(), Ordering::Release);
+        ACTIVE_BACKEND.store(0, Ordering::SeqCst);
+        REQUESTED_BACKEND.store(NO_REQUEST, Ordering::SeqCst);
+        BACKEND_CHOICES.store(1, Ordering::SeqCst);
+        HOST_PACED.store(false, Ordering::SeqCst);
+        lock(&ACTIVE_GRAPHICS).0 = NO_GRAPHICS;
+        lock(&STATUS).invalidate();
+        CHAIN_GENERATION.fetch_add(1, Ordering::SeqCst);
+        let facts = self.facts();
+        let plan = rsf_d3d11p_plain_plan {
+            queue: facts.device11,
+            swap_effect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+            flags: if facts.tearing != 0 {
+                DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+            } else {
+                0
+            },
+            buffer_count: DIRECT_BUFFERS,
+            buffer_usage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+        };
+        let mut device = null_mut();
+        let chain = creating(|| {
+            acquire_resource(|out| unsafe { leaf::create_plain(self.b(), &plan, out, &mut device) })
+        });
+        let created = chain.as_ref().err().copied();
+        let published = self.publish_physical(chain, device);
+        self.direct_pending.store(false, Ordering::Release);
+        if published != OK {
+            self.report_step("direct chain creation", created.unwrap_or(E_FAIL));
+            self.faulted.store(true, Ordering::Release);
+            return Err(E_FAIL);
+        }
+        self.direct.store(true, Ordering::Release);
+        log(
+            "presentation bridge: presenting the application's frame directly on its D3D11 device; frame generation and upscaling unavailable",
+        );
+        Ok(())
+    }
+
+    // The first query of each application buffer index. Only slot zero reaches the screen on
+    // the D3D11 path, so a writer of another index shows here.
+    fn report_buffer_query(&self, index: u32, iid: *const c_void, result: i32) {
+        let bit = 1u32 << index.min(31);
+        if self.buffer_queries.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
+            return;
+        }
+        let iid = unsafe { iid.cast::<GUID>().as_ref() }
+            .map_or_else(|| "null".to_owned(), |iid| format!("{iid:?}"));
+        log(&format!(
+            "presentation bridge: application GetBuffer index={index} IID={iid} result=0x{:08x} native12={} direct={}",
+            result as u32,
+            u32::from(self.native12()),
+            u32::from(self.direct())
+        ));
+    }
+
+    fn application_texture(&self, index: u32) -> Option<IUnknown> {
+        lock(&self.buffers)
+            .get(index as usize)
+            .and_then(Option::as_ref)
+            .map(|buffer| buffer.application().clone())
+    }
+
+    // Direct presentation: slot zero onto the D3D11 chain's buffer, then its Present.
+    fn present_direct(&self, physical: &Physical, event: &mut Event, sync: u32, flags: u32) -> i32 {
+        let chain = physical.chain.as_raw();
+        let mut step = "application buffer missing";
+        let mut result = E_UNEXPECTED;
+        if let Some(source) = self.application_texture(0) {
+            step = "direct copy";
+            result = unsafe { leaf::copy_direct(self.b(), chain, source.as_raw()) };
+            if !failed(result) {
+                step = "direct Present";
+                result = unsafe { leaf::physical_present(chain, sync, flags) };
+            }
+        }
+        if failed(result) && result != DXGI_ERROR_WAS_STILL_DRAWING {
+            self.report_step(step, result);
+            let (d3d11, _) = self.removed_reasons();
+            if failed(d3d11) {
+                self.fault(d3d11);
+            }
+        }
+        self.notify_presented(event, result);
+        result
+    }
+
+    fn next_serial(&self) -> u64 {
+        self.serial.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn facts(&self) -> rsf_d3d11p_facts {
+        // SAFETY: the record holds only pointers and integers.
+        let mut facts: rsf_d3d11p_facts = unsafe { std::mem::zeroed() };
+        unsafe { leaf::facts(self.b(), &mut facts) };
+        facts
+    }
+
+    fn api(&self) -> Option<&'static Provider> {
+        provider_api(self.provider_backend.load(Ordering::Relaxed))
+    }
+
+    // Every current provider status is a cached-only copy; SDK polling stays in the owner callbacks.
+    fn provider_status(&self) -> Option<rsf_fg_status> {
+        let provider = self.provider();
+        let status = self.api()?.status?;
+        if provider.is_null() {
+            return None;
+        }
+        let mut state = EMPTY_STATUS;
+        state.struct_size = size_of::<rsf_fg_status>() as u32;
+        (unsafe { status(provider, &mut state) } == OK).then_some(state)
+    }
+
+    fn publish_status(&self) {
+        let snapshot = self.provider_status();
+        let mut status = lock(&STATUS);
+        self.write_status(&mut status, snapshot.as_ref());
+    }
+
+    fn write_status(&self, status: &mut Snapshot, snapshot: Option<&rsf_fg_status>) {
+        let backend = self.provider_backend.load(Ordering::Relaxed);
+        if let Some(snapshot) = snapshot {
+            let _ = status.publish(backend, generation(), snapshot);
+        } else {
+            status.clear();
+        }
+    }
+
+    fn publish_owner_status(&self) -> Option<rsf_fg_status> {
+        let snapshot = self.provider_status();
+        // A Reflex-paced provider with a shared host leaves pacing with that host.
+        let host_paced = !self.host().is_null()
+            && snapshot
+                .as_ref()
+                .is_some_and(|state| state.pacing_owner == RSF_PACING_REFLEX);
+        HOST_PACED.store(host_paced, Ordering::SeqCst);
+        let mut status = lock(&STATUS);
+        status.activate(ACTIVE_BACKEND.load(Ordering::SeqCst), generation());
+        self.write_status(&mut status, snapshot.as_ref());
+        snapshot
+    }
+
+    fn receipt(&self, stage: &str, result: i32) {
+        if self.post_switch_frames.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let thread = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+        log(&format!(
+            "Bridge post-switch stage={stage} backend={} generation={} HRESULT=0x{:08x} thread={thread}",
+            ACTIVE_BACKEND.load(Ordering::SeqCst),
+            generation(),
+            result as u32
+        ));
+    }
+
+    fn generation_setup(&self, backend: u32) -> rsf_generation_setup {
+        let setup = settings();
+        let facts = self.facts();
+        let native12 = self.native12();
+        let mut value: rsf_generation_setup = unsafe { std::mem::zeroed() };
+        value.struct_size = size_of::<rsf_generation_setup>() as u32;
+        value.abi_version = RSF_FG_ABI_VERSION;
+        value.feature_major = backend;
+        value.streamline_host = self.host();
+        value.runtime_directory_utf8 = sdk_directory(backend);
+        value.depth_inverted = setup.depth_inverted;
+        value.depth_infinite = setup.depth_infinite;
+        value.view_space_to_meters = setup.units_to_meters;
+        let chain = &mut value.chain;
+        chain.struct_size = size_of_val(chain) as u32;
+        chain.abi_version = RSF_BACKEND_ABI_VERSION;
+        chain.d3d12_device = facts.graphics.device;
+        chain.d3d12_queue = facts.graphics.queue;
+        if backend != DLSS {
+            chain.d3d12_device = facts.graphics.native_device;
+            chain.d3d12_queue = if native12 {
+                facts.direct_queue
+            } else {
+                facts.graphics.native_queue
+            };
+        }
+        chain.hwnd = facts.window;
+        chain.width = facts.width;
+        chain.height = facts.height;
+        chain.format = facts.format;
+        chain.buffer_count = if native12 { facts.buffer_count } else { 3 };
+        chain.max_generated_frames = match setup.max_generated_frames {
+            0 => 3,
+            value => value,
+        };
+        chain.ui_mode = match setup.ui_mode {
+            0 => UI_MODE_NONE,
+            value => value,
+        };
+        chain.allow_tearing = u32::from(self.tearing.load(Ordering::Relaxed));
+        chain.log = setup.log;
+        chain.log_user = setup.user;
+        value
+    }
+
+    fn physical(&self) -> Option<Arc<Physical>> {
+        // Copy only the lease under the mutex. COM calls and releases run outside it.
+        lock(&self.physical).clone()
+    }
+
+    fn publish_physical(&self, chain: Result<IUnknown, i32>, queue: Raw) -> i32 {
+        let Ok(chain) = chain else { return INIT_FAILED };
+        if queue.is_null() {
+            return INIT_FAILED;
+        }
+        let physical = Arc::new(Physical::new(chain, unsafe { com_ref::retain(queue) }));
+        let mut current = lock(&self.physical);
+        if current.is_some() {
+            return INIT_FAILED;
+        }
+        *current = Some(physical);
+        OK
+    }
+
+    fn take_physical(&self) -> Option<Arc<Physical>> {
+        lock(&self.physical).take()
+    }
+
+    fn retire_unpublished(&self) -> i32 {
+        let mut pending = lock(&self.unpublished_provider);
+        let Some((backend, session)) = *pending else {
+            return OK;
+        };
+        let result = destroy_provider(provider_api(backend), session as Raw);
+        if result == OK {
+            *pending = None;
+        }
+        result
+    }
+
+    fn discard_unpublished(&self, backend: u32, session: Raw) -> i32 {
+        if session.is_null() {
+            return OK;
+        }
+        *lock(&self.unpublished_provider) = Some((backend, session as usize));
+        self.retire_unpublished()
+    }
+
+    fn create_physical(&self, backend: u32) -> i32 {
+        let retired = self.retire_unpublished();
+        if retired != OK {
+            return retired;
+        }
+        if backend == 0 {
+            let facts = self.facts();
+            // D3D11 application bindings belong to the virtual buffers. The plain physical
+            // D3D12 chain only presents copies. Native D3D12 keeps its application buffer shape.
+            let (creation_queue, buffer_count, buffer_usage) = if facts.native12 != 0 {
+                (facts.direct_queue, 0, 0)
+            } else {
+                (
+                    facts.graphics.native_queue,
+                    3,
+                    DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                )
+            };
+            let plan = rsf_d3d11p_plain_plan {
+                queue: creation_queue,
+                swap_effect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                flags: if facts.tearing != 0 {
+                    DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+                } else {
+                    0
+                },
+                buffer_count,
+                buffer_usage,
+            };
+            let mut queue = null_mut();
+            let chain = acquire_resource(|out| unsafe {
+                leaf::create_plain(self.b(), &plan, out, &mut queue)
+            });
+            return self.publish_physical(chain, queue);
+        }
+        let setup = self.generation_setup(backend);
+        let Some(api) = provider_api(backend) else {
+            return NOT_SUPPORTED;
+        };
+        let (Some(create), Some(configure)) = (api.create, api.configure) else {
+            return NOT_SUPPORTED;
+        };
+        let mut provider = null_mut();
+        let mut chain = null_mut();
+        let mut result = unsafe { create(&setup, &mut provider, &mut chain) };
+        created_provider(provider);
+        if result != OK {
+            let runtime = if setup.runtime_directory_utf8.is_null() {
+                String::new()
+            } else {
+                unsafe { CStr::from_ptr(setup.runtime_directory_utf8) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            log(&format!(
+                "Generation provider create failed backend={backend} result={result} allowed=0x{:x} size={}x{} runtime={runtime}",
+                settings().allowed_backend_choices,
+                setup.chain.width,
+                setup.chain.height
+            ));
+        }
+        if result == OK && chain.is_null() {
+            result = INIT_FAILED;
+        }
+        if result == OK {
+            result = unsafe { configure(provider, &FG_OFF) };
+        }
+        if result == OK {
+            let chain4 = acquire_resource(|out| unsafe { leaf::query_chain4(chain, out) });
+            result = self.publish_physical(chain4, setup.chain.d3d12_queue);
+        }
+        if result == OK {
+            self.provider_backend.store(backend, Ordering::Relaxed);
+            self.provider.store(provider, Ordering::Release);
+        } else {
+            let retired = self.discard_unpublished(backend, provider);
+            if retired != OK {
+                return retired;
+            }
+        }
+        result
+    }
+
+    // Joins the shared queues and the provider's retirement fence.
+    fn drain(&self) -> i32 {
+        // Direct presentation submits no D3D12 work.
+        if self.direct() {
+            return S_OK;
+        }
+        let (interop, graphics, (fence, event)) = {
+            let sync = lock(&self.sync);
+            (sync.queue(), sync.graphics_queue, sync.completion())
+        };
+        let Some(graphics) = graphics else {
+            return S_OK;
+        };
+        if fence.is_null() {
+            return S_OK;
+        }
+        if !interop.is_null()
+            && failed(unsafe { leaf::signal_wait(interop, fence, event, self.next_serial()) })
+        {
+            return E_FAIL;
+        }
+        if failed(unsafe { leaf::signal_wait(graphics.as_ptr(), fence, event, self.next_serial()) })
+        {
+            return E_FAIL;
+        }
+        let provider = self.provider();
+        if !provider.is_null() {
+            let mut retirement = rsf_fg_retirement {
+                struct_size: size_of::<rsf_fg_retirement>() as u32,
+                fence: null_mut(),
+                value: 0,
+            };
+            let retired = self
+                .api()
+                .and_then(|api| api.retirement)
+                .map_or(NOT_SUPPORTED, |call| unsafe {
+                    call(provider, &mut retirement)
+                });
+            if retired != OK
+                || failed(unsafe { leaf::wait_fence(retirement.fence, event, retirement.value) })
+            {
+                return E_FAIL;
+            }
+        }
+        S_OK
+    }
+
+    fn creation_pending(&self) -> bool {
+        self.physical_creation.load(Ordering::Acquire) != PhysicalCreation::Idle as u8
+    }
+
+    fn ensure_physical(&self) -> Result<Arc<Physical>, i32> {
+        // Never create the HWND owner from an outer wrapper's constructor query.
+        if SCOPED.load(Ordering::Acquire) && SCOPE_TOKEN.get() != 0 {
+            return Err(DXGI_ERROR_WAS_STILL_DRAWING);
+        }
+        if self.faulted.load(Ordering::Acquire) {
+            return Err(DXGI_ERROR_DEVICE_REMOVED);
+        }
+        if self.direct_pending.load(Ordering::Acquire) {
+            return self.direct_physical();
+        }
+        match self.physical_creation.compare_exchange(
+            PhysicalCreation::Pending as u8,
+            PhysicalCreation::Creating as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {}
+            Err(state) if state == PhysicalCreation::Creating as u8 => {
+                return Err(DXGI_ERROR_WAS_STILL_DRAWING);
+            }
+            Err(_) => return self.physical().ok_or(DXGI_ERROR_WAS_STILL_DRAWING),
+        }
+        // Overlay creation callbacks retain per-call device and queue state. A provider's
+        // nested native creation happens after the engine's factory call returns.
+        creating(|| self.create_lazily())
+    }
+
+    fn create_lazily(&self) -> Result<Arc<Physical>, i32> {
+        let host = self.host();
+        if !host.is_null() && ACTIVE_BACKEND.load(Ordering::SeqCst) != DLSS {
+            let loaded = unsafe { leaf::host_generation_load(host.cast(), 0) };
+            if loaded != OK {
+                self.report_step("generation host load", loaded);
+                self.physical_creation
+                    .store(PhysicalCreation::Pending as u8, Ordering::Release);
+                return Err(E_FAIL);
+            }
+        }
+        let result = self.create_physical(ACTIVE_BACKEND.load(Ordering::SeqCst));
+        if result != OK {
+            SWITCH_RESULT.store(result, Ordering::SeqCst);
+            ACTIVE_BACKEND.store(0, Ordering::SeqCst);
+            let plain = self.create_physical(0);
+            if plain != OK {
+                if lock(&self.unpublished_provider).is_some() {
+                    self.physical_creation
+                        .store(PhysicalCreation::Pending as u8, Ordering::Release);
+                    return Err(DXGI_ERROR_WAS_STILL_DRAWING);
+                }
+                return self.creation_failed("plain physical creation", plain);
+            }
+        }
+        let Some(physical) = self.physical() else {
+            return self.creation_failed("physical publication", INIT_FAILED);
+        };
+        ACTIVE_SESSION.store(self.provider(), Ordering::Release);
+        let _ = self.publish_owner_status();
+        self.physical_creation
+            .store(PhysicalCreation::Idle as u8, Ordering::Release);
+        Ok(physical)
+    }
+
+    // The bridge could not create its chain. Native D3D12 owns no other route; a D3D11 facade
+    // presents the application's frame directly.
+    fn creation_failed(&self, step: &'static str, result: i32) -> Result<Arc<Physical>, i32> {
+        self.physical_creation
+            .store(PhysicalCreation::Idle as u8, Ordering::Release);
+        if self.native12() {
+            self.report_step(step, result);
+            self.faulted.store(true, Ordering::Release);
+            return Err(E_FAIL);
+        }
+        self.retreat(step, result);
+        self.direct_physical()
+    }
+
+    fn direct_physical(&self) -> Result<Arc<Physical>, i32> {
+        if self.faulted.load(Ordering::Acquire) {
+            return Err(E_FAIL);
+        }
+        self.enter_direct()?;
+        self.physical().ok_or(E_FAIL)
+    }
+
+    fn allocate_application_buffers(
+        &self,
+        facts: &rsf_d3d11p_facts,
+    ) -> Result<ApplicationBuffers, i32> {
+        let mut batch = ApplicationBuffers::default();
+        let slots = batch
+            .get_mut(..facts.buffer_count as usize)
+            .filter(|slots| !slots.is_empty())
+            .ok_or(E_INVALIDARG)?;
+        if self.native12() {
+            for slot in slots {
+                let resource = acquire_resource(|out| unsafe {
+                    leaf::create_render_buffer(
+                        self.b(),
+                        facts.width,
+                        facts.height,
+                        facts.format,
+                        out,
+                    )
+                })?;
+                *slot = Some(ApplicationBuffer::Render(resource));
+            }
+        } else {
+            let setup = SurfaceSetup {
+                struct_size: size_of::<SurfaceSetup>() as u32,
+                abi_version: shared_surface::ABI_VERSION,
+                width: facts.width,
+                height: facts.height,
+                format: facts.format,
+                render_target: 1,
+                log: settings().log,
+                log_user: settings().user,
+                unordered_access: u32::from(facts.buffer_usage & DXGI_USAGE_UNORDERED_ACCESS != 0),
+            };
+            // Direct presentation copies on the application's device; no D3D12 peer is opened.
+            let direct = self.direct();
+            let device12 = if direct {
+                null_mut()
+            } else {
+                facts.graphics.native_device
+            };
+            if (!direct && device12.is_null())
+                || !shared_surface::valid_surface(facts.device11, &setup)
+            {
+                return Err(E_FAIL);
+            }
+            let platform = unsafe { &*leaf::shared_surface_platform() };
+            for slot in slots {
+                let surface = unsafe {
+                    shared_surface::create_surface(platform, facts.device11, device12, &setup)
+                }
+                .map_err(|_| E_FAIL)?;
+                *slot = Some(ApplicationBuffer::Shared(surface));
+            }
+        }
+        Ok(batch)
+    }
+
+    fn create_application_buffers(&self, facts: &rsf_d3d11p_facts) -> Result<(), i32> {
+        let batch = self.allocate_application_buffers(facts)?;
+        *lock(&self.buffers) = batch;
+        Ok(())
+    }
+
+    fn take_application_buffers(&self) -> ApplicationBuffers {
+        std::mem::take(&mut *lock(&self.buffers))
+    }
+
+    fn buffers_referenced(&self) -> bool {
+        lock(&self.buffers)
+            .iter()
+            .flatten()
+            .any(|buffer| unsafe { leaf::buffer_referenced(buffer.application().as_raw()) != 0 })
+    }
+
+    unsafe fn get_buffer(&self, index: u32, iid: *const c_void, out: *mut Raw) -> i32 {
+        // Wrappers can query virtual buffers before any physical chain is created.
+        if !self.native12() || switching() {
+            let buffer = lock(&self.buffers)
+                .get(index as usize)
+                .and_then(Option::as_ref)
+                .map(|buffer| buffer.application().clone());
+            return buffer.map_or(DXGI_ERROR_INVALID_CALL, |buffer| unsafe {
+                leaf::query_buffer_interface(buffer.as_raw(), iid, out)
+            });
+        }
+        let physical = match self.ensure_physical() {
+            Ok(physical) => physical,
+            Err(error) => {
+                if self.failed_buffer_reports.fetch_add(1, Ordering::Relaxed) < 4 {
+                    let pending = u32::from(self.creation_pending());
+                    unsafe { leaf::log_buffer_refusal(self.b(), index, iid, error, pending) };
+                }
+                return error;
+            }
+        };
+        unsafe { leaf::get_physical_buffer(physical.chain.as_raw(), index, iid, out) }
+    }
+
+    fn acquire_backbuffer(&self, physical: &Physical) -> Result<IUnknown, i32> {
+        acquire_resource(|out| unsafe { leaf::acquire_backbuffer(physical.chain.as_raw(), out) })
+    }
+
+    fn copy_source(&self, index: u32) -> Option<IUnknown> {
+        lock(&self.buffers)
+            .get(index as usize)
+            .and_then(Option::as_ref)
+            .and_then(ApplicationBuffer::copy_source)
+            .cloned()
+    }
+
+    // Creates the slot pairs in slot order. A refusal keeps the earlier pairs, which teardown
+    // releases or retains with the rest of the unpublished facade.
+    fn create_command_slots(&self) -> i32 {
+        let mut pairs = Vec::with_capacity(SLOTS);
+        let mut result = S_OK;
+        while pairs.len() < SLOTS {
+            let (mut allocator, mut list) = (null_mut(), null_mut());
+            let created = unsafe { leaf::create_slot(self.b(), &mut allocator, &mut list) };
+            let list = unsafe { com_ref::owned(list) };
+            let allocator = unsafe { com_ref::owned(allocator) };
+            match (list, allocator) {
+                (Some(list), Some(allocator)) if !failed(created) => {
+                    pairs.push(Commands { list, allocator });
+                }
+                _ => {
+                    result = E_FAIL;
+                    break;
+                }
+            }
+        }
+        *lock(&self.commands) = Some(Arc::new(CommandSlots(pairs)));
+        result
+    }
+
+    // Pins the slot pairs for one Present. Publication requires all three.
+    fn command_slots(&self) -> Option<Arc<CommandSlots>> {
+        lock(&self.commands)
+            .clone()
+            .filter(|slots| slots.0.len() == SLOTS)
+    }
+
+    fn take_command_slots(&self) -> Option<Arc<CommandSlots>> {
+        lock(&self.commands).take()
+    }
+
+    // The facade's last reference is gone, so Present holds no pin. Each list releases before
+    // its allocator, in slot order or last slot first.
+    fn release_command_slots(&self, last_first: bool) {
+        if let Some(slots) = self.take_command_slots()
+            && let Ok(CommandSlots(mut pairs)) = Arc::try_unwrap(slots)
+        {
+            if last_first {
+                pairs.reverse();
+            }
+            drop(pairs);
+        }
+    }
+
+    fn reset_application_frames(&self) {
+        self.render_index.store(0, Ordering::Relaxed);
+        self.application_serial.store(0, Ordering::Relaxed);
+        for fence in &self.application_fences {
+            fence.store(0, Ordering::Relaxed);
+        }
+        let ready = lock(&self.sync).ready_event();
+        if !ready.is_null() {
+            let _ = unsafe { leaf::application_ready(ready, null_mut(), 0) };
+        }
+    }
+
+    fn initialize(
+        &self,
+        factory: Raw,
+        source: Raw,
+        request: &rsf_d3d11p_request,
+        desc: *const c_void,
+    ) -> i32 {
+        let b = self.b();
+        let setup = settings();
+        let identity = prepared().is_some_and(|value| value.identity);
+        let frequency = crate::qpc_frequency();
+        lock(&self.timing).tick_ms = if frequency > 0 {
+            1000.0 / frequency as f64
+        } else {
+            0.0
+        };
+        let native12 = unsafe { leaf::init_source(b, factory, source, desc) } != 0;
+        self.native12.store(native12, Ordering::Relaxed);
+        if setup.backend == AUTO {
+            let mut adapter = rsf_d3d11p_adapter::default();
+            let result = unsafe { leaf::owning_adapter(b, source, &mut adapter) };
+            if failed(result) {
+                return refused_initialization("owning adapter", result, E_FAIL);
+            }
+            let allowed = setup.allowed_backend_choices;
+            // An unrestricted setup keeps the adapter default, including Off.
+            let backend = if allowed == 0 {
+                adapter.default_backend
+            } else {
+                rsf_fg_select_auto_backend(adapter.default_backend, allowed)
+            };
+            ACTIVE_BACKEND.store(backend, Ordering::SeqCst);
+            log(&format!(
+                "Auto FG selected backend {backend} from owning adapter vendor=0x{:x} device=0x{:x}",
+                adapter.vendor, adapter.device
+            ));
+        }
+        let explicit = prepared().is_some_and(|value| value.streamline_explicit);
+        if native12 {
+            // Native D3D12 plugins use the engine's device and queue.
+            if setup.backend == DLSS && setup.runtime_switching == 0 {
+                return DXGI_ERROR_UNSUPPORTED;
+            }
+            let result = unsafe { leaf::native_device(b) };
+            if failed(result) {
+                return refused_initialization("native device", result, result);
+            }
+            if setup.runtime_switching != 0 && explicit {
+                let mut adopted = NOT_SUPPORTED;
+                if unsafe { leaf::adopt_host(b, u32::from(identity), &mut adopted) } != 0 {
+                    // Only INIT_FAILED can follow slInit, slUpgradeInterface or slSetD3DDevice on the
+                    // engine device, which may then be half registered. Every other refusal happens
+                    // before the device is touched and only leaves DLSS-G unavailable.
+                    if adopted == INIT_FAILED {
+                        log("Native D3D12 shared Streamline registration refused");
+                        return DXGI_ERROR_UNSUPPORTED;
+                    }
+                    if adopted != OK {
+                        log(&format!(
+                            "Native D3D12 shared Streamline host unavailable ({adopted}). DLSS-G disabled"
+                        ));
+                    }
+                }
+            }
+        } else {
+            let result = unsafe { leaf::d3d11_device(b, source) };
+            if failed(result) {
+                return refused_initialization("D3D11 device", result, result);
+            }
+        }
+        // The host decides which adapters Streamline serves. Only a strict DLSS request (no runtime
+        // switching) needs it; otherwise a refusal leaves FidelityFX, XeSS and Off available.
+        let dlss_required =
+            setup.runtime_switching == 0 && (setup.backend == 0 || setup.backend == DLSS);
+        if !native12 && (dlss_required || setup.runtime_switching != 0) {
+            let result = if identity {
+                unsafe { leaf::create_host(b) }
+            } else {
+                NOT_SUPPORTED
+            };
+            if result != OK {
+                log(&format!(
+                    "Streamline FG host refused ({result}); {}",
+                    if dlss_required {
+                        "retaining D3D11 presentation"
+                    } else {
+                        "DLSS-G unavailable, other generation backends remain"
+                    }
+                ));
+                if dlss_required {
+                    return DXGI_ERROR_UNSUPPORTED;
+                }
+            }
+        }
+        self.host.store(unsafe { leaf::host(b) }, Ordering::Release);
+        let result = unsafe { leaf::resolve_graphics(b) };
+        if failed(result) {
+            return refused_initialization("resolve graphics", result, result);
+        }
+        self.tearing.store(
+            unsafe { leaf::tearing_supported(b) } != 0,
+            Ordering::Relaxed,
+        );
+        let mut choices = RSF_FG_BACKEND_ALL | 1;
+        if unsafe { leaf::fsr4_supported(b, setup.fsr4_directory_utf8) } == 0 {
+            choices &= !bit(FSR4);
+        }
+        if setup.allowed_backend_choices != 0 {
+            choices &= setup.allowed_backend_choices | 1;
+        }
+        BACKEND_CHOICES.store(choices, Ordering::SeqCst);
+        let ready = native12
+            && setup.runtime_switching != 0
+            && request.flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT != 0;
+        let mut sync = PresentationSync::default();
+        let result = sync.initialize(&self.facts(), ready);
+        *lock(&self.sync) = sync;
+        if failed(result) {
+            return refused_initialization("presentation sync", result, E_FAIL);
+        }
+        if !native12 {
+            let fenced = unsafe { leaf::create_upload_fence(b) };
+            if failed(fenced) {
+                return refused_initialization("shared upload fence", fenced, E_FAIL);
+            }
+            if let Err(result) = self.create_application_buffers(&self.facts()) {
+                return refused_initialization("shared application buffers", result, E_FAIL);
+            }
+            self.render_index.store(0, Ordering::Relaxed);
+        }
+        let slots = self.create_command_slots();
+        if failed(slots) {
+            return refused_initialization("command slots", slots, E_FAIL);
+        }
+        if setup.runtime_switching != 0 {
+            if native12 {
+                if let Err(result) = self.create_application_buffers(&self.facts()) {
+                    return refused_initialization("render buffers", result, E_FAIL);
+                }
+                self.reset_application_frames();
+            }
+            self.physical_creation
+                .store(PhysicalCreation::Pending as u8, Ordering::Release);
+        } else {
+            let backend = ACTIVE_BACKEND.load(Ordering::SeqCst);
+            let result = self.create_physical(backend);
+            if result != OK {
+                log(&format!(
+                    "Generation backend={backend} create refused ({result}); retaining engine presentation"
+                ));
+                return E_FAIL;
+            }
+        }
+        // A chain created for fullscreen gets the window that state stands for at creation.
+        if request.windowed == 0 {
+            self.enter_borderless(null_mut());
+        }
+        log(if self.tearing.load(Ordering::Relaxed) {
+            "presentation bridge: windowed flip chain supports immediate tearing presentation"
+        } else {
+            "presentation bridge: DXGI tearing unavailable; using supported flip presentation"
+        });
+        let facts = self.facts();
+        ACTIVE_HOST.store(self.host(), Ordering::Release);
+        ACTIVE_SESSION.store(self.provider(), Ordering::Release);
+        let interop_queue = lock(&self.sync).queue();
+        lock(&ACTIVE_GRAPHICS).0 = Graphics {
+            queue: interop_queue,
+            native_queue: null_mut(),
+            ..facts.graphics
+        };
+        ACTIVE_BRIDGE.store(b, Ordering::Release);
+        ACTIVE_CHAIN.store(ptr::from_ref(self).cast_mut(), Ordering::Release);
+        let snapshot = self.publish_owner_status();
+        if setup.log.is_some()
+            && let Some(status) = snapshot
+        {
+            let version = unsafe { CStr::from_ptr(status.version_name.as_ptr()) };
+            log(&format!(
+                "Generation support={} max generated={} dynamic={} VSync={} minimum={} latency available={} version={}",
+                status.supported,
+                status.max_generated_frames,
+                status.dynamic_supported,
+                status.vsync_supported,
+                status.min_dimension,
+                status.low_latency_available,
+                version.to_string_lossy()
+            ));
+        }
+        log(if native12 {
+            "presentation bridge: native D3D12 engine queue, one vendor generation chain"
+        } else {
+            "presentation bridge: D3D11 facade, one vendor D3D12 generation chain, separate interop queue"
+        });
+        S_OK
+    }
+
+    // A requested provider change happens at a drained Present boundary.
+    fn switch_if_requested(&self) {
+        let selected = REQUESTED_BACKEND.swap(NO_REQUEST, Ordering::SeqCst);
+        if selected != NO_REQUEST {
+            self.switch_provider(selected);
+        }
+    }
+
+    fn defer_switch(backend: u32) {
+        // Retry at another completed Present without displacing a newer request.
+        let _ = REQUESTED_BACKEND.compare_exchange(
+            NO_REQUEST,
+            backend,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
+    fn switch_provider(&self, backend: u32) {
+        let b = self.b();
+        let setup = settings();
+        let allowed = setup.allowed_backend_choices;
+        if backend != 0 && allowed != 0 && allowed & bit(backend) == 0 {
+            SWITCH_RESULT.store(NOT_SUPPORTED, Ordering::SeqCst);
+            return;
+        }
+        if setup.runtime_switching == 0 || (backend == DLSS && self.host().is_null()) {
+            SWITCH_RESULT.store(NOT_SUPPORTED, Ordering::SeqCst);
+            return;
+        }
+        if backend == ACTIVE_BACKEND.load(Ordering::SeqCst)
+            && !self.switch_incomplete.load(Ordering::Acquire)
+        {
+            SWITCH_RESULT.store(0, Ordering::SeqCst);
+            return;
+        }
+        let _guard = match PROVIDER_GUARD.try_write() {
+            Ok(guard) => guard,
+            Err(TryLockError::Poisoned(guard)) => guard.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                // A pacer may still need this Present thread to finish the older frame.
+                Self::defer_switch(backend);
+                return;
+            }
+        };
+        let previous = ACTIVE_BACKEND.load(Ordering::SeqCst);
+        let mut result = if failed(self.drain()) {
+            NOT_READY
+        } else {
+            self.retire_unpublished()
+        };
+        if result == OK
+            && !self.switch_incomplete.load(Ordering::Acquire)
+            && backend != 0
+            && backend != DLSS
+        {
+            let mut probe_setup = self.generation_setup(backend);
+            probe_setup.chain.hwnd = null_mut();
+            result = match provider_api(backend).and_then(|api| api.create) {
+                Some(create) => {
+                    let mut probe = null_mut();
+                    let mut probe_chain = null_mut();
+                    let created = unsafe { create(&probe_setup, &mut probe, &mut probe_chain) };
+                    created_provider(probe);
+                    let retired = self.discard_unpublished(backend, probe);
+                    if retired == OK { created } else { retired }
+                }
+                _ => NOT_SUPPORTED,
+            };
+        }
+        if result != OK {
+            SWITCH_RESULT.store(result, Ordering::SeqCst);
+            if self.switch_incomplete.load(Ordering::Acquire)
+                || lock(&self.unpublished_provider).is_some()
+            {
+                Self::defer_switch(backend);
+            }
+            return;
+        }
+        let outgoing = {
+            let mut current = lock(&self.physical);
+            // DXGI needs the old HWND chain released before its replacement. A query or
+            // window operation may hold it on a thread that needs this Present to return.
+            if current
+                .as_ref()
+                .is_some_and(|pair| Arc::strong_count(pair) != 1)
+            {
+                Self::defer_switch(backend);
+                return;
+            }
+            current.take()
+        };
+        let old_chain = outgoing
+            .as_ref()
+            .map_or(null_mut(), |pair| pair.chain.as_raw());
+        log(&format!(
+            "Generation switch identity facade={} old_physical={} old_provider={} requested={backend}",
+            hex(b),
+            hex(old_chain),
+            hex(self.provider())
+        ));
+        lock(&STATUS).invalidate();
+        drop(outgoing);
+        ACTIVE_SESSION.store(null_mut(), Ordering::Release);
+        HOST_PACED.store(false, Ordering::SeqCst);
+        let retired = destroy_provider(self.api(), self.provider());
+        if retired != OK {
+            self.switch_incomplete.store(true, Ordering::Release);
+            SWITCH_RESULT.store(retired, Ordering::SeqCst);
+            Self::defer_switch(backend);
+            return;
+        }
+        self.switch_incomplete.store(false, Ordering::Release);
+        self.provider.store(null_mut(), Ordering::Release);
+        self.provider_backend.store(0, Ordering::Relaxed);
+        CREATING.set(true);
+        let host = self.host();
+        if !host.is_null() {
+            let _ = unsafe { leaf::host_reflex_off(host) };
+            result = unsafe { leaf::host_generation_load(host.cast(), u32::from(backend == DLSS)) };
+        }
+        if result == OK {
+            result = self.create_physical(backend);
+        }
+        let mut effective = backend;
+        if result != OK {
+            effective = previous;
+            if !host.is_null() {
+                let _ =
+                    unsafe { leaf::host_generation_load(host.cast(), u32::from(previous == DLSS)) };
+            }
+            if self.create_physical(previous) != OK {
+                effective = 0;
+                if self.create_physical(0) != OK {
+                    if lock(&self.unpublished_provider).is_some() {
+                        CREATING.set(false);
+                        self.switch_incomplete.store(true, Ordering::Release);
+                        SWITCH_RESULT.store(NOT_READY, Ordering::SeqCst);
+                        Self::defer_switch(backend);
+                        return;
+                    }
+                    self.faulted.store(true, Ordering::Release);
+                }
+            }
+        }
+        CREATING.set(false);
+        let physical = self.physical();
+        ACTIVE_BACKEND.store(effective, Ordering::SeqCst);
+        ACTIVE_SESSION.store(self.provider(), Ordering::Release);
+        CHAIN_GENERATION.fetch_add(1, Ordering::SeqCst);
+        let _ = self.publish_owner_status();
+        {
+            let mut timing = lock(&self.timing);
+            timing.epoch = 0;
+            timing.reset();
+        }
+        self.post_switch_frames.store(4, Ordering::Relaxed);
+        SWITCH_RESULT.store(result, Ordering::SeqCst);
+        log(&format!(
+            "Generation runtime switch requested={backend} effective={effective} result={result} generation={}",
+            generation()
+        ));
+        log(&format!(
+            "Generation switch identity facade={} new_physical={} new_provider={} effective={effective}",
+            hex(b),
+            hex(physical
+                .as_ref()
+                .map_or(null_mut(), |pair| pair.chain.as_raw())),
+            hex(self.provider())
+        ));
+    }
+
+    fn application_frame_complete(&self, value: u64) -> i32 {
+        let (ready, fence) = {
+            let sync = lock(&self.sync);
+            (sync.ready_event(), sync.completion().0)
+        };
+        if ready.is_null() {
+            return S_OK;
+        }
+        let frame = self.application_serial.fetch_add(1, Ordering::Relaxed) + 1;
+        self.application_fences[(frame % APPLICATION_FENCES as u64) as usize]
+            .store(value, Ordering::Relaxed);
+        let latency = u64::from(self.application_latency.load(Ordering::Relaxed));
+        if frame < latency {
+            return unsafe { leaf::application_ready(ready, null_mut(), 0) };
+        }
+        let available = self.application_fences
+            [((frame - latency + 1) % APPLICATION_FENCES as u64) as usize]
+            .load(Ordering::Relaxed);
+        unsafe { leaf::application_ready(ready, fence, available) }
+    }
+
+    fn notify_presented(&self, event: &mut Event, result: i32) {
+        event.completed = 1;
+        event.result = result;
+        unsafe { leaf::observer_present(event) };
+        if let Some(callback) = settings().present_event {
+            unsafe { callback(settings().user, event) };
+        }
+    }
+
+    // Physical Present and the provider callbacks around it, after the frame's list was submitted.
+    fn present_physical(
+        &self,
+        chain: Raw,
+        event: &mut Event,
+        mut sync: u32,
+        flags: u32,
+        ticks: &mut [u64; 6],
+    ) -> i32 {
+        let setup = settings();
+        let debug = setup.debug_timing != 0;
+        self.receipt("physical-enter", S_OK);
+        // Multi-refresh intervals throttle generated output as well as real frames. XeLL requires
+        // interval 1 when VSync is enabled; DLSS-G also clamps it. Preserve the application's
+        // VSync choice while normalizing its cadence at the owned physical chain.
+        if sync > 1
+            && let Some(state) = self.provider_status()
+            && (state.effective_mode != RSF_FG_OFF
+                || (state.pacing_owner == RSF_PACING_XELL
+                    && state.effective_reflex != RSF_REFLEX_OFF))
+        {
+            if self.last_normalized_sync.swap(sync, Ordering::Relaxed) != sync {
+                log(&format!(
+                    "Physical Present interval normalized: requested={sync} effective=1 backend={} for FG/latency pacing",
+                    self.provider_backend.load(Ordering::Relaxed)
+                ));
+            }
+            sync = 1;
+        }
+        let host = self.host();
+        let common = !host.is_null() && ACTIVE_BACKEND.load(Ordering::SeqCst) != DLSS;
+        if common && unsafe { leaf::host_present_common(host.cast(), chain, sync, flags, 1) } != OK
+        {
+            log("presentation bridge: shared Streamline common Present begin refused");
+            return E_FAIL;
+        }
+        if let Some(callback) = setup.latency_event {
+            unsafe { callback(setup.user, event) };
+        }
+        if debug {
+            ticks[3] = crate::now_qpc();
+        }
+        self.receipt("vendor-present-enter", S_OK);
+        let result = unsafe { leaf::physical_present(chain, sync, flags) };
+        self.receipt("vendor-present-done", result);
+        if common && unsafe { leaf::host_present_common(host.cast(), chain, sync, flags, 0) } != OK
+        {
+            log("presentation bridge: shared Streamline common Present end refused");
+        }
+        if debug {
+            ticks[4] = crate::now_qpc();
+        }
+        event.completed = 1;
+        event.result = result;
+        if let Some(callback) = setup.latency_event {
+            unsafe { callback(setup.user, event) };
+        }
+        let provider = self.provider();
+        if !provider.is_null()
+            && let Some(after) = self.api().and_then(|api| api.after_present)
+        {
+            unsafe { after(provider) };
+        }
+        self.publish_status();
+        self.receipt("retire-enter", S_OK);
+        if let Some(retire) = setup.retire {
+            unsafe { retire(setup.user, provider) };
+        }
+        self.receipt("retire-done", S_OK);
+        result
+    }
+
+    fn prepare_callback(&self, context: Raw, command: Raw, backbuffer: &IUnknown, sync: u32) {
+        let setup = settings();
+        if let Some(prepare) = setup.prepare {
+            unsafe {
+                prepare(
+                    setup.user,
+                    self.b(),
+                    context,
+                    command,
+                    backbuffer.as_raw(),
+                    self.host().cast::<rsf_streamline_host>(),
+                    self.provider(),
+                    sync,
+                )
+            };
+        }
+    }
+
+    fn present(&self, sync: u32, flags: u32) -> i32 {
+        let result = self.present_frame(sync, flags);
+        if flags & DXGI_PRESENT_TEST == 0 {
+            self.record_present(result);
+        }
+        result
+    }
+
+    fn present_frame(&self, sync: u32, flags: u32) -> i32 {
+        let b = self.b();
+        let setup = settings();
+        let debug = setup.debug_timing != 0;
+        let switching = setup.runtime_switching != 0;
+        if self.faulted.load(Ordering::Acquire) {
+            return DXGI_ERROR_DEVICE_REMOVED;
+        }
+        if flags & DXGI_PRESENT_TEST != 0 {
+            return self.ensure_physical().map_or_else(
+                |error| error,
+                |physical| unsafe { leaf::physical_present(physical.chain.as_raw(), sync, flags) },
+            );
+        }
+        // An incomplete provider teardown has no physical chain to present on.
+        if self.switch_incomplete.load(Ordering::Acquire) {
+            self.switch_if_requested();
+        }
+        self.receipt("application-enter", S_OK);
+        let physical = match self.ensure_physical() {
+            Ok(physical) => physical,
+            Err(error) => return error,
+        };
+        // A published facade has all three pairs. Its final Release comes after this pin ends.
+        let Some(commands) = self.command_slots() else {
+            return E_UNEXPECTED;
+        };
+        let chain = physical.chain.as_raw();
+        let queue = physical.queue.as_raw();
+        // Legacy discard chains cannot request the flip-model tearing creation flag. Translate
+        // VSync Off to the supported windowed immediate-present contract; bridge chains are
+        // always windowed, also while the application is in (borderless) fullscreen.
+        let mut physical_flags = flags & !DXGI_PRESENT_ALLOW_TEARING;
+        if sync == 0 && self.tearing.load(Ordering::Relaxed) {
+            physical_flags |= DXGI_PRESENT_ALLOW_TEARING;
+        }
+        self.last_present.store(
+            (u64::from(sync) << 32) | u64::from(physical_flags),
+            Ordering::Relaxed,
+        );
+        let mut ticks = [0_u64; 6];
+        if debug {
+            ticks[0] = crate::now_qpc();
+        }
+        let mut event = Event {
+            struct_size: size_of::<Event>() as u32,
+            completed: 0,
+            swapchain: b,
+            sync_interval: sync,
+            flags,
+            result: 0,
+            method: 0,
+        };
+        unsafe { leaf::observer_present(&mut event) };
+        if let Some(callback) = setup.present_event {
+            unsafe { callback(setup.user, &event) };
+        }
+        if let Some(callback) = setup.before_present {
+            unsafe { callback(setup.user, b) };
+        }
+        self.receipt("application-callbacks-done", S_OK);
+        if debug {
+            ticks[1] = crate::now_qpc();
+        }
+        if self.direct() {
+            return self.present_direct(&physical, &mut event, sync, physical_flags);
+        }
+        let mut result = E_FAIL;
+        let mut submission_fenced = false;
+        // The fence serial advances three times per frame, so it cannot also select the slot.
+        let index = self.next_slot.load(Ordering::Relaxed);
+        self.next_slot
+            .store((index + 1) % SLOTS as u32, Ordering::Relaxed);
+        let slot = &self.slot_fences[index as usize];
+        let pair = &commands.0[index as usize];
+        let (allocator, list) = (pair.allocator.as_raw(), pair.list.as_raw());
+        // The facade pins these borrowed references through Present, just like the slot set.
+        let (source_queue, (completion_fence, completion_event)) = {
+            let sync = lock(&self.sync);
+            (sync.queue(), sync.completion())
+        };
+        if self.native12() {
+            // Streamline requires CreateCommandQueue through its upgraded device, so its queue is
+            // not the engine queue. Join the engine's source work into it, and the copy back out.
+            let joined = queue != source_queue;
+            // Each step before the physical Present keeps its own HRESULT for the failure report.
+            // Each attempt completes the application notification, including nonblocking refusal.
+            let mut step = "source queue join";
+            let mut stage = DXGI_ERROR_DEVICE_REMOVED;
+            let source_joined = !joined
+                || !failed(unsafe {
+                    leaf::join(source_queue, queue, completion_fence, self.next_serial())
+                });
+            if source_joined {
+                let mut step_index = 0;
+                stage = unsafe {
+                    leaf::slot_reset(
+                        completion_fence,
+                        completion_event,
+                        allocator,
+                        list,
+                        slot.load(Ordering::Relaxed),
+                        &mut step_index,
+                    )
+                };
+                step = STEPS[(step_index as usize).min(STEPS.len() - 1)];
+            } else {
+                result = stage;
+            }
+            if source_joined && !failed(stage) {
+                let render_index = self.render_index.load(Ordering::Relaxed);
+                step = "physical GetBuffer";
+                let backbuffer = self.acquire_backbuffer(&physical);
+                match &backbuffer {
+                    Err(error) => stage = *error,
+                    Ok(backbuffer) => {
+                        let source = switching.then(|| self.copy_source(render_index)).flatten();
+                        if switching && source.is_none() {
+                            step = "render buffer missing";
+                            stage = E_UNEXPECTED;
+                        } else {
+                            if let Some(source) = &source {
+                                unsafe {
+                                    leaf::record_copy(b, list, backbuffer.as_raw(), source.as_raw())
+                                };
+                            }
+                            let command = unsafe { leaf::command_list(b, queue, list) };
+                            if command.is_null() {
+                                step = "command list unwrap";
+                                stage = E_FAIL;
+                            } else {
+                                self.prepare_callback(null_mut(), command, backbuffer, sync);
+                                self.publish_status();
+                                step = "command list Close";
+                                stage = unsafe { leaf::close_execute(queue, list, command) };
+                            }
+                            if !failed(stage) {
+                                if joined
+                                    && failed(unsafe {
+                                        leaf::join(
+                                            queue,
+                                            source_queue,
+                                            completion_fence,
+                                            self.next_serial(),
+                                        )
+                                    })
+                                {
+                                    // The submitted list stays covered by the slot fence below.
+                                    step = "present queue join";
+                                    stage = DXGI_ERROR_DEVICE_REMOVED;
+                                    result = stage;
+                                } else {
+                                    step = "physical Present";
+                                    result = self.present_physical(
+                                        chain,
+                                        &mut event,
+                                        sync,
+                                        physical_flags,
+                                        &mut ticks,
+                                    );
+                                    stage = result;
+                                }
+                            }
+                        }
+                    }
+                }
+                let fence = self.next_serial();
+                slot.store(fence, Ordering::Relaxed);
+                submission_fenced =
+                    !failed(unsafe { leaf::signal_slot(queue, completion_fence, fence) });
+                if !submission_fenced {
+                    step = "slot fence signal";
+                    stage = DXGI_ERROR_DEVICE_REMOVED;
+                    result = stage;
+                }
+                drop(backbuffer);
+            }
+            if failed(result) {
+                let step = CString::new(step).unwrap_or_default();
+                unsafe {
+                    leaf::log_present_failure(
+                        b,
+                        step.as_ptr(),
+                        stage,
+                        self.render_index.load(Ordering::Relaxed),
+                    )
+                };
+            }
+            self.notify_presented(&mut event, result);
+            drop(physical);
+            if !failed(result) && switching {
+                let available = self.application_frame_complete(slot.load(Ordering::Relaxed));
+                if failed(available) {
+                    return available;
+                }
+                self.application_presents.fetch_add(1, Ordering::Relaxed);
+                let count = self.facts().buffer_count.max(1);
+                let next = (self.render_index.load(Ordering::Relaxed) + 1) % count;
+                self.render_index.store(next, Ordering::Relaxed);
+                self.switch_if_requested();
+            }
+            // Only physical Present supplies this result. A failed slot signal replaces it
+            // with DEVICE_REMOVED because the submitted list cannot be reused safely.
+            if failed(result) && !(submission_fenced && result == DXGI_ERROR_WAS_STILL_DRAWING) {
+                unsafe {
+                    leaf::report_device_failure(b, result, ACTIVE_BACKEND.load(Ordering::SeqCst))
+                };
+                self.faulted.store(true, Ordering::Release);
+            }
+            return result;
+        }
+        self.receipt("d3d11-slot-enter", S_OK);
+        // Each step keeps its own HRESULT for the failure report.
+        let mut step_index = 0;
+        let mut stage = unsafe {
+            leaf::slot_reset(
+                completion_fence,
+                completion_event,
+                allocator,
+                list,
+                slot.load(Ordering::Relaxed),
+                &mut step_index,
+            )
+        };
+        let mut step = STEPS[(step_index as usize).min(STEPS.len() - 1)];
+        if !failed(stage) {
+            if debug {
+                ticks[2] = crate::now_qpc();
+            }
+            // Real DXGI backbuffers (the Off path) must be written on their creation queue.
+            // The separate interop queue stays with SR; the final upload uses the present queue.
+            // Submit the D3D11 signal with its preceding work before D3D12 waits on it.
+            step = "upload wait";
+            stage = unsafe { leaf::upload_wait(b, queue, self.next_serial()) };
+            if !failed(stage) {
+                step = "physical GetBuffer";
+                match self.acquire_backbuffer(&physical) {
+                    Err(error) => stage = error,
+                    Ok(backbuffer) => match self.copy_source(0) {
+                        None => {
+                            step = "application buffer missing";
+                            stage = E_UNEXPECTED;
+                        }
+                        Some(source) => {
+                            // The application writes slot zero. Generated frames use the
+                            // physical backbuffer.
+                            unsafe {
+                                leaf::record_copy(b, list, backbuffer.as_raw(), source.as_raw())
+                            };
+                            let command = unsafe { leaf::command_list(b, queue, list) };
+                            if command.is_null() {
+                                step = "command list unwrap";
+                                stage = E_FAIL;
+                            } else {
+                                self.prepare_callback(
+                                    unsafe { leaf::context11(b) },
+                                    command,
+                                    &backbuffer,
+                                    sync,
+                                );
+                                self.publish_status();
+                                step = "command list Close";
+                                stage = unsafe { leaf::close_execute(queue, list, command) };
+                                if !failed(stage) {
+                                    step = "upload return";
+                                    stage = unsafe {
+                                        leaf::upload_return(b, queue, self.next_serial())
+                                    };
+                                }
+                                if !failed(stage) {
+                                    step = "physical Present";
+                                    result = self.present_physical(
+                                        chain,
+                                        &mut event,
+                                        sync,
+                                        physical_flags,
+                                        &mut ticks,
+                                    );
+                                    stage = result;
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+            let fence = self.next_serial();
+            slot.store(fence, Ordering::Relaxed);
+            submission_fenced =
+                !failed(unsafe { leaf::signal_slot(queue, completion_fence, fence) });
+            if !submission_fenced {
+                step = "slot fence signal";
+                stage = DXGI_ERROR_DEVICE_REMOVED;
+                result = stage;
+            }
+        }
+        self.receipt("application-complete", result);
+        self.notify_presented(&mut event, result);
+        drop(physical);
+        let frames = self.post_switch_frames.load(Ordering::Relaxed);
+        if frames != 0 {
+            self.post_switch_frames.store(frames - 1, Ordering::Relaxed);
+        }
+        if debug && !failed(result) {
+            ticks[5] = crate::now_qpc();
+            self.trace_pacing(&ticks, index, sync, physical_flags);
+        }
+        if !failed(result) && switching {
+            self.switch_if_requested();
+        }
+        // A frame the bridge lost costs this one Present, never the session's image.
+        if failed(result) && !(submission_fenced && result == DXGI_ERROR_WAS_STILL_DRAWING) {
+            self.retreat(step, if failed(stage) { stage } else { result });
+        }
+        if !failed(result) && settings().log.is_some() {
+            let state = self.provider_status();
+            let line = window_line(
+                &mut lock(&self.window),
+                crate::now_qpc(),
+                crate::qpc_frequency(),
+                state.as_ref(),
+                ACTIVE_BACKEND.load(Ordering::SeqCst),
+            );
+            if let Some(line) = line {
+                log(&line);
+            }
+        }
+        result
+    }
+
+    fn trace_pacing(&self, ticks: &[u64; 6], index: u32, sync: u32, physical_flags: u32) {
+        let setup = settings();
+        if setup.debug_timing == 0 || setup.log.is_none() || self.provider().is_null() {
+            return;
+        }
+        let Some(state) = self.provider_status() else {
+            return;
+        };
+        let mut timing = lock(&self.timing);
+        if timing.tick_ms == 0.0 {
+            return;
+        }
+        let tick_ms = timing.tick_ms;
+        let end = ticks[5];
+        if timing.epoch == 0 {
+            timing.epoch = end;
+            timing.sdk_start = state.total_presented;
+            timing.previous = ticks[0];
+            return;
+        }
+        let interval = ticks[0].wrapping_sub(timing.previous) as f64 * tick_ms;
+        timing.previous = ticks[0];
+        timing.interval_min = if timing.frames != 0 {
+            timing.interval_min.min(interval)
+        } else {
+            interval
+        };
+        timing.interval_max = timing.interval_max.max(interval);
+        timing.frames += 1;
+        timing.slots |= 1 << index;
+        for i in 0..5 {
+            let elapsed = ticks[i + 1].wrapping_sub(ticks[i]) as f64 * tick_ms;
+            timing.sum[i] += elapsed;
+            timing.max[i] = timing.max[i].max(elapsed);
+        }
+        let elapsed = end.wrapping_sub(timing.epoch) as f64 * tick_ms;
+        if elapsed < 1000.0 {
+            return;
+        }
+        let frames = timing.frames as f64;
+        let mut text = format!(
+            "FG pacing frames={} rendered={:.1} presented={:.1} interval_ms={:.2}..{:.2}",
+            timing.frames,
+            frames * 1000.0 / elapsed,
+            state.total_presented.wrapping_sub(timing.sdk_start) as f64 * 1000.0 / elapsed,
+            timing.interval_min,
+            timing.interval_max
+        );
+        for (i, name) in ["callbacks", "slot_wait", "upload", "present", "sdk"]
+            .iter()
+            .enumerate()
+        {
+            let _ = write!(
+                text,
+                " {name}_ms={:.2}/{:.2}",
+                timing.sum[i] / frames,
+                timing.max[i]
+            );
+        }
+        let _ = write!(
+            text,
+            " slots=0x{:x} sync={sync} active={} physical_flags=0x{physical_flags:x}",
+            timing.slots, state.active
+        );
+        timing.epoch = end;
+        timing.sdk_start = state.total_presented;
+        timing.reset();
+        drop(timing);
+        log(&text);
+    }
+
+    // The bridge never takes DXGI exclusive fullscreen. Its chain presents on another device than
+    // the application's, frame generation needs a composed window, and a flip chain switched to
+    // fullscreen refuses Present (DXGI_ERROR_INVALID_CALL) until a ResizeBuffers the application
+    // never issues for the facade. The application's state is kept in the facade description,
+    // which GetFullscreenState and GetDesc report; the window shows it as a borderless popup over
+    // the output, presented through the windowed flip chain with tearing and VRR intact.
+    fn set_fullscreen(&self, fullscreen: i32, target: Raw) -> i32 {
+        if self.faulted.load(Ordering::Acquire) {
+            return DXGI_ERROR_DEVICE_REMOVED;
+        }
+        if fullscreen != 0 {
+            self.enter_borderless(target);
+        } else {
+            self.leave_borderless();
+        }
+        unsafe { leaf::set_windowed(self.b(), u32::from(fullscreen == 0)) };
+        S_OK
+    }
+
+    // Covers the requested output, or the window's monitor, with the window, keeping the frame
+    // it replaces. A repeated request leaves the window as it is.
+    fn enter_borderless(&self, target: Raw) {
+        let mut saved = lock(&self.borderless);
+        if saved.is_some() {
+            return;
+        }
+        let window = self.facts().window;
+        let (mut current, mut output) = (WindowFrame::default(), WindowFrame::default());
+        if unsafe { leaf::window_frame(window, &mut current) } == 0
+            || unsafe { leaf::output_rect(window, target, &mut output) } == 0
+        {
+            log(
+                "presentation bridge: exclusive fullscreen requested; window or output unavailable, window left as is",
+            );
+            return;
+        }
+        let applied = unsafe { leaf::apply_frame(window, &current.borderless(output)) };
+        log(&format!(
+            "presentation bridge: exclusive fullscreen requested; presenting borderless on monitor at ({},{}) {}x{} applied={applied}",
+            output.left,
+            output.top,
+            output.right - output.left,
+            output.bottom - output.top
+        ));
+        *saved = Some(current);
+    }
+
+    // Gives the window back the frame it had before the application's fullscreen.
+    fn leave_borderless(&self) {
+        let Some(frame) = lock(&self.borderless).take() else {
+            return;
+        };
+        let applied = unsafe { leaf::apply_frame(self.facts().window, &frame) };
+        log(&format!(
+            "presentation bridge: application left fullscreen; window frame restored applied={applied}"
+        ));
+    }
+
+    // In the application's fullscreen there is no display mode to change: the target stays the
+    // window over its output. False when windowed, where DXGI resizes the window itself.
+    fn resize_borderless_target(&self) -> bool {
+        let saved = lock(&self.borderless);
+        let Some(frame) = *saved else {
+            return false;
+        };
+        let window = self.facts().window;
+        let mut output = WindowFrame::default();
+        if unsafe { leaf::output_rect(window, null_mut(), &mut output) } != 0 {
+            let _ = unsafe { leaf::apply_frame(window, &frame.borderless(output)) };
+        }
+        true
+    }
+
+    fn resize(
+        &self,
+        count: u32,
+        mut width: u32,
+        mut height: u32,
+        mut format: u32,
+        flags: u32,
+    ) -> i32 {
+        let b = self.b();
+        if count > MAX_BUFFERS || self.faulted.load(Ordering::Acquire) {
+            return DXGI_ERROR_INVALID_CALL;
+        }
+        let physical = match self.ensure_physical() {
+            Ok(physical) => physical,
+            Err(error) => return error,
+        };
+        let mut facts = self.facts();
+        if (width == 0 || height == 0)
+            && unsafe { leaf::client_size(facts.window, &mut width, &mut height) } == 0
+        {
+            return E_FAIL;
+        }
+        if width == 0 || height == 0 {
+            return DXGI_ERROR_INVALID_CALL;
+        }
+        if format == 0 {
+            format = facts.format;
+        }
+        if failed(self.drain()) {
+            return E_FAIL;
+        }
+        let native12 = self.native12();
+        let switching = switching();
+        if (!native12 || switching) && self.buffers_referenced() {
+            return DXGI_ERROR_INVALID_CALL;
+        }
+        if count != 0 {
+            facts.buffer_count = count;
+        }
+        facts.width = width;
+        facts.height = height;
+        facts.format = format;
+        // The application images are independent allocations, not references to
+        // DXGI's physical backbuffers. Keep both batches until DXGI accepts the resize.
+        let replacement = if !native12 || switching {
+            match self.allocate_application_buffers(&facts) {
+                Ok(batch) => Some(batch),
+                Err(error) => return error,
+            }
+        } else {
+            None
+        };
+        let provider = self.provider();
+        if !provider.is_null() {
+            let configured = self
+                .api()
+                .and_then(|api| api.configure)
+                .map_or(NOT_SUPPORTED, |configure| unsafe {
+                    configure(provider, &FG_OFF)
+                });
+            if configured != OK {
+                return E_FAIL;
+            }
+        }
+        self.publish_status();
+        // With runtime switching the application renders into its own buffers, never the physical
+        // chain, so the physical count stays as created (0 keeps it). Changing it under an FG
+        // provider's proxy chain broke its back-buffer index after an application count change.
+        let physical_count = match (native12, switching) {
+            (false, _) if self.direct() => 0,
+            (false, _) => 3,
+            (true, true) => 0,
+            (true, false) => count,
+        };
+        let result = unsafe {
+            leaf::resize_physical(
+                b,
+                physical.chain.as_raw(),
+                physical_count,
+                width,
+                height,
+                format,
+            )
+        };
+        if failed(result) {
+            return result;
+        }
+        if let Some(batch) = replacement {
+            *lock(&self.buffers) = batch;
+            // New application buffers: log their first queries again, so a writer still holding
+            // a view of the replaced slot zero shows as a resize with no GetBuffer after it.
+            self.buffer_queries.store(0, Ordering::Relaxed);
+        }
+        unsafe { leaf::set_description(b, facts.buffer_count, width, height, format, flags) };
+        if native12 && switching {
+            self.reset_application_frames();
+        } else if !native12 {
+            self.render_index.store(0, Ordering::Relaxed);
+        }
+        S_OK
+    }
+
+    // Joins vendor retirement on the provider queue, optionally runs a closed list there, and
+    // signals one private fence that covers both. Present thread, between Presents.
+    fn retire(&self, session: Raw, list: Raw, fence: &mut Raw, value: &mut u64) -> i32 {
+        let b = self.b();
+        let provider = self.provider();
+        let Some(retirement) = self.api().and_then(|api| api.retirement) else {
+            return NOT_READY;
+        };
+        if session.is_null() || session != provider {
+            return NOT_READY;
+        }
+        let Some(physical) = self.physical() else {
+            return NOT_READY;
+        };
+        // The provider guard pins the session. This lock also protects the fence and serial
+        // against overlapping retire calls, including a callback that reenters on this thread.
+        let mut state = match self.provider_retirement.try_lock() {
+            Ok(state) => state,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => return NOT_READY,
+        };
+        if state.fence.is_none() {
+            let mut acquired = null_mut();
+            let result = unsafe { leaf::create_retirement_fence(b, &mut acquired) };
+            let acquired = unsafe { com_ref::owned(acquired) };
+            if failed(result) || acquired.is_none() {
+                return INIT_FAILED;
+            }
+            state.fence = acquired;
+        }
+        let retired = state.fence.as_ref().map_or(null_mut(), Interface::as_raw);
+        let Some(next) = state
+            .serial
+            .checked_add(1)
+            .filter(|&value| value != u64::MAX)
+        else {
+            return NOT_READY;
+        };
+        let mut vendor = rsf_fg_retirement {
+            struct_size: size_of::<rsf_fg_retirement>() as u32,
+            fence: null_mut(),
+            value: 0,
+        };
+        let result = unsafe { retirement(session, &mut vendor) };
+        if result != OK {
+            return result;
+        }
+        let result = unsafe {
+            leaf::retire_submit(
+                b,
+                physical.queue.as_raw(),
+                retired,
+                vendor.fence,
+                vendor.value,
+                list,
+                next,
+            )
+        };
+        if result != OK {
+            return result;
+        }
+        state.serial = next;
+        *fence = retired;
+        *value = next;
+        OK
+    }
+
+    // The facade's last reference is gone. Unpublish, drain and release or retain.
+    fn retire_owner(&self) {
+        let b = self.b();
+        // Releasing a fullscreen chain leaves fullscreen, as DXGI does.
+        self.leave_borderless();
+        let published = {
+            // Drain existing shared provider leases before unpublishing. Release this lock
+            // before the GPU drain; new leases cannot obtain this session.
+            let _guard = PROVIDER_GUARD
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            let published = ACTIVE_CHAIN.load(Ordering::Acquire) == ptr::from_ref(self).cast_mut();
+            if published {
+                RETIREMENT_PENDING.store(true, Ordering::Release);
+                lock(&STATUS).invalidate();
+                OUTER_ALIAS.store(null_mut(), Ordering::Release);
+                lock(&ACTIVE_GRAPHICS).0 = NO_GRAPHICS;
+                ACTIVE_CHAIN.store(null_mut(), Ordering::Release);
+                ACTIVE_BRIDGE.store(null_mut(), Ordering::Release);
+                ACTIVE_SESSION.store(null_mut(), Ordering::Release);
+                HOST_PACED.store(false, Ordering::SeqCst);
+            }
+            published
+        };
+        // On device failure retain GPU-reachable storage for the process rather than free it.
+        if failed(self.drain()) || self.retire_unpublished() != OK {
+            // Initializing owners can fail after creating a provider but before publication.
+            RETIREMENT_PENDING.store(true, Ordering::Release);
+            log("presentation bridge: retirement failed; retaining provider and shared inputs");
+            std::mem::forget(self.take_application_buffers());
+            std::mem::forget(self.take_physical());
+            self.retain_shared_inputs(b);
+            return;
+        }
+        let checked = self.api().is_some_and(|api| api.destroy_checked.is_some());
+        // Keep native buffers on the facade until teardown for a checked provider.
+        let buffers = self.take_application_buffers();
+        let retained_buffers = if self.native12() || checked {
+            Some(buffers)
+        } else {
+            drop(buffers);
+            None
+        };
+        let physical = self.take_physical();
+        if !checked {
+            unsafe { leaf::release_presentation(b) };
+        }
+        drop(physical);
+        if destroy_provider(self.api(), self.provider()) != OK {
+            RETIREMENT_PENDING.store(true, Ordering::Release);
+            log("presentation bridge: provider teardown refused; retaining shared inputs");
+            std::mem::forget(retained_buffers);
+            self.retain_shared_inputs(b);
+            return;
+        }
+        self.provider.store(null_mut(), Ordering::Release);
+        let direct_buffers = if self.native12() {
+            retained_buffers
+        } else {
+            drop(retained_buffers);
+            None
+        };
+        if checked {
+            unsafe { leaf::release_presentation(b) };
+        }
+        // The host also serves SR and CPU callbacks and stays loaded while it is the published one.
+        let host = self.host();
+        let private = !host.is_null() && ACTIVE_HOST.load(Ordering::Acquire) != host;
+        let mut sync = std::mem::take(&mut *lock(&self.sync));
+        let mut retired = lock(&self.provider_retirement).fence.take();
+        drop(sync.completion_event.take());
+        drop(sync.application_ready.take());
+        if private {
+            // The slot lists belong to the private host's device and end before the host,
+            // after its interop queue and in slot order.
+            drop(sync.interop_queue.take());
+            self.release_command_slots(false);
+            drop(sync.completion_fence.take());
+            drop(retired.take());
+            unsafe { leaf::release_host(b) };
+        } else if !host.is_null() {
+            // Shared SR callbacks keep using the process-owned interop queue.
+            std::mem::forget(sync.interop_queue.take());
+        }
+        drop(direct_buffers);
+        if published {
+            CHAIN_GENERATION.fetch_add(1, Ordering::SeqCst);
+            RETIREMENT_PENDING.store(false, Ordering::Release);
+        }
+        if !private {
+            // Release in reverse creation order after the events close.
+            self.release_command_slots(true);
+            drop(retired.take());
+            drop(sync.completion_fence.take());
+            unsafe { leaf::release_direct_graphics(b) };
+            drop(sync.interop_queue.take());
+        }
+    }
+
+    // Retirement could not prove GPU completion. Submitted lists and their allocators, the
+    // events a refused wait can leave armed, the retirement fence and the facade's device
+    // references stay alive for the process.
+    fn retain_shared_inputs(&self, b: Raw) {
+        std::mem::forget(self.take_command_slots());
+        std::mem::forget(std::mem::take(&mut *lock(&self.sync)));
+        std::mem::forget(lock(&self.provider_retirement).fence.take());
+        unsafe { leaf::retain_all(b) };
+    }
+
+    fn refuse(&self) {
+        self.faulted.store(true, Ordering::Release);
+        SCOPED_ADMITTED.store(false, Ordering::Release);
+        OUTER_ALIAS.store(null_mut(), Ordering::Release);
+    }
+}
+
+// The caller holds the provider read lease across any use of the facade.
+fn active() -> Option<&'static Owner> {
+    unsafe { ACTIVE_CHAIN.load(Ordering::Acquire).as_ref() }
+}
+
+unsafe fn owner<'a>(chain: *mut Chain) -> Option<&'a Owner> {
+    unsafe { chain.cast::<Owner>().as_ref() }
+}
+
+// Creation and admission --------------------------------------------------------------------
+
+pub(crate) extern "C" fn rsf_core_d3d11p_set_scoped(scoped: u32) {
+    SCOPED.store(scoped != 0, Ordering::Release);
+}
+
+pub(crate) extern "C" fn rsf_core_d3d11p_capture(window: Raw) -> u32 {
+    let captured = SCOPE_CAPTURED.with_borrow(|value| !value.object.is_null());
+    u32::from(
+        !SCOPED.load(Ordering::Acquire)
+            || (SCOPE_TOKEN.get() != 0 && SCOPE_WINDOW.get() == window && !captured),
+    )
+}
+
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_captured(bridge: Raw) {
+    if !SCOPED.load(Ordering::Acquire) || bridge.is_null() {
+        return;
+    }
+    unsafe { leaf::add_ref(bridge) };
+    let previous = SCOPE_CAPTURED.replace(Captured {
+        object: bridge,
+        release: Some(leaf::release),
+    });
+    drop(previous);
+}
+
+pub(crate) extern "C" fn rsf_core_d3d11p_active_bridge() -> Raw {
+    ACTIVE_BRIDGE.load(Ordering::Acquire)
+}
+
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_create(
+    factory: Raw,
+    source: Raw,
+    request: *const rsf_d3d11p_request,
+    desc: *const c_void,
+    out: *mut Raw,
+) -> i32 {
+    let Some(request) = (unsafe { request.as_ref() }) else {
+        return DXGI_ERROR_UNSUPPORTED;
+    };
+    let setup = settings();
+    let Some(accept) = setup.accept_window else {
+        return DXGI_ERROR_UNSUPPORTED;
+    };
+    if unsafe { accept(setup.user, request.window) } == 0 {
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+    if CREATING.get()
+        || !ACTIVE_CHAIN.load(Ordering::Acquire).is_null()
+        || out.is_null()
+        || request.sample_count != 1
+        || request.width == 0
+        || request.height == 0
+        || unsafe { leaf::window_valid(request.window) } == 0
+        || !FORMATS.contains(&request.format)
+    {
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+    if source.is_null() || request.buffer_count == 0 || request.buffer_count > MAX_BUFFERS {
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+    let _creation = lock(&CREATION_GUARD);
+    if !ACTIVE_CHAIN.load(Ordering::Acquire).is_null() || RETIREMENT_PENDING.load(Ordering::Acquire)
+    {
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+    CREATING.set(true);
+    let owner = crate::allocate_handle(Owner::new());
+    let result = if owner.is_null() {
+        E_OUTOFMEMORY
+    } else {
+        let bridge = unsafe { leaf::bridge_new(owner.cast()) };
+        if bridge.is_null() {
+            drop(unsafe { Box::from_raw(owner) });
+            E_OUTOFMEMORY
+        } else {
+            let value = unsafe { &*owner };
+            value.bridge.store(bridge, Ordering::Release);
+            let result = value.initialize(factory, source, request, desc);
+            if failed(result) {
+                // Not published; never enter an external Release hook.
+                unsafe { leaf::bridge_release_owned(bridge) };
+            } else {
+                log(&format!(
+                    "presentation bridge: application chain {}x{} refresh={}/{} windowed={} buffers={} flags=0x{:x} effect={}",
+                    request.width,
+                    request.height,
+                    request.refresh_numerator,
+                    request.refresh_denominator,
+                    request.windowed as i32,
+                    request.buffer_count,
+                    request.flags,
+                    request.swap_effect
+                ));
+                unsafe { *out = bridge };
+            }
+            result
+        }
+    };
+    CREATING.set(false);
+    result
+}
+
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_creation_begin(
+    window: Raw,
+    token: *mut u64,
+    installed: u32,
+) -> i32 {
+    let Some(token) = (unsafe { token.as_mut() }) else {
+        return E_INVALIDARG;
+    };
+    if *token != 0 || window.is_null() || unsafe { leaf::window_valid(window) } == 0 {
+        return E_INVALIDARG;
+    }
+    if !SCOPED.load(Ordering::Acquire)
+        || installed == 0
+        || SCOPE_TOKEN.get() != 0
+        || CREATING.get()
+        || !ACTIVE_CHAIN.load(Ordering::Acquire).is_null()
+    {
+        return DXGI_ERROR_INVALID_CALL;
+    }
+    let selected = CREATION_TOKENS.fetch_add(1, Ordering::SeqCst) + 1;
+    if ACTIVE_CREATION_TOKEN
+        .compare_exchange(0, selected, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return DXGI_ERROR_INVALID_CALL;
+    }
+    SCOPE_WINDOW.set(window);
+    SCOPE_TOKEN.set(selected);
+    *token = selected;
+    S_OK
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_creation_end(
+    window: Raw,
+    token: u64,
+    device: Raw,
+    context: Raw,
+    outer: Raw,
+) -> i32 {
+    if token == 0 || token != SCOPE_TOKEN.get() || window != SCOPE_WINDOW.get() {
+        return E_INVALIDARG;
+    }
+    // Close even when native creation failed or its outputs refuse.
+    let captured = SCOPE_CAPTURED.replace(Captured {
+        object: null_mut(),
+        release: None,
+    });
+    SCOPE_TOKEN.set(0);
+    SCOPE_WINDOW.set(null_mut());
+    ACTIVE_CREATION_TOKEN.store(0, Ordering::SeqCst);
+    let inner = captured.object;
+    let result = if inner.is_null() || device.is_null() || context.is_null() || outer.is_null() {
+        DXGI_ERROR_UNSUPPORTED
+    } else if inner != ACTIVE_BRIDGE.load(Ordering::Acquire)
+        || failed(unsafe { leaf::verify_outer(inner, window, device, context, outer) })
+    {
+        E_INVALIDARG
+    } else {
+        OUTER_ALIAS.store(outer, Ordering::Release);
+        SCOPED_ADMITTED.store(true, Ordering::Release);
+        log(
+            "presentation bridge: scoped inner owner and final outer chain canonical identity verified; outer Present retained",
+        );
+        S_OK
+    };
+    if failed(result)
+        && !inner.is_null()
+        && let Some(owner) = unsafe { owner(leaf::bridge_chain(inner)) }
+    {
+        owner.refuse();
+    }
+    drop(captured);
+    result
+}
+
+// Facade methods ----------------------------------------------------------------------------
+
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_chain_destroy(chain: *mut Chain) {
+    let owner = chain.cast::<Owner>();
+    if owner.is_null() {
+        return;
+    }
+    unsafe { (*owner).retire_owner() };
+    drop(unsafe { Box::from_raw(owner) });
+}
+
+macro_rules! facade {
+    ($(#[$attr:meta])* $name:ident($($arg:ident: $ty:ty),*) -> $ret:ty, $missing:expr, |$owner:ident| $body:expr) => {
+        $(#[$attr])*
+        pub(crate) unsafe extern "C" fn $name(chain: *mut Chain $(, $arg: $ty)*) -> $ret {
+            match unsafe { owner(chain) } {
+                Some($owner) => $body,
+                None => $missing,
+            }
+        }
+    };
+}
+
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_acquire_physical(
+    chain: *mut Chain,
+    initialize: u32,
+    lease: *mut *const Physical,
+    physical: *mut Raw,
+) -> i32 {
+    let (Some(lease), Some(physical)) = (unsafe { lease.as_mut() }, unsafe { physical.as_mut() })
+    else {
+        return E_POINTER;
+    };
+    *lease = ptr::null();
+    *physical = null_mut();
+    let Some(owner) = (unsafe { owner(chain) }) else {
+        return E_FAIL;
+    };
+    let pair = if initialize == 0 {
+        owner.physical().ok_or(DXGI_ERROR_WAS_STILL_DRAWING)
+    } else {
+        owner.ensure_physical()
+    };
+    match pair {
+        Ok(pair) => {
+            *physical = pair.chain.as_raw();
+            *lease = Arc::into_raw(pair);
+            S_OK
+        }
+        Err(error) => error,
+    }
+}
+
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_release_physical(lease: *const Physical) {
+    if !lease.is_null() {
+        drop(unsafe { Arc::from_raw(lease) });
+    }
+}
+
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_get_buffer(
+    chain: *mut Chain,
+    index: u32,
+    iid: *const c_void,
+    out: *mut Raw,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // Failed admission or deferred physical creation must clear the caller's output.
+    unsafe { out.write(null_mut()) };
+    let Some(owner) = (unsafe { owner(chain) }) else {
+        return E_FAIL;
+    };
+    let result = unsafe { owner.get_buffer(index, iid, out) };
+    owner.report_buffer_query(index, iid, result);
+    result
+}
+facade!(
+    #[inline(never)]
+    rsf_core_d3d11p_present(sync: u32, flags: u32) -> i32,
+    E_FAIL,
+    |o| o.present(sync, flags)
+);
+facade!(
+    #[inline(never)]
+    rsf_core_d3d11p_set_fullscreen(fullscreen: i32, target: Raw) -> i32,
+    E_FAIL,
+    |o| {
+        let result = o.set_fullscreen(fullscreen, target);
+        log(&format!(
+            "presentation bridge: application SetFullscreenState({fullscreen}) result=0x{:08x} direct={}",
+            result as u32,
+            u32::from(o.direct())
+        ));
+        result
+    }
+);
+facade!(
+    #[inline(never)]
+    rsf_core_d3d11p_resize(count: u32, width: u32, height: u32, format: u32, flags: u32) -> i32,
+    E_FAIL,
+    |o| {
+        let result = o.resize(count, width, height, format, flags);
+        log(&format!(
+            "presentation bridge: application ResizeBuffers({count}, {width}x{height}, format {format}, flags 0x{flags:x}) result=0x{:08x} direct={}",
+            result as u32,
+            u32::from(o.direct())
+        ));
+        result
+    }
+);
+facade!(rsf_core_d3d11p_resize_borderless_target() -> u32, 0,
+    |o| u32::from(o.resize_borderless_target()));
+facade!(rsf_core_d3d11p_physical_pending() -> u32, 0,
+    |o| u32::from(o.creation_pending()));
+facade!(rsf_core_d3d11p_render_index() -> u32, 0, |o| o.render_index.load(Ordering::Relaxed));
+facade!(rsf_core_d3d11p_application_presents() -> u32, 0,
+    |o| o.application_presents.load(Ordering::Relaxed));
+facade!(
+    rsf_core_d3d11p_set_max_latency(value: u32) -> i32,
+    DXGI_ERROR_INVALID_CALL,
+    |o| {
+        if lock(&o.sync).ready_event().is_null()
+            || value == 0
+            || value as usize > APPLICATION_FENCES
+        {
+            DXGI_ERROR_INVALID_CALL
+        } else {
+            o.application_latency
+                .store(value.min(o.facts().buffer_count), Ordering::Relaxed);
+            S_OK
+        }
+    }
+);
+facade!(
+    rsf_core_d3d11p_max_latency(value: *mut u32) -> i32,
+    DXGI_ERROR_INVALID_CALL,
+    |o| {
+        if lock(&o.sync).ready_event().is_null() || value.is_null() {
+            DXGI_ERROR_INVALID_CALL
+        } else {
+            unsafe { *value = o.application_latency.load(Ordering::Relaxed) };
+            S_OK
+        }
+    }
+);
+facade!(
+    rsf_core_d3d11p_duplicate_application_ready() -> Raw,
+    null_mut(),
+    |o| {
+        let ready = lock(&o.sync).ready_event();
+        if ready.is_null() {
+            null_mut()
+        } else {
+            unsafe { leaf::duplicate_event(ready) }
+        }
+    }
+);
+
+// Public bridge exports ---------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_prepare(setup: *const Setup) -> i32 {
+    unsafe { rsf_core_d3d11p_prepare(setup, factory::rsf_d3d11p_factory_hooks_block_explicit()) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_d3d11_present_creation_begin(window: Raw, token: *mut u64) -> i32 {
+    unsafe {
+        rsf_core_d3d11p_creation_begin(window, token, factory::rsf_d3d11p_factory_hooks_ready())
+    }
+}
+
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_pace_for_generation(
+    id: u64,
+    owner: u32,
+    generation: u64,
+) -> i32 {
+    unsafe { rsf_core_d3d11p_pace(id, owner, &generation, null_mut()) }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_d3d11_present_host() -> Raw {
+    ACTIVE_HOST.load(Ordering::Acquire)
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_graphics(graphics: *mut Graphics) -> i32 {
+    if !unsafe { has_capacity(graphics) } {
+        return 0;
+    }
+    let snapshot = lock(&ACTIVE_GRAPHICS).0;
+    if snapshot.queue.is_null() {
+        return 0;
+    }
+    unsafe { graphics.write(snapshot) };
+    1
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_queue() -> Raw {
+    let Some(_guard) = read_guard() else {
+        return null_mut();
+    };
+
+    // Direct presentation's chain belongs to the application's D3D11 device, not a D3D12 queue.
+    active()
+        .filter(|owner| !owner.direct())
+        .and_then(Owner::physical)
+        .map_or(null_mut(), |physical| physical.queue.as_raw())
+}
+
+pub(crate) unsafe fn rsf_d3d11_present_source_queue() -> Raw {
+    // The same lock fences owner unpublication. A transition must not block the producer.
+    let Some(_guard) = read_guard() else {
+        return null_mut();
+    };
+    match active().filter(|owner| !owner.direct()) {
+        Some(owner) => {
+            let queue = lock(&owner.sync).queue();
+            unsafe { leaf::source_queue(owner.b(), queue) }
+        }
+        _ => null_mut(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_command_list(list: Raw) -> Raw {
+    let Some(_guard) = read_guard() else {
+        return null_mut();
+    };
+    if list.is_null() {
+        return null_mut();
+    }
+    let Some(owner) = active().filter(|owner| !owner.direct()) else {
+        return null_mut();
+    };
+    let physical = owner.physical();
+    let queue = physical
+        .as_ref()
+        .map_or(null_mut(), |pair| pair.queue.as_raw());
+    // Pending creation used the native-list path when a host was already available.
+    unsafe { leaf::command_list(owner.b(), queue, list) }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_is_owner(swapchain: Raw) -> i32 {
+    let active = ACTIVE_BRIDGE.load(Ordering::Acquire);
+    if swapchain.is_null()
+        || active.is_null()
+        || (SCOPED.load(Ordering::Acquire) && !SCOPED_ADMITTED.load(Ordering::Acquire))
+    {
+        return 0;
+    }
+    if active == swapchain {
+        return 1;
+    }
+    if OUTER_ALIAS.load(Ordering::Acquire) != swapchain {
+        return 0;
+    }
+    // The facade publishes its canonical COM interface address. Query only the
+    // caller's live receiver, since the cached address can retire during the call.
+    let identity = unsafe { leaf::canonical_identity(swapchain) };
+    i32::from(
+        identity == active
+            && ACTIVE_BRIDGE.load(Ordering::Acquire) == active
+            && OUTER_ALIAS.load(Ordering::Acquire) == swapchain
+            && rsf_d3d11_present_has_owner() != 0,
+    )
+}
+
+fn dispatch_admit(receiver: Raw) -> u32 {
+    let active = ACTIVE_BRIDGE.load(Ordering::Acquire);
+    if receiver.is_null() || receiver != active {
+        0
+    } else if SCOPED.load(Ordering::Acquire) && !SCOPED_ADMITTED.load(Ordering::Acquire) {
+        2
+    } else {
+        1
+    }
+}
+
+unsafe fn dispatch_result_slot(request: *mut rsf_d3d11_chain_dispatch) -> *mut i32 {
+    // The C union's HRESULT and reference count have the same 32-bit storage.
+    unsafe { (&raw mut (*request).result).cast::<i32>() }
+}
+
+unsafe extern "C" fn dispatch_invoke_owned(request: *mut rsf_d3d11_chain_dispatch) -> i32 {
+    let request = unsafe { &*request };
+    let chain = unsafe { facade::rsf_d3d11p_facade_chain(request.receiver) };
+    // Call private continuations because the published COM methods may be detoured.
+    unsafe {
+        match request.method {
+            RSF_D3D11_DISPATCH_PRESENT => {
+                let args = request.args.present;
+                rsf_core_d3d11p_present(chain, args.sync_interval, args.flags)
+            }
+            RSF_D3D11_DISPATCH_PRESENT1 => {
+                let args = request.args.present1;
+                dxgi::rsf_d3d11p_facade_present1(
+                    chain,
+                    args.sync_interval,
+                    args.flags,
+                    args.parameters.cast(),
+                )
+            }
+            RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE => {
+                let args = request.args.fullscreen;
+                rsf_core_d3d11p_set_fullscreen(chain, args.fullscreen as i32, args.target)
+            }
+            RSF_D3D11_DISPATCH_RESIZE_BUFFERS => {
+                let args = request.args.resize_buffers;
+                rsf_core_d3d11p_resize(
+                    chain,
+                    args.buffer_count,
+                    args.width,
+                    args.height,
+                    args.format,
+                    args.flags,
+                )
+            }
+            RSF_D3D11_DISPATCH_SET_COLOR_SPACE1 => facade::rsf_d3d11p_facade_color_space(
+                request.receiver,
+                request.args.color_space.color_space,
+            ),
+            RSF_D3D11_DISPATCH_RESIZE_BUFFERS1 => {
+                let args = request.args.resize_buffers1;
+                dxgi::rsf_d3d11p_facade_resize1(
+                    chain,
+                    args.buffer_count,
+                    args.width,
+                    args.height,
+                    args.format,
+                    args.flags,
+                    args.node_masks,
+                    args.present_queues,
+                )
+            }
+            _ => E_FAIL,
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_chain_dispatch_owned(
+    request: *mut rsf_d3d11_chain_dispatch,
+) {
+    unsafe {
+        rsf_core_d3d11p_dispatch_owned(
+            request,
+            facade::rsf_d3d11p_facade_release,
+            dispatch_invoke_owned,
+        )
+    };
+}
+
+unsafe extern "C" fn rsf_core_d3d11p_dispatch_owned(
+    request: *mut rsf_d3d11_chain_dispatch,
+    release_owned: unsafe extern "C" fn(Raw) -> u32,
+    invoke_owned: unsafe extern "C" fn(*mut rsf_d3d11_chain_dispatch) -> i32,
+) {
+    if request.is_null() {
+        return;
+    }
+    let receiver = unsafe { (*request).receiver };
+    let admission = dispatch_admit(receiver);
+    if admission == 0 {
+        return;
+    }
+    unsafe { (*request).handled = 1 };
+    let result = unsafe { dispatch_result_slot(request) };
+    if unsafe { (*request).method } == RSF_D3D11_DISPATCH_RELEASE {
+        // Release consumes the caller's reference, including during scope refusal.
+        unsafe { result.write(release_owned(receiver) as i32) };
+    } else if admission == 2 {
+        unsafe { result.write(DXGI_ERROR_INVALID_CALL) };
+    } else {
+        // The caller holds a live COM reference. No host lock spans the owned call.
+        let _lease = unsafe { com_ref::retain(receiver) };
+        unsafe { result.write(invoke_owned(request)) };
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_d3d11p_get_api(out: *mut u8, table: *const u8) -> i32 {
+    // The native export thunk supplies the typed function table. The Rust owner
+    // treats the client storage as raw bytes until size and version are accepted.
+    const TABLE_SIZE: usize = 184;
+    if out.is_null() || (unsafe { out.cast::<u32>().read() } as usize) < TABLE_SIZE {
+        return INVALID_ARGUMENT;
+    }
+    if unsafe { out.cast::<u32>().add(1).read() } != 1 {
+        return ABI_MISMATCH;
+    }
+    unsafe { ptr::copy_nonoverlapping(table, out, TABLE_SIZE) };
+    OK
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_d3d11_present_has_owner() -> i32 {
+    i32::from(
+        !ACTIVE_BRIDGE.load(Ordering::Acquire).is_null()
+            && (!SCOPED.load(Ordering::Acquire) || SCOPED_ADMITTED.load(Ordering::Acquire)),
+    )
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_provider() -> *const Provider {
+    provider_api(ACTIVE_BACKEND.load(Ordering::SeqCst)).map_or(ptr::null(), ptr::from_ref)
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_status_get(status: *mut PresentStatus) -> i32 {
+    unsafe { lock(&STATUS).read(status) }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_d3d11_present_session() -> Raw {
+    ACTIVE_SESSION.load(Ordering::Acquire)
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_d3d11_present_backend() -> u32 {
+    ACTIVE_BACKEND.load(Ordering::SeqCst)
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_d3d11_present_backend_choices() -> u32 {
+    BACKEND_CHOICES.load(Ordering::SeqCst)
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_d3d11_present_request(backend: u32) -> i32 {
+    if !switching() || ACTIVE_CHAIN.load(Ordering::Acquire).is_null() {
+        return NOT_READY;
+    }
+    if backend != 0 && !known(backend) {
+        return NOT_SUPPORTED;
+    }
+    if BACKEND_CHOICES.load(Ordering::SeqCst) & bit(backend) == 0 {
+        SWITCH_RESULT.store(NOT_SUPPORTED, Ordering::SeqCst);
+        return NOT_SUPPORTED;
+    }
+    SWITCH_RESULT.store(0, Ordering::SeqCst);
+    REQUESTED_BACKEND.store(backend, Ordering::SeqCst);
+    OK
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_d3d11_present_switch_result() -> i32 {
+    SWITCH_RESULT.load(Ordering::SeqCst)
+}
+
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn rsf_d3d11_present_generation() -> u64 {
+    generation()
+}
+
+// Latency routing ---------------------------------------------------------------------------
+
+struct Lease {
+    api: Option<&'static Provider>,
+    session: Raw,
+    host: Raw,
+}
+
+impl Lease {
+    // One provider entry with its live session.
+    fn entry<F>(&self, pick: impl FnOnce(&'static Provider) -> Option<F>) -> Option<(F, Raw)> {
+        let api = self.api.filter(|_| !self.session.is_null())?;
+        Some((pick(api)?, self.session))
+    }
+
+    // The shared host's result, or OK when no host is published.
+    fn host(&self, call: impl FnOnce(Raw) -> i32) -> i32 {
+        if self.host.is_null() {
+            OK
+        } else {
+            call(self.host)
+        }
+    }
+}
+
+// Shares the provider lifetime; refuses NOT_READY while replacement or retirement holds it.
+unsafe fn with_provider(call: impl FnOnce(&Lease) -> i32) -> i32 {
+    let Some(_guard) = read_guard() else {
+        return NOT_READY;
+    };
+    call(&Lease {
+        api: provider_api(ACTIVE_BACKEND.load(Ordering::SeqCst)),
+        session: ACTIVE_SESSION.load(Ordering::Acquire),
+        host: ACTIVE_HOST.load(Ordering::Acquire),
+    })
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_retire(
+    session: Raw,
+    list: Raw,
+    fence: *mut Raw,
+    value: *mut u64,
+) -> i32 {
+    let (Some(fence), Some(value)) = (unsafe { fence.as_mut() }, unsafe { value.as_mut() }) else {
+        return INVALID_ARGUMENT;
+    };
+    *fence = null_mut();
+    *value = 0;
+    unsafe {
+        with_provider(|_| {
+            active().map_or(NOT_READY, |owner| owner.retire(session, list, fence, value))
+        })
+    }
+}
+
+// A provider that paces through the host is the host: it gets the host calls once. Any other
+// provider owns its own pacing, and the host only records markers for latency reporting.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_begin(id: u64, out: *mut u64) -> i32 {
+    unsafe {
+        with_provider(|lease| {
+            if let Some(out) = out.as_mut() {
+                *out = generation();
+            }
+            if HOST_PACED.load(Ordering::SeqCst) {
+                return leaf::host_sleep(lease.host.cast(), id);
+            }
+            lease
+                .entry(|api| api.begin_frame)
+                .map_or(OK, |(begin, session)| begin(session, id))
+        })
+    }
+}
+
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_pace(
+    id: u64,
+    owner: u32,
+    expected: *const u64,
+    out: *mut u64,
+) -> i32 {
+    unsafe {
+        with_provider(|lease| {
+            let current = generation();
+            if let Some(out) = out.as_mut() {
+                *out = current;
+            }
+            if expected
+                .as_ref()
+                .is_some_and(|expected| *expected != current)
+            {
+                return NOT_READY;
+            }
+            if id == 0 || owner > PACING_LAST {
+                return INVALID_ARGUMENT;
+            }
+            match owner {
+                RSF_PACING_REFLEX if !lease.host.is_null() => {
+                    leaf::host_sleep(lease.host.cast(), id)
+                }
+                RSF_PACING_REFLEX => NOT_READY,
+                RSF_PACING_XELL => lease
+                    .entry(|api| api.begin_frame)
+                    .map_or(NOT_READY, |(begin, session)| begin(session, id)),
+                // Anti-Lag updates live in the core; none has no sleeper.
+                _ => OK,
+            }
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_marker(
+    expected: u64,
+    id: u64,
+    marker: u32,
+    controller: u32,
+) -> i32 {
+    unsafe {
+        with_provider(|lease| {
+            if expected != generation() {
+                return NOT_READY;
+            }
+            let host = lease.host(|host| leaf::host_marker(host.cast(), id, marker, controller));
+            if host != OK || HOST_PACED.load(Ordering::SeqCst) {
+                return host;
+            }
+            lease
+                .entry(|api| api.marker)
+                .map_or(host, |(call, session)| {
+                    call(session, marker, id, controller)
+                })
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_acquire(id: u64) -> i32 {
+    unsafe { with_provider(|lease| lease.host(|host| leaf::host_acquire(host.cast(), id))) }
+}
+
+pub(crate) unsafe fn rsf_d3d11_present_receipt(
+    expected: u64,
+    id: u64,
+    kinds: u32,
+    message: u32,
+) -> i32 {
+    unsafe {
+        with_provider(|lease| {
+            if expected != generation() || lease.host.is_null() {
+                NOT_READY
+            } else {
+                leaf::host_input(lease.host.cast(), id, kinds, message)
+            }
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_input(id: u64, kinds: u32, message: u32) -> i32 {
+    unsafe {
+        with_provider(|lease| {
+            let result = lease.host(|host| leaf::host_input(host.cast(), id, kinds, message));
+            if result != OK || HOST_PACED.load(Ordering::SeqCst) || kinds == 0 {
+                return result;
+            }
+            lease
+                .entry(|api| api.marker)
+                .map_or(result, |(call, session)| {
+                    call(session, LATENCY_INPUT_SAMPLE, id, u32::from(kinds & 4 != 0))
+                })
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_d3d11_present_abort(id: u64) -> i32 {
+    unsafe {
+        with_provider(|lease| {
+            let host = lease.host(|host| leaf::host_abort(host.cast(), id));
+            if HOST_PACED.load(Ordering::SeqCst) {
+                return host;
+            }
+            lease
+                .entry(|api| api.abort_frame)
+                .map_or(host, |(call, session)| call(session, id))
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "d3d11_present_tests.rs"]
+mod tests;

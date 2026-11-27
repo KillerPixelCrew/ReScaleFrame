@@ -55,7 +55,7 @@ internal enum NgxLifetimeOutcome
 /// <para><b>What actually crashed on 2026-09-12</b> was none of this: the driver's
 /// <c>Shutdown1</c> takes a second, undeclared parameter and writes the SDK's
 /// remaining instance count through it, while the SDK header declares one. That
-/// is fixed in the shim (<c>native/ngx/vulkanstory_ngx.c</c>); this type is
+/// is handled by the native NGX shim; this type is
 /// what makes sure the call it fixed happens exactly once, in the right place.</para>
 /// </summary>
 internal sealed class NgxLifetimeOwner

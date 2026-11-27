@@ -1,0 +1,15 @@
+[package]
+name = "rsf-bindgen"
+description = "Build-script helper that runs bindgen with the settings every RSF binding owner uses"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+bindgen = "=0.72.1"
+regex = "1"
+
+[lints]
+workspace = true

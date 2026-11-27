@@ -9,8 +9,9 @@ of through an MCP adapter that cannot rename, read bytes or list names.
 | --- | --- |
 | `apply_ida.py` | IDAPython (IDA 9.x): names, vtables, functions, name list, census comments |
 | `apply_ghidra.py` | PyGhidra (Ghidra 12): the same behaviour |
+| `rsf_dump_plan.py` | The planning core both scripts import from beside themselves |
 
-Both scripts share one planning core and each has `--self-test <sidecar.json>`, which runs the
+Both scripts import one planning core, `rsf_dump_plan.py`, and each has `--self-test <sidecar.json>`, which runs the
 parsing, naming and rebasing without IDA or Ghidra:
 
 ```powershell

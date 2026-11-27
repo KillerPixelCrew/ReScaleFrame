@@ -1,0 +1,41 @@
+[package]
+name = "rsf-vulkan-fg-fixtures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+# A CMake fixture archive. Its unit-test harness would link the Runtime and adapter crates it
+# takes bindings from, with all their native imports.
+test = false
+
+[features]
+xess-sr = ["dep:ash", "dep:windows-sys"]
+# The owner entries and production table are C symbols only in the orchestrator's test-fixtures build;
+# the owner reaches XeSS through the Vulkan SR table, so both of its Vulkan SR features are on (CMake
+# registers the test only with the XeSS and FidelityFX Vulkan headers).
+xess-input-range = ["dep:ash", "rsf-orchestrator/test-fixtures", "rsf-orchestrator/xess-vk", "rsf-orchestrator/ffx-vk"]
+xess-device = [
+  "dep:ash", "dep:rsf-vk-xess-fg", "dep:windows", "dep:windows-sys", "windows-sys/Win32_Graphics_Gdi",
+  "windows-sys/Win32_UI_WindowsAndMessaging",
+]
+
+[dependencies]
+ash = { workspace = true, optional = true }
+rsf-game-sys = { path = "../../sdk/game" }
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
+rsf-test-support = { path = "../support" }
+rsf-vk-xess-fg = { path = "../../runtime/vulkan/xess-fg", optional = true }
+
+[target."cfg(windows)".dependencies]
+windows = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"], optional = true }
+windows-sys = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+], optional = true }
+
+[lints]
+workspace = true

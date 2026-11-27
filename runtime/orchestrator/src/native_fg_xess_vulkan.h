@@ -12,6 +12,9 @@
 typedef rsf_dx12vk_interop rsf_xessvk_interop;
 typedef rsf_dx12vk_shared_image rsf_xessvk_shared_image;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 int32_t rsf_xessvk_interop_create(const rsf_srvk_setup*, rsf_xess_bridge*,
     uint32_t timeline_enabled, rsf_xessvk_interop**);
 /* Dedicated D3D12_RESOURCE import. Transfer-only optimal image, initial UNDEFINED.
@@ -19,7 +22,6 @@ int32_t rsf_xessvk_interop_create(const rsf_srvk_setup*, rsf_xess_bridge*,
    release/acquire around every DX12 handoff. Result lives through owner destroy. */
 int32_t rsf_xessvk_interop_image(rsf_xessvk_interop*, uint32_t format,
     uint32_t width, uint32_t height, rsf_xessvk_shared_image*);
-uint64_t rsf_xessvk_interop_timeline(const rsf_xessvk_interop*);
 /* Require the parent to prove both Vulkan and DX12 drains. Failure retains all
    resources; this never interprets a CPU frame counter as GPU completion. */
 int32_t rsf_xessvk_interop_destroy(rsf_xessvk_interop*, uint32_t queues_drained);
@@ -40,14 +42,12 @@ int32_t rsf_xessgvk_prepare(rsf_xessgvk*, void*, const rsf_fgvk_frame*);
 int32_t rsf_xessgvk_hudless(rsf_xessgvk*, void*, const rsf_fgvk_frame*);
 void rsf_xessgvk_submitted(rsf_xessgvk*, void* const*, uint32_t);
 int32_t rsf_xessgvk_present(rsf_xessgvk*, const void*);
-int32_t rsf_xessgvk_present_source(rsf_xessgvk*, const void*, const rsf_frame_record*);
 int32_t rsf_xessgvk_enable(rsf_xessgvk*, uint32_t);
-int32_t rsf_xessgvk_enable_options(rsf_xessgvk*, uint32_t, uint32_t);
-uint32_t rsf_xessgvk_max_generated(const rsf_xessgvk*);
 int32_t rsf_xessgvk_latency(rsf_xessgvk*, uint32_t frame, uint32_t marker);
 int32_t rsf_xessgvk_sleep(rsf_xessgvk*, uint32_t frame);
-int32_t rsf_xessgvk_latency_options(rsf_xessgvk*, uint32_t mode, uint32_t minimum_interval_us);
-int32_t rsf_xessgvk_latency_status(rsf_xessgvk*, rsf_fgvk_latency_status*);
 int32_t rsf_xessgvk_status(rsf_xessgvk*, rsf_fgvk_status*);
 int32_t rsf_xessgvk_drain(rsf_xessgvk*);
 int32_t rsf_xessgvk_destroy(rsf_xessgvk*);
+#ifdef __cplusplus
+}
+#endif

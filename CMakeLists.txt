@@ -8,14 +8,15 @@ if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 
 if(NOT MSVC)
-    # mingw would otherwise emit libReScaleFrame.Bootstrap.dll. Windows DLL names are exact, and
+    # mingw would otherwise emit libdinput8.dll. Windows DLL names are exact, and
     # a forwarder has to match the name the game imports, so the cross build keeps MSVC's naming.
     set(CMAKE_SHARED_LIBRARY_PREFIX "")
     set(CMAKE_SHARED_MODULE_PREFIX "")
 endif()
 
-# A cache entry left by godot-cpp (see integrations/godot/CMakeLists.txt) would force the Release CRT
-# onto every target in Debug; clear it so the default per-configuration CRT applies.
+# A cache entry left by an earlier godot-cpp configure (the Godot extension no longer uses it) would
+# force the Release CRT onto every target in Debug; clear it so the default per-configuration CRT
+# applies.
 unset(CMAKE_MSVC_RUNTIME_LIBRARY CACHE)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -47,16 +48,26 @@ endif()
 # IDXGISwapChain::Present both in the table and at the function's entry and re-asserts either when
 # displaced, so a table patch and the overlay chase each other; a detour with a trampoline built
 # from the genuine bytes sits in the same chain without ever routing through the entry again.
-# BSD-2-Clause, pinned to v1.3.4.
+# BSD-2-Clause, pinned by third_party/minhook/minhook.lock.json. The source is the vendor/minhook
+# submodule at that revision, which the Cargo build of rsf-minhook-sys compiles as well; without it
+# FetchContent clones the same revision.
+file(READ "${PROJECT_SOURCE_DIR}/third_party/minhook/minhook.lock.json" rsf_minhook_lock)
+string(JSON rsf_minhook_rev GET "${rsf_minhook_lock}" revision)
+if(EXISTS "${PROJECT_SOURCE_DIR}/vendor/minhook/src/hook.c" AND NOT FETCHCONTENT_SOURCE_DIR_MINHOOK)
+    set(FETCHCONTENT_SOURCE_DIR_MINHOOK "${PROJECT_SOURCE_DIR}/vendor/minhook")
+endif()
 include(FetchContent)
 FetchContent_Declare(minhook
     GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-    GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537 # v1.3.4
+    GIT_TAG ${rsf_minhook_rev}
     GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(minhook)
 
 include(CTest)
+include(cmake/rust_static.cmake)
+include(cmake/vendor.cmake)
 add_subdirectory(sdk/game)
+add_subdirectory(runtime/common)
 add_subdirectory(loader)
 add_subdirectory(runtime/contract)
 add_subdirectory(runtime/graphics)
@@ -87,7 +98,8 @@ add_subdirectory(games/unity-mono)
 add_subdirectory(integrations/unity)
 add_subdirectory(integrations/godot)
 add_subdirectory(games/minecraft)
-add_subdirectory(apps/launcher)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+# Last, once every target exists: each binary drops the Rust archives another archive it links carries.
+rsf_resolve_embedded_archives()

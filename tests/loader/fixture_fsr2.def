@@ -1,0 +1,6 @@
+EXPORTS
+    ffxFsr2ContextCreate
+    ffxFsr2ContextDispatch
+    ffxFsr2GetJitterOffset
+    ffxFsr2GetUpscaleRatioFromQualityMode
+    fixture_fsr2_seen

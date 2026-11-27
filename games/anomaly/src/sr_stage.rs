@@ -1,0 +1,2798 @@
+// SPDX-License-Identifier: MIT
+// SR stage driver (docs/research/anomaly-sr-seam.md sections 9 to 12, docs/research/rust-anomaly-sr-stage.md).
+// Rust owns the lifecycle, source identity and view admission, the H1 preparation and S-B seam ordering, the
+// published jitter and main-view camera, the frame dump, burst bookkeeping and the burst readback staging transaction
+// (staging.rs), the configuration (the [Anomaly] keys,
+// the INI path, the vendor directories, the live panel options), GPU query retirement and the
+// status text.
+// The leaves are sr_stage/native.rs over the Rust profile records, the C11 leaf (sr_stage_platform.c: guarded engine
+// reads, the trampolines and the game-owned resource callbacks) and the Rust temporal driver; the fakes under test.
+#[cfg(all(windows, feature = "sr-fixtures"))]
+mod jitter_device;
+pub(crate) mod math;
+
+#[cfg(test)]
+pub(crate) use self::math::jitter_sample;
+pub(crate) use self::math::plan_for_render;
+use self::math::{
+    BurstGate, DEFAULT_MIP_OFFSET, DEFAULT_SCALE, JitterSequence, clamp_mip_offset, clamp_scale,
+    jitter_to_uv, make_plan, mip_delta, next_jitter,
+};
+use crate::camera;
+use crate::frame_dump::{DumpApi, anomaly_directory};
+use crate::lease::Lease;
+use crate::native_geometry_abi::SCOPE;
+use crate::sr_d3d11::{DrawViews, Extent, PREPARE, REINSERT, ROUND_TRIP, TemporalTargets, UPSCALE};
+#[cfg(any(windows, test))]
+use crate::sr_temporal::Admit;
+use crate::sys::*;
+use crate::sys::{
+    RSF_ANOMALY_SWAP_RESTORE_COMBINE_END, RSF_ANOMALY_SWAP_RESTORE_FRAME_END,
+    RSF_ANOMALY_SWAP_RESTORE_ROLLBACK, RSF_ANOMALY_SWAP_RESTORE_SEAM,
+    RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN, RSF_ANOMALY_SWAP_RESTORE_STALE_PREPARE,
+    RSF_ANOMALY_SWAP_SKIP_DEPTH, RSF_ANOMALY_SWAP_SKIP_LAYOUT, RSF_ANOMALY_SWAP_SKIP_MSAA,
+    RSF_ANOMALY_SWAP_SKIP_OFF, RSF_ANOMALY_SWAP_SKIP_SCOPE, RSF_ANOMALY_SWAP_SKIP_TWINS,
+    rsf_anomaly_swap_fields as TargetFields, rsf_anomaly_swap_upscale as UpscaleInputs,
+};
+use rsf_game_sys::RSF_SR_AUTO as BACKEND_AUTO;
+use rsf_game_sys::vendor_paths::VendorPaths;
+use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
+use std::ffi::{CStr, CString, c_char, c_void};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::ptr::null_mut;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{LazyLock, Mutex, MutexGuard};
+
+const PHASE_RENDER_SUBMIT: u32 = 2;
+const SCREEN_UNKNOWN: u32 = 0;
+const E_FAIL: i32 = 0x8000_4005_u32 as i32;
+const FORMAT_RGBA16F: u32 = 10;
+// CRender::o word3 o.dx10_msaa (sr_profile.rs).
+pub(super) const DX10_MSAA: u32 = crate::sr_profile::DX10_MSAA_BIT;
+pub(crate) const FIRST_PERSON_DEPTH_BITS: u32 = 0.02f32.to_bits();
+const VIEW_RAW: u32 = 0;
+const VIEW_HDR: u32 = 3;
+const VIEW_DEPTH: u32 = 4;
+const VIEW_DENSE_MOTION: u32 = 7;
+#[cfg(any(windows, test))]
+const BACKEND_DLSS: u32 = 1;
+const BACKENDS: u32 = RSF_ANOMALY_SR_ADAPTER_BACKENDS | (1 << BACKEND_AUTO);
+const QUALITIES: u32 = RSF_ANOMALY_SR_ADAPTER_QUALITIES;
+// Temporal driver refusal transport values.
+const REFUSAL_PREPARE: u8 = 2;
+const REFUSAL_REINSERT: u8 = 5;
+const SPATIAL_PATH: u8 = 6;
+const EVALUATION_REFUSED: u8 = 7;
+const CAMERA_RECOVERY: u8 = 8;
+const MIP_OFFSET_DIVISOR: i32 = 10;
+const OPTION_SCALE: u32 = 6;
+const OPTION_CAPTURE_START: u32 = 7;
+const OPTION_CAPTURE_COUNT: u32 = 8;
+const OPTION_CAPTURE_INTERVAL: u32 = 9;
+const OPTION_CUT_DISTANCE: u32 = 10;
+const OPTION_CUT_ANGLE: u32 = 11;
+const OPTION_REQUIRE_SIGNATURE: u32 = 12;
+
+// The stage's leaves: sr_stage/native.rs in production, the recording fakes under test.
+#[cfg(not(test))]
+pub(crate) use self::native::leaves;
+#[cfg(test)]
+pub(crate) use self::tests::leaves;
+
+/// Whether a stage's leaves are bound. The native configure and install entries bind the production stage (a test
+/// binds its own); until then every leaf answers with a refusal.
+struct Platform {
+    bound: bool,
+}
+type Config = rsf_anomaly_sr_stage_config;
+type JitterState = rsf_anomaly_sr_jitter_state;
+
+#[derive(Default)]
+pub(crate) struct OverlayChoices {
+    pub backends: u32,
+    pub qualities: u32,
+    pub preset: bool,
+    pub defaults: rsf_anomaly_sr_settings,
+}
+
+// A leaf of an unbound stage answers with a refusal: null, zero or false.
+trait Refused {
+    fn refused() -> Self;
+}
+macro_rules! refused {
+    ($($t:ty => $v:expr),* $(,)?) => { $(impl Refused for $t { fn refused() -> Self { $v } })* };
+}
+refused!(() => (), bool => false, u32 => 0, i32 => 0, u64 => 0, f32 => 0.0,
+    (i64, i64) => (0, 0), (u32, u32) => (0, 0), (u64, u64) => (0, 0),
+    *mut c_void => null_mut(), *const c_void => std::ptr::null(), *const c_char => std::ptr::null(),
+    rsf_anomaly_sr_jitter_sample => rsf_anomaly_sr_jitter_sample::default(),
+    rsf_anomaly_sr_controller => rsf_anomaly_sr_controller::default(),
+    rsf_anomaly_sr_swap_counters => rsf_anomaly_sr_swap_counters::default(),
+    rsf_anomaly_sr_motion_target => rsf_anomaly_sr_motion_target::default(),
+    rsf_anomaly_sr_frame_reads => rsf_anomaly_sr_frame_reads::default());
+impl<T> Refused for Option<T> {
+    fn refused() -> Self {
+        None
+    }
+}
+
+macro_rules! leaf {
+    ($p:expr, $name:ident($($arg:expr),* $(,)?)) => {
+        if $p.bound {
+            // The native leaves are noexcept functions with exactly these C signatures.
+            #[allow(unused_unsafe)]
+            let value = unsafe { $crate::sr_stage::leaves::$name($($arg),*) };
+            value
+        } else {
+            Refused::refused()
+        }
+    };
+}
+
+// H1 and the stock seam both belong to the current CRender::Target.
+fn admitted_target(platform: &Platform, this: *mut c_void) -> *mut c_void {
+    let target = leaf!(platform, render_target());
+    if target == this { target } else { null_mut() }
+}
+
+// The swap controller lends these views through the synchronous seam call.
+struct Seam {
+    twin_surface: *mut c_void,
+    engine_surface: *mut c_void,
+    spatial_recovery: bool,
+    views: DrawViews,
+}
+
+impl Seam {
+    unsafe fn upscale(input: &UpscaleInputs) -> Option<Self> {
+        let colour = unsafe { input.generic0_twin.as_ref() }?;
+        let position = unsafe { input.position_twin.as_ref() }?;
+        let distort = unsafe { input.generic1_twin.as_ref() }?;
+        let colour_target = unsafe { input.generic0.as_ref() }?;
+        let position_target = unsafe { input.position.as_ref() }?;
+        let distort_target = unsafe { input.generic1.as_ref() }?;
+        Some(Self {
+            twin_surface: colour.surface,
+            engine_surface: colour_target.surface,
+            spatial_recovery: input.spatial_recovery,
+            views: DrawViews {
+                output: Extent {
+                    width: input.output_width,
+                    height: input.output_height,
+                },
+                source: Extent {
+                    width: input.render_width,
+                    height: input.render_height,
+                },
+                targets: [colour_target.rtv, position_target.rtv, distort_target.rtv],
+                depth: input.engine_dsv,
+                inputs: [
+                    colour.srv,
+                    position.srv,
+                    distort.srv,
+                    input.depth_srv,
+                    null_mut(),
+                ],
+                ..DrawViews::default()
+            },
+        })
+    }
+
+    fn round_trip(twin: &TargetFields, engine: &TargetFields) -> Self {
+        Self {
+            twin_surface: twin.surface,
+            engine_surface: engine.surface,
+            spatial_recovery: false,
+            views: DrawViews {
+                output: Extent {
+                    width: engine.width,
+                    height: engine.height,
+                },
+                source: Extent {
+                    width: twin.width,
+                    height: twin.height,
+                },
+                targets: [engine.rtv, null_mut(), null_mut()],
+                inputs: [twin.srv, null_mut(), null_mut(), null_mut(), null_mut()],
+                ..DrawViews::default()
+            },
+        }
+    }
+}
+
+mod burst_file;
+mod gpu_timer;
+#[cfg(all(windows, feature = "sr-fixtures"))]
+mod hook_fixture;
+#[cfg(windows)]
+pub(crate) mod native;
+mod staging;
+
+fn default_jitter() -> JitterState {
+    JitterState {
+        phase_count: 8,
+        ..Default::default()
+    }
+}
+
+fn default_config() -> Config {
+    Config {
+        scale: DEFAULT_SCALE,
+        scale_defaulted: true,
+        jitter: true,
+        mip_bias: true,
+        mip_bias_offset: DEFAULT_MIP_OFFSET,
+        capture_start: 600,
+        capture_count: 3,
+        capture_interval: 300,
+        first_person_zero: true,
+        cut_distance: 4.0,
+        cut_degrees: 45.0,
+        settings: rsf_anomaly_sr_settings {
+            enabled: true,
+            backend: BACKEND_AUTO,
+            quality: 1,
+            preset: 0,
+        },
+        ..Default::default()
+    }
+}
+
+fn world_window(stage: u32) -> bool {
+    (2..=5).contains(&stage)
+}
+fn temporal(stage: u32) -> bool {
+    (3..=5).contains(&stage)
+}
+fn sr_inputs(stage: u32) -> bool {
+    stage == 4 || stage == 5
+}
+
+// ---- INI parsing ----------------------------------------------------------------------------------------------
+fn is_space(c: u16) -> bool {
+    matches!(c, 0x20 | 0x09..=0x0d)
+}
+
+// The longest prefix of `text` that converts as a decimal number (after leading white space, as wcstod skips it),
+// and its value. Zero length: no conversion.
+fn wcstod(text: &[u16]) -> (f64, usize) {
+    let start = text
+        .iter()
+        .position(|&c| !is_space(c))
+        .unwrap_or(text.len());
+    let ascii: String = text[start..]
+        .iter()
+        .map_while(|&c| char::from_u32(c.into()).filter(char::is_ascii))
+        .collect();
+    (1..=ascii.len())
+        .rev()
+        .find_map(|n| ascii[..n].parse().ok().map(|value| (value, start + n)))
+        .unwrap_or((0.0, 0))
+}
+struct Ini<'a> {
+    platform: &'a Platform,
+    ini: *const c_void,
+}
+
+impl Ini<'_> {
+    fn int(&self, key: &CStr, fallback: i32) -> i32 {
+        leaf!(self.platform, ini_int(self.ini, key.as_ptr(), fallback))
+    }
+    fn text(&self, key: &CStr, fallback: &CStr) -> Vec<u16> {
+        self.text_of::<64>(key, fallback)
+    }
+    // At most N - 1 UTF-16 units, as GetPrivateProfileStringW returns them for an N-unit buffer.
+    fn text_of<const N: usize>(&self, key: &CStr, fallback: &CStr) -> Vec<u16> {
+        let mut out = [0u16; N];
+        let length = leaf!(
+            self.platform,
+            ini_text(
+                self.ini,
+                key.as_ptr(),
+                fallback.as_ptr(),
+                out.as_mut_ptr(),
+                N as u32
+            )
+        );
+        let length = (length as usize).min(N - 1);
+        let end = out[..length].iter().position(|&c| c == 0).unwrap_or(length);
+        out[..end].to_vec()
+    }
+    // SRScale: clamped; `defaulted` when missing or not a number (sr_stage.h).
+    fn scale(&self) -> (f32, bool) {
+        let text = self.text(c"SRScale", c"");
+        let (value, end) = wcstod(&text);
+        if text.is_empty() || end == 0 {
+            return (DEFAULT_SCALE, true);
+        }
+        if text[end..].iter().any(|&c| c != 0x20 && c != 0x09) {
+            return (DEFAULT_SCALE, true); // trailing garbage: "0.67x"
+        }
+        let scale = clamp_scale(value as f32);
+        (scale, value.is_nan() || value <= 0.0 || !value.is_finite())
+    }
+    // SRMipBias: a decimal offset clamped to [-2, 1], "off", or "off" followed by the saved offset.
+    fn mip_bias(&self) -> (f32, bool) {
+        let text = self.text(c"SRMipBias", c"");
+        let blank = |c: &u16| *c == 0x20 || *c == 0x09;
+        let begin = text.iter().position(|c| !blank(c)).unwrap_or(text.len());
+        let mut rest = &text[begin..];
+        let disabled = rest.len() >= 3
+            && rest[..3]
+                .iter()
+                .map(|&c| c | 0x20)
+                .eq("off".bytes().map(u16::from))
+            && rest.get(3).is_none_or(blank);
+        if disabled {
+            rest = &rest[3..];
+        }
+        let (value, end) = wcstod(rest);
+        let valid = end != 0 && rest[end..].iter().all(blank) && value.is_finite();
+        let offset = if valid {
+            clamp_mip_offset(value as f32)
+        } else {
+            DEFAULT_MIP_OFFSET
+        };
+        (offset, !disabled)
+    }
+    fn float(&self, key: &CStr, fallback: f32, (low, high): (f32, f32)) -> f32 {
+        let text = self.text(key, c"");
+        let (value, end) = wcstod(&text);
+        if text.is_empty() || end == 0 || !value.is_finite() {
+            return fallback;
+        }
+        if value < f64::from(low) {
+            low
+        } else if value > f64::from(high) {
+            high
+        } else {
+            value as f32
+        }
+    }
+    fn options(&self) -> Config {
+        let mut out = default_config();
+        let stage = self.int(c"SRStage", 0);
+        out.stage = if (1..=5).contains(&stage) {
+            stage as u32
+        } else {
+            0
+        };
+        (out.scale, out.scale_defaulted) = self.scale();
+        out.jitter = self.int(c"SRJitter", 1) != 0;
+        (out.mip_bias_offset, out.mip_bias) = self.mip_bias();
+        out.capture = self.int(c"SRStageCapture", 0) != 0;
+        out.capture_start = self.int(c"SRStageCaptureStart", 600) as u32;
+        out.capture_count =
+            self.int(c"SRStageCaptureCount", if out.stage == 3 { 8 } else { 3 }) as u32;
+        out.capture_interval = self.int(c"SRStageCaptureInterval", 300) as u32;
+        out.capture_count = out.capture_count.min(capture_limit(out.stage));
+        out.capture_interval = out.capture_interval.max(1);
+        let exposure = self.text(c"SRExposure", c"constant");
+        out.exposure_auto = exposure.len() == 4
+            && exposure
+                .iter()
+                .map(|&c| c | 0x20)
+                .eq("auto".bytes().map(u16::from));
+        out.colour_transport = self.int(c"SRColourTransport", 0) != 0;
+        out.first_person_zero = self.int(c"SRFirstPersonZero", 1) != 0;
+        out.cut_distance = self.float(c"SRCutDistance", 4.0, CUT_DISTANCE);
+        out.cut_degrees = self.float(c"SRCutAngle", 45.0, CUT_DEGREES);
+        out.require_signature = self.int(c"SRRequireSignature", 0) != 0;
+        // The shared frontend keys the overlay persists in the same section; a value the adapter cannot apply keeps
+        // the default.
+        let backend = self.int(c"SRBackend", BACKEND_AUTO as i32) as u32;
+        let quality = self.int(c"SRQuality", 1) as u32;
+        out.settings = rsf_anomaly_sr_settings {
+            enabled: self.int(c"SR", 1) != 0,
+            backend: if backend < 32 && (BACKENDS >> backend) & 1 != 0 {
+                backend
+            } else {
+                BACKEND_AUTO
+            },
+            quality: if quality < 32 && (QUALITIES >> quality) & 1 != 0 {
+                quality
+            } else {
+                1
+            },
+            preset: self.int(c"DLSSPreset", 0) as u32,
+        };
+        out
+    }
+}
+
+// ---- process state ------------------------------------------------------------------------------------------
+struct GpuLease(Lease);
+// D3D11 resources and views are free-threaded. The stage serializes access.
+unsafe impl Send for GpuLease {}
+
+#[derive(Clone, Copy)]
+struct Raw(*mut c_void);
+// Opaque engine identities and log context, used only on the threads the native caller allows.
+unsafe impl Send for Raw {}
+
+struct MotionView {
+    device: Raw,
+    texture: Raw,
+    view: GpuLease,
+}
+
+#[derive(Default)]
+struct BurstFrame {
+    world: Option<GpuLease>,
+    presented: Option<GpuLease>,
+    engine_frame: u32,
+    jitter: JitterState,
+    mip_bias: f32,
+    fp_jittered: u64,
+}
+
+struct Burst {
+    enabled: bool,
+    armed: bool,
+    finished: bool,
+    written: bool,
+    wanted: u32,
+    wait: u32,
+    start: u64,
+    fp_at_prepare: u64,
+    directory: PathBuf,
+    frames: Vec<BurstFrame>,
+    result: String,
+}
+
+impl Default for Burst {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            armed: false,
+            finished: false,
+            written: false,
+            wanted: 0,
+            wait: 0,
+            start: 0,
+            fp_at_prepare: 0,
+            directory: PathBuf::new(),
+            frames: Vec::new(),
+            result: "not started".into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Capture {
+    active: bool,
+    record: rsf_frame_record,
+    remaining: u32,
+    next: u64,
+    taken: u64,
+    images: u64,
+    failed: u64,
+    seam_taken: bool,
+}
+
+impl Default for Capture {
+    fn default() -> Self {
+        Self {
+            active: false,
+            // A plain C record; every field is valid as zero.
+            record: unsafe { std::mem::zeroed() },
+            remaining: 0,
+            next: 0,
+            taken: 0,
+            images: 0,
+            failed: 0,
+            seam_taken: false,
+        }
+    }
+}
+
+#[derive(Default)]
+struct Reported {
+    counters: rsf_anomaly_sr_swap_counters,
+    frames: u64,
+    without_world: u64,
+    world_ms: [f64; 2],
+    seam_ms: f64,
+    world_samples: [u64; 2],
+    timer_generation: u64,
+    seam_samples: u64,
+}
+
+// The configuration beyond its scalar keys: the INI that SRScale is re-read from after a device reset
+// (NUL-terminated, empty when configured without one) and the vendor runtime directories.
+#[derive(Clone, Default)]
+struct Paths {
+    ini: Vec<u16>,
+    vendors: VendorPaths,
+}
+
+struct State {
+    config: Config,
+    paths: Paths,
+    log: rsf_anomaly_sr_log,
+    log_user: Raw,
+    build: Raw,
+    session: u64,
+    world_frames: u64,
+    frames: u64,
+    frames_without_world: u64,
+    prepared_this_frame: bool,
+    native_depth_frame: Option<u32>,
+    current_scale: f32,
+    scale_generation: u64,
+    last_plan: rsf_anomaly_sr_plan,
+    main_state: JitterState,
+    published: JitterState,
+    no_world_mark: u64,
+    jitter_enabled: bool,
+    sequence: JitterSequence,
+    frame_camera: rsf_anomaly_sr_camera,
+    previous_camera: rsf_anomaly_sr_camera,
+    frame_cut: bool,
+    frame_seconds: f32,
+    last_main_qpc: i64,
+    dump: Option<DumpApi>,
+    capture: Capture,
+    burst: Burst,
+    burst_gate: BurstGate,
+    burst_revision: u64,
+    timer: gpu_timer::Timer,
+    motion_view: Option<MotionView>,
+    temporal_targets: Option<TemporalTargets>,
+    twin_drops: u64,
+    reported: Reported,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            config: default_config(),
+            paths: Paths::default(),
+            log: None,
+            log_user: Raw(null_mut()),
+            build: Raw(null_mut()),
+            session: 0,
+            world_frames: 0,
+            frames: 0,
+            frames_without_world: 0,
+            prepared_this_frame: false,
+            native_depth_frame: None,
+            current_scale: DEFAULT_SCALE,
+            scale_generation: u64::MAX,
+            last_plan: rsf_anomaly_sr_plan::default(),
+            main_state: default_jitter(),
+            published: default_jitter(),
+            no_world_mark: u64::MAX,
+            jitter_enabled: false,
+            sequence: JitterSequence::new(),
+            frame_camera: Default::default(),
+            previous_camera: Default::default(),
+            frame_cut: false,
+            frame_seconds: 0.0,
+            last_main_qpc: 0,
+            dump: None,
+            capture: Capture::default(),
+            burst: Burst::default(),
+            burst_gate: BurstGate::new(),
+            burst_revision: 0,
+            timer: gpu_timer::Timer::default(),
+            motion_view: None,
+            temporal_targets: None,
+            twin_drops: 0,
+            reported: Reported::default(),
+        }
+    }
+}
+
+// The options the panel changes while the game runs. Read on the render thread without the lock.
+struct Live {
+    colour_transport: AtomicBool,
+    exposure_auto: AtomicBool,
+    first_person_zero: AtomicBool,
+    jitter: AtomicBool,
+    mip_bias: AtomicBool,
+    mip_offset: AtomicU32,
+}
+
+pub(crate) struct Stage {
+    bound: AtomicBool,
+    state: LazyLock<Mutex<State>>,
+    active: AtomicBool,
+    // The configured stage and SRStageCapture, read without the stage lock by the overlay's report and request paths,
+    // the observer's install decision and the motion stage's capture binding.
+    stage: AtomicU32,
+    capture: AtomicBool,
+    uv: [AtomicU32; 4],
+    live: Live,
+}
+
+// A path's UTF-16 units, without a terminator.
+#[cfg(test)]
+fn units(path: &Path) -> Vec<u16> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        path.as_os_str().encode_wide().collect()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string_lossy().encode_utf16().collect()
+    }
+}
+
+// The path UTF-16 units name. Windows keeps unpaired surrogates.
+fn path_of(units: &[u16]) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(units).into()
+    }
+    #[cfg(not(windows))]
+    {
+        String::from_utf16_lossy(units).into()
+    }
+}
+
+// The vendor runtime folders of the package beside the INI, as every host resolves them.
+pub(crate) fn vendor_directories(ini: &[u16]) -> VendorPaths {
+    let path = path_of(ini);
+    let package = path
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join("ReScaleFrame");
+    VendorPaths::new(&CString::new(package.to_string_lossy().as_bytes()).unwrap_or_default())
+}
+
+fn selected(config: &Config) -> bool {
+    config.stage == 1 || world_window(config.stage) || config.capture
+}
+
+// SRMipBias as Ini::mip_bias reads it back.
+fn mip_bias_text(enabled: bool, offset: f32) -> String {
+    if enabled {
+        format!("{offset:.1}")
+    } else {
+        format!("off {offset:.1}")
+    }
+}
+
+// A Stage 3 burst can hold a whole 18- or 32-phase cycle.
+fn capture_limit(stage: u32) -> u32 {
+    if stage == 3 { 32 } else { 16 }
+}
+
+// SRCutDistance and SRCutAngle bounds.
+const CUT_DISTANCE: (f32, f32) = (0.1, 1000.0);
+const CUT_DEGREES: (f32, f32) = (1.0, 180.0);
+
+// The controller's refusal reason (static strings), empty when none.
+fn refusal_text(reason: *const c_char) -> std::borrow::Cow<'static, str> {
+    if reason.is_null() {
+        "".into()
+    } else {
+        unsafe { CStr::from_ptr(reason) }.to_string_lossy()
+    }
+}
+
+fn yes(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+fn on(value: bool) -> &'static str {
+    if value { "on" } else { "off" }
+}
+
+impl Stage {
+    pub(crate) const fn new() -> Self {
+        Self {
+            bound: AtomicBool::new(false),
+            state: LazyLock::new(|| Mutex::new(State::default())),
+            active: AtomicBool::new(false),
+            stage: AtomicU32::new(0),
+            capture: AtomicBool::new(false),
+            uv: [
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+            ],
+            live: Live {
+                colour_transport: AtomicBool::new(false),
+                exposure_auto: AtomicBool::new(false),
+                first_person_zero: AtomicBool::new(true),
+                jitter: AtomicBool::new(true),
+                mip_bias: AtomicBool::new(true),
+                mip_offset: AtomicU32::new(0),
+            },
+        }
+    }
+
+    fn platform(&self) -> &'static Platform {
+        static BOUND: Platform = Platform { bound: true };
+        static UNBOUND: Platform = Platform { bound: false };
+        if self.bound.load(Ordering::Acquire) {
+            &BOUND
+        } else {
+            &UNBOUND
+        }
+    }
+
+    pub(crate) fn bind(&self) {
+        self.bound.store(true, Ordering::Release);
+    }
+
+    fn lock(&self) -> MutexGuard<'_, State> {
+        crate::lock(&self.state)
+    }
+
+    fn active_lock(&self) -> Option<MutexGuard<'_, State>> {
+        if !self.active() {
+            return None;
+        }
+        let guard = self.lock();
+        self.active().then_some(guard)
+    }
+
+    fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
+        let mut guard = self.lock();
+        f(&mut guard)
+    }
+
+    fn say(&self, state: &State, text: &str) {
+        // SAFETY: the host handed over the callback and its user pointer together.
+        unsafe { rsf_game_sys::log_guarded(state.log, state.log_user.0, text) };
+    }
+
+    fn live_mip_offset(&self) -> f32 {
+        f32::from_bits(self.live.mip_offset.load(Ordering::Relaxed))
+    }
+
+    fn controller(&self) -> rsf_anomaly_sr_controller {
+        leaf!(self.platform(), controller())
+    }
+
+    fn counters(&self) -> rsf_anomaly_sr_swap_counters {
+        leaf!(self.platform(), swap_counters())
+    }
+
+    fn publish(&self, state: &mut State, value: JitterState) {
+        state.published = value;
+        let uv = jitter_to_uv(&value);
+        for (slot, value) in
+            self.uv
+                .iter()
+                .zip([uv.current_u, uv.current_v, uv.previous_u, uv.previous_v])
+        {
+            slot.store(value.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    fn reset_jitter(&self, state: &mut State) {
+        state.main_state = default_jitter();
+        self.publish(state, default_jitter());
+    }
+
+    // ---- options and configuration ------------------------------------------------------------------------
+    #[cfg(test)]
+    fn ini(&self, ini: *const c_void) -> Ini<'_> {
+        Ini {
+            platform: self.platform(),
+            ini,
+        }
+    }
+
+    // The cold entry: reads the [Anomaly] SR keys from the INI at `path` (UTF-16, no terminator) and, when `apply`
+    // and a stage or the capture is selected, keeps them with the INI path and the vendor directories. Returns
+    // whether one is selected.
+    pub(crate) fn configure_ini(
+        &self,
+        path: &[u16],
+        apply: bool,
+        log: rsf_anomaly_sr_log,
+        user: *mut c_void,
+    ) -> bool {
+        let ini: Vec<u16> = path.iter().copied().chain([0]).collect();
+        let reader = Ini {
+            platform: self.platform(),
+            ini: ini.as_ptr().cast(),
+        };
+        let config = reader.options();
+        if !(apply && selected(&config)) {
+            return selected(&config);
+        }
+        let vendors = vendor_directories(path);
+        let paths = Paths { ini, vendors };
+        if self.configure(&config, paths, log, user) {
+            #[cfg(windows)]
+            register_live_options();
+        }
+        true
+    }
+
+    // Before Observe starts. Refused while the hooks are installed.
+    fn configure(
+        &self,
+        config: &Config,
+        paths: Paths,
+        log: rsf_anomaly_sr_log,
+        user: *mut c_void,
+    ) -> bool {
+        let vendors = paths.vendors.clone();
+        let accepted = self.with(|state| {
+            if self.active.load(Ordering::Acquire) {
+                return false;
+            }
+            state.config = *config;
+            state.paths = paths;
+            self.stage.store(config.stage, Ordering::Release);
+            self.capture.store(config.capture, Ordering::Release);
+            state.log = log;
+            state.log_user = Raw(user);
+            let live = &self.live;
+            live.colour_transport
+                .store(config.colour_transport, Ordering::Relaxed);
+            live.exposure_auto
+                .store(config.exposure_auto, Ordering::Relaxed);
+            live.first_person_zero
+                .store(config.first_person_zero, Ordering::Relaxed);
+            live.jitter.store(config.jitter, Ordering::Relaxed);
+            live.mip_bias.store(config.mip_bias, Ordering::Relaxed);
+            live.mip_offset
+                .store(config.mip_bias_offset.to_bits(), Ordering::Relaxed);
+            true
+        });
+        if !accepted {
+            return false;
+        }
+        // Stages 4 and 5 hand the TemporalDriver its options; the directories are borrowed for the call.
+        let options = rsf_anomaly_sr_driver_config {
+            stage: config.stage,
+            exposure_auto: config.exposure_auto,
+            colour_transport: config.colour_transport,
+            first_person_zero: config.first_person_zero,
+            require_signature: config.require_signature,
+            initial: config.settings,
+            streamline: vendors.streamline.as_ptr(),
+            fidelityfx: vendors.fidelityfx.as_ptr(),
+            xess: vendors.xess.as_ptr(),
+        };
+        let driver = if sr_inputs(config.stage) {
+            &raw const options
+        } else {
+            std::ptr::null()
+        };
+        leaf!(self.platform(), configured(log, user, driver));
+        true
+    }
+
+    // Whether the configured stage or capture needs the SR hooks (the observer installs them only then).
+    pub(crate) fn selected(&self) -> bool {
+        let stage = self.stage.load(Ordering::Acquire);
+        stage == 1 || world_window(stage) || self.capture()
+    }
+
+    // SRStageCapture: this run's frame dump service belongs to the SR stage.
+    pub(crate) fn capture(&self) -> bool {
+        self.capture.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn option(&self, id: u32) -> i32 {
+        let live = &self.live;
+        let flag = |value: &AtomicBool| i32::from(value.load(Ordering::Relaxed));
+        match id {
+            RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT => 1 - flag(&live.colour_transport),
+            RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO => flag(&live.exposure_auto),
+            RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO => flag(&live.first_person_zero),
+            RSF_ANOMALY_SR_OPTION_JITTER => flag(&live.jitter),
+            RSF_ANOMALY_SR_OPTION_MIP_BIAS => flag(&live.mip_bias),
+            RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET => {
+                (self.live_mip_offset() * MIP_OFFSET_DIVISOR as f32).round() as i32
+            }
+            OPTION_SCALE => self.with(|state| (state.current_scale * 100.0).round() as i32),
+            OPTION_CAPTURE_START => {
+                self.with(|state| state.config.capture_start.min(i32::MAX as u32) as i32)
+            }
+            OPTION_CAPTURE_COUNT => self.with(|state| state.config.capture_count as i32),
+            OPTION_CAPTURE_INTERVAL => {
+                self.with(|state| state.config.capture_interval.min(i32::MAX as u32) as i32)
+            }
+            OPTION_CUT_DISTANCE => {
+                self.with(|state| (state.config.cut_distance * 10.0).round() as i32)
+            }
+            OPTION_CUT_ANGLE => self.with(|state| (state.config.cut_degrees * 10.0).round() as i32),
+            OPTION_REQUIRE_SIGNATURE => {
+                self.with(|state| i32::from(state.config.require_signature))
+            }
+            _ => 0,
+        }
+    }
+
+    // Applies a panel value and saves it through the adapter option path.
+    pub(crate) fn set_option(&self, id: u32, value: i32) -> bool {
+        let p = self.platform();
+        let live = &self.live;
+        let persist_int = |key: &CStr, v: i32| leaf!(p, persist_int(key.as_ptr(), v));
+        let persist_text = |key: &CStr, v: &str| {
+            CString::new(v).is_ok_and(|text| leaf!(p, persist_text(key.as_ptr(), text.as_ptr())))
+        };
+        let enabled = value != 0;
+        let set_flag = |target: &AtomicBool, flag: bool, saved: bool| {
+            if saved {
+                target.store(flag, Ordering::Relaxed);
+            }
+            saved
+        };
+        match id {
+            RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT => {
+                let transport = !enabled;
+                if !persist_int(c"SRColourTransport", i32::from(transport)) {
+                    return false;
+                }
+                live.colour_transport.store(transport, Ordering::Relaxed);
+                leaf!(p, apply_colour_transport(transport));
+                true
+            }
+            RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO => set_flag(
+                &live.exposure_auto,
+                enabled,
+                persist_text(c"SRExposure", if enabled { "auto" } else { "constant" }),
+            ),
+            RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO => set_flag(
+                &live.first_person_zero,
+                enabled,
+                persist_int(c"SRFirstPersonZero", i32::from(enabled)),
+            ),
+            RSF_ANOMALY_SR_OPTION_JITTER => set_flag(
+                &live.jitter,
+                enabled,
+                persist_int(c"SRJitter", i32::from(enabled)),
+            ),
+            RSF_ANOMALY_SR_OPTION_MIP_BIAS => {
+                let text = mip_bias_text(enabled, self.live_mip_offset());
+                set_flag(&live.mip_bias, enabled, persist_text(c"SRMipBias", &text))
+            }
+            RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET => {
+                let offset = value as f32 / MIP_OFFSET_DIVISOR as f32;
+                let text = mip_bias_text(live.mip_bias.load(Ordering::Relaxed), offset);
+                if !persist_text(c"SRMipBias", &text) {
+                    return false;
+                }
+                live.mip_offset.store(offset.to_bits(), Ordering::Relaxed);
+                true
+            }
+            OPTION_SCALE => self.with(|state| {
+                let scale = clamp_scale(value as f32 / 100.0);
+                if !persist_text(c"SRScale", &format!("{scale:.2}")) {
+                    return false;
+                }
+                state.current_scale = scale;
+                state.config.scale = scale;
+                state.config.scale_defaulted = false;
+                true
+            }),
+            OPTION_CUT_DISTANCE | OPTION_CUT_ANGLE => self.with(|state| {
+                let (target, key, (min, max)) = if id == OPTION_CUT_DISTANCE {
+                    (
+                        &mut state.config.cut_distance,
+                        c"SRCutDistance",
+                        CUT_DISTANCE,
+                    )
+                } else {
+                    (&mut state.config.cut_degrees, c"SRCutAngle", CUT_DEGREES)
+                };
+                let cut = (value as f32 / 10.0).clamp(min, max);
+                if !persist_text(key, &format!("{cut:.1}")) {
+                    return false;
+                }
+                *target = cut;
+                true
+            }),
+            OPTION_CAPTURE_START | OPTION_CAPTURE_COUNT | OPTION_CAPTURE_INTERVAL => {
+                self.with(|state| {
+                    let (target, key, value) = match id {
+                        OPTION_CAPTURE_START => (
+                            &mut state.config.capture_start,
+                            c"SRStageCaptureStart",
+                            value.max(0),
+                        ),
+                        OPTION_CAPTURE_COUNT => (
+                            &mut state.config.capture_count,
+                            c"SRStageCaptureCount",
+                            value.clamp(0, capture_limit(state.config.stage) as i32),
+                        ),
+                        _ => (
+                            &mut state.config.capture_interval,
+                            c"SRStageCaptureInterval",
+                            value.max(1),
+                        ),
+                    };
+                    if !persist_int(key, value) {
+                        return false;
+                    }
+                    *target = value as u32;
+                    if state.config.stage == 3 {
+                        if id != OPTION_CAPTURE_INTERVAL && state.config.capture && self.active() {
+                            state.burst_revision = state.burst_revision.wrapping_add(1);
+                            self.bind_burst(state);
+                        }
+                    } else {
+                        state.capture.next = u64::from(state.config.capture_start);
+                        state.capture.remaining = state.config.capture_count;
+                    }
+                    true
+                })
+            }
+            OPTION_REQUIRE_SIGNATURE => self.with(|state| {
+                if !persist_int(c"SRRequireSignature", i32::from(enabled)) {
+                    return false;
+                }
+                state.config.require_signature = enabled;
+                true
+            }),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    #[cfg(windows)]
+    fn owns_depth(&self, native_frame: u32) -> bool {
+        let stage = self.stage.load(Ordering::Acquire);
+        world_window(stage)
+            && (stage != 5
+                || !self.active()
+                || self.with(|state| state.native_depth_frame != Some(native_frame)))
+    }
+
+    #[cfg(any(test, feature = "sr-fixtures"))]
+    pub(crate) fn jitter(&self) -> JitterState {
+        self.with(|state| state.published)
+    }
+
+    pub(crate) fn jitter_uv(&self) -> rsf_anomaly_sr_jitter_uv {
+        let [u, v, pu, pv] =
+            [0, 1, 2, 3].map(|i| f32::from_bits(self.uv[i].load(Ordering::Relaxed)));
+        rsf_anomaly_sr_jitter_uv {
+            current_u: u,
+            current_v: v,
+            previous_u: pu,
+            previous_v: pv,
+        }
+    }
+
+    // ---- install and quiesce ------------------------------------------------------------------------------------
+    pub(crate) fn install(
+        &self,
+        module: *mut c_void,
+        image_size: u32,
+        expected_size: u32,
+        build: *const c_void,
+    ) -> bool {
+        let p = self.platform();
+        let mut guard = self.lock();
+        let state = &mut *guard;
+        let stage = state.config.stage;
+        if !selected(&state.config) {
+            return true;
+        }
+        if self.active.load(Ordering::Acquire) {
+            return true;
+        }
+        if module.is_null() || image_size != expected_size {
+            self.say(
+                state,
+                "Anomaly SR stage refused: image size differs from the verified build.",
+            );
+            return false;
+        }
+        // Trampolines are process-lifetime: a re-start must be the build the first install verified.
+        let created = leaf!(p, hooks_created());
+        if created && state.build.0.cast_const() != build {
+            self.say(
+                state,
+                "Anomaly SR stage refused: a different build than the installed hooks.",
+            );
+            return false;
+        }
+        // A re-start after quiesce finds our own detours in place of the guarded bytes; the first install verified them.
+        if !created {
+            if !p.bound {
+                self.say(
+                    state,
+                    "Anomaly SR stage refused: guard verification unavailable.",
+                );
+                return false;
+            }
+            if let Some(name) = leaf!(
+                p,
+                verify_guards(
+                    module,
+                    image_size,
+                    build,
+                    world_window(stage),
+                    temporal(stage)
+                )
+            ) {
+                let name = name.to_string_lossy();
+                self.say(
+                    state,
+                    &format!("Anomaly SR stage refused, game left stock: guard mismatch at {name}"),
+                );
+                return false;
+            }
+        }
+        state.build = Raw(build.cast_mut());
+        leaf!(p, set_engine(module, build, temporal(stage)));
+        let (counter, _) = leaf!(p, now());
+        state.session = counter as u64 | 1;
+        let swap =
+            (stage == 1 || world_window(stage)) && (stage != 5 || leaf!(p, driver_enabled()));
+        leaf!(p, set_swap_enabled(swap));
+        state.native_depth_frame = None;
+        state.current_scale = clamp_scale(state.config.scale);
+        state.scale_generation = u64::MAX;
+        // Stage 3: the main projection is jittered here, the first-person ones only through the shared rmNear slot.
+        // Without that slot (geometry hooks refused) the weapon would shimmer against the world, so jitter stays off.
+        state.sequence = JitterSequence::new();
+        self.reset_jitter(state);
+        state.no_world_mark = u64::MAX;
+        state.jitter_enabled = temporal(stage) && leaf!(p, geometry_active());
+        if temporal(stage) && !state.jitter_enabled {
+            self.say(state, "Anomaly SR stage 3: jitter off, the rmNear slot is unavailable (geometry hooks refused); mip bias only.");
+        }
+        if stage == 5 && !state.jitter_enabled {
+            self.say(state, "Anomaly SR stage 5: no jitter (SRJitter=0 or the rmNear slot is unavailable); every SR pass is refused and the seam stays bilinear.");
+        }
+        // Stage 5 borrows the carrier-loaded Runtime's SR pipeline; the pipeline starts at the first frame boundary.
+        if stage == 5 {
+            leaf!(p, driver_bind());
+        }
+        state.frame_camera = Default::default();
+        state.previous_camera = Default::default();
+        state.frame_cut = false;
+        state.last_main_qpc = 0;
+        if !leaf!(p, install_hooks()) {
+            self.say(
+                state,
+                "Anomaly SR stage refused: guarded detour installation failed; game left stock.",
+            );
+            return false;
+        }
+        if !leaf!(p, install_position_slot()) {
+            leaf!(p, disable_hooks());
+            self.say(state, "Anomaly SR stage refused: the position binder's vtable slot does not hold the profiled setup; game left stock.");
+            return false;
+        }
+        if stage == 1 || world_window(stage) {
+            leaf!(p, set_rm_near(true));
+        }
+        self.active.store(true, Ordering::Release);
+        if state.config.capture {
+            self.bind_dump(state);
+        }
+        if state.config.capture && stage == 3 {
+            self.bind_burst(state);
+        }
+        let text = self.install_text(state);
+        self.say(state, &text);
+        true
+    }
+
+    fn install_text(&self, state: &State) -> String {
+        let c = &state.config;
+        let geometry = leaf!(self.platform(), geometry_active());
+        let defaulted = if c.scale_defaulted { " (default)" } else { "" };
+        let scale = state.current_scale;
+        let detail = if sr_inputs(c.stage) {
+            format!(
+                "{}; SRScale={scale:.3}{defaulted}{}; jitter={}, mip bias {} (log2(render/output) {:+.3}); SR inputs: linear colour, R24G8 depth twin, motion target (validity in Z, first-person zero {}); exposure {}; cut at {:.2} m or {:.1} deg",
+                if c.stage == 5 {
+                    "temporal SR through the shared RSF pipeline at the seam (bilinear on any refusal)"
+                } else {
+                    "SR inputs prepared at the seam, bilinear output"
+                },
+                if c.stage == 5 {
+                    " (fallback; the selected backend's quality plans the render size)"
+                } else {
+                    ""
+                },
+                on(state.jitter_enabled),
+                on(c.mip_bias),
+                f64::from(c.mip_bias_offset),
+                on(c.first_person_zero),
+                if c.exposure_auto {
+                    "auto (backend)"
+                } else {
+                    "constant 1.0"
+                },
+                f64::from(c.cut_distance),
+                f64::from(c.cut_degrees),
+            )
+        } else if c.stage == 3 {
+            format!(
+                "SRScale={scale:.3}{defaulted}, bilinear upscale at the seam; jitter={} (Halton 2,3, ceil(8*(output/render)^2) phases), mip bias {} (log2(render/output) {:+.3}), burst={} consecutive frames from world frame {}",
+                on(state.jitter_enabled),
+                on(c.mip_bias),
+                f64::from(c.mip_bias_offset),
+                if c.capture { c.capture_count } else { 0 },
+                c.capture_start,
+            )
+        } else if c.stage == 2 {
+            format!("SRScale={scale:.3}{defaulted}, bilinear upscale at the seam")
+        } else {
+            "scale 1.0".into()
+        };
+        format!(
+            "Anomaly SR stage hooks installed: SRStage={} SRStageCapture={} (start={} count={} interval={}) rmNear slot={}; {detail}{}.",
+            c.stage,
+            i32::from(c.capture),
+            c.capture_start,
+            c.capture_count,
+            c.capture_interval,
+            if c.stage == 0 {
+                "unused"
+            } else if geometry {
+                "shared"
+            } else {
+                "unavailable (geometry hooks refused)"
+            },
+            if c.stage == 5 {
+                ""
+            } else {
+                ", no SR provider is called"
+            },
+        )
+    }
+
+    fn bind_dump(&self, state: &mut State) {
+        let Some(table) = DumpApi::bind() else {
+            self.say(
+                state,
+                "Anomaly SR stage capture refused: Runtime frame dump exports missing.",
+            );
+            return;
+        };
+        let Some(directory) = anomaly_directory() else {
+            self.say(
+                state,
+                "Anomaly SR stage capture refused: LOCALAPPDATA unavailable.",
+            );
+            return;
+        };
+        let Ok(directory) = CString::new(directory.to_string_lossy().as_bytes()) else {
+            return;
+        };
+        let sha = leaf!(self.platform(), build_sha256());
+        // The Runtime copies the strings; the log context outlives the session.
+        unsafe {
+            (table.configure)(
+                directory.as_ptr(),
+                c"Anomaly".as_ptr(),
+                sha,
+                state.log,
+                state.log_user.0,
+            )
+        };
+        state.dump = Some(table);
+        // Stage 3 replaces the scheduled single-frame captures with the consecutive burst; F10 still takes one.
+        state.capture.remaining = if state.config.stage == 3 {
+            0
+        } else {
+            state.config.capture_count
+        };
+        state.capture.next = u64::from(state.config.capture_start);
+    }
+
+    fn bind_burst(&self, state: &mut State) {
+        let Some(directory) = anomaly_directory() else {
+            self.say(
+                state,
+                "Anomaly SR stage 3 burst refused: LOCALAPPDATA unavailable.",
+            );
+            return;
+        };
+        state.burst_gate = BurstGate::new();
+        let stem = format!("sr-jitter-{:016x}", state.session);
+        let directory = if state.burst_revision == 0 {
+            directory.join(stem)
+        } else {
+            directory.join(format!("{stem}-{}", state.burst_revision))
+        };
+        state.burst = Burst {
+            directory,
+            wanted: state.config.capture_count,
+            start: u64::from(state.config.capture_start),
+            frames: Vec::with_capacity(state.config.capture_count as usize),
+            enabled: state.config.capture_count > 0,
+            ..Burst::default()
+        };
+    }
+
+    pub(crate) fn quiesce(&self) -> bool {
+        let p = self.platform();
+        if !leaf!(p, hooks_created()) {
+            return true;
+        }
+        let disabled = leaf!(p, remove_hooks());
+        let mut guard = self.lock();
+        self.active.store(false, Ordering::Release);
+        let state = &mut *guard;
+        if !disabled {
+            // A partially disabled hook can still enter. Let it run stock and
+            // keep its resources until the native removal can be retried.
+            leaf!(p, close_stale());
+        }
+        let shut = disabled && leaf!(p, shutdown());
+        self.reset_jitter(state);
+        if !shut {
+            return false;
+        }
+        state.motion_view = None;
+        state.temporal_targets = None;
+        state.native_depth_frame = None;
+        state.timer.reset();
+        for frame in &mut state.burst.frames {
+            frame.world = None;
+            frame.presented = None;
+        }
+        state.burst.armed = false;
+        if let Some(dump) = state.dump {
+            self.capture_abandon(state);
+            unsafe { (dump.cancel)(state.session) };
+        }
+        // Teardown: the pipeline releases its device reference and every vendor context before the engine's device goes.
+        leaf!(p, driver_stop());
+        leaf!(p, host_reset());
+        true
+    }
+
+    // ---- H1: CRenderTarget::phase_scene_prepare ---------------------------------------------------------------
+    fn gather(&self, state: &mut State, this: *mut c_void) -> rsf_anomaly_sr_frame_facts {
+        let p = self.platform();
+        let stage = state.config.stage;
+        let target = admitted_target(p, this);
+        let reads = leaf!(p, frame_facts(world_window(stage), temporal(stage)));
+        let mut facts = reads.facts;
+        facts.render_target = target;
+        // An unreadable view or options word cannot admit a reduced world frame.
+        facts.scope = !reads.view_read || reads.render_view == u32::from(SCOPE);
+        facts.msaa = !reads.options_read || reads.options_word3 & DX10_MSAA != 0;
+        facts.stage = 1;
+        if !world_window(stage) {
+            state.last_plan = make_plan(facts.device_width, facts.device_height, 1.0).unwrap_or(
+                rsf_anomaly_sr_plan {
+                    scale: 1.0,
+                    ..Default::default()
+                },
+            );
+            return facts;
+        }
+        // A device reset (vid_restart, resolution change) re-reads SRScale, so a new value applies without a restart.
+        if facts.generation != state.scale_generation {
+            if state.scale_generation != u64::MAX && !state.paths.ini.is_empty() {
+                let (scale, _) = Ini {
+                    platform: p,
+                    ini: state.paths.ini.as_ptr().cast(),
+                }
+                .scale();
+                if scale != state.current_scale {
+                    let text = format!(
+                        "Anomaly SR stage {stage}: SRScale {:.3} -> {:.3} after a device reset.",
+                        f64::from(state.current_scale),
+                        f64::from(scale)
+                    );
+                    self.say(state, &text);
+                    state.current_scale = scale;
+                }
+            }
+            state.scale_generation = facts.generation;
+        }
+        if let Some(plan) = make_plan(facts.device_width, facts.device_height, state.current_scale)
+        {
+            facts.render_width = plan.render_width;
+            facts.render_height = plan.render_height;
+            state.last_plan = plan;
+        }
+        // Stage 5: the render size the selected backend plans for this output at the selected quality. SRScale stays
+        // the fallback while no backend plans (not started, refused, or planning for another output size).
+        if stage == 5
+            && let Some([width, height]) =
+                leaf!(p, driver_planned(facts.device_width, facts.device_height))
+            && let Some(plan) =
+                plan_for_render(facts.device_width, facts.device_height, width, height)
+        {
+            facts.render_width = plan.render_width;
+            facts.render_height = plan.render_height;
+            state.last_plan = plan;
+        }
+        facts.stage = 2;
+        if temporal(stage) {
+            facts.mip_bias = self.live.mip_bias.load(Ordering::Relaxed);
+            facts.mip_bias_delta = mip_delta(
+                facts.render_width,
+                facts.device_width,
+                self.live_mip_offset(),
+            );
+        }
+        facts
+    }
+
+    // Stages 4 and 5, at a main-view H1 before the jitter is applied.
+    fn read_main_camera(&self, state: &mut State) {
+        let p = self.platform();
+        state.previous_camera = state.frame_camera;
+        let mut camera = rsf_anomaly_sr_camera::default();
+        camera.valid = leaf!(p, read_camera(&mut camera))
+            && camera
+                .view
+                .iter()
+                .chain(camera.projection.iter())
+                .all(|v| v.is_finite());
+        state.frame_camera = camera;
+        let c = &state.config;
+        state.frame_cut = camera.valid
+            && state.previous_camera.valid
+            && camera::camera_cut(
+                camera::pose(&state.previous_camera.view),
+                camera::pose(&camera.view),
+                c.cut_distance,
+                c.cut_degrees,
+            );
+        let (now, frequency) = leaf!(p, now());
+        let mut seconds = if state.last_main_qpc != 0 && frequency != 0 {
+            ((now - state.last_main_qpc) as f64 / frequency as f64) as f32
+        } else {
+            0.0
+        };
+        if seconds.is_nan() || seconds <= 0.0 || seconds > 1.0 {
+            seconds = 0.0;
+        }
+        state.frame_seconds = seconds;
+        state.last_main_qpc = now;
+    }
+
+    fn choose_jitter(
+        &self,
+        state: &mut State,
+        facts: &mut rsf_anomaly_sr_frame_facts,
+    ) -> (rsf_anomaly_sr_jitter_sample, bool) {
+        if !temporal(state.config.stage)
+            || facts.scope
+            || !state.jitter_enabled
+            || !self.live.jitter.load(Ordering::Relaxed)
+        {
+            return (
+                rsf_anomaly_sr_jitter_sample {
+                    phase_count: 8,
+                    ..Default::default()
+                },
+                false,
+            );
+        }
+        let continuous = state.no_world_mark == state.frames_without_world; // no menu/loading frame since the last main H1
+        state.no_world_mark = state.frames_without_world;
+        let sample = state.sequence.next(
+            [
+                facts.render_width,
+                facts.render_height,
+                facts.device_width,
+                facts.device_height,
+            ],
+            facts.generation,
+            continuous,
+        );
+        facts.jitter = true;
+        facts.jitter_x = sample.x;
+        facts.jitter_y = sample.y;
+        (sample, state.sequence.reset)
+    }
+
+    fn publish_jitter(
+        &self,
+        state: &mut State,
+        facts: &rsf_anomaly_sr_frame_facts,
+        sample: &rsf_anomaly_sr_jitter_sample,
+        reset: bool,
+    ) {
+        if !temporal(state.config.stage) {
+            return;
+        }
+        let c = self.controller();
+        let applied = c.window_open && c.jitter_applied;
+        let (width, height) = if applied {
+            (c.render_width, c.render_height)
+        } else {
+            (facts.render_width, facts.render_height)
+        };
+        let next = next_jitter(
+            &state.main_state,
+            facts.scope,
+            applied,
+            sample,
+            width,
+            height,
+            reset,
+        );
+        if !facts.scope {
+            state.main_state = next;
+        }
+        self.publish(state, next);
+    }
+
+    fn loading(&self) -> bool {
+        let p = self.platform();
+        // Both precache and the post-load key wait draw the loading screen over the world. An unreadable fact is
+        // a loading screen; the precache frame is read whenever the registration is readable.
+        let registered = leaf!(p, loading_registered());
+        registered.is_none()
+            || leaf!(p, precache_frame()).is_none_or(|precache| precache != 0)
+            || registered != Some(0)
+    }
+
+    fn capture_abandon(&self, state: &mut State) {
+        if !state.capture.active {
+            return;
+        }
+        if let Some(dump) = state.dump {
+            // A Runtime export resolved at bind time; the record outlives the call.
+            unsafe { (dump.complete)(&state.capture.record, E_FAIL) };
+        }
+        state.capture.active = false;
+        state.capture.failed += 1;
+    }
+
+    // At H1, on a main-view frame: arm the next scheduled capture, or join an F10 request.
+    fn capture_arm(&self, state: &mut State, facts: &rsf_anomaly_sr_frame_facts) {
+        let Some(dump) = state.dump else { return };
+        self.capture_abandon(state);
+        state.capture.seam_taken = false;
+        let scheduled = state.capture.remaining != 0
+            && state.world_frames >= state.capture.next
+            && !self.loading();
+        let c = self.controller();
+        let stage2 = c.window_open && c.stage == 2; // this frame renders the world at render size
+        let engine_frame = leaf!(self.platform(), engine_frame());
+        let record = &mut state.capture.record;
+        // A plain C record; every field is valid as zero.
+        *record = unsafe { std::mem::zeroed() };
+        record.struct_size = size_of::<rsf_frame_record>() as u32;
+        record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+        record.frame_id = u64::from(engine_frame) + 1; // never RSF_FRAME_ID_NONE
+        record.session_id = state.session;
+        record.view_id = 0;
+        record.resource_generation = c.twin_generation as u32;
+        record.phase = PHASE_RENDER_SUBMIT;
+        record.screen = SCREEN_UNKNOWN;
+        record.output_width = facts.device_width;
+        record.output_height = facts.device_height;
+        record.render_width = if stage2 {
+            facts.render_width
+        } else {
+            facts.device_width
+        };
+        record.render_height = if stage2 {
+            facts.render_height
+        } else {
+            facts.device_height
+        };
+        if !dump.admit(&state.capture.record, scheduled) {
+            return;
+        }
+        state.capture.active = true;
+        state.capture.taken += 1;
+        if scheduled {
+            state.capture.remaining -= 1;
+            state.capture.next = state.world_frames + u64::from(state.config.capture_interval);
+        }
+    }
+
+    // Stage 3 burst: arm a consecutive capture frame at H1 (after publish_jitter).
+    fn burst_arm(&self, state: &mut State, facts: &rsf_anomaly_sr_frame_facts) {
+        let burst = &state.burst;
+        if !burst.enabled || burst.finished || facts.scope {
+            return;
+        }
+        let loading = self.loading();
+        let verdict = state.burst_gate.frame(
+            loading,
+            state.frames_without_world,
+            !burst.frames.is_empty(),
+        );
+        if verdict.discard {
+            state.burst.frames.clear();
+            state.burst.armed = false;
+        }
+        let c = self.controller();
+        if !verdict.capture || !c.window_open || state.world_frames < state.burst.start {
+            return;
+        }
+        if state.burst.frames.len() >= state.burst.wanted as usize {
+            return;
+        }
+        let frame = BurstFrame {
+            engine_frame: leaf!(self.platform(), engine_frame()),
+            jitter: state.published,
+            mip_bias: if c.mip_bias_applied {
+                c.window_mip_bias
+            } else {
+                c.saved_mip_bias
+            },
+            ..Default::default()
+        };
+        state.burst.frames.push(frame);
+        state.burst.fp_at_prepare = self.counters().fp_jittered;
+        state.burst.armed = true;
+    }
+
+    pub(crate) fn prepare(&self, this: *mut c_void) {
+        let p = self.platform();
+        let Some(mut guard) = self.active_lock() else {
+            return;
+        };
+        let state = &mut *guard;
+        // A window still open here (never expected) is closed first, so Device.dwWidth reads the output size again.
+        leaf!(p, close_stale());
+        state
+            .timer
+            .begin(p, leaf!(p, device()), leaf!(p, context()));
+        let mut facts = self.gather(state, this);
+        if sr_inputs(state.config.stage) && !facts.scope {
+            self.read_main_camera(state);
+        }
+        let (sample, reset) = self.choose_jitter(state, &mut facts);
+        state.prepared_this_frame = true;
+        let swapped = leaf!(p, prepare(&facts, state.log, state.log_user.0));
+        if sr_inputs(state.config.stage) {
+            let twin_drops = self.counters().twin_drops;
+            if state.twin_drops != twin_drops {
+                state.motion_view = None;
+                state.temporal_targets = None;
+                state.twin_drops = twin_drops;
+            } else if state
+                .motion_view
+                .as_ref()
+                .is_some_and(|cached| cached.device.0 != facts.device)
+            {
+                state.motion_view = None;
+            }
+        }
+        if state.config.stage == 5 && (swapped || !facts.scope) {
+            // Expose the stock depth only for the main frame that actually ran with SR off.
+            state.native_depth_frame = if !swapped && !facts.scope && !leaf!(p, driver_enabled()) {
+                let frame = leaf!(p, engine_frame());
+                (frame != 0).then_some(frame)
+            } else {
+                None
+            };
+        }
+        self.publish_jitter(state, &facts, &sample, reset);
+        if !facts.scope {
+            state.world_frames += 1;
+            if state.config.capture {
+                self.capture_arm(state, &facts);
+            }
+            self.burst_arm(state, &facts);
+        }
+    }
+
+    // H1 epilogue. Stage 2: the viewport now describes the render-size targets.
+    pub(crate) fn prepared(&self) {
+        let Some(_guard) = self.active_lock() else {
+            return;
+        };
+        leaf!(self.platform(), prepared());
+    }
+
+    // ---- the S-B seam and the other exits -------------------------------------------------------------------
+    fn take(
+        &self,
+        state: &mut State,
+        name: &CStr,
+        description: &CStr,
+        texture: *mut c_void,
+        view: u32,
+        scale: f32,
+    ) {
+        let Some(dump) = state.dump else {
+            return;
+        };
+        let context = leaf!(self.platform(), context());
+        if !state.capture.active || context.is_null() || texture.is_null() {
+            return;
+        }
+        // A Runtime export resolved at bind time; every pointer is valid for the call.
+        if unsafe {
+            (dump.texture_record)(
+                context,
+                &state.capture.record,
+                name.as_ptr(),
+                description.as_ptr(),
+                texture,
+                view,
+                scale,
+            )
+        } != 0
+        {
+            state.capture.images += 1;
+        } else {
+            state.capture.failed += 1;
+        }
+    }
+
+    pub(crate) fn seam(&self, this: *mut c_void) {
+        self.seam_with(this, |run| {
+            let handle = leaf!(self.platform(), swap_handle()).cast();
+            // The controller handle is stable until native quiesce takes the stage lock.
+            unsafe { crate::sr_swap::run_seam(handle, run) };
+        });
+    }
+
+    fn seam_with(
+        &self,
+        this: *mut c_void,
+        dispatch: impl FnOnce(&mut dyn FnMut(crate::sr_swap::SeamPass<'_>) -> bool),
+    ) {
+        let p = self.platform();
+        let Some(mut guard) = self.active_lock() else {
+            return;
+        };
+        let state = &mut *guard;
+        let device = leaf!(p, device());
+        let context = leaf!(p, context());
+        let swapped = self.controller().window_open;
+        state.timer.seam(p, device, context, swapped);
+        if !swapped {
+            state.timer.finish(p, device, context);
+        }
+        dispatch(&mut |pass| match pass {
+            crate::sr_swap::SeamPass::Upscale(input) => {
+                (unsafe { Seam::upscale(input) }).is_some_and(|seam| self.upscale(state, &seam))
+            }
+            crate::sr_swap::SeamPass::RoundTrip(twin, engine) => {
+                self.round_trip(state, &Seam::round_trip(twin, engine))
+            }
+        });
+        if swapped {
+            state
+                .timer
+                .finish(p, leaf!(p, device()), leaf!(p, context()));
+            return;
+        }
+        // Stock capture: the engine generic0 as the post chain receives it, once per frame at the first seam call.
+        if state.capture.active && !state.capture.seam_taken {
+            let target = admitted_target(p, this);
+            let surface = if target.is_null() {
+                null_mut()
+            } else {
+                leaf!(p, seam_surface(target))
+            };
+            if !surface.is_null() {
+                let stock = self.controller().refused || state.config.stage == 0;
+                self.take(
+                    state,
+                    c"anomaly_seam_generic0",
+                    if stock {
+                        c"Stock (no swap this frame): engine UNORM8 generic0 at the S-B seam; input to every post pass"
+                    } else {
+                        c"SRStage frame without a window (skipped): stock engine UNORM8 generic0 at the S-B seam"
+                    },
+                    surface,
+                    VIEW_RAW,
+                    1.0,
+                );
+            }
+            state.capture.seam_taken = true;
+        }
+    }
+
+    // Stage 2 and later, after the restore at the seam.
+    fn upscale(&self, state: &mut State, seam: &Seam) -> bool {
+        let p = self.platform();
+        let stage = state.config.stage;
+        if state.capture.active {
+            self.take(
+                state,
+                c"anomaly_seam_fp16_input",
+                c"SRStage=2/3: render-size FP16 generic0 twin at the S-B seam, engine low tonemap space, before the upscale",
+                seam.twin_surface,
+                VIEW_RAW,
+                1.0,
+            );
+        }
+        if state.burst.armed && state.burst.frames.last().is_some_and(|f| f.world.is_none()) {
+            let context = leaf!(p, context());
+            let copy = staging::copy(p, context, seam.twin_surface);
+            if let Some(frame) = state.burst.frames.last_mut() {
+                frame.world = copy;
+            }
+        }
+        let ok = if sr_inputs(stage) && !seam.spatial_recovery {
+            self.temporal_seam(state, seam)
+        } else if sr_inputs(stage) {
+            self.bilinear(seam, CAMERA_RECOVERY)
+        } else {
+            leaf!(p, draw_pass(UPSCALE, &seam.views))
+        };
+        if state.capture.active && ok {
+            self.take(
+                state,
+                c"anomaly_seam_generic0",
+                if stage == 5 {
+                    c"SRStage=5: engine UNORM8 generic0 after the SR reinsertion (or the bilinear fallback) at output size; input to every post pass"
+                } else {
+                    c"SRStage=2/3/4: engine UNORM8 generic0 after the bilinear upscale to output size; input to every post pass"
+                },
+                seam.engine_surface,
+                VIEW_RAW,
+                1.0,
+            );
+        }
+        if state.capture.active {
+            state.capture.seam_taken = true;
+        }
+        ok
+    }
+
+    // Stage 1, after the restore at the seam.
+    fn round_trip(&self, state: &mut State, seam: &Seam) -> bool {
+        if state.capture.active {
+            self.take(
+                state,
+                c"anomaly_seam_fp16_input",
+                c"SRStage=1: FP16 generic0 twin at the S-B seam, engine low tonemap space, before the round trip",
+                seam.twin_surface,
+                VIEW_RAW,
+                1.0,
+            );
+        }
+        let ok = leaf!(self.platform(), draw_pass(ROUND_TRIP, &seam.views));
+        if state.capture.active {
+            self.take(
+                state,
+                c"anomaly_seam_generic0",
+                c"SRStage=1: engine UNORM8 generic0 after the f^-1/f round trip; input to every post pass",
+                seam.engine_surface,
+                VIEW_RAW,
+                1.0,
+            );
+            state.capture.seam_taken = true;
+        }
+        ok
+    }
+
+    fn own(&self, handle: *mut c_void) -> Option<GpuLease> {
+        if !self.platform().bound {
+            return None;
+        }
+        Lease::new(handle, leaves::release).map(GpuLease)
+    }
+
+    fn motion_view(
+        &self,
+        state: &mut State,
+        device: *mut c_void,
+        texture: *mut c_void,
+    ) -> *mut c_void {
+        if let Some(cached) = &state.motion_view
+            && cached.device.0 == device
+            && cached.texture.0 == texture
+        {
+            return cached.view.0.as_ptr();
+        }
+        state.motion_view = None;
+        let p = self.platform();
+        if !p.bound {
+            return null_mut();
+        }
+        let handle = leaf!(p, create_motion_view(device, texture));
+        if let Some(view) = Lease::new(handle, leaves::release) {
+            state.motion_view = Some(MotionView {
+                device: Raw(device),
+                texture: Raw(texture),
+                view: GpuLease(view),
+            });
+        }
+        handle
+    }
+
+    fn bilinear(&self, seam: &Seam, reason: u8) -> bool {
+        let p = self.platform();
+        let drawn = leaf!(p, draw_pass(UPSCALE, &seam.views));
+        leaf!(p, driver_fallback(reason, drawn));
+        drawn
+    }
+
+    // Stages 4 and 5 at the S-B seam, after the engine fields are restored (section 12).
+    fn temporal_seam(&self, state: &mut State, seam: &Seam) -> bool {
+        let p = self.platform();
+        let device = leaf!(p, device());
+        if device.is_null() || leaf!(p, context()).is_null() || !leaf!(p, temporal_ready()) {
+            return self.bilinear(seam, REFUSAL_PREPARE);
+        }
+        let stage = state.config.stage;
+        let (rw, rh, ow, oh) = (
+            seam.views.source.width,
+            seam.views.source.height,
+            seam.views.output.width,
+            seam.views.output.height,
+        );
+        let evaluate = stage == 5 && leaf!(p, driver_enabled());
+        let pipeline_format = if evaluate {
+            leaf!(p, driver_output_format())
+        } else {
+            0
+        };
+        let format = if pipeline_format != 0 {
+            pipeline_format
+        } else {
+            FORMAT_RGBA16F
+        };
+        let render = Extent {
+            width: rw,
+            height: rh,
+        };
+        let output = Extent {
+            width: ow,
+            height: oh,
+        };
+        if state
+            .temporal_targets
+            .as_ref()
+            .is_none_or(|targets| !targets.matches(device, render, output, format))
+        {
+            // The old targets are only valid for their old shape. Free them before allocating replacements.
+            state.temporal_targets = None;
+            state.temporal_targets = p
+                .bound
+                .then(|| TemporalTargets::new(device, render, output, format).ok())
+                .flatten();
+            let text = format!(
+                "Anomaly SR stage {stage}: SR input targets {} at render {rw}x{rh}, output {ow}x{oh} (format {format}).",
+                if state.temporal_targets.is_some() {
+                    "created"
+                } else {
+                    "refused"
+                }
+            );
+            self.say(state, &text);
+        }
+        let Some(targets) = &state.temporal_targets else {
+            return self.bilinear(seam, REFUSAL_PREPARE);
+        };
+        let textures = targets.view();
+        let depth = leaf!(p, depth_texture());
+        // The motion target the main view's G-buffer window wrote this frame, at render size.
+        let target = leaf!(p, motion_target());
+        let engine_frame = leaf!(p, engine_frame());
+        let current = !target.texture.is_null()
+            && target.written
+            && target.main
+            && target.frame == engine_frame
+            && target.width == rw
+            && target.height == rh;
+        let motion_view = if current {
+            self.motion_view(state, device, target.texture)
+        } else {
+            null_mut()
+        };
+        let motion_present = !motion_view.is_null();
+        let motion_input = if motion_present {
+            motion_view
+        } else {
+            textures.empty_motion_srv
+        };
+        let first_person_zero = self.live.first_person_zero.load(Ordering::Relaxed);
+        let prepare = DrawViews {
+            output: seam.views.source,
+            targets: [textures.colour_rtv, textures.motion_rtv, null_mut()],
+            inputs: [
+                seam.views.inputs[0],
+                seam.views.inputs[3],
+                motion_input,
+                null_mut(),
+                null_mut(),
+            ],
+            first_person_depth: FIRST_PERSON_DEPTH_BITS,
+            first_person_zero: u32::from(first_person_zero),
+            ..DrawViews::default()
+        };
+        if !leaf!(p, draw_pass(PREPARE, &prepare)) {
+            return self.bilinear(seam, REFUSAL_PREPARE);
+        }
+        leaf!(p, driver_count_prepared(!motion_present));
+        self.take(
+            state,
+            c"anomaly_sr_color",
+            c"SRStage=4/5 SR colour: render-size f^-1 of the FP16 generic0 twin, exposure-scaled linear",
+            textures.colour,
+            VIEW_HDR,
+            1.0,
+        );
+        self.take(
+            state,
+            c"anomaly_sr_depth",
+            c"SRStage=4/5 SR depth: render-size R24G8 depth twin, standard device depth (first person in [0, 0.02])",
+            depth,
+            VIEW_DEPTH,
+            1.0,
+        );
+        self.take(
+            state,
+            c"anomaly_sr_motion",
+            c"SRStage=4/5 SR motion: current-minus-previous UV (Y down), validity in Z, first-person rule applied (UV x20)",
+            textures.motion,
+            VIEW_DENSE_MOTION,
+            20.0,
+        );
+        if motion_present {
+            self.take(
+                state,
+                c"anomaly_motion_target",
+                c"Motion RTV2 as the G-buffer wrote it (raw RGBA16F)",
+                target.texture,
+                VIEW_RAW,
+                1.0,
+            );
+        }
+        if !evaluate {
+            return self.bilinear(seam, SPATIAL_PATH);
+        }
+        let pass = rsf_anomaly_sr_pass {
+            native_frame: u64::from(engine_frame),
+            generation: self.controller().twin_generation as u32,
+            render_width: rw,
+            render_height: rh,
+            output_width: ow,
+            output_height: oh,
+            current: state.frame_camera,
+            previous: state.previous_camera,
+            jitter: state.published,
+            frame_seconds: state.frame_seconds,
+            motion_missing: !motion_present,
+            exposure_auto: self.live.exposure_auto.load(Ordering::Relaxed),
+            reset_sequence: state.published.reset,
+            cut: state.frame_cut,
+        };
+        // A captured frame also asks the pipeline for its own guides beside the core dump record.
+        if state.capture.active
+            && let Some(directory) = anomaly_directory()
+        {
+            let directory = directory.join(format!("sr-pipeline-{:016x}", state.session));
+            let _ = std::fs::create_dir(&directory);
+            let prefix = format!(
+                "{}\\frame_{}",
+                directory.to_string_lossy(),
+                state.capture.record.frame_id
+            );
+            if let Ok(text) = CString::new(prefix.as_bytes())
+                && leaf!(p, driver_request_dump(text.as_ptr()))
+            {
+                self.say(
+                    state,
+                    &format!("Anomaly SR stage 5 capture: pipeline guides requested at {prefix}"),
+                );
+            }
+        }
+        let record = &mut state.capture.record;
+        let result = state.dump.and_then(|dump| dump.result).filter(|_| {
+            state.capture.active
+                && engine_frame != 0
+                && record.frame_id == pass.native_frame + 1
+                && record.resource_generation == pass.generation
+                && [
+                    record.render_width,
+                    record.render_height,
+                    record.output_width,
+                    record.output_height,
+                ] == [rw, rh, ow, oh]
+        });
+        let mut backend = 0;
+        let (camera_out, backend_out) = if result.is_some() {
+            (
+                std::ptr::addr_of_mut!(record.camera),
+                std::ptr::addr_of_mut!(backend),
+            )
+        } else {
+            (null_mut(), null_mut())
+        };
+        let mut inputs = rsf_anomaly_sr_pass_inputs {
+            frame: pass,
+            color: textures.colour,
+            color_output: textures.output,
+            depth,
+            motion: textures.motion,
+            exposure: if pass.exposure_auto {
+                null_mut()
+            } else {
+                textures.exposure
+            },
+            ..Default::default()
+        };
+        if !leaf!(p, driver_evaluate(&mut inputs, camera_out, backend_out)) {
+            return self.bilinear(seam, EVALUATION_REFUSED);
+        }
+        if let Some(result) = result {
+            unsafe { result(record, c"sr".as_ptr(), backend, 0) };
+        }
+        self.take(
+            state,
+            c"anomaly_sr_output",
+            c"SRStage=5 reconstruction at output size, linear (before the stock tonemap curve)",
+            textures.output,
+            VIEW_HDR,
+            1.0,
+        );
+        let mut reinsert = seam.views;
+        reinsert.inputs[4] = textures.output_srv;
+        if !leaf!(p, draw_pass(REINSERT, &reinsert)) {
+            return self.bilinear(seam, REFUSAL_REINSERT);
+        }
+        true
+    }
+
+    pub(crate) fn combine_end(&self) {
+        let p = self.platform();
+        let Some(mut guard) = self.active_lock() else {
+            return;
+        };
+        let state = &mut *guard;
+        let was_refused = self.controller().refused;
+        leaf!(p, combine_end());
+        let c = self.controller();
+        if !was_refused && c.refused {
+            self.say(
+                state,
+                &format!(
+                    "Anomaly SR stage refused further swaps: {}",
+                    refusal_text(c.refusal)
+                ),
+            );
+        }
+    }
+
+    pub(crate) fn sun_begin(&self) -> bool {
+        let Some(_guard) = self.active_lock() else {
+            return false;
+        };
+        leaf!(self.platform(), sun_begin())
+    }
+    pub(crate) fn sun_end(&self, suspended: bool) {
+        let Some(_guard) = self.active_lock() else {
+            return;
+        };
+        leaf!(self.platform(), sun_end(suspended));
+    }
+    pub(crate) fn position_setup(&self, constant: *mut c_void) {
+        let Some(_guard) = self.active_lock() else {
+            return;
+        };
+        leaf!(self.platform(), position_setup(constant));
+    }
+    pub(crate) fn rm_near(&self) {
+        let Some(_guard) = self.active_lock() else {
+            return;
+        };
+        leaf!(self.platform(), rm_near());
+    }
+
+    // ---- IRenderDeviceRender::End, before Present -------------------------------------------------------------
+    pub(crate) fn frame_end(&self) {
+        let p = self.platform();
+        let Some(mut guard) = self.active_lock() else {
+            return;
+        };
+        let state = &mut *guard;
+        leaf!(p, frame_end());
+        state.native_depth_frame = None;
+        if state.config.stage == 5 {
+            // The drained boundary: this frame's SR work is submitted and Present has not run. Start the pipeline,
+            // follow a device or output change and apply the shared settings; the next H1 plans its render size.
+            let (width, height) = leaf!(p, device_size());
+            leaf!(p, driver_boundary(width, height));
+            // SR=0: the world window stays closed and the frame renders stock at output size.
+            if !self.controller().refused {
+                let enabled = leaf!(p, driver_enabled());
+                leaf!(p, set_swap_enabled(enabled));
+            }
+        }
+        state.frames += 1;
+        if !state.prepared_this_frame {
+            state.frames_without_world += 1; // menu, loading, first frame after reset
+        }
+        state.prepared_this_frame = false;
+        if state.burst.armed {
+            // The burst frame armed at this frame's H1: the presented image, then the next frame (or the drain).
+            state.burst.armed = false;
+            if self.loading() {
+                // The loading screen appeared during this frame and may be the presented image: start over.
+                state.burst.frames.clear();
+                state.burst_gate.interrupted();
+            } else {
+                let fp = self
+                    .counters()
+                    .fp_jittered
+                    .wrapping_sub(state.burst.fp_at_prepare);
+                let back = self.own(leaf!(p, back_buffer()));
+                let context = leaf!(p, context());
+                let presented = back
+                    .as_ref()
+                    .and_then(|back| staging::copy(p, context, back.0.as_ptr()));
+                drop(back);
+                if let Some(frame) = state.burst.frames.last_mut() {
+                    frame.fp_jittered = fp;
+                    frame.presented = presented;
+                }
+                if state.burst.frames.len() >= state.burst.wanted as usize {
+                    state.burst.finished = true;
+                    state.burst.wait = 3;
+                }
+            }
+        } else if state.burst.finished && !state.burst.written {
+            let wait = state.burst.wait;
+            state.burst.wait = wait.wrapping_sub(1);
+            if wait == 0 {
+                self.burst_write(state);
+            }
+        }
+        if !state.capture.active {
+            return;
+        }
+        // The presented frame: the back buffer immediately before End's Present, with UI.
+        if let Some(back) = self.own(leaf!(p, back_buffer())) {
+            self.take(
+                state,
+                c"final_color",
+                c"Back buffer before Present (world, post, HUD and UI)",
+                back.0.as_ptr(),
+                VIEW_RAW,
+                1.0,
+            );
+        }
+        if let Some(dump) = state.dump {
+            unsafe { (dump.complete)(&state.capture.record, 0) };
+        }
+        state.capture.active = false;
+    }
+
+    // After the last frame and a short GPU drain: map every copy once, write world_NN.bin / final_NN.bin and burst.json.
+    fn burst_write(&self, state: &mut State) {
+        let p = self.platform();
+        state.burst.written = true;
+        let context = leaf!(p, context());
+        if context.is_null() {
+            state.burst.result = "no device context".into();
+            state.burst.frames.clear();
+            return;
+        }
+        if let Err(error) = std::fs::create_dir(&state.burst.directory) {
+            state.burst.result = format!(
+                "could not create {} ({error})",
+                state.burst.directory.to_string_lossy()
+            );
+            state.burst.frames.clear();
+            self.say(
+                state,
+                &format!("Anomaly SR stage 3 jitter burst: {}", state.burst.result),
+            );
+            return;
+        }
+        let mut json = String::from(
+            "{\n  \"schema\": \"rsf-anomaly-sr-jitter-burst-1\",\n  \"convention\": \"jitter in render pixels, +X right, +Y down; the rasterized world moves by (+x, +y). world_NN.bin: render-size FP16 RGBA generic0 twin at the S-B seam (engine low tonemap space), rows packed. final_NN.bin: back buffer before Present, rows packed.\",\n",
+        );
+        json += &format!(
+            "  \"session\": \"{:016x}\", \"scale\": {:.4}, \"mip_bias_offset\": {:.3}, \"mip_bias\": {},\n  \"frames\": [\n",
+            state.session,
+            f64::from(state.current_scale),
+            f64::from(self.live_mip_offset()),
+            yes(self.live.mip_bias.load(Ordering::Relaxed))
+        );
+        let count = state.burst.frames.len();
+        let mut written = 0u32;
+        for (i, frame) in state.burst.frames.iter_mut().enumerate() {
+            let write = |name: String, texture: &Option<GpuLease>| {
+                burst_file::staging(p, context, texture, &state.burst.directory.join(name))
+            };
+            let (world_ok, ww, wh, wf) = write(format!("world_{i:02}.bin"), &frame.world);
+            let (final_ok, fw, fh, ff) = write(format!("final_{i:02}.bin"), &frame.presented);
+            written += u32::from(world_ok);
+            let j = &frame.jitter;
+            json += &format!(
+                "    {{\"index\": {i}, \"engine_frame\": {}, \"jitter_frame\": {}, \"sequence_index\": {}, \"phase_count\": {}, \"applied\": {}, \"reset\": {}, \"jitter_px\": [{:.6}, {:.6}], \"previous_jitter_px\": [{:.6}, {:.6}], \"render\": [{}, {}], \"mip_bias\": {:.4}, \"fp_jittered\": {}, \"loading_screen\": false, \"world\": {}, \"world_size\": [{ww}, {wh}], \"world_dxgi\": {wf}, \"final\": {}, \"final_size\": [{fw}, {fh}], \"final_dxgi\": {ff}}}{}\n",
+                frame.engine_frame,
+                j.frame,
+                j.sequence_index,
+                j.phase_count,
+                yes(j.applied),
+                yes(j.reset),
+                f64::from(j.current_x),
+                f64::from(j.current_y),
+                f64::from(j.previous_x),
+                f64::from(j.previous_y),
+                j.render_width,
+                j.render_height,
+                f64::from(frame.mip_bias),
+                frame.fp_jittered,
+                yes(world_ok),
+                yes(final_ok),
+                if i + 1 < count { "," } else { "" }
+            );
+            frame.world = None;
+            frame.presented = None;
+        }
+        json += "  ]\n}\n";
+        let summary = state.burst.directory.join("burst.json");
+        state.burst.result =
+            match burst_file::write_new(&summary, |file| file.write_all(json.as_bytes())) {
+                Ok(()) => format!(
+                    "{written} of {count} world frames written to {}",
+                    state.burst.directory.to_string_lossy()
+                ),
+                Err(error) => format!("could not write {} ({error})", summary.to_string_lossy()),
+            };
+        let text = format!("Anomaly SR stage 3 jitter burst: {}", state.burst.result);
+        self.say(state, &text);
+    }
+
+    // ---- status -----------------------------------------------------------------------------------------------
+    pub(crate) fn report(&self, sink: &mut dyn FnMut(&str)) {
+        if !self.active.load(Ordering::Acquire) {
+            return;
+        }
+        let p = self.platform();
+        let mut lines = Vec::with_capacity(5);
+        let mut guard = self.lock();
+        let state = &mut *guard;
+        let c = self.controller();
+        let now = self.counters();
+        let stage = state.config.stage;
+        let jitter = state.main_state;
+        let sequence_resets = state.sequence.resets;
+        let mip_applied = c.mip_bias_applied || now.mip_applied != 0;
+        let loading = self.loading();
+        let (held, restarts) = (state.burst_gate.held, state.burst_gate.restarts);
+        let burst = &state.burst;
+        let burst_state = if !burst.enabled {
+            "off".into()
+        } else if burst.written {
+            burst.result.clone()
+        } else {
+            format!(
+                "{}/{} held={held} restarts={restarts}{}",
+                burst.frames.len(),
+                burst.wanted,
+                if loading { " loading-screen" } else { "" }
+            )
+        };
+        let (twin_bytes, twin_refs) = leaf!(p, host_stats());
+        let timer = state
+            .timer
+            .sample(p, leaf!(p, device()), leaf!(p, context()));
+        if state.reported.timer_generation != state.timer.generation {
+            state.reported.world_ms = [0.0; 2];
+            state.reported.seam_ms = 0.0;
+            state.reported.world_samples = [0; 2];
+            state.reported.seam_samples = 0;
+        }
+        let r = &state.reported;
+        let average = |sum: f64, before: f64, count: u64, before_count: u64| {
+            if count > before_count {
+                (sum - before) / (count - before_count) as f64
+            } else {
+                0.0
+            }
+        };
+        let stock_ms = average(
+            timer.world_ms[0],
+            r.world_ms[0],
+            timer.samples[0],
+            r.world_samples[0],
+        );
+        let swapped_ms = average(
+            timer.world_ms[1],
+            r.world_ms[1],
+            timer.samples[1],
+            r.world_samples[1],
+        );
+        let seam_ms = average(timer.seam_ms, r.seam_ms, timer.seam_samples, r.seam_samples);
+        let was = &r.counters;
+        let skip = |i: usize| now.skipped[i].wrapping_sub(was.skipped[i]);
+        let rest = |i: usize| now.restores[i].wrapping_sub(was.restores[i]);
+        macro_rules! d {
+            ($field:ident) => {
+                now.$field.wrapping_sub(was.$field)
+            };
+        }
+        lines.push(format!(
+            "Anomaly SR stage window frames={} no_world={} prepare={} eligible={} swapped={} skipped off={} scope={} msaa={} layout={} twins={} | seams={} passthrough={} round_trips={} rt_failed={} | restores seam={} combine_end={} stale_prepare={} frame_end={} shutdown={} rollback={} | rm_near_in_window={} foreign={} write_faults={} | depth={} alloc_failed={} viewports={} ssao_viewport={} | gpu_world_ms swapped={swapped_ms:.3} (n={}) stock={stock_ms:.3} (n={}) gpu_seam_ms={seam_ms:.3}",
+            state.frames.wrapping_sub(r.frames),
+            state.frames_without_world.wrapping_sub(r.without_world),
+            d!(prepares),
+            d!(eligible),
+            d!(swapped),
+            skip(RSF_ANOMALY_SWAP_SKIP_OFF as usize),
+            skip(RSF_ANOMALY_SWAP_SKIP_SCOPE as usize),
+            skip(RSF_ANOMALY_SWAP_SKIP_MSAA as usize),
+            skip(RSF_ANOMALY_SWAP_SKIP_LAYOUT as usize),
+            skip(RSF_ANOMALY_SWAP_SKIP_TWINS as usize),
+            d!(seams),
+            d!(seams_without_window),
+            d!(round_trips),
+            d!(round_trip_failures),
+            rest(RSF_ANOMALY_SWAP_RESTORE_SEAM as usize),
+            rest(RSF_ANOMALY_SWAP_RESTORE_COMBINE_END as usize),
+            rest(RSF_ANOMALY_SWAP_RESTORE_STALE_PREPARE as usize),
+            rest(RSF_ANOMALY_SWAP_RESTORE_FRAME_END as usize),
+            rest(RSF_ANOMALY_SWAP_RESTORE_SHUTDOWN as usize),
+            rest(RSF_ANOMALY_SWAP_RESTORE_ROLLBACK as usize),
+            d!(rm_near_in_window),
+            d!(foreign_changes),
+            d!(write_faults),
+            skip(RSF_ANOMALY_SWAP_SKIP_DEPTH as usize),
+            d!(allocation_failures),
+            d!(viewports),
+            d!(ssao_viewport_swaps),
+            timer.samples[1].wrapping_sub(r.world_samples[1]),
+            timer.samples[0].wrapping_sub(r.world_samples[0]),
+        ));
+        let restores: u64 = now.restores.iter().sum();
+        let plan = state.last_plan;
+        let window = world_window(stage);
+        let refusal = if c.refusal.is_null() {
+            "no".into()
+        } else {
+            refusal_text(c.refusal)
+        };
+        lines.push(format!(
+            "Anomaly SR stage totals stage={stage} swapped={} restores={restores} round_trips={} twin_generation={} twin_drops={} twin_refs_at_drop={twin_refs} captures={} images={} capture_failed={} render={}x{} output={}x{} scale={:.3} twin_mib={:.1} refused={refusal}",
+            now.swapped,
+            now.round_trips,
+            now.twin_generations,
+            now.twin_drops,
+            state.capture.taken,
+            state.capture.images,
+            state.capture.failed,
+            if window { plan.render_width } else { plan.output_width },
+            if window { plan.render_height } else { plan.output_height },
+            plan.output_width,
+            plan.output_height,
+            if window { f64::from(state.current_scale) } else { 1.0 },
+            twin_bytes as f64 / (1024.0 * 1024.0),
+        ));
+        if temporal(stage) {
+            lines.push(format!(
+                "Anomaly SR stage 3 window jittered={} jitter_invalid={} fp_jittered={} fp_already={} fp_foreign={} projection_restores={} | mip applied={} restored={} unchanged={} | sequence frame={} index={}/{} resets={sequence_resets} last=({:+.4},{:+.4}) previous=({:+.4},{:+.4}) applied={} | mip window={:.3} user={:.3} {} | burst {burst_state}",
+                d!(jittered),
+                d!(jitter_invalid),
+                d!(fp_jittered),
+                d!(fp_already),
+                d!(fp_foreign),
+                d!(projection_restores),
+                d!(mip_applied),
+                d!(mip_restored),
+                d!(mip_unchanged),
+                jitter.frame,
+                jitter.sequence_index,
+                jitter.phase_count,
+                f64::from(jitter.current_x),
+                f64::from(jitter.current_y),
+                f64::from(jitter.previous_x),
+                f64::from(jitter.previous_y),
+                i32::from(jitter.applied),
+                f64::from(c.window_mip_bias),
+                f64::from(c.saved_mip_bias),
+                if mip_applied { "" } else { "(never applied)" },
+            ));
+        }
+        lines.push(format!(
+            "Anomaly SR sun cascades calls={} unjittered={} restored={} refused={}",
+            d!(sun_calls),
+            d!(sun_unjittered),
+            d!(sun_restored),
+            d!(sun_refused)
+        ));
+        lines.push(format!(
+            "Anomaly SR position reconstruction corrected={} stock={} refused={}",
+            d!(position_corrected),
+            d!(position_stock),
+            d!(position_refused)
+        ));
+        let frames = (state.frames, state.frames_without_world);
+        state.reported = Reported {
+            counters: now,
+            frames: frames.0,
+            without_world: frames.1,
+            world_ms: timer.world_ms,
+            seam_ms: timer.seam_ms,
+            world_samples: timer.samples,
+            timer_generation: state.timer.generation,
+            seam_samples: timer.seam_samples,
+        };
+        // The lines are emitted, and the driver reports, with the stage lock released.
+        drop(guard);
+        for line in &lines {
+            sink(line);
+        }
+        if sr_inputs(stage) {
+            let mut target: &mut dyn FnMut(&str) = sink;
+            leaf!(
+                p,
+                driver_report(
+                    self.live.exposure_auto.load(Ordering::Relaxed),
+                    self.live.first_person_zero.load(Ordering::Relaxed),
+                    Some(forward_line),
+                    (&mut target as *mut &mut dyn FnMut(&str)).cast()
+                )
+            );
+        }
+    }
+
+    // ---- the shared overlay -------------------------------------------------------------------------------------
+    // The overlay calls these directly; its unit tests fake them.
+    #[cfg(windows)]
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn choices(&self, runtime: *mut c_void) -> OverlayChoices {
+        // The overlay borrows the same carrier-owned module as the renderer.
+        self.choices_with(unsafe { crate::sr_temporal::admission_export(runtime) })
+    }
+
+    #[cfg(any(windows, test))]
+    fn choices_with(&self, service: Option<Admit>) -> OverlayChoices {
+        let (config, vendors) = self.with(|state| (state.config, state.paths.vendors.clone()));
+        let mut out = OverlayChoices::default();
+        let Some(service) = service.filter(|_| config.stage == 5) else {
+            return out;
+        };
+        let Some(result) = crate::sr_temporal::admit(
+            service,
+            [&vendors.streamline, &vendors.fidelityfx, &vendors.xess].map(CString::as_c_str),
+            null_mut(),
+            config.settings.backend,
+        ) else {
+            return out;
+        };
+        if result.offered_backends == 0 {
+            return out;
+        }
+        out.backends = result.offered_backends;
+        let offered = |backend: u32| out.backends.checked_shr(backend).unwrap_or(0) & 1 != 0;
+        out.qualities = QUALITIES;
+        out.preset = offered(BACKEND_DLSS);
+        out.defaults = config.settings;
+        if !offered(out.defaults.backend) {
+            out.defaults.backend = result.selected_backend;
+        }
+        out
+    }
+
+    pub(crate) fn overlay_report(&self, report: *mut c_void) -> bool {
+        if report.is_null()
+            || self.stage.load(Ordering::Acquire) != 5
+            || !self.active.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        leaf!(self.platform(), driver_overlay_report(report));
+        true
+    }
+
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn request(&self, settings: &rsf_anomaly_sr_settings) {
+        if self.stage.load(Ordering::Acquire) == 5 {
+            leaf!(self.platform(), driver_request(settings));
+        }
+    }
+}
+
+unsafe extern "C" fn forward_line(user: *mut c_void, text: *const c_char) {
+    if user.is_null() || text.is_null() {
+        return;
+    }
+    // `user` is the report's sink for the duration of the driver report.
+    let sink = unsafe { &mut *user.cast::<&mut dyn FnMut(&str)>() };
+    sink(&unsafe { CStr::from_ptr(text) }.to_string_lossy());
+}
+
+pub(crate) static STAGE: Stage = Stage::new();
+
+// ---- the private C ABI the native leaves call (sr_stage/native.rs binds the C11 leaf's table) ---------------------
+// `ini` is null (nothing selected) or a NUL-terminated UTF-16 path that stays readable for the call: the carrier's
+// configuration path at cold start, or a fixture's INI.
+unsafe fn rsf_anomaly_sr_stage_configure_ini(
+    ini: *const u16,
+    apply: bool,
+    log: rsf_anomaly_sr_log,
+    user: *mut c_void,
+) -> bool {
+    let Some((path, _)) = (unsafe { crate::wide::terminated(ini) }) else {
+        return false;
+    };
+    STAGE.configure_ini(path, apply, log, user)
+}
+
+// The SR options in the shared overlay (AGENTS.md Rule 2), in RSF_ANOMALY_SR_OPTION_* order. The panel calls
+// get and set on the Present-owner thread, which is the engine's render thread.
+#[cfg(windows)]
+fn register_live_options() {
+    for option in &live_options() {
+        // The registry copies the entry; labels and functions are static.
+        crate::overlay::add_option(option);
+    }
+}
+
+#[cfg(windows)]
+fn live_options() -> [crate::overlay::rsf_anomaly_overlay_option; 13] {
+    use crate::overlay::rsf_anomaly_overlay_option;
+    extern "C" fn get<const ID: u32>() -> i32 {
+        STAGE.option(ID)
+    }
+    extern "C" fn set<const ID: u32>(value: i32) -> bool {
+        STAGE.set_option(ID, value)
+    }
+    type Get = unsafe extern "C" fn() -> i32;
+    type Set = unsafe extern "C" fn(i32) -> bool;
+    let toggle = |label: &'static CStr, get: Get, set: Set| rsf_anomaly_overlay_option {
+        label: label.as_ptr(),
+        toggle: 1,
+        restart: 0,
+        minimum: 0,
+        maximum: 1,
+        step: 1,
+        divisor: 1,
+        get: Some(get),
+        set: Some(set),
+    };
+    let number = |label, minimum, maximum, divisor, get, set| rsf_anomaly_overlay_option {
+        toggle: 0,
+        minimum,
+        maximum,
+        divisor,
+        ..toggle(label, get, set)
+    };
+    [
+        toggle(
+            c"DLSS input: linear HDR colour",
+            get::<RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT>,
+            set::<RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT>,
+        ),
+        toggle(
+            c"DLSS auto exposure",
+            get::<RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO>,
+            set::<RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO>,
+        ),
+        toggle(
+            c"First-person pixels: zero motion",
+            get::<RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO>,
+            set::<RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO>,
+        ),
+        toggle(
+            c"Subpixel jitter (SR needs it; off = no upscaling)",
+            get::<RSF_ANOMALY_SR_OPTION_JITTER>,
+            set::<RSF_ANOMALY_SR_OPTION_JITTER>,
+        ),
+        toggle(
+            c"Texture mip bias",
+            get::<RSF_ANOMALY_SR_OPTION_MIP_BIAS>,
+            set::<RSF_ANOMALY_SR_OPTION_MIP_BIAS>,
+        ),
+        rsf_anomaly_overlay_option {
+            toggle: 0,
+            minimum: (RSF_ANOMALY_SR_MIN_MIP_OFFSET * MIP_OFFSET_DIVISOR as f64) as i32,
+            maximum: (RSF_ANOMALY_SR_MAX_MIP_OFFSET * MIP_OFFSET_DIVISOR as f64) as i32,
+            divisor: MIP_OFFSET_DIVISOR as u32,
+            ..toggle(
+                c"Mip bias offset",
+                get::<RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET>,
+                set::<RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET>,
+            )
+        },
+        number(
+            c"SR fallback scale",
+            33,
+            100,
+            100,
+            get::<OPTION_SCALE>,
+            set::<OPTION_SCALE>,
+        ),
+        number(
+            c"SR capture start frame",
+            0,
+            i32::MAX,
+            1,
+            get::<OPTION_CAPTURE_START>,
+            set::<OPTION_CAPTURE_START>,
+        ),
+        number(
+            c"SR capture frame count",
+            0,
+            32,
+            1,
+            get::<OPTION_CAPTURE_COUNT>,
+            set::<OPTION_CAPTURE_COUNT>,
+        ),
+        number(
+            c"SR capture interval",
+            1,
+            i32::MAX,
+            1,
+            get::<OPTION_CAPTURE_INTERVAL>,
+            set::<OPTION_CAPTURE_INTERVAL>,
+        ),
+        number(
+            c"SR camera cut distance (m)",
+            1,
+            10000,
+            10,
+            get::<OPTION_CUT_DISTANCE>,
+            set::<OPTION_CUT_DISTANCE>,
+        ),
+        number(
+            c"SR camera cut angle (deg)",
+            10,
+            1800,
+            10,
+            get::<OPTION_CUT_ANGLE>,
+            set::<OPTION_CUT_ANGLE>,
+        ),
+        rsf_anomaly_overlay_option {
+            restart: 1,
+            ..toggle(
+                c"Require signed SR libraries",
+                get::<OPTION_REQUIRE_SIGNATURE>,
+                set::<OPTION_REQUIRE_SIGNATURE>,
+            )
+        },
+    ]
+}
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_sr_stage_quiesce() -> bool {
+    STAGE.quiesce()
+}
+#[cfg(windows)]
+pub(crate) fn owns_depth(native_frame: u32) -> bool {
+    STAGE.owns_depth(native_frame)
+}
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_stage_prepare(this: *mut c_void) {
+    STAGE.prepare(this);
+}
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_stage_prepared() {
+    STAGE.prepared();
+}
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_stage_seam(this: *mut c_void) {
+    STAGE.seam(this);
+}
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_stage_combine_end() {
+    STAGE.combine_end();
+}
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_stage_sun_begin() -> bool {
+    STAGE.sun_begin()
+}
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_stage_sun_end(suspended: bool) {
+    STAGE.sun_end(suspended);
+}
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_stage_position_setup(constant: *mut c_void) {
+    STAGE.position_setup(constant);
+}
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn rsf_anomaly_sr_stage_frame_end() {
+    STAGE.frame_end();
+}
+/// Emits two log lines with the per-window deltas and the totals, nothing when inactive.
+pub(crate) unsafe fn rsf_anomaly_sr_stage_report(emit: rsf_anomaly_sr_log, user: *mut c_void) {
+    let Some(emit) = emit else { return };
+    STAGE.report(&mut |text| {
+        if let Ok(text) = CString::new(text) {
+            unsafe { emit(user, text.as_ptr()) };
+        }
+    });
+}
+#[cfg(test)]
+mod tests;

@@ -147,7 +147,10 @@ namespace ReScaleFrame
             if ((kinds & ~7u) != 0) throw new ArgumentOutOfRangeException(nameof(kinds));
             if (ready) Native.rsfu_input(Native.FrameId, kinds);
         }
-        private static void End() { if (ready && (!Application.isEditor || previewVisible)) { Native.Cpu(3, Native.FrameId); Native.Cpu(4, Native.FrameId); } }
+        // The simulation ends after PreLateUpdate; the frame ends after PostLateUpdate, once the
+        // main thread has recorded and queued its rendering.
+        private static void Simulated() { if (ready && (!Application.isEditor || previewVisible)) Native.Cpu(3, Native.FrameId); }
+        private static void Finished() { if (ready && (!Application.isEditor || previewVisible)) Native.Cpu(4, Native.FrameId); }
         private static void ReceivedLegacy() {
 #if ENABLE_LEGACY_INPUT_MANAGER && !ENABLE_INPUT_SYSTEM
             if (!ready) return;
@@ -164,7 +167,7 @@ namespace ReScaleFrame
 #endif
         }
         private static void InstallLoop() {
-            Engine.InputLoop.Install(Begin, ReceivedLegacy, End);
+            Engine.InputLoop.Install(Begin, ReceivedLegacy, Simulated, Finished);
         }
         private static void RemoveLoop() { Engine.InputLoop.Clear(); }
         public static void Stop() {

@@ -15,6 +15,7 @@ crate-type = ["lib", "cdylib"]
 
 [dependencies]
 egui.workspace = true
+rsf-game-sys = { path = "../../sdk/game" }
 
 [lints]
 workspace = true

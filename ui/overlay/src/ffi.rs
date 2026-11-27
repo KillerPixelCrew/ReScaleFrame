@@ -15,6 +15,7 @@
 //! * Nothing is allocated for the caller. The pointers handed back point into buffers the handle
 //!   owns and refills on the next frame call.
 
+use rsf_game_sys::ffi_util::has_capacity;
 use std::ffi::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
@@ -24,7 +25,7 @@ use crate::abi::{
     RSF_OVERLAY_OK, RsfOverlayDrawData, RsfOverlayInput, RsfOverlayIntent, RsfOverlayResult,
     RsfOverlayStats, RsfOverlayTextureUpdate,
 };
-use crate::model::{FrameInput, Quality, Stats};
+use crate::model::{FrameInput, Stats};
 use crate::overlay::Overlay;
 
 /// Longest borrowed string the overlay will read.
@@ -48,6 +49,9 @@ pub struct RsfOverlay {
 /// Returns null on an ABI mismatch, or if construction panicked or could not allocate.
 #[unsafe(no_mangle)]
 pub extern "C" fn rsf_overlay_create(abi_version: u32) -> *mut RsfOverlay {
+    // A caught panic still leaves its record.
+    #[cfg(windows)]
+    rsf_game_sys::panic_record::install();
     if abi_version != RSF_OVERLAY_ABI_VERSION {
         return null_mut();
     }
@@ -195,14 +199,14 @@ unsafe fn frame_inner(
     // Size first, reference second. A caller with a shorter struct has fewer bytes than this build
     // expects, and a reference to the whole thing would already be invalid by the time anything
     // got to look at the size that says so.
-    if unsafe { !fits(input) || !fits(stats) } {
+    if unsafe { !has_capacity(input) || !has_capacity(stats) } {
         return RSF_OVERLAY_ERROR_INVALID_ARGUMENT;
     }
     // The two outputs are optional, but a short one is refused rather than partly filled.
-    if !draw_data.is_null() && unsafe { !fits(draw_data.cast_const()) } {
+    if !draw_data.is_null() && unsafe { !has_capacity(draw_data.cast_const()) } {
         return RSF_OVERLAY_ERROR_INVALID_ARGUMENT;
     }
-    if !intent.is_null() && unsafe { !fits(intent.cast_const()) } {
+    if !intent.is_null() && unsafe { !has_capacity(intent.cast_const()) } {
         return RSF_OVERLAY_ERROR_INVALID_ARGUMENT;
     }
     let input = unsafe { &*input };
@@ -242,17 +246,14 @@ unsafe fn frame_inner(
     RSF_OVERLAY_OK
 }
 
-/// Whether a caller's struct says it is at least as long as this build's version of it.
-///
-/// Longer is fine and means the caller compiled against a later header: fields are only ever
-/// appended, so everything this build knows about is still where it expects it.
-///
-/// # Safety
-/// `pointer` must be non-null and point at a struct that begins with its own `uint32_t
-/// struct_size`, which every struct in `overlay.h` does. Only those four bytes are read.
-unsafe fn fits<T>(pointer: *const T) -> bool {
-    let declared = unsafe { pointer.cast::<u32>().read_unaligned() };
-    declared as usize >= size_of::<T>()
+/// The intent a frame starts from before the panel changes anything.
+#[cfg(test)]
+fn default_intent() -> RsfOverlayIntent {
+    encode_intent(crate::model::Intent {
+        backend: 1,
+        fg_generated: 1,
+        ..Default::default()
+    })
 }
 
 fn encode_intent(produced: crate::model::Intent) -> RsfOverlayIntent {
@@ -264,6 +265,7 @@ fn encode_intent(produced: crate::model::Intent) -> RsfOverlayIntent {
         quality: produced.quality.to_abi(),
         enabled_changed: u32::from(produced.enabled_changed),
         enabled: u32::from(produced.enabled),
+        sr_change_id: produced.sr_change_id,
         fg_changed: u32::from(produced.fg_changed),
         fg_mode: produced.fg_mode,
         fg_generated: produced.fg_generated,
@@ -276,6 +278,9 @@ fn encode_intent(produced: crate::model::Intent) -> RsfOverlayIntent {
         frame_limit_changed: u32::from(produced.frame_limit_changed),
         frame_limit_us: produced.frame_limit_us,
         host_option_changed: u32::from(produced.host_option_changed),
+        saved_action: produced.saved_action,
+        saved_index: produced.saved_index,
+        saved_value: produced.saved_value,
         host_option_index: produced.host_option_index,
         host_option_value: produced.host_option_value,
         sharpening_changed: u32::from(produced.sharpening_changed),
@@ -326,8 +331,11 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
     Stats {
         backend_loaded: stats.backend_loaded != 0,
         refusal_reason: unsafe { borrow_str(stats.refusal_reason) },
-        quality: Quality::from_abi(stats.quality),
+        fg_unavailable_reason: unsafe { borrow_str(stats.fg_unavailable_reason) },
         quality_raw: stats.quality,
+        sr_quality_choices: stats.sr_quality_choices,
+        sr_change_id: stats.sr_change_id,
+        sr_change_status: stats.sr_change_status,
         enabled: stats.enabled != 0,
         backend: stats.backend,
         dlss_preset: stats.dlss_preset,
@@ -343,7 +351,6 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
             available: stats.fg_available != 0,
             requested_mode: stats.fg_requested_mode,
             requested_generated: stats.fg_requested_generated,
-            effective_mode: stats.fg_effective_mode,
             effective_generated: stats.fg_effective_generated,
             active: stats.fg_active != 0,
             max_generated: stats.fg_max_generated,
@@ -369,6 +376,7 @@ unsafe fn borrow_stats(stats: &RsfOverlayStats) -> Stats<'_> {
         show_performance_hud: stats.show_performance_hud != 0,
         fg_present_count_valid: stats.fg_present_count_valid != 0,
         host_options: unsafe { borrow_host_options(stats) },
+        saved_options: unsafe { borrow_saved_options(stats) },
         sharpening_available: stats.sharpening_available != 0,
         sharpening_depth_available: stats.have_depth != 0,
         sharpening: crate::model::Sharpening {
@@ -419,6 +427,46 @@ unsafe fn borrow_host_options(
     out
 }
 
+unsafe fn borrow_saved_options(
+    stats: &RsfOverlayStats,
+) -> [Option<crate::model::SavedOption<'_>>; crate::abi::RSF_OVERLAY_SAVED_ROW_LIMIT as usize] {
+    let mut out = [None; crate::abi::RSF_OVERLAY_SAVED_ROW_LIMIT as usize];
+    if stats.saved_rows.is_null() {
+        return out;
+    }
+    let count = (stats.saved_row_count as usize).min(out.len());
+    for (index, slot) in out.iter_mut().enumerate().take(count) {
+        let row = unsafe { &*stats.saved_rows.add(index) };
+        let Some(label) = (unsafe { borrow_str(row.label) }) else {
+            continue;
+        };
+        let text = if row.kind == crate::abi::RSF_OVERLAY_SAVED_TEXT {
+            if row.text_length == 0 {
+                Some(&[][..])
+            } else if row.text.is_null() || row.text_length > 32767 {
+                continue;
+            } else {
+                Some(unsafe { std::slice::from_raw_parts(row.text, row.text_length as usize) })
+            }
+        } else {
+            None
+        };
+        *slot = Some(crate::model::SavedOption {
+            option: crate::model::HostOption {
+                label,
+                toggle: row.kind == crate::abi::RSF_OVERLAY_SAVED_TOGGLE,
+                value: row.value,
+                range: [row.minimum, row.maximum, row.step.max(1)],
+                divisor: row.divisor.max(1),
+                restart: row.restart != 0,
+            },
+            text,
+            last_result: row.last_result,
+        });
+    }
+    out
+}
+
 /// # Safety
 /// `pointer` must be null, or point at bytes that are readable until a NUL or
 /// [`MAX_BORROWED_STRING`] bytes, whichever comes first.
@@ -461,6 +509,13 @@ mod tests {
         is_whole_texture: 0,
     };
 
+    fn draw_data() -> RsfOverlayDrawData {
+        RsfOverlayDrawData {
+            struct_size: size_of::<RsfOverlayDrawData>() as u32,
+            ..Default::default()
+        }
+    }
+
     fn input() -> RsfOverlayInput {
         RsfOverlayInput {
             struct_size: size_of::<RsfOverlayInput>() as u32,
@@ -480,91 +535,43 @@ mod tests {
         RsfOverlayStats {
             struct_size: size_of::<RsfOverlayStats>() as u32,
             backend_loaded: 1,
-            backend_supported: 1,
             backend_name: c"Test backend".as_ptr(),
-            refusal_reason: null(),
             render_width: 1024,
             render_height: 576,
             output_width: 2048,
             output_height: 1152,
-            frames_presented: 100,
-            frames_evaluated: 99,
-            frames_refused: 1,
-            last_result: -3,
-            have_scene_color: 1,
-            have_depth: 1,
-            have_motion: 1,
-            have_exposure: 0,
-            motion_decoded: 0,
-            jitter_active: 1,
-            jitter_pixels: [0.25, -0.25],
             quality: RSF_OVERLAY_QUALITY_BALANCED,
             enabled: 1,
-            debug_view_on: 0,
-            reinsert_on: 0,
-            reinsert_available: 0,
-            render_scale_percent: 50,
-            captures_written: 0,
-            jitter_on: 1,
-            jitter_available: 1,
             backend: 1,
             requested_backend: 1,
-            last_switch_result: 0,
-            fg_available: 0,
-            fg_requested_mode: 0,
-            fg_requested_generated: 1,
-            fg_effective_mode: 0,
-            fg_effective_generated: 0,
-            fg_active: 0,
-            fg_max_generated: 0,
-            reflex_available: 0,
-            reflex_requested_mode: 0,
-            reflex_effective_mode: 0,
-            fg_reason: 0,
-            fg_last_result: 0,
-            fg_total_presented: 0,
-            application_presented_frames: 0,
-            sample_qpc: 0,
-            qpc_frequency: 0,
-            show_performance_hud: 0,
-            fg_present_count_valid: 0,
-            frame_limit_us: 0,
-            display_refresh_mhz: 0,
-            fg_backend: 0,
-            fg_requested_backend: 0,
-            fg_backend_choices: 0,
-            fg_selection_result: 0,
-            sr_backend_choices: 0,
-            dlss_preset: 0,
-            dlss_preset_available: 0,
-            fg_mfg_unlock_status: 0,
-            sr_quality_locked: 0,
-            host_option_count: 0,
-            host_options: null(),
-            sharpening_available: 0,
-            sharpening_mode: 0,
-            sharpening_sharpness: 0.4,
-            sharpening_mas: 0,
-            sharpening_motion_sharpness: 0.2,
-            sharpening_motion_threshold: 0.0,
-            sharpening_motion_scale_limit: 10.0,
-            sharpening_contrast_enabled: 0,
-            sharpening_contrast: 0.0,
-            sharpening_depth_scale: 35.0,
-            sharpening_depth_bias: 0.001,
-            sharpening_clamp_output: 0,
-            sharpening_debug: 0,
-            ui_preferences: 0,
-            latency_pacing_owner: 0,
-            latency_reserved: 0,
-            latency_paced_frames: 0,
-            pcl_available: 0,
-            pcl_reserved: 0,
-            input_receipts: [0; 3],
-            pcl_routed: 0,
-            pcl_failed: 0,
-            pcl_unmatched: 0,
+            sr_quality_choices: crate::abi::RSF_OVERLAY_SR_QUALITY_STANDARD_MASK,
+            ..unsafe { std::mem::zeroed() }
         }
+    }
+    #[test]
+    fn host_options_include_the_twenty_fifth_entry() {
+        let mut stats = stats();
+        let option = crate::abi::RsfOverlayHostOption {
+            label: c"Adapter option".as_ptr(),
+            kind: crate::abi::RSF_OVERLAY_HOST_OPTION_TOGGLE,
+            value: 0,
+            minimum: 0,
+            maximum: 1,
+            step: 1,
+            divisor: 1,
+            restart: 0,
+            reserved: 0,
+        };
+        let mut options = [option; 25];
+        options[24].label = c"Motion capture interval".as_ptr();
+        stats.host_option_count = options.len() as u32;
+        stats.host_options = options.as_ptr();
+        let imported = unsafe { borrow_host_options(&stats) };
+        assert_eq!(imported.iter().flatten().count(), options.len());
+        assert_eq!(
+            imported.iter().flatten().last().unwrap().label,
+            "Motion capture interval"
+        );
     }
 
     #[test]
@@ -582,8 +589,8 @@ mod tests {
 
         let input = input();
         let stats = stats();
-        let mut draw = RsfOverlayDrawData::default();
-        let mut intent = RsfOverlayIntent::default();
+        let mut draw = draw_data();
+        let mut intent = default_intent();
         // More than one, because egui lays a new window out invisibly to size it first.
         for _ in 0..3 {
             let code =
@@ -697,10 +704,7 @@ mod tests {
         );
 
         // Including the outputs: an unset struct_size is a caller that has not been told.
-        let mut draw = RsfOverlayDrawData {
-            struct_size: 0,
-            ..RsfOverlayDrawData::default()
-        };
+        let mut draw = RsfOverlayDrawData::default();
         assert_eq!(
             unsafe { rsf_overlay_frame(overlay, &input, &stats, &mut draw, null_out.1) },
             RSF_OVERLAY_ERROR_INVALID_ARGUMENT
@@ -725,7 +729,11 @@ mod tests {
         assert_eq!(RSF_OVERLAY_ERROR_INVALID_ARGUMENT, -1);
         assert_eq!(RSF_OVERLAY_ERROR_ABI_MISMATCH, -2);
         assert_eq!(RSF_OVERLAY_ERROR_PANICKED, -3);
-        assert_eq!(RSF_OVERLAY_ABI_VERSION, 18);
+        assert_eq!(RSF_OVERLAY_ABI_VERSION, 21);
+        let intent = default_intent();
+        assert_eq!(intent.struct_size, size_of::<RsfOverlayIntent>() as u32);
+        assert_eq!((intent.backend, intent.fg_generated), (1, 1));
+        assert_eq!(intent.sr_change_id, 0);
     }
 
     #[test]
@@ -736,7 +744,7 @@ mod tests {
             visible: 0,
             ..input()
         };
-        let mut draw = RsfOverlayDrawData::default();
+        let mut draw = draw_data();
         assert_eq!(
             unsafe { rsf_overlay_frame(overlay, &hidden, &stats, &mut draw, std::ptr::null_mut()) },
             RSF_OVERLAY_OK

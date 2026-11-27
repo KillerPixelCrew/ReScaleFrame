@@ -1,0 +1,364 @@
+// SPDX-License-Identifier: MIT
+// D3D11 binding snapshots and ownership behind rescaleframe/d3d11_state.h.
+// Production calls the D3D11 leaves in `native`; unit tests call same-named fakes.
+#[cfg(not(test))]
+mod native;
+#[cfg(not(test))]
+use native as leaf;
+#[cfg(not(test))]
+pub use native::{
+    rsf_d3d11_create_shader_view, rsf_d3d11_state_restore, rsf_d3d11_state_save,
+    rsf_d3d11_state_save_independent,
+};
+#[cfg(test)]
+use tests as leaf;
+
+use crate::com_ref;
+use crate::sys::rsf_d3d11_state as State;
+use std::alloc::{Layout, alloc_zeroed};
+use std::cell::Cell;
+use std::ffi::c_void;
+use std::ptr::{self, NonNull, null_mut};
+use std::sync::atomic::{AtomicPtr, Ordering};
+use windows::core::IUnknown;
+use windows::core::Interface;
+
+type Handle = *mut c_void;
+
+// D3D11 slot counts; the layout sizes below are asserted beside the native leaves.
+const RESOURCES: usize = 128;
+const SAMPLERS: usize = 16;
+const CONSTANTS: usize = 14;
+// D3D11_SHADER_MAX_INTERFACES, the native class instance array length.
+const INTERFACES: usize = 253;
+const VERTEX_BUFFERS: usize = 32;
+const UAVS: usize = 64;
+const STREAM_TARGETS: usize = 4;
+const VIEWPORTS: usize = 16;
+const TARGETS: usize = 8;
+
+type Viewport = [f32; 6];
+type Rect = [i32; 4];
+
+// Each interface is one reference from a D3D11 getter. Option<IUnknown> stores a nullable pointer,
+// so the native operations can fill each slot directly and Drop releases the retained references.
+#[repr(C)]
+struct Stage {
+    resources: [Option<IUnknown>; RESOURCES],
+    samplers: [Option<IUnknown>; SAMPLERS],
+    constants: [Option<IUnknown>; CONSTANTS],
+    first_constants: [u32; CONSTANTS],
+    constant_counts: [u32; CONSTANTS],
+    classes: [Option<IUnknown>; INTERFACES],
+    class_count: u32,
+}
+
+#[repr(C)]
+struct Snapshot {
+    context1: Option<IUnknown>,
+    uav_count: u32,
+    constant_ranges: u32,
+    layout: Option<IUnknown>,
+    index_buffer: Option<IUnknown>,
+    topology: u32,
+    index_format: u32,
+    index_offset: u32,
+    vertex_buffers: [Option<IUnknown>; VERTEX_BUFFERS],
+    vertex_strides: [u32; VERTEX_BUFFERS],
+    vertex_offsets: [u32; VERTEX_BUFFERS],
+    // Vertex, hull, domain, geometry, pixel and compute, in that order.
+    shaders: [Option<IUnknown>; 6],
+    stages: [Stage; 6],
+    compute_uavs: [Option<IUnknown>; UAVS],
+    pixel_uavs: [Option<IUnknown>; UAVS],
+    stream_targets: [Option<IUnknown>; STREAM_TARGETS],
+    predicate: Option<IUnknown>,
+    predicate_value: i32,
+    raster: Option<IUnknown>,
+    viewport_count: u32,
+    viewports: [Viewport; VIEWPORTS],
+    scissor_count: u32,
+    scissors: [Rect; VIEWPORTS],
+    targets: [Option<IUnknown>; TARGETS],
+    depth_view: Option<IUnknown>,
+    blend: Option<IUnknown>,
+    blend_factor: [f32; 4],
+    blend_mask: u32,
+    depth_state: Option<IUnknown>,
+    stencil_reference: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct Features {
+    uav_count: u32,
+    constant_ranges: u32,
+}
+
+// What the full scope keeps in the caller's storage. The storage may move; it must not be copied.
+#[repr(C)]
+struct Scope {
+    // Null for a save nested under an open scope on the same context, which took nothing.
+    snapshot: *mut Snapshot,
+    // This save opened the thread's scope.
+    outermost: bool,
+}
+
+const _: () = {
+    assert!(size_of::<Stage>() == 3408);
+    assert!(size_of::<Snapshot>() == 22904);
+    assert!(std::mem::offset_of!(Snapshot, stages) == 608);
+    assert!(std::mem::offset_of!(Snapshot, targets) == 22784);
+    assert!(size_of::<Features>() == 8);
+    // The scope lives in the caller's storage.
+    assert!(size_of::<Scope>() <= size_of::<State>());
+    assert!(align_of::<Snapshot>() <= align_of::<State>());
+};
+
+#[derive(Clone, Copy)]
+struct Traits {
+    // Compared only, never dereferenced.
+    device: usize,
+    uav_count: u32,
+    constant_ranges: bool,
+}
+
+thread_local! {
+    // The context a save is open on for this thread. A pass running inside another's scope would
+    // only capture what the outer restore already puts back, at the cost of reading and rebinding
+    // every slot of six stages, so it takes nothing and its restore does nothing. The passes that
+    // nest set every binding they use and leave the outer scope to restore the game's.
+    static OPEN: Cell<usize> = const { Cell::new(0) };
+    // What a device can do does not change for its lifetime, so the feature queries are made once
+    // per device and thread.
+    static TRAITS: Cell<Traits> = const {
+        Cell::new(Traits {
+            device: 0,
+            uav_count: 0,
+            constant_ranges: false,
+        })
+    };
+}
+
+// One snapshot is kept for reuse, so a frame of passes does not allocate and free ~23 KB each
+// time. A thread that finds it taken allocates its own.
+static SPARE: AtomicPtr<Snapshot> = AtomicPtr::new(null_mut());
+
+fn take_snapshot() -> Option<Box<Snapshot>> {
+    let spare = SPARE.swap(null_mut(), Ordering::Acquire);
+    if !spare.is_null() {
+        return Some(unsafe { Box::from_raw(spare) });
+    }
+    // All zero is an empty snapshot: no references and no counts.
+    let raw = unsafe { alloc_zeroed(Layout::new::<Snapshot>()) }.cast::<Snapshot>();
+    NonNull::new(raw).map(|raw| unsafe { Box::from_raw(raw.as_ptr()) })
+}
+
+fn give_back(mut snapshot: Box<Snapshot>) {
+    let raw: *mut Snapshot = &mut *snapshot;
+    // Release every reference the save took and leave the snapshot empty again. Nothing between
+    // the two can unwind.
+    unsafe {
+        ptr::drop_in_place(raw);
+        raw.write_bytes(0, 1);
+    }
+    let previous = SPARE.swap(Box::into_raw(snapshot), Ordering::AcqRel);
+    if !previous.is_null() {
+        drop(unsafe { Box::from_raw(previous) });
+    }
+}
+
+unsafe fn traits(context: Handle) -> Traits {
+    let device = unsafe { com_ref::owned(leaf::device(context)) };
+    let address = device.as_ref().map_or(0, |device| device.as_raw() as usize);
+    let cached = TRAITS.get();
+    if cached.device == address {
+        return cached;
+    }
+    let mut features = Features::default();
+    if let Some(device) = &device {
+        unsafe { leaf::features(device.as_raw(), &mut features) };
+    }
+    let traits = Traits {
+        device: address,
+        uav_count: features.uav_count,
+        constant_ranges: features.constant_ranges != 0,
+    };
+    TRAITS.set(traits);
+    traits
+}
+
+unsafe fn rsf_core_d3d11_state_save(context: Handle, storage: *mut State, independent: u32) -> u32 {
+    if context.is_null() || storage.is_null() {
+        return 0;
+    }
+    unsafe { storage.write_bytes(0, 1) };
+    if unsafe { leaf::immediate(context) } == 0 {
+        return 0;
+    }
+    let open = OPEN.get();
+    if open == context as usize && independent == 0 {
+        // The zeroed storage is a scope that restores nothing.
+        return 1;
+    }
+    let Some(mut snapshot) = take_snapshot() else {
+        return 0;
+    };
+    let outermost = open == 0;
+    if outermost {
+        OPEN.set(context as usize);
+    }
+    let traits = unsafe { traits(context) };
+    snapshot.uav_count = traits.uav_count;
+    if traits.constant_ranges {
+        snapshot.context1 = unsafe { com_ref::owned(leaf::context1(context)) };
+        snapshot.constant_ranges = snapshot.context1.is_some().into();
+    }
+    unsafe {
+        leaf::read(context, &mut snapshot);
+        storage.cast::<Scope>().write(Scope {
+            snapshot: Box::into_raw(snapshot),
+            outermost,
+        });
+    }
+    1
+}
+
+unsafe fn rsf_core_d3d11_state_restore(context: Handle, storage: *mut State) {
+    if context.is_null() || storage.is_null() {
+        return;
+    }
+    let scope = unsafe { storage.cast::<Scope>().read() };
+    if !scope.snapshot.is_null() {
+        let snapshot = unsafe { Box::from_raw(scope.snapshot) };
+        // Output-merger targets and UAVs share slots, so pixel UAVs resume after the last target.
+        let targets = snapshot
+            .targets
+            .iter()
+            .rposition(Option::is_some)
+            .map_or(0, |last| last + 1);
+        // Foreign inputs and outputs go first so no saved binding conflicts with one.
+        unsafe {
+            leaf::clear(context, snapshot.uav_count);
+            leaf::write(context, &snapshot, targets as u32);
+        }
+        if scope.outermost {
+            OPEN.set(0);
+        }
+        give_back(snapshot);
+    }
+    unsafe { storage.write_bytes(0, 1) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::com_ref::test::{Fake, fake, raw};
+
+    const CONTEXT: usize = 0x1000;
+    const DEFERRED: usize = 0x2000;
+
+    thread_local! {
+        static OBJECT: Cell<Handle> = const { Cell::new(null_mut()) };
+        static READS: Cell<u32> = const { Cell::new(0) };
+        static WRITES: Cell<u32> = const { Cell::new(0) };
+        // Target count and UAV count of the last full write.
+        static WRITTEN: Cell<[u32; 2]> = const { Cell::new([0; 2]) };
+    }
+
+    // Tests may share a thread, so each starts from its own object and counts.
+    fn start(object: &Fake) {
+        OBJECT.set(raw(object));
+        READS.set(0);
+        WRITES.set(0);
+    }
+
+    fn retained() -> Option<IUnknown> {
+        Some(unsafe { com_ref::retain(OBJECT.get()) })
+    }
+
+    pub(super) unsafe fn immediate(context: Handle) -> u32 {
+        (context as usize != DEFERRED).into()
+    }
+
+    pub(super) unsafe fn device(_: Handle) -> Handle {
+        retained().map_or(null_mut(), Interface::into_raw)
+    }
+
+    pub(super) unsafe fn features(_: Handle, out: &mut Features) {
+        out.uav_count = 8;
+    }
+
+    pub(super) unsafe fn context1(_: Handle) -> Handle {
+        null_mut()
+    }
+
+    pub(super) unsafe fn read(_: Handle, snapshot: &mut Snapshot) {
+        snapshot.targets[1] = retained();
+        snapshot.stages[4].resources[3] = retained();
+        READS.set(READS.get() + 1);
+    }
+
+    pub(super) unsafe fn clear(_: Handle, _: u32) {}
+
+    pub(super) unsafe fn write(_: Handle, snapshot: &Snapshot, target_count: u32) {
+        WRITES.set(WRITES.get() + 1);
+        WRITTEN.set([target_count, snapshot.uav_count]);
+    }
+
+    fn empty(state: &State) -> bool {
+        state.opaque.iter().all(|word| *word == 0)
+    }
+
+    fn save(context: usize, state: *mut State, independent: u32) -> u32 {
+        unsafe { rsf_core_d3d11_state_save(context as Handle, state, independent) }
+    }
+
+    fn restore(context: usize, state: &mut State) {
+        unsafe { rsf_core_d3d11_state_restore(context as Handle, state) }
+    }
+
+    #[test]
+    fn nested_saves_take_nothing_and_restores_release_every_reference() {
+        let object = fake();
+        start(&object);
+        let [mut outer, mut inner, mut independent] = [(); 3].map(|()| State::default());
+        assert_eq!(save(CONTEXT, &mut outer, 0), 1);
+        assert_eq!(object.refs.get(), 3);
+        assert_eq!(save(CONTEXT, &mut inner, 0), 1);
+        assert!(empty(&inner) && READS.get() == 1);
+        assert_eq!(save(CONTEXT, &mut independent, 1), 1);
+        assert_eq!(READS.get(), 2);
+
+        restore(CONTEXT, &mut inner);
+        assert_eq!(WRITES.get(), 0);
+        restore(CONTEXT, &mut independent);
+        assert_eq!((WRITES.get(), WRITTEN.get()), (1, [2, 8]));
+        assert!(empty(&independent) && object.refs.get() == 3);
+        // The independent scope did not open the thread's scope, so it did not close it.
+        assert_eq!(save(CONTEXT, &mut inner, 0), 1);
+        assert_eq!(READS.get(), 2);
+        restore(CONTEXT, &mut inner);
+
+        restore(CONTEXT, &mut outer);
+        assert_eq!((WRITES.get(), object.refs.get()), (2, 1));
+        // Closed: the next save takes a real snapshot again.
+        assert_eq!(save(CONTEXT, &mut outer, 0), 1);
+        assert_eq!(READS.get(), 3);
+        restore(CONTEXT, &mut outer);
+        assert_eq!(object.refs.get(), 1);
+    }
+
+    #[test]
+    fn refused_saves_leave_nothing_to_restore() {
+        let object = fake();
+        start(&object);
+        let mut state = State::default();
+        assert_eq!(save(DEFERRED, &mut state, 0), 0);
+        assert_eq!(save(0, &mut state, 0), 0);
+        assert_eq!(save(CONTEXT, null_mut(), 0), 0);
+        restore(CONTEXT, &mut state);
+        assert!(empty(&state));
+        assert_eq!((READS.get(), WRITES.get(), object.refs.get()), (0, 0, 1));
+    }
+}

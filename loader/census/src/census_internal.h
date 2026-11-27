@@ -1,25 +1,22 @@
-// SPDX-License-Identifier: MIT
-// Internal types shared by the census translation units. Nothing here crosses the DLL boundary.
-#pragma once
+/* SPDX-License-Identifier: MIT */
+/* Native declarations shared by the census platform leaves. Nothing here crosses the DLL boundary. */
+#ifndef RSF_CENSUS_INTERNAL_H
+#define RSF_CENSUS_INTERNAL_H
 
+#include <rescaleframe/foreign_guard.h>
 #include <windows.h>
 
-#include <atomic>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <type_traits>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include "rescaleframe/vendor_census.h"
+#include "census_platform.h"
 
-namespace rsf_census {
-
-// ---- Intercepted functions --------------------------------------------------------------------
-// X(id, api, export name or nullptr, modules). `modules` is a '|' separated list of lowercase
-// module basenames whose exports are detoured when the module loads. An entry with no export name
-// is bound by the DXGI and Vulkan code that learns the address at run time.
-
+/* ---- Intercepted functions ------------------------------------------------------------------ */
+/* X(id, api, export name or NULL, modules). `modules` is a '|' separated list of lowercase
+   module basenames whose exports are detoured when the module loads. An entry with no export name
+   is bound by the DXGI and Vulkan code that learns the address at run time. */
 #define RSF_NGX_FUNCS(X, A, API, MODS)                                                          \
     X(Ngx##A##Init, API, "NVSDK_NGX_" #A "_Init", MODS)                                        \
     X(Ngx##A##InitExt, API, "NVSDK_NGX_" #A "_Init_Ext", MODS)                                 \
@@ -43,18 +40,18 @@ namespace rsf_census {
     X(CreateDXGIFactory1, "dxgi", "CreateDXGIFactory1", "dxgi.dll")                             \
     X(CreateDXGIFactory2, "dxgi", "CreateDXGIFactory2", "dxgi.dll")                             \
     X(D3D12CreateDevice, "d3d12", "D3D12CreateDevice", "d3d12.dll")                             \
-    X(DxgiFactoryCreateSwapChain, "dxgi", nullptr, "")                                          \
-    X(DxgiFactoryCreateSwapChainForHwnd, "dxgi", nullptr, "")                                   \
-    X(DxgiFactoryCreateSwapChainForCoreWindow, "dxgi", nullptr, "")                             \
-    X(DxgiSwapChainPresent, "dxgi", nullptr, "")                                                \
-    X(DxgiSwapChainPresent1, "dxgi", nullptr, "")                                               \
-    X(DxgiSwapChainResizeBuffers, "dxgi", nullptr, "")                                          \
-    X(DxgiSwapChainResizeBuffers1, "dxgi", nullptr, "")                                         \
-    X(DxgiSwapChainSetColorSpace1, "dxgi", nullptr, "")                                         \
-    X(DxgiSwapChainSetFullscreenState, "dxgi", nullptr, "")                                     \
-    X(DxgiSwapChainGetFrameLatencyWaitableObject, "dxgi", nullptr, "")                          \
-    X(D3d12DeviceCreateCommandQueue, "d3d12", nullptr, "")                                      \
-    X(D3d12QueueExecuteCommandLists, "d3d12", nullptr, "")                                      \
+    X(DxgiFactoryCreateSwapChain, "dxgi", NULL, "")                                          \
+    X(DxgiFactoryCreateSwapChainForHwnd, "dxgi", NULL, "")                                   \
+    X(DxgiFactoryCreateSwapChainForCoreWindow, "dxgi", NULL, "")                             \
+    X(DxgiSwapChainPresent, "dxgi", NULL, "")                                                \
+    X(DxgiSwapChainPresent1, "dxgi", NULL, "")                                               \
+    X(DxgiSwapChainResizeBuffers, "dxgi", NULL, "")                                          \
+    X(DxgiSwapChainResizeBuffers1, "dxgi", NULL, "")                                         \
+    X(DxgiSwapChainSetColorSpace1, "dxgi", NULL, "")                                         \
+    X(DxgiSwapChainSetFullscreenState, "dxgi", NULL, "")                                     \
+    X(DxgiSwapChainGetFrameLatencyWaitableObject, "dxgi", NULL, "")                          \
+    X(D3d12DeviceCreateCommandQueue, "d3d12", NULL, "")                                      \
+    X(D3d12QueueExecuteCommandLists, "d3d12", NULL, "")                                      \
     X(VkGetInstanceProcAddr, "vulkan", "vkGetInstanceProcAddr", "vulkan-1.dll")                 \
     X(VkGetDeviceProcAddr, "vulkan", "vkGetDeviceProcAddr", "vulkan-1.dll")                     \
     X(VkCreateInstance, "vulkan", "vkCreateInstance", "")                                       \
@@ -145,13 +142,13 @@ namespace rsf_census {
     X(SlPclSetMarker, "streamline", "slPCLSetMarker", "sl.interposer.dll")                      \
     X(SlPclSetOptions, "streamline", "slPCLSetOptions", "sl.interposer.dll")                    \
     X(NvapiQueryInterface, "nvapi", "nvapi_QueryInterface", "nvapi64.dll")                      \
-    X(NvapiSetSleepMode, "nvapi_reflex", nullptr, "")                                           \
-    X(NvapiSleep, "nvapi_reflex", nullptr, "")                                                  \
-    X(NvapiSetLatencyMarker, "nvapi_reflex", nullptr, "")                                       \
-    X(NvapiGetLatency, "nvapi_reflex", nullptr, "")                                             \
-    X(NvapiD3D12SetAsyncFrameMarker, "nvapi_reflex", nullptr, "")                               \
-    X(D3d12DebugMessage, "d3d12_debug", nullptr, "")                                            \
-    X(CensusEvent, "census", nullptr, "")                                                       \
+    X(NvapiSetSleepMode, "nvapi_reflex", NULL, "")                                           \
+    X(NvapiSleep, "nvapi_reflex", NULL, "")                                                  \
+    X(NvapiSetLatencyMarker, "nvapi_reflex", NULL, "")                                       \
+    X(NvapiGetLatency, "nvapi_reflex", NULL, "")                                             \
+    X(NvapiD3D12SetAsyncFrameMarker, "nvapi_reflex", NULL, "")                               \
+    X(D3d12DebugMessage, "d3d12_debug", NULL, "")                                            \
+    X(CensusEvent, "census", NULL, "")                                                       \
     X(NvllInitialize, "nvll_vk", "NvLL_VK_Initialize", "nvlowlatencyvk.dll")                    \
     X(NvllInitLowLatencyDevice, "nvll_vk", "NvLL_VK_InitLowLatencyDevice",                      \
       "nvlowlatencyvk.dll")                                                                     \
@@ -171,202 +168,35 @@ namespace rsf_census {
     "amd_fidelityfx_upscaler_dx12.dll|amd_fidelityfx_framegeneration_dx12.dll"
 #define RSF_XESS_MODULES "libxess.dll|libxess_dx11.dll"
 
-enum class Fn : uint16_t {
-#define X(id, api, name, mods) id,
+typedef enum rsf_census_fn {
+#define X(id, api, name, mods) RSF_FN_##id,
     RSF_CENSUS_FUNCTIONS(X)
 #undef X
-        Count
-};
+    RSF_FN_COUNT
+} rsf_census_fn;
 
-struct FnDesc {
-    const char* id;
-    const char* api;
-    const char* name;    // export name, may be null
-    const char* modules; // see above
-};
+extern const rsf_census_hook_desc rsf_census_functions[RSF_FN_COUNT];
 
-constexpr size_t kFnCount = static_cast<size_t>(Fn::Count);
-extern const FnDesc kFns[kFnCount];
-inline size_t idx(Fn f) noexcept { return static_cast<size_t>(f); }
+/* ---- Safe memory access --------------------------------------------------------------------- */
+bool rsf_census_safe_read(const void* src, void* dst, size_t n);
+bool rsf_census_safe_read_cstr(const char* src, char* dst, size_t cap);
+bool rsf_census_safe_read_wstr(const wchar_t* src, wchar_t* dst, size_t cap);
+bool rsf_census_plausible_ptr(const void* p);
+/* True when `p` is committed executable memory. */
+bool rsf_census_is_code_ptr(const void* p);
+/* Read a vtable entry: `obj` points at an object whose first word is the vtable. Returns NULL
+   unless the entry points at executable memory, so a bad object is never called. */
+void* rsf_census_vtable_slot(const void* obj, size_t slot);
+/* Read a narrow or wide string argument; returns false when unreadable. */
+bool rsf_census_read_arg_string(const void* p, char* out, size_t cap);
+bool rsf_census_read_arg_wstring(const void* p, wchar_t* out, size_t cap);
 
-// ---- Bound originals --------------------------------------------------------------------------
-// g_orig is the function a wrapper forwards to: a MinHook trampoline for a detour, or the real
-// export for a GetProcAddress thunk. g_wrapper is the wrapper's address. g_target is the detoured
-// function for an inline binding and null for a thunk binding.
-extern std::atomic<void*> g_orig[kFnCount];
-extern void* g_wrapper[kFnCount];
-extern std::atomic<void*> g_target[kFnCount];
-
-template <Fn F>
-inline void* orig() noexcept {
-    return g_orig[idx(F)].load(std::memory_order_acquire);
-}
-inline void* orig_by(Fn f) noexcept { return g_orig[idx(f)].load(std::memory_order_acquire); }
-
-// First binding wins. Returns the address to hand back to the game: the wrapper, or `real` when
-// the entry is bound to a different implementation (counted as a conflict) or already detoured.
-void* bind_thunk(Fn fn, void* real) noexcept;
-// Bind the address a vtable slot points at with an inline detour. Returns false when the entry is
-// already bound or the detour fails.
-bool bind_inline(Fn fn, void* target, const char* why) noexcept;
-// Apply the detours queued by bind_inline in one thread freeze.
-void hooks_apply() noexcept;
-// Look up an export or API name in the function table. Returns Fn::Count when unknown.
-Fn lookup_name(const char* name) noexcept;
-
-// ---- Safe memory access -----------------------------------------------------------------------
-bool safe_read(const void* src, void* dst, size_t n) noexcept;
-bool safe_read_cstr(const char* src, char* dst, size_t cap) noexcept;
-bool safe_read_wstr(const wchar_t* src, wchar_t* dst, size_t cap) noexcept;
-bool plausible_ptr(const void* p) noexcept;
-
-template <class T>
-inline bool rd(const void* p, T& out) noexcept {
-    return safe_read(p, &out, sizeof(T));
-}
-template <class T>
-inline T rd_or(const void* p, T fallback) noexcept {
-    T v{};
-    return safe_read(p, &v, sizeof(T)) ? v : fallback;
-}
-// True when `p` is committed executable memory.
-bool is_code_ptr(const void* p) noexcept;
-// Read a vtable entry: `obj` points at an object whose first word is the vtable. Returns null
-// unless the entry points at executable memory, so a bad object is never called.
-void* vtable_slot(const void* obj, size_t slot) noexcept;
-
-// Run `fn(ctx)` under SEH. Returns false when it faulted.
-bool guarded(void (*fn)(void*), void* ctx) noexcept;
-template <class L>
-inline bool guard(L&& lambda) noexcept {
-    using T = std::remove_reference_t<L>;
-    return guarded([](void* c) { (*static_cast<T*>(c))(); }, &lambda);
-}
-
-// ---- JSON line builder ------------------------------------------------------------------------
-class Json {
-public:
-    Json(char* buf, size_t cap) noexcept : buf_(buf), cap_(cap) {}
-    bool ok() const noexcept { return !overflow_; }
-    size_t size() const noexcept { return len_; }
-
-    void obj(const char* key = nullptr) noexcept { open(key, '{'); }
-    void end_obj() noexcept { close('}'); }
-    void arr(const char* key = nullptr) noexcept { open(key, '['); }
-    void end_arr() noexcept { close(']'); }
-    void str(const char* key, const char* v) noexcept;
-    void wstr(const char* key, const wchar_t* v) noexcept;
-    void u64(const char* key, uint64_t v) noexcept;
-    void i64(const char* key, int64_t v) noexcept;
-    void hex(const char* key, uint64_t v) noexcept; // "0x..." string
-    void f32(const char* key, double v) noexcept;
-    void boolean(const char* key, bool v) noexcept;
-    void null(const char* key) noexcept;
-    void bytes_hex(const char* key, const void* data, size_t n) noexcept;
-    void raw(const char* key, const char* json_text) noexcept;
-
-private:
-    void open(const char* key, char c) noexcept;
-    void close(char c) noexcept;
-    void lead(const char* key) noexcept;
-    void put(const char* s, size_t n) noexcept;
-    void put(const char* s) noexcept { put(s, std::strlen(s)); }
-    void put_escaped(const char* s) noexcept;
-
-    char* buf_;
-    size_t cap_;
-    size_t len_ = 0;
-    uint32_t comma_ = 0; // bit per nesting level: an element already written
-    uint32_t depth_ = 0;
-    bool overflow_ = false;
-};
-
-// ---- Per-call recording -----------------------------------------------------------------------
-constexpr size_t kBodyMax = 6144;
-// D3D12 validation can consume more than 16 frames before reaching the game's recording call.
-constexpr uint32_t kStackFrames = 32;
-
-class Call {
-public:
-    Call(Fn fn, void* return_address) noexcept;
-    Call(const Call&) = delete;
-    Call& operator=(const Call&) = delete;
-    // True when this call is written in full. Decode arguments only then.
-    bool full() const noexcept { return full_; }
-    Json& json() noexcept { return json_; }
-    // Queue the record. `ret` is the raw return register.
-    void finish(uint64_t ret) noexcept;
-
-private:
-    Fn fn_;
-    bool full_;
-    uint32_t rva_ = 0;
-    uint32_t tid_ = 0;
-    uint64_t base_ = 0;
-    uint64_t site_ord_ = 0;
-    uint64_t ord_ = 0;
-    uint64_t t_us_ = 0;
-    // Return addresses from the intercepted call's caller outward, captured for full records only.
-    void* stack_[kStackFrames] = {};
-    uint32_t stack_n_ = 0;
-    Json json_;
-    char buf_[kBodyMax];
-};
-
-#define RSF_RETADDR() _ReturnAddress()
-
-// Present boundary: call before the real Present, before opening the Call for it.
-void note_present_begin() noexcept;
-uint64_t present_index() noexcept;
-
-enum class QueueKind : uint8_t { D3d12 = 1, Vulkan = 2 };
-// Describe a queue once (D3D12: type, priority, flags; Vulkan: family, index, unused).
-void queue_describe(QueueKind kind, const void* queue, uint32_t a, uint32_t b, uint32_t c) noexcept;
-// Count one submission call carrying `lists` command lists or batches. Returns true the first
-// time a queue is seen, so the caller can describe a queue that predates the census.
-bool queue_submit(QueueKind kind, const void* queue, uint32_t lists) noexcept;
-
-// Present calls can nest (a proxy swapchain calling the one beneath it). Only the outermost counts.
-inline thread_local int tl_present_depth = 0;
-struct PresentScope {
-    PresentScope() noexcept : outer(tl_present_depth++ == 0) {}
-    ~PresentScope() noexcept { --tl_present_depth; }
-    PresentScope(const PresentScope&) = delete;
-    PresentScope& operator=(const PresentScope&) = delete;
-    bool outer;
-};
-
-// Static findings (statically linked vendor code), kept for the summary.
-void add_finding(const char* vendor, const char* what, uint64_t rva, uint64_t function_rva) noexcept;
-
-bool installed() noexcept;
-uint32_t option_flags() noexcept;
-
-// Hook installation entry points of each translation unit.
-void register_wrappers_d3d(void** table) noexcept;
-void register_wrappers_vk(void** table) noexcept;
-void register_wrappers_ngx(void** table) noexcept;
-void register_wrappers_fsr(void** table) noexcept;
-void register_wrappers_misc(void** table) noexcept;
-
-// Hook layer (hooks.cpp).
-bool hooks_install() noexcept;
-void hooks_remove() noexcept;
-void hook_counts(uint32_t& installed, uint32_t& conflicts, uint32_t& modules) noexcept;
-// Summary contributions written by the hook layer.
-void hooks_summary(Json& j) noexcept;
-
-// Core services (core.cpp).
-rsf_census_result core_install(const rsf_census_options* opt) noexcept;
-void static_scan_run() noexcept;
-
-// Resource decode helpers (decode.cpp).
-const char* dxgi_format_name(uint32_t format) noexcept;
-void json_d3d12_resource(Json& j, const char* key, const void* resource) noexcept;
-void json_d3d11_resource(Json& j, const char* key, const void* resource) noexcept;
-void json_ptr_or_null(Json& j, const char* key, const void* p) noexcept;
-// Read a narrow or wide string argument; returns false when unreadable.
-bool read_arg_string(const void* p, char* out, size_t cap) noexcept;
-bool read_arg_wstring(const void* p, wchar_t* out, size_t cap) noexcept;
-
-} // namespace rsf_census
+/* SEH-guarded calls through D3D12, D3D11 and DXGI vtables (d3d_guarded_platform.c). */
+int32_t rsf_census_query_interface(void* object, const void* iid, void** result);
+void rsf_census_release_interface(void* object);
+bool rsf_census_queue_desc(const void* queue, void* description);
+bool rsf_census_swapchain_desc(const void* chain, void* description);
+bool rsf_census_resource12_desc(const void* resource, void* description);
+bool rsf_census_resource11_dimension(const void* resource, int32_t* dimension);
+bool rsf_census_resource11_desc(const void* resource, void* description);
+#endif

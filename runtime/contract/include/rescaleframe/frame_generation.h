@@ -13,49 +13,17 @@ extern "C" {
 #define RSF_FG_BACKEND_FSR3 3u
 #define RSF_FG_BACKEND_FSR4 4u
 #define RSF_FG_BACKEND_XESS 5u
-/* Startup-only policy, resolved from the engine device before creating a vendor chain. */
+/* Startup-only policy, resolved from the engine device before creating a vendor chain.
+   These queries link against the embedded Runtime or the Runtime DLL. */
 #define RSF_FG_BACKEND_AUTO 7u
-static inline uint32_t rsf_fg_default_backend(uint32_t vendor_id, uint32_t software_adapter)
-{
-    if (software_adapter) return 0;
-    if (vendor_id == 0x10de) return RSF_FG_BACKEND_DLSS;
-    if (vendor_id == 0x8086) return RSF_FG_BACKEND_XESS;
-    if (vendor_id == 0x1002) return RSF_FG_BACKEND_FSR3;
-    return 0;
-}
+uint32_t rsf_fg_default_backend(uint32_t vendor_id, uint32_t software_adapter);
 /* Choices mask of every implemented backend, bit n for backend id n. */
 #define RSF_FG_BACKEND_ALL ((1u << RSF_FG_BACKEND_DLSS) | (1u << RSF_FG_BACKEND_FSR3) | \
                             (1u << RSF_FG_BACKEND_FSR4) | (1u << RSF_FG_BACKEND_XESS))
-
-/* One row per backend. ini_key is the Unity ini path setting, env_var the override variable, and
-   default_subdir the SDK folder beside the module (FSR3 and FSR4 share the FidelityFX one). */
-typedef struct rsf_fg_backend_info {
-    uint32_t id;
-    const char* ini_key;
-    const char* env_var;
-    const char* default_subdir;
-} rsf_fg_backend_info;
-
-/* Null for an unknown id, so a caller cannot fall back to another vendor by accident. */
-static inline const rsf_fg_backend_info* rsf_fg_backend_info_for(uint32_t id)
-{
-    static const rsf_fg_backend_info table[] = {
-        {RSF_FG_BACKEND_DLSS, "Streamline", "RSF_STREAMLINE_BIN", "ReScaleFrame\\streamline"},
-        {RSF_FG_BACKEND_FSR3, "FSR3", "RSF_FSR3_BIN", "ReScaleFrame\\fidelityfx"},
-        {RSF_FG_BACKEND_FSR4, "FSR4", "RSF_FSR4_BIN", "ReScaleFrame\\fidelityfx"},
-        {RSF_FG_BACKEND_XESS, "XeSS", "RSF_XESS_BIN", "ReScaleFrame\\xess"},
-    };
-    uint32_t i;
-    for (i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
-        if (table[i].id == id) return &table[i];
-    }
-    return (const rsf_fg_backend_info*)0;
-}
-
-static inline int rsf_fg_backend_known(uint32_t id)
-{
-    return rsf_fg_backend_info_for(id) != (const rsf_fg_backend_info*)0;
-}
+/* What a host passes as its overlay FG choices when it can generate frames at all: every provider
+   and Auto. The Runtime then offers what this GPU and package serve; hosts keep no list. */
+#define RSF_FG_CHOICES_ALL (RSF_FG_BACKEND_ALL | (1u << RSF_FG_BACKEND_AUTO))
+int rsf_fg_backend_known(uint32_t id);
 typedef uint32_t rsf_fg_mode;
 #define RSF_FG_OFF 0u
 #define RSF_FG_FIXED 1u
@@ -153,7 +121,9 @@ typedef struct rsf_generation_setup {
 /* A versioned FG surface separate from the older draft vtable. Call on the presenting owner
    thread, except marker(), which may run at actual CPU event boundaries. Device/queue/window
    outlive the handle. Inputs and record metadata remain borrowed during prepare; GPU resources
-   are leased by the caller through both GPU and provider retirement. */
+   are leased by the caller through both GPU and provider retirement.
+   A failed create with a non-null session transfers a teardown-only handle. The caller
+   must retire it before creating a replacement. */
 typedef struct rsf_generation_provider {
     uint32_t struct_size;
     rsf_backend_result (*create)(const rsf_generation_setup*, void** session, void** present_chain);
@@ -167,6 +137,8 @@ typedef struct rsf_generation_provider {
     rsf_backend_result (*retirement)(void* session, rsf_fg_retirement* retirement);
     void (*destroy)(void* session);
     rsf_backend_result (*abort_frame)(void* session, uint64_t frame_id);
+    /* Optional. Failure retains the handle for retry; only OK consumes it. */
+    rsf_backend_result (*destroy_checked)(void* session);
 } rsf_generation_provider;
 
 const rsf_generation_provider* rsf_generation_dlss(void);

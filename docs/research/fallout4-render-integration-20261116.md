@@ -28,6 +28,10 @@ below remain historical evidence with their original scope.
 
 Installed executable: `Fallout4.exe`, version1.11.240.0,55343016 bytes, DX11,
 SHA256 `fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8`.
+The RVAs in this and the other Fallout 4 notes are those of this researched
+build. Since 2026-11-24 the adapter no longer requires it: every site is found
+by signature, name or decoded operand at preparation and the hash is evidence
+only ([site discovery](fallout4-site-discovery.md)).
 The source lead is `references/fallout4-community-shaders` at
 `e0e711594291c1a8e447ac758099492514810fbb` (2026-11-14). Its README line33
 explicitly lists AE1.11.240, NG1.10.984 and OG1.10.163. Pinned dependencies:

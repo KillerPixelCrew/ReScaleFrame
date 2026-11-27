@@ -3,7 +3,9 @@ name: Verify
 on:
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**', 'LICENSE', '.agents/**']
   pull_request:
+    paths-ignore: ['**/*.md', 'docs/**', 'LICENSE', '.agents/**']
 
 permissions:
   contents: read
@@ -12,14 +14,66 @@ concurrency:
   group: verify-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Incremental artifacts only help local rebuilds; in CI they bloat the cache.
+  CARGO_INCREMENTAL: 0
+  LLVM_DIR: C:\llvm-22.1.8
+
 jobs:
   windows:
     runs-on: windows-2022
     steps:
+      # The vendor SDK submodules (vendor/streamline, fidelityfx, fidelityfx-vulkan, xess) supply the headers that
+      # switch the DLSS, FSR and XeSS backends on; compiling and linking them needs no vendor GPU. About 950 MB of
+      # checkout at depth 1. The signed Streamline runtime (eng/fetch-vendor.ps1) is not fetched: nothing here loads it.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
+      # rust-toolchain.toml names the toolchain; rustup no longer installs it implicitly.
       - name: Install pinned Rust toolchain
         shell: pwsh
-        run: rustup show
+        run: |
+          rustup toolchain install --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup show
+      # Registry plus both target directories: verify.ps1's clippy uses target/, the CMake build
+      # uses build/windows-x64/cargo (cmake/rust_static.cmake). Stale artifacts are pruned on save.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            . -> build/windows-x64/cargo
+          cache-on-failure: true
+      - name: Cache LLVM and bindgen
+        id: tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            C:\llvm-22.1.8
+            ~\.cargo\bin\bindgen.exe
+          key: tools-llvm-22.1.8-bindgen-0.72.1
+      # build.rs generates the C bindings with bindgen, which loads libclang (docs/tooling.md).
+      - name: Install pinned LLVM for bindgen
+        if: steps.tools.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'LLVM-22.1.8-win64.exe'
+          Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-win64.exe' -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList '/S', "/D=$env:LLVM_DIR" -Wait
+      # The runner image ships a newer bindgen; the committed-bindings check needs this exact version.
+      - name: Install pinned bindgen
+        if: steps.tools.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          cargo install bindgen-cli --version 0.72.1 --locked --force
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Use LLVM and bindgen
+        shell: pwsh
+        run: |
+          # bindgen takes its builtin headers from the clang it finds; without CLANG_PATH that is
+          # the runner's older C:\Program Files\LLVM, whose headers libclang 22 rejects.
+          "LIBCLANG_PATH=$env:LLVM_DIR\bin", "CLANG_PATH=$env:LLVM_DIR\bin\clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          bindgen --version
       - name: Verify native and Rust components
         shell: pwsh
         run: ./eng/verify.ps1 -Configuration Release

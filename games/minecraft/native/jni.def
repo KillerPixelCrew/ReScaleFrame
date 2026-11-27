@@ -1,0 +1,16 @@
+EXPORTS
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_createSurface
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_destroySurface
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_open
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_configure
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_openSettings
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_settingsRevision
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_configureSettings
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_cpu
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_input
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_abort
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_evaluate
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_hudless
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_present
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_statusCount
+    Java_org_kpc_rescaleframecraft_render_NativeBridge_close

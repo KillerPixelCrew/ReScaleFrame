@@ -1,0 +1,5 @@
+EXPORTS
+    vkGetInstanceProcAddr
+    vkGetDeviceProcAddr
+    fixture_vk_raw
+    fixture_vk_seen

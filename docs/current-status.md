@@ -1,108 +1,23 @@
 # Current implementation and validation
 
-16 November 2026: Fallout 4 1.11.240 has user-accepted DLSS SR/FG in the tested
-moving scene. XeSS FG's 128-frame stall was traced with a CPU dump and matching
-Steam-overlay binary analysis to a Present-lock cycle. The shared Steam
-integration now dispatches registered RSF facades before that lock. A later
-physical VSync interval correction improved the observed XeSS result from about
-23-28 base FPS to 82 base/164 presented FPS; the user accepted the improvement.
-These are scoped game observations, not a controlled vendor benchmark.
+Latest recorded acceptance by integration. Each row is a scoped game observation, not a controlled
+vendor benchmark; the dated entries in [the implementation tracker](implementation.md) hold the
+failures and corrections.
 
-Actual native input and simulation callbacks supply latency markers. Reflex
-Off/On/Boost and live PCL receipt delivery have recorded evidence; derived
-boundaries do not authorize SDK markers. XeLL settings completion guarding is
-built and CPU-tested but awaits deployment and a game settings-switch check.
-AMD Anti-Lag has focused contract coverage, with no AMD device acceptance on
-this NVIDIA machine. Full shader/material and lifecycle coverage remain tracked
-separately. No release or broad rendering-readiness claim is made. GPU
-autocapture is disabled. See the
-[latency and XeSS investigation](research/fallout4-actual-latency-boundaries-20261116.md)
-and [SR dropout investigation](research/fallout4-sr-dropout-20261116.md).
+| Date | Integration | Recorded result and limits |
+| --- | --- | --- |
+| 16 Nov 2026 | Fallout 4 1.11.240 | User-accepted DLSS SR/FG in the tested moving scene. XeSS FG's 128-frame stall was traced with a CPU dump and matching Steam-overlay binary analysis to a Present-lock cycle; the shared Steam integration now dispatches registered RSF facades before that lock. A later physical VSync interval correction improved the observed XeSS result from about 23-28 base FPS to 82 base/164 presented FPS, which the user accepted. See the [latency and XeSS investigation](research/fallout4-actual-latency-boundaries-20261116.md) and [SR dropout investigation](research/fallout4-sr-dropout-20261116.md). |
+| 15 Nov 2026 | Skyrim SE 1.7.104 | Experimental no-SKSE pre-HDR path. Bounded vanilla QASmoke runs evaluated DLSS at native 1711x1048, reinserted into native colour, captured actual backend inputs/output and matched native Present; live SR off/on preserved native TAA. Reduced modes still use native fallback; reduced-resolution SR, portable startup, shader repairs, moving-game quality, worker input ownership, FG, latency and CS/ENB handover are incomplete, and CS refuses activation. Rendering readiness stays zero. See [research](research/skyrim-se-integration.md). |
+| 12 Nov 2026 | Anomaly | SR stages 1 and 2, motion vectors and the overlay game-accepted; jitter, foliage motion and temporal SR built and fixture-tested; FG device-fixture-tested only. See [the acceptance matrix](research/anomaly-sr-seam.md#integration-goal-and-acceptance-matrix-from-the-former-progressmd). |
+| 25 Oct 2026 | Godot (developer integration, `integrations/godot`) | Standard and .NET Forward+ DX12 and Vulkan engines pass SR/FG/MFG provider switching, PCL/input-marker fixtures and independent-midpoint image cases for several providers. Open: FSR2/FSR3 object-motion cases (four of 30 end-to-end image cases), FSR2 displacement, a synchronization-validation present hazard, the DLSS lifecycle crash at SDK shutdown, cold-start pauses and AMD FSR4 FG execution. These are bounded fixture results and do not change game-plugin readiness flags. [Evidence and limits](research/godot-engine-integration.md). |
+| 10 Oct 2026 | Unity (Drag'n Wash) | A UI/overlay regression in the new package was corrected (native pre-UI copy, overlay synchronization, touch handling, Auto FG); menu/gameplay and provider replacements stayed responsive and the user confirmed the correction. FSR4 ML-FG on NVIDIA/Intel and physical Claw touch remain unestablished. [Correction and limits](research/shared-fg-20261004.md#unity-ui-regression-correction-10-october-2026). |
 
-15 November 2026: Skyrim SE 1.7.104 has an experimental no-SKSE pre-HDR path.
-Bounded vanilla QASmoke runs evaluated DLSS at native 1711x1048, reinserted into
-native colour, captured actual backend inputs/output and matched native Present.
-Live SR off/on preserved native TAA and consumed its history reset. Camera and
-host ABI fixtures pass. A subsequent native raster probe produced 1141x699 inside
-1711x1048 allocations with clear depth outside the active rectangle, then restored
-full resolution and resumed native DLSS. Reduced modes still use native fallback
-until post-processing auxiliary repair is complete. Reduced-resolution SR, portable startup, shader repairs,
-moving-game quality, worker input ownership, FG, latency and CS/ENB handover are
-incomplete; CS currently refuses activation. Rendering readiness stays zero.
-See [research](research/skyrim-se-integration.md) for evidence and limitations.
-
-End-of-day checkpoint, 25 October 2026: work stopped at the user's request.
-The latest native Release gate passes 75 discovered tests, with 64 executed and
-11 opt-in skips, plus formatting and Clippy. Standard/.NET editors also build
-with a new FSR1 storage-format correction, but its GPU retake and matching
-template rebuilds have not run. The new aggregate Vulkan matrix runner preserves
-actual images and failures; its initial FSR1 case exposed the format mismatch,
-and a full matrix has not run. DLSS secondary-window teardown still crashes;
-the primary-only latency-chain experiment failed and was reverted. FSR2 stage
-captures narrow the remaining edge displacement without delivering a production
-fix. XeSS MFG capability/admission follow-up remains unimplemented.
-See the [progress tracker](implementation.md) for the restart checkpoint.
-
-25 October 2026: the developer-facing Godot integration is in progress under
-`integrations/godot`. Custom standard/.NET 4.7.2 Forward+ DX12 engines passed
-SR/FG/MFG provider switching and PCL/input-marker fixtures. Actual FSR-generated
-frame dumps exposed and helped correct a zero-motion handoff and camera matrix
-conventions. Six standard/.NET visual cases now compare generated images with
-independently rendered midpoints. SR-enabled testing also corrected Godot's
-unwritten-motion sentinel. The expanded matrix passed vector/camera checks on
-120 generated frames, but four of 30 end-to-end image cases still fail for
-FSR2/FSR3 object motion. Standard/.NET Debug and Release
-exports passed runtime/controller fixtures, with C# on .NET and a separate
-GDScript-only .NET export. Native Vulkan FSR2/FSR3 SR now runs on standard/.NET
-editors with resize, C# calls, raw GPU readbacks and validation-layer checks.
-Vulkan FSR3 FG now passes standard/.NET functional fixtures with SR Off,
-Off/resume, resize and a secondary native window. Captures include actual SDK
-generated images and independent midpoint references. FSR2 image displacement
-and a synchronization-validation present hazard remain open. The corrected
-SR Off/FSR3 Vulkan image suite passes 12 cases and 48 actual generated frames.
-Vulkan PCL/Reflex now runs with camera-free native presentation and alongside
-FSR3 FG on standard/.NET editors. Vulkan DLSS SR also runs on both editions;
-six DLSS SR + FSR3 FG + PCL image cases pass against independent midpoint
-renders, covering 24 actual generated frames. XeSS Vulkan SR now passes six standard/.NET object/camera/combined image cases
-with FSR3 FG and PCL, covering 24 actual generated images. Vulkan DLSS FG passes
-strict standard/.NET device checks and independent midpoint image tests, including
-a shared DLSS SR + FG case. Higher-count MFG3 passes strict GPU checks and independent quarter-step image
-comparisons, preserving all three generated ordinals. XeSS FG uses a Vulkan/DX12 presenter: standard/.NET
-lifecycle, C# and PCL checks pass. All twelve standard/.NET object/camera/combined
-image cases with SR Off or XeSS SR pass, covering 48 actual SDK-generated images.
-Optional foreground maintenance records scoped activation and preserved failed controls.
-FSR4 SR uses a graph-owned
-Vulkan/DX12 handoff; both editors pass switching/resize checks, with C# on .NET. One combined-motion
-image case and four raw SR frames pass per edition. Rebuilt standard/.NET Release exports
-also pass FSR4 switching, resize and raw-output checks. Debug exports pass XeSS FG/PCL,
-Off/resume and resize on both editions. The strict DLSS lifecycle fixture now passes
-all eleven phases and API/synchronization checks after the options correction, but
-still crashes during SDK shutdown. FSR4 FG routing builds and correctly refuses
-the current NVIDIA provider list; AMD execution remains untested. These remain bounded fixture results. Cold
-startup pauses, FSR2 displacement, DLSS shutdown, new-provider export coverage and broader
-scene-quality acceptance remain open. This does
-not change game-plugin readiness flags.
-Rebuilt Vulkan Debug/Release exports pass 12 standard/.NET SR, FG and
-camera-free PCL fixtures, with C# in SR/FG and actual PNG/raw input checks in SR.
-[Evidence and limits](research/godot-engine-integration.md).
-
-10 October update: the user reported a Unity UI/overlay regression in the new
-package. The pre-UI snapshot, overlay synchronization, touch handling and Auto
-FG corrections are applied and pass the recorded automated checks. Fresh game
-and Claw acceptance remain pending; the earlier acceptance below does not cover
-this package. [Correction and limits](research/shared-fg-20261004.md#unity-ui-regression-correction-10-october-2026).
-
-Later local live testing replaced the managed snapshot with a native copy on
-Unity's current pre-UI recording list. Menu/gameplay and provider replacements
-remained responsive, and the user confirmed the correction works. This local
-acceptance supersedes the pending snapshot correction above. FSR4 ML-FG on
-NVIDIA/Intel and physical Claw touch remain unestablished; the investigated INT8
-guides provide FSR4 SR compatibility.
-
-Documentation checked on 7 October 2026 against source commit
-`fda5fd0f2730b40e5b96f419bc0a05cb0b73932b`, the recorded research and GitHub release metadata.
-This is a source/documentation audit. No new game, GPU or Windows build was run for this audit.
-
+Actual native input and simulation callbacks supply latency markers. Reflex Off/On/Boost and live
+PCL receipt delivery have recorded evidence; derived boundaries do not authorize SDK markers. XeLL
+settings completion guarding is built and CPU-tested but awaits deployment and a game
+settings-switch check. AMD Anti-Lag has focused contract coverage, with no AMD device acceptance on
+this NVIDIA machine. Full shader/material and lifecycle coverage remain tracked separately. No
+release or broad rendering-readiness claim is made. GPU autocapture is disabled.
 ## Downloads and source builds
 
 18 October 2026: the [AC7 0.1.1 prerelease](https://github.com/KillerPixelCrew/ReScaleFrame/releases/tag/ac7-v0.1.1)
@@ -129,13 +44,13 @@ it does not prove that a particular ZIP received game or Claw acceptance.
 | --- | --- | --- |
 | AC7, Steam build 9855922, D3D11 | Native renderer hooks and pre-tonemap SR; output-resolution UI/briefing; TrueSky correction; DLSS, FSR2/3/4, XeSS; D3D12 presentation facade and independent FG | User accepted corrected SR/UI/cloud rendering and DLSS-G. FSR3/XeSS FG have synthetic device activity; new AC7 vendor FG paths lack live acceptance. Briefing FG is deferred. Later low-resolution lighting defects and missing-object motion coverage remain open. |
 | Drag'n Wash, Steam build 25286774, Unity 6000.3.14f1 Mono/URP RenderGraph, D3D12 | Shared shim, Mono/Harmony hooks, pre-DoF SR, overlay, DLSS/FSR/XeSS FG switching, pre-UI colour and temporal inputs independent of SR | Live SR execution and improved post-processing order recorded; user accepted XeSS/DLSS-G and the final FSR correction. General scene/resize/teardown coverage, other Unity players and MSI Claw acceptance remain unproven. |
-| Project Wingman, researched UE4.27.2 build | Exact-build XInput carrier and guarded native temporal graph observer | Release-built, contract-tested and deployed; user-run desktop mission verifies readable inputs/history/rectangles. GPU leases, SR, FG, latency and VR processing remain unimplemented. VR hardware was unavailable. |
+| Project Wingman, researched UE4.27.2 build | Guarded native temporal graph observer whose sites are found by signature, through the generic XInput carrier | Release-built, contract-tested and deployed; user-run desktop mission verifies readable inputs/history/rectangles. Signature discovery is proven on the recovered researched executable, not yet in a game run. GPU leases, SR, FG, latency and VR processing remain unimplemented. VR hardware was unavailable. |
 | Red Dead Redemption 2, Steam build 13773296, RAGE | Native common-SR adapter, scene/pacing/marker, shared FG presentation and Rust overlay; forced-DX12 ASI and Social Club correction | Four SR providers and recorded DLSS/XeSS FG intervals accepted. Shared overlay and all five runtime performance presets are user-confirmed, with actual input dimensions captured in logs. FG-Off selector mapping corrected, regression-tested and deployed. Normal SDR pixels match outside the captured HUD region. Complete HUD modes, HDR and non-NVIDIA hardware remain unproven; broad readiness stays zero. |
 
 All native plugin APIs still report `rendering_ready = 0`. That conservative code-level
 flag is distinct from recorded user acceptance of individual deployed paths; it must not be
 rewritten in prose as either universal support or absence of all working rendering. Detection
-checks executable basename, x64 machine and exact SHA256. Other builds remain unknown.
+checks executable basename, x64 machine and exact SHA256 in the adapters not yet converted to AGENTS.md Rule 4; the Unity Mono plugin discovers the player instead and logs the hash as evidence.
 
 Evidence: [AC7 consumer session](research/ac7-consumer-session.md),
 [native renderer](research/ac7-native-renderer-refactor-20261001.md),
@@ -181,11 +96,11 @@ physical scanout, a latency reduction, or an in-game performance gain.
 
 | Contract | Current version | Source |
 | --- | --- | --- |
-| Game plugin lifecycle and renderer callbacks | 13 | `sdk/game/include/rescaleframe/game_api.h`, `game_renderer.h` |
-| Frame/camera record | 1 | `sdk/game/include/rescaleframe/game_frame.h` |
-| Vendor-neutral backend | 3 | `runtime/contract/include/rescaleframe/backend.h` |
+| Game plugin lifecycle and renderer callbacks | 24 | `sdk/game/include/rescaleframe/game_api.h`, `game_renderer.h` |
+| Frame record / camera record | 2 / 1 | `sdk/game/include/rescaleframe/game_frame.h` |
+| Vendor-neutral backend | 4 | `runtime/contract/include/rescaleframe/backend.h` |
 | FG provider | 2 | `runtime/contract/include/rescaleframe/frame_generation.h` |
-| Overlay | 12 | `ui/overlay/include/rescaleframe/overlay.h` |
+| Overlay | 20 | `ui/overlay/include/rescaleframe/overlay.h` |
 
 `VERSION` and the Cargo workspace both specify 0.1.1. Equal component versions do not imply equal
 builds or ABI compatibility; deploy matched artifacts. SDK headers are optional, and absent headers

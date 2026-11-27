@@ -1,0 +1,535 @@
+// SPDX-License-Identifier: MIT
+//! CPU and render facts for the matched Skyrim executable. The native detours own the
+//! callback leases and original calls. The host receives these facts at the native boundaries.
+
+#[cfg(feature = "fixtures")]
+mod fixture;
+
+use crate::cpu_native::{REQUESTED_MODE, RUNNING_MODE};
+use crate::cpu_sources::{self, Consumer, Stamp};
+use crate::discovery::{self, Site, rva};
+use crate::platform::Platform;
+use crate::sys::rsf_skyrim_menu_observation;
+use rsf_game_sys::{
+    RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE, RSF_GAME_CPU_FRAME_END,
+    RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_UNFRAMED,
+    RSF_GAME_CPU_RENDER_SKIPPED, RSF_GAME_INPUT_CONTROLLER, RSF_GAME_INPUT_KEYBOARD,
+    RSF_GAME_INPUT_MOUSE, RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_NO_FG,
+    RSF_GAME_RENDER_PRIMARY, RSF_SCREEN_GAMEPLAY as SCREEN_GAMEPLAY,
+    RSF_SCREEN_LOADING as SCREEN_LOADING, RSF_SCREEN_MENU as SCREEN_MENU,
+    RSF_SCREEN_UNKNOWN as SCREEN_UNKNOWN, rsf_game_cpu_event, rsf_game_cpu_source_event,
+    rsf_game_render_pass, rsf_screen_class,
+};
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const LOADING_NAME_OFFSET: usize = 0xe8;
+const MAIN_NAME_OFFSET: usize = 0xa8;
+
+static NEXT_SOURCE: AtomicU64 = AtomicU64::new(1);
+static NEXT_RENDER_SCOPE: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Default)]
+struct ScreenFacts {
+    readable: bool,
+    owned_main: bool,
+    primary_world: bool,
+    loading_menu: bool,
+    main_menu: bool,
+    frozen_background: bool,
+    pause_count: u32,
+    requested_mode: u32,
+    running_mode: u32,
+    freeze_time: bool,
+    parent_cell: bool,
+}
+
+/// Render facts collected during a Main tick.
+#[derive(Default)]
+pub(crate) struct RenderState {
+    pub(crate) scope: u64,
+    pub(crate) screen: rsf_screen_class,
+    pub(crate) primary_world_entries: u32,
+    pub(crate) primary_count: u32,
+    pub(crate) render_entered: bool,
+    pub(crate) simulation_ended: bool,
+    pub(crate) sampled: bool,
+}
+
+/// Observations from consumers during the current tick.
+#[derive(Default)]
+pub(crate) struct FrameInput {
+    pub(crate) consumed: Stamp,
+    pub(crate) camera_updates: u32,
+    pub(crate) movement_calls: u32,
+    pub(crate) player_update_calls: u32,
+    pub(crate) player_camera_updates: u32,
+    pub(crate) ambiguous: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screen_and_render_admission_require_native_gameplay_evidence() {
+        let mut facts = ScreenFacts::default();
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.readable = true;
+        facts.owned_main = true;
+        facts.parent_cell = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.primary_world = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_GAMEPLAY);
+        facts.freeze_time = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.pause_count = 1;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_MENU);
+        facts.loading_menu = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_LOADING);
+        facts.loading_menu = false;
+        facts.pause_count = 0;
+        facts.freeze_time = false;
+        facts.main_menu = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_MENU);
+        facts.main_menu = false;
+        facts.frozen_background = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_MENU);
+        facts.frozen_background = false;
+        facts.parent_cell = false;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.parent_cell = true;
+        facts.requested_mode = 2;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.requested_mode = 0;
+        facts.running_mode = 2;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.running_mode = 0;
+        facts.owned_main = false;
+        facts.loading_menu = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        assert!(rendered_source_eligible(true, 1, SCREEN_GAMEPLAY));
+        assert!(!rendered_source_eligible(true, 0, SCREEN_GAMEPLAY));
+        assert!(!rendered_source_eligible(true, 2, SCREEN_GAMEPLAY));
+        assert!(!rendered_source_eligible(false, 1, SCREEN_GAMEPLAY));
+        for screen in [SCREEN_UNKNOWN, SCREEN_MENU, SCREEN_LOADING] {
+            assert!(!rendered_source_eligible(true, 1, screen));
+        }
+    }
+}
+
+pub(crate) fn cpu_record_consumer(
+    state: &mut FrameInput,
+    stamp: &Stamp,
+    consumer: Consumer,
+    mapped: bool,
+) {
+    if !mapped {
+        state.ambiguous = true;
+    }
+    let count = match consumer {
+        Consumer::Movement => &mut state.movement_calls,
+        Consumer::PlayerUpdate => &mut state.player_update_calls,
+        Consumer::Camera => &mut state.camera_updates,
+        Consumer::PlayerCamera => &mut state.player_camera_updates,
+    };
+    *count = count.wrapping_add(1);
+    if !cpu_sources::EPOCHS.unchanged(*stamp)
+        || (state.consumed.generation != 0 && state.consumed.generation != stamp.generation)
+    {
+        state.ambiguous = true;
+    } else {
+        state.consumed = *stamp;
+    }
+}
+
+pub(crate) fn cpu_next_source() -> u64 {
+    NEXT_SOURCE.fetch_add(1, Ordering::SeqCst)
+}
+
+fn rsf_skyrim_classify_screen(facts: &ScreenFacts) -> rsf_screen_class {
+    if !facts.readable || !facts.owned_main {
+        return SCREEN_UNKNOWN;
+    }
+    if facts.loading_menu {
+        return SCREEN_LOADING;
+    }
+    if facts.main_menu || facts.pause_count != 0 || facts.frozen_background {
+        return SCREEN_MENU;
+    }
+    if !facts.primary_world
+        || facts.freeze_time
+        || !facts.parent_cell
+        || facts.requested_mode > 1
+        || facts.running_mode > 1
+    {
+        return SCREEN_UNKNOWN;
+    }
+    SCREEN_GAMEPLAY
+}
+
+pub(crate) fn rendered_source_eligible(
+    active_scope: bool,
+    primary_world_entries: u32,
+    screen: rsf_screen_class,
+) -> bool {
+    active_scope && primary_world_entries == 1 && screen == SCREEN_GAMEPLAY
+}
+
+#[derive(PartialEq, Eq)]
+struct NativeScreen {
+    main: usize,
+    ui: usize,
+    names: usize,
+    loading_name: usize,
+    main_name: usize,
+    player: usize,
+    manager: usize,
+    cell: usize,
+    pause: u32,
+    freeze: u8,
+    requested: u32,
+    running: u32,
+}
+
+impl NativeScreen {
+    fn read(platform: &Platform, base: usize) -> Option<Self> {
+        let nonzero = |address| platform.read_usize(address).filter(|value| *value != 0);
+        let main = nonzero(base + rva(Site::Main))?;
+        let ui = nonzero(base + rva(Site::Ui))?;
+        let names = nonzero(base + rva(Site::UiNames))?;
+        let loading_name = nonzero(names.checked_add(LOADING_NAME_OFFSET)?)?;
+        let main_name = nonzero(names.checked_add(MAIN_NAME_OFFSET)?)?;
+        let player = nonzero(base + rva(Site::Player))?;
+        let manager = nonzero(base + rva(Site::JobManager))?;
+        let cell = platform.read_usize(player.checked_add(0x60)?)?;
+        let pause = platform.read_u32(ui.checked_add(0x160)?)?;
+        let mut freeze = [0];
+        if !platform.read(main.checked_add(0x16)?, &mut freeze) {
+            return None;
+        }
+        Some(Self {
+            main,
+            ui,
+            names,
+            loading_name,
+            main_name,
+            player,
+            manager,
+            cell,
+            pause,
+            freeze: freeze[0],
+            requested: platform.read_u32(manager.checked_add(REQUESTED_MODE)?)?,
+            running: platform.read_u32(manager.checked_add(RUNNING_MODE)?)?,
+        })
+    }
+}
+
+type MenuQueries = unsafe extern "C" fn(
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    &mut rsf_skyrim_menu_observation,
+) -> bool;
+
+/// The first native menu query whose live bytes no longer match its discovered pattern.
+pub(crate) fn bad_screen_query(platform: &Platform, base: usize) -> Option<Site> {
+    [Site::MenuOpen, Site::FrozenBackground]
+        .into_iter()
+        .find(|&site| !discovery::verify(platform, base, site))
+}
+
+pub(crate) fn cpu_screen(main: usize, primary: bool, menus: MenuQueries) -> rsf_screen_class {
+    let platform = &Platform;
+    let base = platform.main_module();
+    let Some(before) = NativeScreen::read(platform, base).filter(|state| state.main == main) else {
+        return SCREEN_UNKNOWN;
+    };
+    let mut menu = rsf_skyrim_menu_observation {
+        loading_menu: false,
+        main_menu: false,
+        frozen_background: false,
+    };
+    // Native menu calls take the engine's own map synchronization and borrow its names.
+    if !unsafe {
+        menus(
+            base + rva(Site::MenuOpen),
+            base + rva(Site::FrozenBackground),
+            before.ui,
+            before.names + LOADING_NAME_OFFSET,
+            before.names + MAIN_NAME_OFFSET,
+            &mut menu,
+        )
+    } || NativeScreen::read(platform, base).as_ref() != Some(&before)
+    {
+        return SCREEN_UNKNOWN;
+    }
+    rsf_skyrim_classify_screen(&ScreenFacts {
+        readable: true,
+        owned_main: true,
+        primary_world: primary,
+        loading_menu: menu.loading_menu,
+        main_menu: menu.main_menu,
+        frozen_background: menu.frozen_background,
+        pause_count: before.pause,
+        requested_mode: before.requested,
+        running_mode: before.running,
+        freeze_time: before.freeze != 0,
+        parent_cell: before.cell != 0,
+    })
+}
+
+#[derive(Default)]
+pub(crate) struct RenderReceipt {
+    pub(crate) scope: u64,
+    pub(crate) screen: rsf_screen_class,
+}
+
+pub(crate) fn cpu_begin_render(
+    state: &mut RenderState,
+    screen: rsf_screen_class,
+    previous: &mut RenderReceipt,
+) -> bool {
+    *previous = RenderReceipt {
+        scope: state.scope,
+        screen: state.screen,
+    };
+    state.screen = screen;
+    state.scope = NEXT_RENDER_SCOPE.fetch_add(1, Ordering::SeqCst);
+    state.render_entered = true;
+    !std::mem::replace(&mut state.simulation_ended, true)
+}
+
+pub(crate) fn cpu_end_render(state: &mut RenderState, previous: &RenderReceipt) {
+    state.scope = previous.scope;
+    state.screen = previous.screen;
+}
+
+pub(crate) fn cpu_begin_world(
+    state: &mut RenderState,
+    pass: &rsf_game_render_pass,
+    base: usize,
+    caller: usize,
+    output: u32,
+) -> bool {
+    if base.checked_add(rva(Site::WorldReturn)) != Some(caller)
+        || output != 0
+        || pass.source_frame_id == 0
+        || pass.view_key == 0
+        || pass.swapchain.is_null()
+    {
+        return false;
+    }
+    state.primary_world_entries = state.primary_world_entries.wrapping_add(1);
+    true
+}
+
+pub(crate) fn cpu_world_screen(state: &mut RenderState, screen: rsf_screen_class) {
+    state.screen = if state.primary_world_entries == 1 {
+        screen
+    } else {
+        SCREEN_UNKNOWN
+    };
+}
+
+pub(crate) fn cpu_end_world(state: &mut RenderState) {
+    state.primary_count = state.primary_count.wrapping_add(1);
+}
+
+pub(crate) fn cpu_render_identity(
+    state: &RenderState,
+    pass: &mut rsf_game_render_pass,
+    source: u64,
+    active: bool,
+) -> bool {
+    if state.scope == 0 || !state.simulation_ended {
+        return false;
+    }
+    pass.source_frame_id = source;
+    pass.submission_id = state.scope;
+    pass.scope_id = state.scope;
+    pass.screen = state.screen;
+    pass.flags |= RSF_GAME_RENDER_AFTER_SIMULATION | RSF_GAME_RENDER_NO_FG;
+    if rendered_source_eligible(active, state.primary_world_entries, state.screen) {
+        pass.flags &= !RSF_GAME_RENDER_NO_FG;
+    }
+    true
+}
+
+pub(crate) fn cpu_render_fact(pass: &mut rsf_game_render_pass, session: u64) {
+    let platform = &Platform;
+    let base = platform.main_module();
+    pass.session_id = session;
+    pass.flags |= RSF_GAME_RENDER_PRIMARY;
+    pass.native_frame = u64::from(
+        platform
+            .read_u32(base + rva(Site::NativeFrame))
+            .unwrap_or(0),
+    );
+    let camera = platform
+        .read_usize(base + rva(Site::CameraRoot))
+        .filter(|root| *root != 0)
+        .and_then(|root| platform.read_usize(root.checked_add(296)?))
+        .unwrap_or(0) as u64;
+    pass.family_key = camera;
+    pass.view_key = camera;
+    pass.history_key = camera;
+    if let Some(window) = platform
+        .read_usize(base + rva(Site::ActiveWindow))
+        .filter(|window| *window != 0)
+    {
+        pass.viewport_key = window as u64;
+        pass.window_key = window as u64;
+        pass.rhi_viewport_key = window as u64;
+        let swapchain = window
+            .checked_add(0x18)
+            .and_then(|slot| platform.read_usize(slot))
+            .unwrap_or(0);
+        pass.swapchain = std::ptr::with_exposed_provenance_mut(swapchain);
+    }
+}
+
+pub(crate) fn cpu_sample_tick(state: &mut RenderState) -> bool {
+    !std::mem::replace(&mut state.sampled, true)
+}
+
+fn cpu_event(
+    stage: u32,
+    session: u64,
+    source: u64,
+    qpc: u64,
+    frequency: u64,
+) -> rsf_game_cpu_event {
+    rsf_game_cpu_event {
+        struct_size: size_of::<rsf_game_cpu_event>() as u32,
+        stage,
+        session_id: session,
+        source_frame_id: source,
+        timestamp_qpc: qpc,
+        qpc_frequency: frequency,
+        render_expected: 0,
+        input_kind: 0,
+        message_id: 0,
+        event_version: RSF_GAME_CPU_EVENT_VERSION,
+        flags: 0,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cpu_frame_event(
+    state: &RenderState,
+    stage: u32,
+    session: u64,
+    source: u64,
+    qpc: u64,
+    frequency: u64,
+) -> rsf_game_cpu_event {
+    let mut flags = RSF_GAME_CPU_INPUT_KEYED;
+    if stage == RSF_GAME_CPU_FRAME_END && !state.render_entered {
+        flags |= RSF_GAME_CPU_RENDER_SKIPPED;
+    }
+    rsf_game_cpu_event {
+        render_expected: state.primary_count,
+        flags,
+        ..cpu_event(stage, session, source, qpc, frequency)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cpu_source_event(
+    stage: u32,
+    session: u64,
+    source: u64,
+    qpc: u64,
+    frequency: u64,
+    predecessor: u64,
+    generation: u64,
+    flags: u32,
+    kinds: u32,
+    reason: u32,
+    poll_begin: u64,
+) -> rsf_game_cpu_source_event {
+    rsf_game_cpu_source_event {
+        header: rsf_game_cpu_event {
+            struct_size: size_of::<rsf_game_cpu_source_event>() as u32,
+            event_version: RSF_GAME_CPU_EVENT_VERSION_SOURCE,
+            input_kind: kinds,
+            flags,
+            ..cpu_event(stage, session, source, qpc, frequency)
+        },
+        predecessor_source_id: predecessor,
+        native_generation: generation,
+        reason,
+        reserved: 0,
+        poll_begin_qpc: poll_begin,
+    }
+}
+
+pub(crate) fn cpu_input_event(
+    session: u64,
+    kinds: u32,
+    qpc: u64,
+    frequency: u64,
+) -> rsf_game_cpu_event {
+    rsf_game_cpu_event {
+        input_kind: kinds,
+        flags: RSF_GAME_CPU_INPUT_UNFRAMED,
+        ..cpu_event(RSF_GAME_CPU_INPUT_EVENT, session, 0, qpc, frequency)
+    }
+}
+
+type ReadNative = unsafe extern "C" fn(usize, *mut c_void, usize) -> bool;
+
+#[repr(C)]
+#[derive(Default)]
+struct NativeInputEvent {
+    _vtable: usize,
+    device: u32,
+    kind: u32,
+    next: usize,
+}
+
+const _: () = assert!(size_of::<NativeInputEvent>() == 0x18);
+
+pub(crate) fn cpu_input_kinds(list: usize, read: ReadNative) -> u32 {
+    let mut next = 0usize;
+    if list == 0
+        || !unsafe {
+            read(
+                list,
+                std::ptr::from_mut(&mut next).cast(),
+                size_of::<usize>(),
+            )
+        }
+    {
+        return 0;
+    }
+    let mut kinds = 0;
+    // The native dispatch only lends these headers until the queue is cleared. A
+    // cyclic or excessive list refuses all activity, including the readable prefix.
+    for _ in 0..128 {
+        if next == 0 {
+            break;
+        }
+        let mut event = NativeInputEvent::default();
+        if !unsafe {
+            read(
+                next,
+                std::ptr::from_mut(&mut event).cast(),
+                size_of::<NativeInputEvent>(),
+            )
+        } {
+            return 0;
+        }
+        kinds |= match (event.device, event.kind) {
+            (0 | 3, 0 | 2) => RSF_GAME_INPUT_KEYBOARD,
+            (1, 0 | 1) => RSF_GAME_INPUT_MOUSE,
+            (2, 0 | 3) => RSF_GAME_INPUT_CONTROLLER,
+            _ => 0,
+        };
+        next = event.next;
+    }
+    if next == 0 { kinds } else { 0 }
+}

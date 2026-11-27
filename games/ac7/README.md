@@ -19,7 +19,9 @@ blocks and aircraft overlap; later low-resolution lighting/shadow defects remain
 
 ## Supported setup
 
-- Ace Combat 7 on Steam, Windows x64. Tested executable: build **9855922**, app **502500**.
+- Ace Combat 7 on Steam, Windows x64. Tested executable: build **9855922**, app **502500**. The
+  current source finds its hook and patch sites by signature at start-up instead of requiring that
+  build; another build is untested and refuses any feature whose site it cannot find.
 - Windows 10 or 11 and a GPU supporting the selected backend; DLSS requires NVIDIA RTX.
 - A current GPU driver and the
   [Microsoft Visual C++ v14 Redistributable, x64](https://aka.ms/vc14/vc_redist.x64.exe).
@@ -97,6 +99,30 @@ AC7 uses a modified UE4.18 renderer on D3D11. The proxy loads the game plugin, w
 engine hooks, per-view resources and reconstruction insertion before bloom, exposure and tonemapping.
 The shared runtime owns vendor SDKs and the GPU-ordered D3D11/D3D12 SR bridge.
 
+`ReScaleFrame.Game.AC7.dll` is the Rust crate `rsf-ac7` plus a few C leaves; both DirectInput carriers
+stay native.
+
+| Owner | Files |
+| --- | --- |
+| Recognition by executable name, GameSDK table, renderer lifecycle (prepare, start, quiesce, stop, with pinned partial activation and retirement admission) | `lib.rs`, `lifecycle.rs`, `renderer.rs`; `plugin.c` keeps the exported entry point |
+| Site discovery by signature (rsf-ac7 `discovery.rs`) and its admission; scene-precision and temporal velocity patch transactions; hook body guards | `sites.rs`, `patches.rs`, `guards.rs` |
+| Renderer object, MinHook records, detours, engine relays, pass leases, protected code writes | `native_renderer.rs`, `native_renderer_platform.c`; SEH-guarded engine reads in `ac7_memory.c` |
+| TrueSky plugin patches and call relays (discovered sites, expected bytes, effect fingerprint, install, rollback, retirement); relay handlers, D3D11 checks and shaders | `truesky.rs`, `native_renderer/sky.rs` |
+| Queued RHI render scopes behind `ac7_render_scope.h` (admission, identity, serials, begin/end stack, lease order, native list append, engine-called marker function) | `render_scope.rs`; `render_scope_entry.c` keeps the two create calls and the SEH leaves that call consumer code |
+
+Per-owner research is in the surviving `docs/research/rust-ac7-*.md` notes and
+[`ue418-hook-map.md`](../../docs/research/ue418-hook-map.md).
+
+Every hooked function, patched site, called function and read global is found at start-up in the
+decrypted executable (the code is encrypted on disk), by a byte pattern unique in its code
+sections, by the RIP-relative operand of an instruction that uses it, or through a vtable found by
+its constructor; each is matched again in memory before it is hooked, patched or called. The
+carrier discovers once after the code decrypts and before its first patch, the adapter at
+prepare. A site that is missing or matched twice refuses only the features that need it and is
+named in `rsf-dump.log`; the executable's SHA-256 is logged, not compared. The six identical
+shader-depth gates are one group (every match patched). The TrueSky plugin's five sites are found
+the same way in the loaded plugin. How each site is found and the evidence are in
+[the site discovery section](../../docs/research/ue418-hook-map.md#site-discovery-instead-of-build-9855922-24-november-2026).
 The view reader handles the game's 4096-byte uniform buffer. Scene motion needs UE encoding
 removal, and the engine's camera transform supplies camera motion. The native integration sizes the
 game's own UI targets through engine owners, preserving grading and glow; texture promotion
@@ -105,7 +131,7 @@ uses matching view/depth selections and unjittered constants across VS, PS, HS, 
 
 - [Accepted result and debugging history](../../docs/research/ac7-consumer-session.md)
 - [Executable and renderer evidence](engine.json)
-- [Hook sites and expected bytes](../../docs/research/ue418-hook-map.md)
+- [Hook sites, signatures and discovery](../../docs/research/ue418-hook-map.md)
 - [Capture research](../../docs/research/ac7-frame-capture.md)
 - [Framework implementation tracker](../../docs/implementation.md)
 

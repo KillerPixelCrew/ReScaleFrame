@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 RELATIVE = Path("sdk/include/FidelityFX/gpu/fsr2/ffx_fsr2_accumulate.h")
+PINS = json.loads((Path(__file__).resolve().parents[2] / "eng/dependencies.json").read_text(encoding="utf-8"))
 EXPECTED = "f9564cb2ca4de0d50dc852a01f1fac71c066a4be92a8bcc9a27aaac345d082c6"
 
 
@@ -51,7 +52,7 @@ def main():
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     args.receipt.write_text(json.dumps({
         "scope": "Diagnostic only, no production correction or image acceptance",
-        "sdk_commit": "c6efa6bf7f2027b3ec94f28578bb5965eabb9e55",
+        "sdk_commit": PINS["vendor"]["fidelityfx_vulkan"]["revision"],
         "stage": args.stage, "file": str(RELATIVE), "before_sha256": EXPECTED,
         "after_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
         "conversion": "UnprepareRgb(YCoCgToRGB(stage), Exposure()); signed RGB retained in RGBA16F",

@@ -5,15 +5,9 @@
    means loading `sl.interposer.dll`, tagging four or five resources, providing per frame camera
    constants, and asking it to evaluate.
 
-   This header is the whole contract. Everything behind it compiles against NVIDIA's C++ headers,
-   whose structures are versioned, GUID tagged, and in one case abstract with a virtual operator.
-   Transcribing those layouts by hand into another language is a silent corruption waiting to
-   happen, so the vendor side stays where the vendor's own headers define it, and this narrow C
-   surface is what the rest of the project sees.
-
-   The Streamline SDK is not in this repository. Fetch it into `vendor/streamline/` per
-   docs/dependencies.md. Without it these entry points still exist and report
-   RSF_DLSS_ERROR_NOT_COMPILED, so a checkout that does not have it still builds and tests. */
+   This header is the whole contract. The Rust owner behind it builds the Streamline records from
+   runtime/vulkan/streamline/sdk_records.h, which tests/dlss_sr_layout_facts.cpp checks against
+   NVIDIA's C++ headers, and calls the interposer it loads at run time. */
 
 #ifndef RSF_DLSS_H
 #define RSF_DLSS_H
@@ -40,8 +34,6 @@ typedef int32_t rsf_dlss_result;
 #define RSF_DLSS_OK ((rsf_dlss_result)0)
 #define RSF_DLSS_ERROR_INVALID_ARGUMENT ((rsf_dlss_result)-1)
 #define RSF_DLSS_ERROR_ABI_MISMATCH ((rsf_dlss_result)-2)
-/* Built without the Streamline headers present. Not a runtime failure: this build never had the
-   code in it. */
 #define RSF_DLSS_ERROR_NOT_COMPILED ((rsf_dlss_result)-3)
 /* `sl.interposer.dll` could not be loaded from the path given, or failed signature verification. */
 #define RSF_DLSS_ERROR_LOAD_FAILED ((rsf_dlss_result)-4)
@@ -100,11 +92,6 @@ rsf_dlss_result rsf_dlss_load(const rsf_dlss_setup* setup);
 /* Hand over the game's `ID3D11Device*`. D3D11 has no device proxy in Streamline, so this is the
    native device and stays the one the game uses. */
 rsf_dlss_result rsf_dlss_set_device(void* d3d11_device);
-/* Graphics owner, paired around actual Present on an unwrapped native D3D11 chain.
-   Standalone SR needs common-plugin bookkeeping even when it does not replace Present.
-   Do not call for a Streamline proxy chain. Shared-host owners already provide this.
-   This SR-only notification refuses a request to skip the native call. */
-rsf_dlss_result rsf_dlss_native_present(void* swapchain, uint32_t sync_interval, uint32_t flags, uint32_t begin);
 /* Borrow the existing D3D12 Streamline owner. The host outlives SR and owns shutdown. */
 rsf_dlss_result rsf_dlss_share_host(void* streamline_host, rsf_dlss_log_fn log, void* user);
 
@@ -149,12 +136,6 @@ typedef struct rsf_dlss_plan {
     uint32_t render_width_max;
     uint32_t render_height_max;
 } rsf_dlss_plan;
-
-/* Ask DLSS what render size a quality level means at this output size.
-   The answer comes from the SDK rather than from a ratio computed here, because DLSS is entitled
-   to change it and a mismatch between the size we render and the size it expects is a rejected
-   evaluate at best. */
-rsf_dlss_result rsf_dlss_plan_render_size(rsf_dlss_plan* plan);
 
 /* Everything one frame needs. Textures are `ID3D11Texture2D*`.
 
@@ -218,7 +199,7 @@ typedef struct rsf_dlss_frame {
 
     /* Appended in ABI 3. Which of the two viewports this frame is for: 0 is the scene, 1 is a
        second feature with its own history, such as a translucency layer integrated at one to one.
-       Each viewport keeps its own options, constants and resources. */
+       Each viewport keeps its own options, constants and resources. Other IDs are rejected. */
     uint32_t viewport;
     /* Carry the alpha channel through the reconstruction as well as the colour. For a layer
        composited by its alpha afterwards. */
@@ -256,24 +237,14 @@ typedef struct rsf_dlss_frame {
    Streamline does not restore pipeline state, so the caller owns saving and restoring whatever it
    cares about around this call. */
 rsf_dlss_result rsf_dlss_evaluate(void* d3d11_context, const rsf_dlss_frame* frame);
-/* D3D12 resources and command list on the borrowed host, with its already minted CPU token.
-   Inputs are NON_PIXEL_SHADER_RESOURCE; output is UNORDERED_ACCESS. */
-rsf_dlss_result rsf_dlss_evaluate_shared(void* d3d12_list, const rsf_dlss_frame* frame,
-                                       uint64_t source_frame_id);
 
 /* Release DLSS resources for the viewport while leaving Streamline loaded. Worth doing when the
    render size changes, since the feature is built for a specific pair of sizes. */
 rsf_dlss_result rsf_dlss_release_resources(void);
 
-/* The same for one viewport by number. */
-rsf_dlss_result rsf_dlss_release_viewport(uint32_t viewport);
-
 /* Shut Streamline down and unload the interposer. Must happen before the game's device goes. */
 rsf_dlss_result rsf_dlss_shutdown(void);
 
-/* Whether this build has the Streamline headers compiled in at all. Reported rather than assumed,
-   so a caller can say "not built with DLSS support" instead of "DLSS failed". */
-uint32_t rsf_dlss_available(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

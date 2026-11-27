@@ -25,6 +25,9 @@ RSF_RUNTIME_API rsf_backend_result rsf_fg_leases_collect(rsf_fg_leases*, uint32_
 RSF_RUNTIME_API rsf_backend_result rsf_fg_leases_cancel(rsf_fg_leases*, uint64_t frame_id);
 /* A refusal retains the live handle and all COM references. */
 RSF_RUNTIME_API rsf_backend_result rsf_fg_leases_destroy(rsf_fg_leases*);
+/* Terminal teardown after the caller verifies device loss, stops all users and tears down GPU
+   work on every device represented by this owner. Consumes the handle without reporting retirement. */
+RSF_RUNTIME_API rsf_backend_result rsf_fg_leases_abandon_device_lost(rsf_fg_leases*);
 #ifdef __cplusplus
 }
 #endif

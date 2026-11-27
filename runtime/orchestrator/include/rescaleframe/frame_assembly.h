@@ -107,7 +107,8 @@ typedef struct rsf_frame_resources {
     rsf_dlss_quality quality;
 } rsf_frame_resources;
 
-/* Fill a DLSS frame from a camera frame and its resources.
+/* Fill a DLSS frame from a camera frame and its resources. Set out->struct_size
+   to its byte capacity before calling. A short output is refused without writes.
    Refuses a pairing that cannot work rather than assembling something that will look wrong. */
 RSF_RUNTIME_API rsf_frame_assembly_result rsf_assemble_dlss_frame(
     const rsf_pipeline_camera_frame* camera, const rsf_frame_resources* resources, rsf_dlss_frame* out);

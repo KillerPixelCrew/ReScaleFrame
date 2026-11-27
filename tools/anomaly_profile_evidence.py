@@ -1,0 +1,148 @@
+"""Read-only evidence regression suite for both installed Anomaly builds.
+
+Runs the four evidence scripts, then proves rejection of altered guards, RVAs and
+layout/frame values in temporary copies of the Rust profile owners, and of altered site
+patterns and checks in a temporary copy of games/anomaly/src/discovery.rs (RSF_ANOMALY_DISCOVERY).
+Never writes the game install.
+Not registered in CTest because the copyrighted executables are external inputs.
+"""
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+CASES = {
+    'geometry': ('geometry_profile.rs', 'world_matrix_rva'),
+    'sr': ('sr_profile.rs', 'device_project_rva'),
+    'motion': ('motion_profile.rs', 'source_offset'),
+    'fg': ('native_profile.rs', 'image_size'),
+}
+# Per domain, sites whose discovery pattern (or, with a second element, check) is altered: each must refuse.
+DISCOVERY_CASES = {
+    'geometry': [('Fvisual::Render', 1)],
+    'sr': [('CRenderTarget::phase_combine', 1), ('R_dsgraph_structure::r_dsgraph_render_hud_ui', 2)],
+    'motion': [('create_shader', 1), ('create_shader<SHS> (r4.cpp:934, hull)', 2)],
+    'fg': [('IRenderDeviceRender::End', 1)],
+}
+
+
+def run(script, build, profile=None, input_profile=None, discovery=None):
+    args = [sys.executable, '-I', str(ROOT / 'tools' / ('anomaly_' + script + '_evidence.py')),
+            '--verify', '--exe', build]
+    if profile:
+        args.extend(['--profile', str(profile)])
+    if input_profile:
+        args.extend(['--input-profile', str(input_profile)])
+    env = dict(os.environ, RSF_ANOMALY_DISCOVERY=str(discovery)) if discovery else None
+    return subprocess.run(args, capture_output=True, text=True, timeout=300, env=env)
+
+
+def discovery_mutations(domain, build, temp):
+    """Alter the first byte of a site's pattern (1) or check (2) in a copy of discovery.rs; each run must refuse."""
+    text = (ROOT / 'games/anomaly/src/discovery.rs').read_text(encoding='utf-8')
+    checks = 0
+    for name, which in DISCOVERY_CASES[domain]:
+        match = re.search(r'c"' + re.escape(name) + r'",\s*' + r'c"(?:[^"\\]|\\\n)*",\s*' * (which - 1) + r'c"([0-9A-F]{2})', text)
+        assert match, (domain, name)
+        new = '00' if match[1] != '00' else 'FF'
+        path = pathlib.Path(temp) / 'discovery.rs'
+        path.write_text(text[:match.start(1)] + new + text[match.end(1):], encoding='utf-8')
+        result = run(domain, build, discovery=path)
+        assert result.returncode != 0 and 'AssertionError' in result.stderr and name in result.stderr, (
+            domain, build, name, result.stdout, result.stderr)
+        checks += 1
+    return checks
+
+
+def main():
+    checks = 0
+    for build, section in (('standard', 'Standard'), ('avx', 'AVX')):
+        for domain, (header, field) in CASES.items():
+            result = run(domain, build)
+            assert result.returncode == 0, (domain, build, result.stdout, result.stderr)
+            checks += 1
+            text = (ROOT / 'games/anomaly/src' / header).read_text(encoding='utf-8')
+            start = text.index('// ---- ' + section + ' 1.5.3 DX11')
+            end = text.find('// ---- ', start + 10)
+            end = len(text) if end < 0 else end
+            selected = text[start:end]
+            guard = re.search(r'b"([0-9a-f]{32})"', selected)
+            rva = re.search(r'\bsite\(\s*c"[^"]+",\s*(0x[0-9a-f]+)', selected)
+            layout = re.search(r'\b' + field + r': (0x[0-9a-f]+)', selected)
+            assert guard and rva and layout, (domain, field)
+            mutations = [('guard', start, guard), ('rva', start, rva), ('layout', start, layout)]
+            if domain == 'sr':
+                # The build's extended guards are its STANDARD_UNIQUE / AVX_UNIQUE table, ahead of PROFILES.
+                unique = text.index('const ' + build.upper() + '_UNIQUE')
+                sun = re.search(r'UniqueGuard::new\(\s*c"CRender::render_sun_cascades",\s*(0x[0-9a-f]+),\s*c"([0-9a-f]+)"',
+                                text[unique:])
+                assert sun
+                # Alter the extended guard beyond expected16, and the separately guarded call's displacement.
+                mutations.append(('sun_extended', unique, sun))
+                sun_call = re.search(r'site\(\s*c"CRender::Render -> render_sun_cascades[^"]*",\s*0x[0-9a-f]+,\s*b"([0-9a-f]+)"', selected)
+                assert sun_call
+                mutations.append(('sun_call', start, sun_call))
+                for field in ('get_constant_buffer_rva', 'position_setup_vtable_rva'):
+                    match = re.search(r'\b' + field + r': (0x[0-9a-f]+)', selected)
+                    assert match
+                    mutations.append((field, start, match))
+                for name in ('position binder body', 'R_constants::GetCBuffer',
+                             'position binder registration', 'constant buffer reflected size'):
+                    match = re.search(r'UniqueGuard::new\(\s*c"' + name + r'",\s*(0x[0-9a-f]+),\s*c"([0-9a-f]+)"', selected)
+                    assert match
+                    mutations.append(('reconstruction_guard', start, match))
+            with tempfile.TemporaryDirectory(prefix='rsf-anomaly-evidence-') as temp:
+                for kind, base, match in mutations:
+                    group = 2 if kind in ('sun_extended', 'reconstruction_guard') else 1
+                    old = match[group]
+                    if kind in ('guard', 'reconstruction_guard'):
+                        new = ('00' if old[:2] != '00' else 'ff') + old[2:]
+                    elif kind == 'sun_extended':
+                        new = old[:32] + ('00' if old[32:34] != '00' else 'ff') + old[34:]
+                    elif kind == 'sun_call':
+                        new = old[:2] + ('00' if old[2:4] != '00' else 'ff') + old[4:]
+                    else:
+                        new = hex(int(old, 16) + 1)
+                    at, stop = base + match.start(group), base + match.end(group)
+                    path = pathlib.Path(temp) / header
+                    path.write_text(text[:at] + new + text[stop:], encoding='utf-8')
+                    result = run(domain, build, path)
+                    assert result.returncode != 0 and 'AssertionError' in result.stderr, (domain, build, kind, result.stdout, result.stderr)
+                    checks += 1
+            if domain == 'fg':
+                input_text = (ROOT / 'games/anomaly/src/input/profile.rs').read_text(encoding='utf-8')
+                begin = input_text.index('// ---- ' + section + ' 1.5.3 DX11')
+                stop = input_text.find('// ---- ', begin + 10)
+                stop = len(input_text) if stop < 0 else stop
+                part = input_text[begin:stop]
+                changes = []
+                for m in re.finditer(r'b"([0-9a-f]{32})"', part):
+                    changes.append((begin+m.start(1), begin+m.end(1), '00'+m[1][2:]))
+                m = re.search(r'slot_rva: (0x[0-9a-f]+),', part)
+                changes.append((begin+m.start(1), begin+m.end(1), hex(int(m[1],16)+8)))
+                m = list(re.finditer(r'"([0-9a-f]{64,})"', part))[-1]
+                changes.append((begin+m.start(1), begin+m.end(1), m[1][:-2]+'cc'))
+                for field in ('keyboard','mouse'):
+                    m = re.search(r'p'+field.title()+r' \+(0x[0-9a-f]+)', input_text)
+                    changes.append((m.start(1),m.end(1),hex(int(m[1],16)+8)))
+                assert len(changes)==7
+                with tempfile.TemporaryDirectory(prefix='rsf-input-evidence-') as temp:
+                    for a,b,new in changes:
+                        path=pathlib.Path(temp)/'input_profile.rs'
+                        path.write_text(input_text[:a]+new+input_text[b:],encoding='utf-8')
+                        result=run('fg',build,input_profile=path)
+                        assert result.returncode != 0 and 'AssertionError' in result.stderr, (build,result.stdout,result.stderr)
+                        checks+=1
+            with tempfile.TemporaryDirectory(prefix='rsf-anomaly-discovery-') as temp:
+                checks += discovery_mutations(domain, build, temp)
+            extra = '; cascade and reconstruction guard/owner mutations refused' if domain == 'sr' else ''
+            print(f'PASS: {build} {domain}: original accepted; guard/RVA/layout and discovery pattern/check mutations '
+                  f'refused{extra}', flush=True)
+    print(f'PASS: {checks} checks (8 originals, {checks - 8} negative mutations)')
+
+
+if __name__ == '__main__':
+    main()

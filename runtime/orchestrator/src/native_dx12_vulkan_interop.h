@@ -30,11 +30,6 @@ extern "C" {
 #endif
 int32_t rsf_dx12vk_interop_create(const rsf_srvk_setup*, const rsf_dx12vk_interop_callbacks*,
     uint32_t timeline_enabled, rsf_dx12vk_interop**);
-int32_t rsf_dx12vk_interop_image(rsf_dx12vk_interop*, uint32_t format,
-    uint32_t width, uint32_t height, rsf_dx12vk_shared_image*);
-uint64_t rsf_dx12vk_interop_timeline(const rsf_dx12vk_interop*);
-/* Parent proves Vulkan AND DX12 queues drained. Failure preserves all owners. */
-int32_t rsf_dx12vk_interop_destroy(rsf_dx12vk_interop*, uint32_t queues_drained);
 #ifdef __cplusplus
 }
 #endif

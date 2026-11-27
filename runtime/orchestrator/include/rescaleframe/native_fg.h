@@ -11,7 +11,8 @@ extern "C" {
 typedef struct rsf_native_fg_options {
     uint32_t struct_size;
     /* frame_limit_us is the minimum interval between rendered frames, before generation.
-       Zero is unlimited. */
+       Zero is unlimited. 2147483647 requests the VRR policy; the owner resolves
+       it from the presenting display and the provider's effective generation. */
     uint32_t mode, generated_frames, reflex_mode, frame_limit_us, debug;
 } rsf_native_fg_options;
 /* rsf_native_fg_status::reason, also shown by the overlay panel. Zero means nothing is deferred.
@@ -48,6 +49,10 @@ RSF_RUNTIME_API void rsf_native_fg_options_set(const rsf_native_fg_options*);
    one-frame overlap, where that sleep can precede the previous Present. Set before the first frame. */
 RSF_RUNTIME_API void rsf_native_fg_reflex_ordering_set(uint32_t threaded);
 RSF_RUNTIME_API void rsf_native_fg_cpu(const rsf_game_cpu_event*);
+/* Linked runtime entry points shared by the carrier and the DLL table. */
+int rsf_native_fg_dispatch_cpu(const rsf_game_cpu_event*);
+int rsf_native_fg_dispatch_pass(void* context11, const rsf_game_render_pass* pass, uint32_t begin);
+void rsf_native_fg_capture_scoped(void* context11, const rsf_game_render_pass* identity, const rsf_dlss_frame*);
 /* Copied identity, scoped around the engine's SR callback. Never uses the latest CPU ID. */
 RSF_RUNTIME_API void rsf_native_fg_scene(const rsf_game_render_pass*);
 /* Graphics owner only. Swap the exact copied scene for nested synchronous scopes; no identity inference. */

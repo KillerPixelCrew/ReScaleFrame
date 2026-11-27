@@ -1,0 +1,4 @@
+EXPORTS
+    nvapi_QueryInterface
+    fixture_nvapi_raw_marker
+    fixture_nvapi_seen

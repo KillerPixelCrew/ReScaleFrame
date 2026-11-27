@@ -1,38 +1,54 @@
-# SR Stage 1 round-trip shader: the RSF-authored HLSL is embedded as a string and compiled at runtime with the system
-# d3dcompiler_47 (rescaleframe/shader_compile.h). The adapter and its D3D11 fixture include the same generated header.
-set(RSF_ANOMALY_SR_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sr/rsf_sr_roundtrip.hlsl")
-set(RSF_ANOMALY_SR_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${RSF_ANOMALY_SR_SHADER}")
-file(READ "${RSF_ANOMALY_SR_SHADER}" RSF_ANOMALY_SR_SHADER_TEXT)
-file(CONFIGURE OUTPUT "${RSF_ANOMALY_SR_GENERATED}/sr_roundtrip_hlsl.h"
-    CONTENT "// Generated from games/anomaly/shaders/sr/rsf_sr_roundtrip.hlsl. Do not edit.\n#pragma once\ninline constexpr char rsf_sr_roundtrip_hlsl[] = R\"rsf_hlsl(@RSF_ANOMALY_SR_SHADER_TEXT@)rsf_hlsl\";\n"
-    @ONLY NEWLINE_STYLE LF)
-# SR Stage 2 seam upscale shader, embedded the same way.
-set(RSF_ANOMALY_SR_UPSCALE_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sr/rsf_sr_upscale.hlsl")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${RSF_ANOMALY_SR_UPSCALE_SHADER}")
-file(READ "${RSF_ANOMALY_SR_UPSCALE_SHADER}" RSF_ANOMALY_SR_UPSCALE_SHADER_TEXT)
-file(CONFIGURE OUTPUT "${RSF_ANOMALY_SR_GENERATED}/sr_upscale_hlsl.h"
-    CONTENT "// Generated from games/anomaly/shaders/sr/rsf_sr_upscale.hlsl. Do not edit.\n#pragma once\ninline constexpr char rsf_sr_upscale_hlsl[] = R\"rsf_hlsl(@RSF_ANOMALY_SR_UPSCALE_SHADER_TEXT@)rsf_hlsl\";\n"
-    @ONLY NEWLINE_STYLE LF)
-add_library(rsf_anomaly_sr_shaders INTERFACE)
-target_include_directories(rsf_anomaly_sr_shaders INTERFACE "${RSF_ANOMALY_SR_GENERATED}")
+# The C leaves of the adapter: the SEH trampolines and detours, the guarded engine calls and copies, the hook sets and
+# the D3D11 pipeline-state snapshot. Rust names them directly, so every binary that links Rust from rsf-anomaly
+# compiles them in: the plugin below and, through rsf_anomaly_fixtures_rust, each fixture executable
+# (tests/CMakeLists.txt, anomaly_support.cmake, anomaly_fg.cmake, overlay_dll_api.cmake). An interface library, so the
+# sources build with each consumer's definitions (rsf_anomaly_geometry_hooks_test sets RSF_ANOMALY_GEOMETRY_TESTING).
+# The D3D11 state leaves they call come from rsf-graphics, which every rsf-anomaly archive carries, so no consumer
+# links ReScaleFrame::GraphicsLeaves beside it.
+add_library(rsf_anomaly_native_leaves INTERFACE)
+target_sources(rsf_anomaly_native_leaves INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/native_observer_platform.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/native_hooks_platform.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/native_geometry_platform.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/engine_slots.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/sr_d3d11_platform.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/sr_stage_platform.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/motion_stage_platform.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/fg_stage_platform.c")
+target_include_directories(rsf_anomaly_native_leaves INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include"
+    "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"
+    # The FG leaf names presentation-bridge and Streamline-host types; include paths only, nothing is linked.
+    "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
+target_link_libraries(rsf_anomaly_native_leaves INTERFACE
+    ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon
+    ReScaleFrame::Graphics minhook d3d11 bcrypt dxguid)
+# The C detour leaves retire their scopes during a C++ unwind: __finally under MSVC, cleanup handlers under GCC.
+target_compile_options(rsf_anomaly_native_leaves INTERFACE
+    $<$<AND:$<COMPILE_LANGUAGE:C>,$<NOT:$<C_COMPILER_ID:MSVC>>>:-fexceptions>)
 
-add_library(rsf_game_anomaly SHARED src/plugin.cpp src/bootstrap.cpp src/native_observer.cpp src/native_hooks.cpp
-    src/native_geometry.cpp src/geometry_feed.cpp
-    src/overlay_input_gate.cpp src/overlay_hooks.cpp src/overlay_service.cpp
-    src/sr_swap.cpp src/sr_d3d11.cpp src/sr_stage.cpp)
-target_include_directories(rsf_game_anomaly PRIVATE "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
-target_link_libraries(rsf_game_anomaly PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon minhook rsf_build_options)
-# Stage 1 uses only the generic immediate-context state scope (d3d11_state) and the texture-dump view enum header.
-target_link_libraries(rsf_game_anomaly PRIVATE ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11)
+# The CInput detour calls the native-entry bootstrap, so it is the plugin's own.
+add_library(rsf_game_anomaly SHARED src/plugin.def src/bootstrap_platform.c)
+rsf_add_rust_static(rsf_anomaly_plugin_rust rsf_rust_anomaly_plugin rsf-anomaly rsf_anomaly
+    --features native-entry CARRIES rsf_graphics_rust)
+# Binaries that carry rsf-anomaly bind Common Controls 6 (comctl6.manifest); the DLL's own manifest
+# governs its imports whatever the host process declares.
+if(MSVC)
+    target_sources(rsf_anomaly_plugin_rust INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/comctl6.manifest")
+endif()
+foreach(symbol IN ITEMS rsf_anomaly_start rsf_anomaly_observation rsf_get_game_plugin_api)
+    if(MSVC)
+        target_link_options(rsf_game_anomaly PRIVATE "LINKER:/INCLUDE:${symbol}")
+    elseif(MINGW)
+        target_link_options(rsf_game_anomaly PRIVATE "LINKER:--undefined=${symbol}")
+    endif()
+endforeach()
+target_link_libraries(rsf_game_anomaly PRIVATE rsf_anomaly_plugin_rust rsf_anomaly_native_leaves rsf_build_options)
 set_target_properties(rsf_game_anomaly PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.Anomaly")
 
 # Motion MRT (src/motion_stage.h): verified shader variants at create_shader, b13 packers, RTV2 binder, draw-time
 # history and the invalidation replay. Inert unless [Anomaly] Motion=1.
-target_sources(rsf_game_anomaly PRIVATE src/motion_constants.cpp src/motion_history.cpp src/motion_foliage.cpp src/motion_policy.cpp
-    src/motion_target.cpp src/motion_d3d11.cpp src/motion_stage.cpp src/shader_loader.cpp src/shader_d3d.cpp)
-target_link_libraries(rsf_game_anomaly PRIVATE bcrypt dxguid)
-target_sources(rsf_game_anomaly PRIVATE src/runtime_shaders.cpp)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 file(GLOB_RECURSE RSF_ANOMALY_PATCH_INPUTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/patches/motion/*")
 add_custom_target(rsf_anomaly_patch_pack ALL
@@ -40,16 +56,3 @@ add_custom_target(rsf_anomaly_patch_pack ALL
         "${CMAKE_CURRENT_SOURCE_DIR}/patches/motion" "$<TARGET_FILE_DIR:rsf_game_anomaly>/patches/motion.rsfpatch"
     DEPENDS ${RSF_ANOMALY_PATCH_INPUTS} "${PROJECT_SOURCE_DIR}/tools/rsf_shader_pack.py"
     COMMENT "Building the rules-only Anomaly shader pack" VERBATIM)
-
-# SR Stages 4 and 5 (src/sr_temporal.h): the Runtime's shared D3D11 SR pipeline through rsf_get_d3d11_sr_api. The
-# pipeline headers name the DLSS backend's frame types; nothing links the backend.
-target_sources(rsf_game_anomaly PRIVATE src/sr_temporal.cpp)
-target_include_directories(rsf_game_anomaly PRIVATE "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include")
-
-# Frame generation (src/fg_stage.h): the Runtime's shared D3D11 presentation bridge and FG tagging path through
-# rsf_get_d3d11_present_api and rsf_get_d3d11_fg_api. Inert unless [Anomaly] FG=1 or FGBridge=1.
-target_sources(rsf_game_anomaly PRIVATE src/fg_stage.cpp src/fg_inputs.cpp)
-# The FG tables name presentation-bridge and Streamline-host types; include paths only, nothing is linked.
-target_include_directories(rsf_game_anomaly PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
-
-target_sources(rsf_game_anomaly PRIVATE src/input_hooks.cpp)

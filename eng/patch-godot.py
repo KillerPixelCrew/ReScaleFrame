@@ -27,6 +27,7 @@ FILES = (
     "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.cpp",
     "servers/rendering/renderer_viewport.cpp",
     "servers/rendering/rendering_device_graph.cpp",
+    "servers/rendering/rendering_device.cpp",
     "thirdparty/amd-fsr2/shaders/ffx_fsr2_callbacks_glsl.h",
     "servers/rendering/renderer_rd/effects/fsr.h",
     "servers/rendering/renderer_rd/effects/fsr.cpp",
@@ -416,6 +417,50 @@ previous_pool_retirement_plan = planned.copy()
 replace(path, '\t// The frame fence has retired every previous use of this pooled buffer.\n\tRSFGodot::vk_recording_begin(command_buffer->vk_command_buffer);',
         '\t// The frame fence has retired every previous use of this pooled buffer.')
 
+previous_startup_plan = planned.copy()
+replace("main/main.cpp",
+        '\t\tinitialize_modules(MODULE_INITIALIZATION_LEVEL_SERVERS);\n'
+        '\t\tGDExtensionManager::get_singleton()->initialize_extensions(GDExtension::INITIALIZATION_LEVEL_SERVERS);',
+        '\t\tinitialize_modules(MODULE_INITIALIZATION_LEVEL_SERVERS);\n'
+        '#ifdef MODULE_RESCALEFRAME_ENABLED\n'
+        '\t\tRSFGodot::boot(display_driver == NULL_DISPLAY_DRIVER);\n'
+        '#endif\n'
+        '\t\tGDExtensionManager::get_singleton()->initialize_extensions(GDExtension::INITIALIZATION_LEVEL_SERVERS);')
+
+previous_input_sample_plan = planned.copy()
+# The OS loop opens the frame before calling the Windows pump, which starts
+# sampling before SDL, raw input, and message dequeue. A nested move-timer
+# iteration can also open a frame at its own key-event pump.
+replace("platform/windows/display_server_windows.cpp",
+        'void DisplayServerWindows::process_events() {\n\tERR_FAIL_COND(!Thread::is_main_thread());',
+        'void DisplayServerWindows::process_events() {\n\tERR_FAIL_COND(!Thread::is_main_thread());\n'
+        '#ifdef MODULE_RESCALEFRAME_ENABLED\n'
+        '\tif (!drop_events && !Main::is_iterating()) RSFGodot::cpu_sample();\n#endif')
+replace("platform/windows/display_server_windows.cpp",
+        '\t\t\t\tif (!Main::is_iterating()) RSFGodot::cpu_begin();\n#endif\n\t\t\t\t_process_key_events();',
+        '\t\t\t\tif (!Main::is_iterating()) {\n'
+        '\t\t\t\t\tRSFGodot::cpu_begin();\n\t\t\t\t\tRSFGodot::cpu_sample();\n\t\t\t\t}\n'
+        '#endif\n\t\t\t\t_process_key_events();')
+
+
+previous_execution_receipt_plan = planned.copy()
+path = "servers/rendering/rendering_device.cpp"
+at = planned[path].index("#include ")
+planned[path] = planned[path][:at] + INCLUDE + "\n" + planned[path][at:]
+replace(path, '\texecute_chained_cmds(present_swap_chain, frames[frame].fence, semaphore);',
+        '#ifdef MODULE_RESCALEFRAME_ENABLED\n'
+        '\tRSFGodot::VulkanExecutionScope rsf_execution(main_queue.id, frames[frame].fence.id,\n'
+        '\t\t\tframe_can_present && RenderingDevice::get_singleton() == this);\n#endif\n'
+        '\texecute_chained_cmds(present_swap_chain, frames[frame].fence, semaphore);')
+path = "drivers/vulkan/rendering_device_driver_vulkan.cpp"
+replace(path, '\t\tdevice_queue.submit_mutex.lock();\n\t\terr = vkQueueSubmit(device_queue.queue, 1, &submit_info, vk_fence);',
+        '#ifdef MODULE_RESCALEFRAME_ENABLED\n'
+        '\t\tRSFGodot::VulkanExecutionScope::submit(p_cmd_queue.id, p_cmd_fence.id, true);\n#endif\n'
+        '\t\tdevice_queue.submit_mutex.lock();\n\t\terr = vkQueueSubmit(device_queue.queue, 1, &submit_info, vk_fence);')
+replace(path, '\t\tRSFGodot::vk_submitted(reinterpret_cast<void *const *>(command_buffers.ptr()), command_buffers.size());',
+        '\t\tRSFGodot::VulkanExecutionScope::submit(p_cmd_queue.id, p_cmd_fence.id, false);\n'
+        '\t\tRSFGodot::vk_submitted(reinterpret_cast<void *const *>(command_buffers.ptr()), command_buffers.size());')
+
 
 changed = set(subprocess.check_output(["git", "-C", str(ENGINE), "diff", "--name-only"], text=True).splitlines())
 if changed - set(FILES):
@@ -423,7 +468,7 @@ if changed - set(FILES):
 for path in FILES:
     current = (ENGINE / path).read_text(encoding="utf-8")
     validated[path] = current
-    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], previous_dlssg_wsi_plan[path], previous_optical_queue_plan[path], previous_graph_split_plan[path], previous_fsr1_formats_plan[path], previous_sharpening_plan[path], previous_unsharpened_plan[path], previous_pool_retirement_plan[path], planned[path]):
+    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], previous_dlssg_wsi_plan[path], previous_optical_queue_plan[path], previous_graph_split_plan[path], previous_fsr1_formats_plan[path], previous_sharpening_plan[path], previous_unsharpened_plan[path], previous_pool_retirement_plan[path], previous_startup_plan[path], previous_input_sample_plan[path], previous_execution_receipt_plan[path], planned[path]):
         raise SystemExit("Reference has unrelated changes: " + path)
     if "--check" in sys.argv and current != planned[path]:
         raise SystemExit("Bridge patch is missing: " + path)

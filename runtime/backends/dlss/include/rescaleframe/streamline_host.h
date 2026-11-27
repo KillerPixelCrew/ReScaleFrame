@@ -68,7 +68,8 @@ RSF_SL_HOST_API void* rsf_streamline_host_token(rsf_streamline_host*, uint64_t f
 /* Graphics owner, before retiring/reconfiguring SR resources. Joins submitted queue work. */
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_drain(rsf_streamline_host*);
 /* Independent of an FG provider. The caller carries one ID from actual input through Present.
-   For Reflex profiles begin sleeps once, even in Off; PCL profile only mints the shared token. */
+   For Reflex profiles begin sleeps once, even in Off; PCL profile only mints the shared token.
+   If the combined begin fails after acquiring, it retires the token and consumes the source ID. */
 RSF_SL_HOST_API rsf_backend_result rsf_streamline_host_begin(rsf_streamline_host*, uint64_t frame_id);
 /* Threaded engines can reserve identity before queuing BeginFrame, then sleep at their
    native pacing boundary. Each token accepts exactly one sleep. */

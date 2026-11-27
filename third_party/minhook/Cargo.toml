@@ -1,0 +1,15 @@
+[package]
+name = "rsf-minhook-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+# MinHook itself is BSD-2-Clause; minhook.lock.json pins the upstream files.
+links = "minhook"
+
+[build-dependencies]
+cc.workspace = true
+
+[lints]
+workspace = true

@@ -1,41 +1,9 @@
 /* SPDX-License-Identifier: MIT */
-/* Mouse and keyboard for the overlay, taken from the game's own window.
-
-   The research carrier polls `GetAsyncKeyState` on a worker thread, and `loader/README.md` says
-   why: a polled key state cannot disturb the message loop or the order in which the game sees its
-   own input. That is the right tool for a hotkey and the wrong one for an interface. Polling has no
-   mouse position, no wheel, no notion of which window had focus, and above all no way to consume an
-   event, so a click on a quality dropdown would also be a click in the game.
-
-   Consuming input means being in the message path, which means replacing the window procedure with
-   `SetWindowLongPtrW` and `GWLP_WNDPROC`. That is a heavier intervention than polling, so the rules
-   below exist to keep it from becoming the game's problem:
-
-   - While the overlay is hidden this passes every message through unchanged, including the toggle
-     key's own press. The game sees exactly the input stream it would have seen with nothing
-     installed.
-   - While the overlay is visible the mouse and keyboard messages it consumes stop here. Two
-     exceptions, both to keep the game from being left holding a key it can never release. A press
-     the game already saw forwards its matching release. System keys, `WM_SYSKEYDOWN` and
-     `WM_SYSKEYUP` other than the toggle, forward in both directions: they are window management
-     rather than gameplay, and swallowing them would take Alt+F4 with them.
-   - Uninstall restores the original procedure only if the window still holds ours. Another tool
-     that subclassed after us owns the chain now, and writing our saved pointer back would delete
-     its hook.
-
-   What this does not do:
-
-   - Keyboard state is swallowed but not delivered. `rsf_overlay_input` in `overlay.h` carries mouse
-     state only, so there is nowhere to put a key. Adding text entry to the overlay means adding
-     fields there first, and filling them here.
-   - Input that never reaches the window procedure cannot be intercepted. The toggle key has a
-     foreground polling fallback; DirectInput device polling
-     and XInput read the device directly, so a gamepad still flies the aircraft while the overlay is
-     open. Raw input is intercepted only in its `WM_INPUT` form.
-   - Nothing here makes a cursor visible. See the note in `overlay_input.cpp`.
-
-   None of this has been exercised in a game yet. It is written against the documented behaviour of
-   the message path, not against an observed AC7 session. */
+/* Window input for the shared overlay. The Rust host subclasses the presentation window and
+   passes input through while the panel is hidden. While it is open, the panel consumes supported
+   pointer and keyboard messages. Releases for presses already seen by the game still reach the
+   game, as do system keys other than the configured toggle. Input sent directly to game-specific
+   device APIs may bypass the window. Cursor capture uses User32 detours when available. */
 
 #ifndef RSF_OVERLAY_INPUT_H
 #define RSF_OVERLAY_INPUT_H
@@ -115,7 +83,7 @@ uint32_t rsf_overlay_input_visible(void);
    shared with the message route; focus gain while held is not a new press. */
 void rsf_overlay_input_poll_toggle(void);
 
-/* Open or close the overlay from code rather than from the toggle key. A transition either way
+/* Request a specific visibility state. A transition either way
    drops the accumulated buttons and wheel, so a click held while the overlay opens is not delivered
    as a click on whatever appeared under the cursor. */
 void rsf_overlay_input_set_visible(uint32_t visible);
@@ -140,7 +108,8 @@ rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input* out, uint3
 /* Cumulative diagnostics, counted only while the panel is open. They exist so a run can tell
    "the window never received a pointer event" from "it received and kept clicks from the game"
    when the panel cannot be captured. Pointer events are mouse moves, buttons and wheel, and
-   touch/pen contacts delivered as window messages; raw mouse reports are WM_INPUT. A caller diffs
+   touch/pen contacts delivered as window messages. Raw mouse reports count decoded, nonzero
+   relative movement submitted to the fallback pointer accumulator. A caller diffs
    two reads to count a single open. `struct_size` is the caller's, as for every struct here. */
 typedef struct rsf_overlay_input_counters {
     uint32_t struct_size;

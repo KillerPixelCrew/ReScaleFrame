@@ -14,7 +14,6 @@
     "audited": "2026-10-07",
     "source_commit": "fda5fd0f2730b40e5b96f419bc0a05cb0b73932b",
     "scope": "Source/documentation review of recorded evidence; no new game or device test. Earlier dated observations below retain their original scope.",
-    "game_abi": 13,
     "plugin_rendering_ready": false,
     "current_status": "../../docs/current-status.md",
     "sr": "Corrected native SR/UI/TrueSky and optimized bridge/FSR4 INT8 path user-accepted.",
@@ -38,7 +37,8 @@
     "platform": "windows-x64",
     "render_api": "d3d11",
     "examined": "2026-09-06",
-    "sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f"
+    "sha256": "c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f",
+    "sha256_role": "evidence of the researched build; detection matches the executable name and sites are discovered"
   },
   "frame_generation_cpu_research": {
     "status": "guarded CPU/RHI/window path and earlier DLSS-G are game accepted; shared FSR/XeSS switching and HUD-less retirement correction built, device-fixture tested and deployed; new gameplay acceptance pending",
@@ -73,7 +73,21 @@
     "state": "encrypted",
     "how": "measured",
     "evidence": "Shipped .text entropy is about 7.997 across 38.9 MB, the entry point is in .bind, and graphics-import references are absent. The decrypted runtime dump contains readable code and 19,888 import references. .rdata and .pdata provide plaintext data.",
-    "consequence": "Use the decrypted runtime image for code analysis; the shipped file still supplies fingerprint, imports, strings, and data."
+    "consequence": "Use the decrypted runtime image for code analysis; the shipped file still supplies imports, strings, and data. The SHA-256 is logged evidence, not a gate."
+  },
+  "site_discovery": {
+    "examined": "2026-11-24",
+    "how": "measured",
+    "code": "games/ac7/src/discovery.rs",
+    "method": "Byte patterns unique in the decrypted image's executable sections (rel32 and RIP displacements wildcarded), RIP-relative operands for globals and class caches, vtables found by their constructors for functions only reached through them (documented slots, entry checked), and one group pattern for the six byte-identical shader-depth gates. Each site is re-matched in memory before it is hooked, patched or called; a missing or ambiguous site refuses its feature by name.",
+    "owners": "carrier after the decryption wait, before its first patch; adapter at prepare",
+    "sites": 122,
+    "shader_depth_gates": 6,
+    "truesky_sites": 5,
+    "recorded_build": "9855922, PE timestamp 0x6362748e",
+    "evidence": "discovery tests resolve every site to the recorded RVAs in a decrypted image (also after the carrier's patches) and every TrueSky site in the installed plugin; no pattern byte lies on a base relocation",
+    "pending": "first game run with discovered sites; another game build",
+    "research": "../../docs/research/ue418-hook-map.md"
   },
   "velocity": {
     "present": true,

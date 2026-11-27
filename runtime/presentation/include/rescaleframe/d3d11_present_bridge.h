@@ -26,8 +26,8 @@ typedef struct rsf_d3d11_present_setup {
     /* Cold-start generation owner, independent of SR. Zero retains the DLSS default.
        Also accepts native D3D12 queues; no D3D11 facade or upload is used on that path. */
     uint32_t backend, max_generated_frames;
-    /* The plugin's depth conventions. units_to_meters must be > 0; install refuses otherwise,
-       since the bridge cannot tell an engine's units from its graphics API. */
+    /* The plugin's depth conventions. Setup requires a finite, positive units_to_meters
+       because the bridge cannot infer the engine's units from its graphics API. */
     uint32_t depth_inverted, depth_infinite;
     float units_to_meters;
     /* Native D3D12 keeps engine buffers stable while swapping the physical presentation
@@ -80,10 +80,6 @@ void* rsf_d3d11_present_command_list(void* list);
    the fence is borrowed (AddRef to keep it). On failure nothing was signalled and both are zero. */
 int32_t rsf_d3d11_present_retire(void* provider_session, void* list, void** fence, uint64_t* value);
 int rsf_d3d11_present_is_owner(void* swapchain);
-/* Borrowed live COM receiver. Exact inner facade only, including a refused owner;
-   no alias QI or unowned dereference. Returns 1 and writes the native result when
-   handled, otherwise 0 with result unchanged. Does not reenter the virtual slot. */
-int rsf_d3d11_present_dispatch_owned(void* receiver, uint32_t sync_interval, uint32_t flags, int32_t* result);
 /* Host validates header/method. Writes handled before calling the typed body;
    exact inner receiver only, including Release during refusal or cancellation. */
 void rsf_d3d11_chain_dispatch_owned(rsf_d3d11_chain_dispatch* request);
@@ -110,12 +106,8 @@ int32_t rsf_d3d11_present_switch_result(void);
 uint64_t rsf_d3d11_present_generation(void);
 /* Main-thread calls skip a provider during retirement, rather than blocking window messages. */
 int32_t rsf_d3d11_present_begin(uint64_t id, uint64_t* generation);
-/* Runtime-only mechanism: the core supplies the chosen owner. This function never chooses another pacer. */
-int32_t rsf_d3d11_present_pace(uint64_t id, rsf_pacing_owner owner, uint64_t* generation);
 int32_t rsf_d3d11_present_marker(uint64_t generation, uint64_t id, rsf_latency_marker marker, uint32_t controller);
 int32_t rsf_d3d11_present_acquire(uint64_t id);
-/* Actual notification only; never a sleep, acquire or simulated input-sample marker. */
-int32_t rsf_d3d11_present_receipt(uint64_t generation, uint64_t id, uint32_t kinds, uint32_t message);
 int32_t rsf_d3d11_present_input(uint64_t id, uint32_t kinds, uint32_t message);
 int32_t rsf_d3d11_present_abort(uint64_t id);
 #ifdef __cplusplus

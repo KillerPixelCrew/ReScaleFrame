@@ -1,0 +1,755 @@
+// SPDX-License-Identifier: MIT
+use crate::capture_names::{ALPHA, DENSE_MOTION, DEPTH, HDR, SCALAR};
+use crate::com_ref;
+use crate::sr_session::checked;
+use crate::sync::lock;
+use crate::sys::{rsf_backend_log_fn, rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
+use rsf_game_sys::{
+    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_NO_SR,
+    RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG,
+    RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_UI_COMPOSITE, rsf_camera_frame,
+    rsf_frame_record, rsf_game_render_pass,
+};
+use std::ffi::{CStr, CString, c_char, c_void};
+use std::fs;
+use std::os::windows::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+
+pub(super) use crate::capture_pixels::Pixels;
+pub(super) use rsf_graphics::dump_options::{
+    DECODED_MOTION, ENCODED_MOTION, Log, MAX_IMAGE_BYTES, MotionEncoding, MotionTextureOptions,
+    TextureOptions,
+};
+pub(super) mod abi;
+mod legacy;
+#[cfg(not(test))]
+pub(crate) use legacy::rsf_input_dump_active;
+#[cfg(not(test))]
+pub(crate) use legacy::rsf_input_dump_texture;
+pub(crate) use legacy::{rsf_input_dump_fg, rsf_input_dump_fg_prepare, rsf_input_dump_sr};
+mod metadata;
+mod native;
+
+const INVALID: i32 = -1;
+const ABI_MISMATCH: i32 = -2;
+const WRITE_FAILED: i32 = -6;
+const RAW: u32 = 0;
+const D3D11: u32 = 1;
+const MAX_IMAGES: usize = 96;
+
+struct Clock {
+    tick: u64,
+    process: u32,
+    key_down: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Surface {
+    width: u32,
+    height: u32,
+    format: u32,
+}
+
+#[derive(Clone, Copy)]
+struct Encoding {
+    raw: i32,
+    preview: i32,
+}
+
+impl Encoding {
+    const INVALID: Self = Self {
+        raw: INVALID,
+        preview: INVALID,
+    };
+
+    fn success(self) -> bool {
+        self.raw == 0 && self.preview == 0
+    }
+}
+
+use native::clock;
+
+#[derive(Clone, Copy, Default)]
+struct PassIdentity {
+    session: u64,
+    source: u64,
+    view: u64,
+    native: u64,
+    family: u64,
+    scope: u64,
+    viewport: u64,
+    render_rect: [i32; 4],
+    output_rect: [i32; 4],
+}
+
+impl From<&rsf_game_render_pass> for PassIdentity {
+    fn from(pass: &rsf_game_render_pass) -> Self {
+        Self {
+            session: pass.session_id,
+            source: pass.source_frame_id,
+            view: pass.view_key,
+            native: pass.native_frame,
+            family: pass.family_key,
+            scope: pass.scope_id,
+            viewport: pass.viewport_key,
+            render_rect: pass.render_rect,
+            output_rect: pass.output_rect,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct WindowIdentity {
+    // Window callbacks have their own scope and may not carry the SR family.
+    session: u64,
+    source: u64,
+    native: u64,
+    view: u64,
+    viewport: u64,
+    window: u64,
+    rhi_viewport: u64,
+    scope: u64,
+}
+
+impl From<&rsf_game_render_pass> for WindowIdentity {
+    fn from(pass: &rsf_game_render_pass) -> Self {
+        Self {
+            session: pass.session_id,
+            source: pass.source_frame_id,
+            native: pass.native_frame,
+            view: pass.view_key,
+            viewport: pass.viewport_key,
+            window: pass.window_key,
+            rhi_viewport: pass.rhi_viewport_key,
+            scope: pass.scope_id,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum ImageState {
+    Unavailable,
+    Reserved,
+    Encoding,
+    Finished,
+}
+
+struct Image {
+    name: String,
+    description: String,
+    view: u32,
+    scale: f32,
+    state: ImageState,
+    surface: Surface,
+    api: u32,
+    native_format: u32,
+    encoding: Encoding,
+}
+
+impl Image {
+    fn new(name: &str, description: &str, view: u32, scale: f32, state: ImageState) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            view,
+            scale: if scale == 0.0 { 1.0 } else { scale },
+            state,
+            surface: Surface::default(),
+            api: D3D11,
+            native_format: 0,
+            encoding: Encoding::INVALID,
+        }
+    }
+
+    fn pending(&self) -> bool {
+        matches!(self.state, ImageState::Reserved | ImageState::Encoding)
+    }
+
+    fn captured(&self) -> bool {
+        self.state == ImageState::Finished && self.encoding.success()
+    }
+}
+
+struct Capture {
+    ticket: u64,
+    bundle: PathBuf,
+    started: u64,
+    record: Option<rsf_frame_record>,
+    identity: Option<PassIdentity>,
+    legacy_camera: Option<rsf_camera_frame>,
+    in_sr: bool,
+    backend: u32,
+    sr_result: Option<i32>,
+    fg_result: Option<i32>,
+    constants: bool,
+    fg_constants: bool,
+    window: Option<WindowIdentity>,
+    present_result: Option<i32>,
+    images: Vec<Image>,
+}
+
+impl Capture {
+    fn new(ticket: u64, bundle: PathBuf, started: u64) -> Self {
+        Self {
+            ticket,
+            bundle,
+            started,
+            record: None,
+            identity: None,
+            legacy_camera: None,
+            in_sr: false,
+            backend: 0,
+            sr_result: None,
+            fg_result: None,
+            constants: false,
+            fg_constants: false,
+            window: None,
+            present_result: None,
+            images: Vec::new(),
+        }
+    }
+
+    fn session(&self) -> u64 {
+        self.record.map_or_else(
+            || self.identity.map_or(0, |id| id.session),
+            |record| record.session_id,
+        )
+    }
+
+    fn has_target(&self) -> bool {
+        self.record.is_some() || self.identity.is_some()
+    }
+
+    fn wants(&self, record: &rsf_frame_record) -> bool {
+        self.record.is_some_and(|selected| {
+            (record.flags ^ selected.flags) & RSF_FRAME_FLAG_AMBIGUOUS_ID == 0
+                && (
+                    record.session_id,
+                    record.frame_id,
+                    record.view_id,
+                    record.resource_generation,
+                ) == (
+                    selected.session_id,
+                    selected.frame_id,
+                    selected.view_id,
+                    selected.resource_generation,
+                )
+        })
+    }
+
+    fn matches_pass(&self, pass: &rsf_game_render_pass) -> bool {
+        if pass.flags & RSF_GAME_RENDER_PRIMARY == 0 || pass.session_id != self.session() {
+            return false;
+        }
+        if let Some(record) = &self.record {
+            let source = if record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID != 0 {
+                pass.source_frame_id == 0
+                    && pass.native_frame == record.frame_id
+                    && pass.flags & RSF_GAME_RENDER_NO_FG != 0
+            } else {
+                pass.source_frame_id == record.frame_id
+            };
+            source
+                && pass.view_key as u32 == record.view_id
+                && self
+                    .identity
+                    .is_none_or(|id| id.native == pass.native_frame && id.view == pass.view_key)
+        } else {
+            self.identity.is_some_and(|id| {
+                id.source == pass.source_frame_id
+                    && id.native == pass.native_frame
+                    && id.view == pass.view_key
+                    && id.family == pass.family_key
+            })
+        }
+    }
+
+    fn fill_sr_metadata(&mut self, frame: &rsf_frame_record, backend: u32) {
+        let Some(mut selected) = self.record else {
+            return;
+        };
+        let extent = |record: &rsf_frame_record| {
+            [
+                record.render_width,
+                record.render_height,
+                record.output_width,
+                record.output_height,
+            ]
+        };
+        let dimensions = extent(&selected);
+        if self.present_result.is_some() || extent(frame) != dimensions {
+            return;
+        }
+        let camera = frame.camera;
+        let fill_camera = !metadata::camera_available(&selected.camera)
+            && metadata::camera_available(&camera)
+            && [
+                camera.render_width,
+                camera.render_height,
+                camera.output_width,
+                camera.output_height,
+            ] == dimensions;
+        let backend = if self.backend == 0 {
+            backend
+        } else {
+            self.backend
+        };
+        if !fill_camera && backend == self.backend {
+            return;
+        }
+        if fill_camera {
+            selected.camera = camera;
+        }
+        if metadata::frame(&self.bundle, &selected, backend).is_ok() {
+            self.record = Some(selected);
+            self.backend = backend;
+            self.constants = true;
+        }
+    }
+
+    fn matches_window(&self, pass: &rsf_game_render_pass) -> bool {
+        let source = match &self.record {
+            Some(record) if record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID == 0 => record.frame_id,
+            Some(_) => return false,
+            None => self.identity.map_or(0, |id| id.source),
+        };
+        source != 0
+            && source == pass.source_frame_id
+            && self.session() == pass.session_id
+            && self.identity.is_none_or(|id| {
+                (id.viewport == pass.viewport_key || self.record.is_some() && id.viewport == 0)
+                    && (pass.native_frame == 0 || id.native == pass.native_frame)
+                    && (pass.view_key == 0 || id.view == pass.view_key)
+            })
+            && (pass.view_key == 0
+                || self
+                    .record
+                    .is_none_or(|record| record.view_id == pass.view_key as u32))
+    }
+
+    fn add_image(&mut self, image: Image) -> Option<usize> {
+        if self.present_result.is_some()
+            || self.images.len() >= MAX_IMAGES
+            || self.images.iter().any(|found| found.name == image.name)
+        {
+            return None;
+        }
+        let index = self.images.len();
+        self.images.push(image);
+        Some(index)
+    }
+
+    fn index(&self, ticket: u64, name: &str) -> Option<usize> {
+        if self.ticket != ticket {
+            return None;
+        }
+        self.images.iter().position(|image| image.name == name)
+    }
+
+    fn completion_status(&self) -> Option<&'static str> {
+        let present = self.present_result?;
+        if self.images.iter().any(Image::pending) {
+            return None;
+        }
+        let images_failed = self
+            .images
+            .iter()
+            .any(|image| image.state == ImageState::Finished && !image.encoding.success());
+        let observed_sr = self.sr_result.is_some();
+        let requires_sr = self
+            .record
+            .is_none_or(|frame| frame.flags & RSF_FRAME_FLAG_NO_SR == 0)
+            || observed_sr;
+        let required: &[&str] = if self.record.is_none() {
+            metadata::LEGACY_REQUIRED
+        } else if requires_sr {
+            &["final_color", "sr_color", "sr_depth", "sr_motion"]
+        } else {
+            &["final_color"]
+        };
+        let has_required = |names: &[&str]| {
+            names.iter().all(|name| {
+                self.images
+                    .iter()
+                    .any(|image| image.name == *name && image.captured())
+            })
+        };
+        let fg_complete = self.record.is_none_or(|frame| match self.fg_result {
+            Some(0) => has_required(&["fg_depth", "fg_motion", "hudless_color"]),
+            Some(_) => false,
+            None => requires_sr || frame.flags & RSF_FRAME_FLAG_NO_FG != 0,
+        });
+        Some(
+            if present < 0
+                || (requires_sr && self.sr_result != Some(0))
+                || !self.constants
+                || images_failed
+                || !has_required(required)
+                || !fg_complete
+            {
+                "partial"
+            } else {
+                "complete"
+            },
+        )
+    }
+}
+
+#[derive(Default)]
+struct Owner {
+    directory: Option<PathBuf>,
+    game: String,
+    hash: String,
+    log: Log,
+    messages: Vec<(Log, String)>,
+    key_down: bool,
+    last_ticket: u64,
+    capture: Option<Capture>,
+}
+
+static OWNER: LazyLock<Mutex<Owner>> = LazyLock::new(|| Mutex::new(Owner::default()));
+
+fn owner<T>(operation: impl FnOnce(&mut Owner) -> T) -> T {
+    let (result, messages) = {
+        let mut owner = lock(&OWNER);
+        let result = operation(&mut owner);
+        (result, std::mem::take(&mut owner.messages))
+    };
+    // Progress sinks can query the capture ABI again. Never invoke one under the lock.
+    for (log, line) in messages {
+        log.say(&line);
+    }
+    result
+}
+
+impl Owner {
+    fn say(&mut self, message: impl Into<String>) {
+        if self.log.callback.is_some() {
+            self.messages.push((self.log, message.into()));
+        }
+    }
+
+    fn publish(&mut self, status: &str) {
+        if let Some(capture) = &self.capture
+            && metadata::manifest(capture, &self.game, &self.hash, status).is_err()
+        {
+            self.say("website dump: manifest write failed");
+        }
+    }
+
+    fn finish(&mut self, status: &str) {
+        if let Some(capture) = &mut self.capture {
+            metadata::fill_missing(&mut capture.images);
+            let path = capture.bundle.clone();
+            self.publish(status);
+            self.capture = None;
+            self.say(format!("website dump {status}: {}", path.display()));
+        }
+    }
+
+    fn finish_ready(&mut self) {
+        if let Some(status) = self.capture.as_ref().and_then(Capture::completion_status) {
+            self.finish(status);
+        }
+    }
+
+    fn configure(&mut self, directory: Option<PathBuf>, game: String, hash: String, log: Log) {
+        self.log = log;
+        self.finish("cancelled_on_reconfigure");
+        self.directory = directory.map(|dir| dir.join("website"));
+        self.game = game;
+        self.hash = hash;
+        self.say("website input dump: F10 captures the next source frame as named opaque PNGs and raw buffers");
+    }
+
+    fn configure_default(&mut self) -> Option<()> {
+        let executable = std::env::current_exe().ok()?;
+        let fallback = executable.file_stem()?;
+        let game = Path::new(&self.game)
+            .file_name()
+            .filter(|name| *name != "..")
+            .unwrap_or(fallback);
+        let directory =
+            if let Some(path) = std::env::var_os("RSF_DUMP_DIR").filter(|path| !path.is_empty()) {
+                PathBuf::from(path)
+            } else {
+                PathBuf::from(std::env::var_os("LOCALAPPDATA").filter(|path| !path.is_empty())?)
+                    .join("ReScaleFrame")
+                    .join(game)
+            };
+        let game = game.to_string_lossy().into_owned();
+        let path: Vec<u16> = executable.as_os_str().encode_wide().chain([0]).collect();
+        let hash = native::executable_hash(&path);
+        self.configure(Some(directory), game, hash, self.log);
+        Some(())
+    }
+
+    fn request(&mut self, now: &Clock) {
+        let Some(directory) = &self.directory else {
+            return;
+        };
+        if self.capture.is_some() {
+            return;
+        }
+        // The high 56 bits of a submission token hold the capture ticket.
+        let ticket = self.last_ticket + 1;
+        if ticket > u64::MAX >> 8 {
+            return;
+        }
+        let local = native::local_time();
+        let name = format!(
+            "scene-{:04}{:02}{:02}-{:02}{:02}{:02}-{:03}-{}-{}-{ticket}",
+            local.wYear,
+            local.wMonth,
+            local.wDay,
+            local.wHour,
+            local.wMinute,
+            local.wSecond,
+            local.wMilliseconds,
+            now.tick,
+            now.process
+        );
+        let bundle = directory.join(name);
+        match fs::create_dir_all(directory).and_then(|()| fs::create_dir(&bundle)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                self.say("website dump: could not create a unique directory");
+                return;
+            }
+            Err(_) => {
+                self.say("website dump stopped after an allocation or file failure; partial files retained");
+                return;
+            }
+        }
+        self.last_ticket = ticket;
+        self.capture = Some(Capture::new(ticket, bundle.clone(), now.tick));
+        self.publish("waiting_for_sr");
+        self.say(format!("website dump armed: {}", bundle.display()));
+    }
+
+    fn poll(&mut self, now: &Clock) {
+        if self.directory.is_none() && self.configure_default().is_none() {
+            return;
+        }
+        if self
+            .capture
+            .as_ref()
+            .is_some_and(|capture| now.tick.saturating_sub(capture.started) > 30000)
+        {
+            self.finish("incomplete_waiting_for_gpu_or_frame");
+        }
+        if now.key_down && !self.key_down {
+            self.request(now);
+        }
+        self.key_down = now.key_down;
+    }
+
+    fn complete(&mut self, result: i32) {
+        if let Some(capture) = &mut self.capture {
+            // The first matching completion owns Present for this bundle.
+            capture.present_result.get_or_insert(result);
+            self.finish_ready();
+            if self.capture.is_some() {
+                self.publish("waiting_for_gpu");
+            }
+        }
+    }
+
+    fn finish_image(&mut self, work: &Work, result: ImageResult) -> bool {
+        let Some(capture) = self
+            .capture
+            .as_mut()
+            .filter(|capture| capture.ticket == work.ticket)
+        else {
+            return false;
+        };
+        let image = &mut capture.images[work.index];
+        image.state = ImageState::Finished;
+        image.surface = result.surface;
+        image.api = result.api;
+        image.native_format = result.native_format;
+        image.view = result.view;
+        image.encoding = result.encoding;
+        self.finish_ready();
+        result.encoding.success()
+    }
+
+    fn work(&self, index: usize) -> Option<Work> {
+        let capture = self.capture.as_ref()?;
+        let image = &capture.images[index];
+        Some(Work {
+            ticket: capture.ticket,
+            index,
+            prefix: capture.bundle.join(&image.name),
+            view: image.view,
+            scale: image.scale,
+            log: self.log,
+        })
+    }
+}
+
+struct Work {
+    ticket: u64,
+    index: usize,
+    prefix: PathBuf,
+    view: u32,
+    scale: f32,
+    log: Log,
+}
+
+impl Work {
+    fn options(&self, prefix: &CString, view: u32) -> TextureOptions {
+        TextureOptions::new(prefix, view, self.scale, self.log)
+    }
+}
+
+struct ImageResult {
+    surface: Surface,
+    api: u32,
+    native_format: u32,
+    view: u32,
+    encoding: Encoding,
+}
+
+fn preview_view(view: u32, format: u32, cpu_pixels: bool) -> u32 {
+    // DXGI R16G16B16A16_FLOAT (10), R11G11B10_FLOAT (26), R32G32B32A32_FLOAT (2).
+    if view == HDR && !(matches!(format, 10 | 26) || cpu_pixels && format == 2) {
+        RAW
+    } else {
+        view
+    }
+}
+
+fn prefix(path: &Path) -> Result<CString, std::ffi::NulError> {
+    CString::new(path.to_string_lossy().as_bytes())
+}
+
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
+}
+
+unsafe fn record<'a>(input: *const rsf_frame_record) -> Option<&'a rsf_frame_record> {
+    unsafe { checked(input) }.filter(|record| record.abi_version == RSF_GAME_FRAME_ABI_VERSION)
+}
+
+unsafe fn string<'a>(input: *const c_char) -> Option<&'a str> {
+    (!input.is_null())
+        .then(|| unsafe { CStr::from_ptr(input) }.to_str().ok())
+        .flatten()
+}
+
+unsafe fn write_texture(
+    work: &Work,
+    context: *mut c_void,
+    source: *mut c_void,
+    raw: bool,
+) -> ImageResult {
+    let opened = unsafe { native::open_texture(context, source) };
+    let surface = opened
+        .as_ref()
+        .map(|(_, surface)| *surface)
+        .unwrap_or_default();
+    let view = preview_view(work.view, surface.format, false);
+    let encoding = match (&opened, prefix(&work.prefix)) {
+        (None, _) => Encoding::INVALID,
+        (Some(_), Err(_)) => Encoding {
+            raw: WRITE_FAILED,
+            preview: WRITE_FAILED,
+        },
+        (Some((texture, _)), Ok(prefix)) => unsafe {
+            native::encode_texture(context, texture, &work.options(&prefix, view), raw)
+        },
+    };
+    ImageResult {
+        api: D3D11,
+        native_format: surface.format,
+        surface,
+        view,
+        encoding,
+    }
+}
+
+struct Texture<'a> {
+    name: &'a str,
+    description: &'a str,
+    source: *mut c_void,
+    view: u32,
+    scale: f32,
+}
+
+impl<'a> Texture<'a> {
+    fn new(
+        name: &'a str,
+        description: &'a str,
+        source: *mut c_void,
+        view: u32,
+        scale: f32,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            source,
+            view,
+            scale,
+        }
+    }
+}
+
+// Take the ticket and path while locked. A retirement during encoding can leave
+// partial files in that bundle, but cannot publish into a later request.
+unsafe fn capture_texture(
+    context: *mut c_void,
+    texture: Texture<'_>,
+    accept: impl FnOnce(&Capture) -> bool,
+    legacy: bool,
+) -> bool {
+    if context.is_null()
+        || (!legacy && texture.source.is_null())
+        || !valid_name(texture.name)
+        || texture.view > DENSE_MOTION
+        || !texture.scale.is_finite()
+    {
+        return false;
+    }
+    let Some(work) = owner(|owner| {
+        let capture = owner.capture.as_mut().filter(|capture| accept(capture))?;
+        let state = if texture.source.is_null() {
+            ImageState::Unavailable
+        } else {
+            ImageState::Encoding
+        };
+        let index = capture.add_image(Image::new(
+            texture.name,
+            texture.description,
+            texture.view,
+            texture.scale,
+            state,
+        ))?;
+        (!texture.source.is_null())
+            .then(|| owner.work(index))
+            .flatten()
+    }) else {
+        return false;
+    };
+    if legacy {
+        work.log.say(&format!("website dump: {}", texture.name));
+    }
+    let result = unsafe { write_texture(&work, context, texture.source, true) };
+    owner(|owner| owner.finish_image(&work, result))
+}
+
+/// The GameSDK depth-domain predicate for native callers and the DLL export. It is defined here, not in rsf-game-sys, so a binary that links several
+/// Rust archives defines it once.
+///
+/// # Safety
+/// The pointer must refer to a readable, aligned depth-domain record.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_game_depth_domains_requested(
+    value: *const rsf_game_sys::rsf_game_depth_domains,
+) -> u32 {
+    u32::from(rsf_game_sys::depth_domains_requested(unsafe { &*value }))
+}

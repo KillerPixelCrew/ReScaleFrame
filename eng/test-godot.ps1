@@ -26,7 +26,7 @@ $taskGpuLease = Enter-RsfGodotValidation
 try {
 $taskLocal = Join-Path $taskRoot '.local/godot'
 $taskSource = Join-Path $taskRoot 'integrations/godot'
-$taskLock = Get-Content -Raw -LiteralPath (Join-Path $taskSource 'dependencies.json') | ConvertFrom-Json
+$taskLock = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'dependencies.json') | ConvertFrom-Json
 $taskPackage = Join-Path $taskLocal 'package/addons/rescaleframe'
 $taskRunStamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')
 $taskRunResults = @()
@@ -284,7 +284,7 @@ application/modify_resources=false
         $taskReport = Get-Content -Raw -LiteralPath $taskResult | ConvertFrom-Json
         if (!$taskReport.passed) { throw "Godot validation failed: $taskResult" }
         if ($Scenario -eq 'fg_admission') {
-            $taskOwnerCreates = @([regex]::Matches((Get-Content -Raw -LiteralPath (Join-Path $taskProject "$taskApi.log")), 'Godot Vulkan swapchain owner: create=0 reserved queues=4'))
+            $taskOwnerCreates = @([regex]::Matches((Get-Content -Raw -LiteralPath (Join-Path $taskProject "$taskApi.log")), 'Vulkan host swapchain owner: create=0 reserved queues=4'))
             if ($taskOwnerCreates.Count -ne 1) { throw 'Negative FG4 admission unexpectedly recreated the working WSI owner.' }
             if (!$taskReport.rejected -or $taskReport.scenario -ne 'negative_exact_fg4_admission') { throw 'The explicit negative FG4 admission evidence is missing.' }
         }

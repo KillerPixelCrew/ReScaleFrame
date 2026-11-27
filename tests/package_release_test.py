@@ -18,6 +18,7 @@ SPEC = importlib.util.spec_from_file_location("package_release", ROOT / "tools/p
 package = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = package
 SPEC.loader.exec_module(package)
+import package_common  # noqa: E402  (package-release put tools/ on sys.path)
 
 
 class ReleasePackageTest(unittest.TestCase):
@@ -26,9 +27,10 @@ class ReleasePackageTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "repo"
         self.root.mkdir()
-        self.root_patch = mock.patch.object(package, "ROOT", self.root)
-        self.root_patch.start()
-        self.addCleanup(self.root_patch.stop)
+        for module in (package, package_common):
+            patch = mock.patch.object(module, "ROOT", self.root)
+            patch.start()
+            self.addCleanup(patch.stop)
         self.write(".gitignore", "build/\ntarget/\nvendor/\nsdk/\ngames/minecraft/build/\n")
         self.write("VERSION", "2.3.4\n")
         self.write("Cargo.toml", '[workspace.package]\nversion = "2.3.4"\n')
@@ -69,11 +71,7 @@ class ReleasePackageTest(unittest.TestCase):
         stamp = int(self.git("show", "-s", "--format=%ct", "HEAD")) + 5
         for path in package.required_outputs("9.8.7"):
             os.utime(path, (stamp, stamp))
-        self.addition = self.write("vendor/shader-patch/yyjson/src/yyjson.c", "pinned fixture")
-        self.loader = mock.patch.object(package, "load_packager", return_value=mock.Mock(
-            source_additions=lambda: {"vendor/shader-patch/yyjson/src/yyjson.c": self.addition}))
-        self.loader.start()
-        self.addCleanup(self.loader.stop)
+
         self.packagers = mock.patch.object(package, "run_packager", side_effect=self.stub_packager)
         self.runner = self.packagers.start()
         self.addCleanup(self.packagers.stop)
@@ -114,7 +112,6 @@ class ReleasePackageTest(unittest.TestCase):
             self.assertEqual(asset["size"], path.stat().st_size)
         with zipfile.ZipFile(self.args.output / expected[-1]) as bundle:
             self.assertEqual(bundle.read("ReScaleFrame-2.3.4/VERSION"), b"2.3.4\n")
-            self.assertEqual(bundle.read("ReScaleFrame-2.3.4/vendor/shader-patch/yyjson/src/yyjson.c"), b"pinned fixture")
             self.assertFalse(any(".git/" in name for name in bundle.namelist()))
         notes = (self.args.output / "release-notes.md").read_text(encoding="utf-8")
         self.assertEqual(notes.count("**Played on this build: not yet played.**"), 5)
@@ -261,19 +258,15 @@ class ExistingPackagerCompatibilityTest(unittest.TestCase):
         for game in ("AC7", "RDR2", "Anomaly"):
             module = package.load_packager(game)
             with self.subTest(game=game):
-                owner = module if game == "Anomaly" else module if game == "AC7" else module.ac7
+                # Anomaly checks its own tree; the others call package_common.release_identity.
+                owner = module if game == "Anomaly" else package_common
                 with mock.patch.object(owner, "git", return_value=" M source"):
                     with self.assertRaisesRegex(RuntimeError, "Commit"):
                         module.main(["--streamline-root", "unused"])
-                with mock.patch.object(module.ac7 if game != "AC7" else module, "git", return_value="new"):
+                with mock.patch.object(package_common, "git", return_value="new"):
                     with self.assertRaisesRegex(RuntimeError, "commit changed"):
                         module.main(["--streamline-root", "unused"], release_revision="old", game_only=True)
 
-    def test_pinned_source_additions_refuse_mutation(self):
-        module = package.load_packager("Anomaly")
-        with mock.patch.object(module, "digest", return_value="0" * 64):
-            with self.assertRaisesRegex(RuntimeError, "differs from its pin"):
-                module.source_additions()
 
 
 if __name__ == "__main__":

@@ -8,6 +8,20 @@ OptiScaler is GPL-3.0; RSF distributes these modified sources under GPL-3.0-only
 The complete GPL-3.0 license is in LICENSE-GPL-3.0.txt in this directory; the rest of ReScaleFrame is MIT.
 Generated SPIR-V has the same provenance and license as its HLSL source.
 
+| D3D shader payload | Vulkan shader payload | OptiScaler source |
+| --- | --- | --- |
+| `rcas.h` | `rcas_spirv.h` | `rcas.hlsl` |
+| `da_rcas.h` and shared `depth_color.inc` | `da_rcas_spirv.h` | `da_rcas_sharpen.hlsl` |
+| `da_das.h` and shared `depth_color.inc` | `da_das_spirv.h` | `da_das_sharpen.hlsl` |
+
+`options.h` also retains GPL-3.0-only terms for its OptiScaler-derived
+constant mapping and motion-adaptive sharpening ramp. The D3D and Vulkan
+native leaves use that mapping at shader dispatch.
+`pass_payload.c` exposes the original HLSL, SPIR-V and constant mapping to the
+Rust D3D and Vulkan sharpening hosts. It is compiled under the same GPL-3.0-only
+terms. The shader headers hold the same text and SPIR-V words as C string literals
+and arrays, so the C payload can include them.
+
 RCAS credits RdenBlaauwen's RCAS-for-ReShade and AMD FidelityFX RCAS.
 The RCAS-for-ReShade `RCAS.fx` includes the following MIT notice, checked at
 https://github.com/RdenBlaauwen/RCAS-for-ReShade/blob/main/RCAS.fx on 2026-11-12.

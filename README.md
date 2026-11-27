@@ -84,9 +84,9 @@ remains pending. See the [RDR2 integration guide](games/rdr2/README.md).
 ReScaleFrameCraft connects Minecraft's Java/OpenGL renderer to ReScaleFrame's native runtime.
 The adapter supplies scene colour, depth, motion, camera state and frame boundaries.
 
-The [OpenGL sharing layer](runtime/presentation/src/gl_shared_surface.cpp) imports shared
+The [OpenGL sharing layer](runtime/orchestrator/src/gl_shared_surface.rs) imports shared
 D3D12 resources as OpenGL textures and synchronizes access through shared fences and
-semaphores. The [GL pipeline](runtime/orchestrator/src/gl_pipeline.cpp) passes those resources
+semaphores. The [GL pipeline](runtime/orchestrator/src/gl_pipeline.rs) passes those resources
 to the D3D12 SR/FG paths and exposes reconstructed output back to OpenGL.
 
 That bridge brings technology requiring D3D12 into Minecraft's OpenGL rendering path.
@@ -103,8 +103,9 @@ AC7's integration brings modern upscaling and frame generation into its existing
 rendering pipeline. Native hooks expose the engine's scene, camera, depth, motion and
 composition boundaries, and prepare the renderer to supply the data those technologies need.
 
-The [native bridge](loader/proxy/src/dlss_bridge.c) routes scene passes into ReScaleFrame's
-SR processing and carries CPU, scene, UI and window events into the shared FG/latency paths.
+The [AC7 carrier](games/ac7/carrier/dlss_bridge.c) reports scene passes and CPU, scene, UI and
+window events to the shared [D3D11 host](runtime/orchestrator/src/d3d11_host.rs), which runs SR,
+FG, latency and the overlay for AC7 as it does for Skyrim SE and Fallout 4.
 The D3D11/D3D12 presentation bridge provides the route to SDKs that require D3D12.
 
 Reconstructed scene output is reinserted into the engine's frame. UI and translucent
@@ -118,8 +119,9 @@ The Unity Mono adapter connects URP RenderGraph to ReScaleFrame through a manage
 and Unity's native rendering interfaces. The helper identifies the reconstruction and
 pre-UI stages, produces camera/temporal packets and queues native render events.
 
-The [native Unity bridge](games/unity-mono/src/bridge.cpp) validates those packets, retains
-their resources and forwards the passes to the shared runtime. SR runs before DoF, bloom
+The [native Unity bridge](integrations/unity/native/render_bridge.c) validates those packets through
+its [Rust frame state](integrations/unity/src/bridge_state.rs), retains their resources and
+forwards the passes to the shared runtime. SR runs before DoF, bloom
 and tonemapping; completed scene colour is captured before UI for FG. Player-loop callbacks
 supply the CPU frame boundaries used by latency coordination.
 

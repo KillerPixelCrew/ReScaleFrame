@@ -1,80 +1,89 @@
 // SPDX-License-Identifier: MIT
-// Compile the actual graph lease with a narrow engine seam. No GPU or queue calls.
+// Compile the real GraphScope against typed driver and graph doubles.
 #include "../integrations/godot/modules/rescaleframe/graph.cpp"
 #include <cstdio>
+#include <optional>
+
+extern "C" void rsf_fixture_vk_labels(void *state, uint64_t command, uint32_t reopen);
+extern "C" int rsf_fixture_graph_cases(void *context, void *state, uint32_t reuse, uint32_t refusals);
 
 namespace {
-int failed = 0;
-#define CHECK(expression) do { if (!(expression)) { std::printf("line %d: %s\n", __LINE__, #expression); ++failed; } } while (false)
 using Driver = RenderingDeviceDriverVulkan;
 using Pool = RenderingDeviceGraph::CommandBufferPool;
-void exercise(bool reuse) {
-    Driver vk;
+
+struct Fixture {
+    Driver driver, foreign;
     Driver::CommandBufferID commands{1};
-    Pool pool; pool.pool.id = 9;
-    if (reuse) { pool.buffers.push_back({2}); pool.semaphores.push_back({1}); vk.allocated = 2; }
-    const auto initial = commands;
-    uint32_t closes = 0, opens = 0;
-    auto labels = [&](bool reopen) {
-        if (reopen) { ++opens; CHECK(commands.id == 2); CHECK(vk.state[1].ended); }
-        else { ++closes; CHECK(commands == initial); CHECK(!vk.state[1].ended); CHECK(vk.state[2].begun); }
-    };
+    Pool pool;
+    struct Labels {
+        Fixture *fixture;
+        void *state;
+        void operator()(bool reopen) {
+            rsf_fixture_vk_labels(state, fixture->commands.id, reopen);
+        }
+    } labels;
+    std::optional<RSFGodot::GraphScope> scope;
     rsf_godot_vk_handoff handoff{};
-    CHECK(!RSFGodot::GraphScope::handoff(&vk, commands, handoff));
-    {
-        RSFGodot::GraphScope scope(&vk, commands, pool, labels);
-        CHECK(RSFGodot::GraphScope::handoff(&vk, commands, handoff));
-        CHECK(handoff.user == &vk && handoff.queue_family == 3 && handoff.timeline_enabled == 1);
-        CHECK(handoff.struct_size == sizeof(handoff) && handoff.abi_version == RSF_GODOT_VK_HANDOFF_ABI_VERSION);
-        void *continuation = nullptr;
-        const auto split = handoff.split_record;
-        CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, &continuation) == 0);
-        CHECK(commands.id == 2 && continuation == vk.rescaleframe_begin(commands));
-        CHECK(pool.buffers_used == 1 && pool.buffers.size() == 1 && pool.semaphores.size() == 1);
-        CHECK(vk.allocated == 2 && vk.begins == 1 && vk.splits == 1);
-        CHECK(vk.state[1].timeline == 77 && vk.state[1].wait == 4 && vk.state[1].signal == 5);
-        CHECK(vk.state[2].timeline == 77 && vk.state[2].wait == 6 && vk.state[2].signal == 0);
-        CHECK(closes == 1 && opens == 1);
-        // Native SDK failure after the handoff does not undo engine ownership.
-        CHECK(!RSFGodot::GraphScope::handoff(&vk, commands, handoff));
+
+    Fixture(void *state, void *foreign_state) : driver(state), foreign(foreign_state), labels{this, state} {}
+};
+}
+
+extern "C" void rsf_fixture_graph_scope(void *context, uint32_t active) {
+    auto &f = *static_cast<Fixture *>(context);
+    if (active) f.scope.emplace(&f.driver, f.commands, f.pool, f.labels);
+    else f.scope.reset();
+}
+
+extern "C" uint32_t rsf_fixture_graph_handoff(void *context, uint32_t foreign, uint64_t command_override) {
+    auto &f = *static_cast<Fixture *>(context);
+    auto *driver = foreign ? &f.foreign : &f.driver;
+    auto commands = command_override ? Driver::CommandBufferID{command_override} : f.commands;
+    return RSFGodot::GraphScope::handoff(driver, commands, f.handoff);
+}
+
+extern "C" const rsf_godot_vk_handoff *rsf_fixture_graph_header(void *context, void **driver) {
+    auto &f = *static_cast<Fixture *>(context);
+    *driver = &f.driver;
+    return &f.handoff;
+}
+
+extern "C" int32_t rsf_fixture_graph_split(void *context, uint32_t foreign, size_t command_override,
+        uint64_t timeline, uint64_t previous, uint64_t ready, uint64_t done, size_t *output) {
+    auto &f = *static_cast<Fixture *>(context);
+    if (!f.handoff.split_record) return VK_ERROR_INITIALIZATION_FAILED;
+    auto *driver = foreign ? &f.foreign : &f.driver;
+    auto *commands = command_override ? reinterpret_cast<void *>(command_override) : f.driver.rescaleframe_begin(f.commands);
+    void *next = output ? reinterpret_cast<void *>(*output) : nullptr;
+    const auto result = f.handoff.split_record(driver, commands, timeline, previous, ready, done, output ? &next : nullptr);
+    if (output) *output = reinterpret_cast<size_t>(next);
+    return result;
+}
+
+extern "C" void rsf_fixture_graph_pool(void *context, uint64_t (*out)[4]) {
+    const auto &f = *static_cast<Fixture *>(context);
+    (*out)[0] = f.commands.id;
+    (*out)[1] = f.pool.buffers_used;
+    (*out)[2] = f.pool.buffers.size();
+    (*out)[3] = f.pool.semaphores.size();
+}
+
+extern "C" void rsf_fixture_graph_failure(uint32_t line) {
+    std::printf("godot_graph_handoff.rs:%u: check failed\n", static_cast<unsigned>(line));
+}
+
+extern "C" int rsf_fixture_graph_run(void *state, void *foreign_state, uint32_t reuse, uint32_t refusals) {
+    Fixture f(state, foreign_state);
+    f.pool.pool.id = 9;
+    if (reuse) {
+        f.pool.buffers.push_back({2});
+        f.pool.semaphores.push_back({1});
     }
-    void *continuation = reinterpret_cast<void *>(1);
-    CHECK(handoff.split_record(&vk, vk.rescaleframe_begin(commands), 77, 6, 7, 8, &continuation) != 0);
-    CHECK(!continuation && commands.id == 2 && pool.buffers_used == 1);
+    return rsf_fixture_graph_cases(&f, state, reuse, refusals);
 }
-void refusals() {
-    Driver vk, foreign;
-    Driver::CommandBufferID commands{1};
-    Pool pool; pool.pool.id = 9;
-    uint32_t labels_changed = 0;
-    auto labels = [&](bool) { ++labels_changed; };
-    RSFGodot::GraphScope scope(&vk, commands, pool, labels);
-    rsf_godot_vk_handoff handoff{};
-    CHECK(!RSFGodot::GraphScope::handoff(&foreign, commands, handoff));
-    CHECK(!RSFGodot::GraphScope::handoff(&vk, {2}, handoff));
-    vk.timeline_enabled = false;
-    CHECK(!RSFGodot::GraphScope::handoff(&vk, commands, handoff));
-    vk.timeline_enabled = true;
-    CHECK(RSFGodot::GraphScope::handoff(&vk, commands, handoff));
-    void *next = nullptr;
-    const auto split = handoff.split_record;
-    CHECK(split(&foreign, vk.rescaleframe_begin(commands), 77, 4, 5, 6, &next) != 0);
-    CHECK(split(&vk, reinterpret_cast<void *>(17), 77, 4, 5, 6, &next) != 0);
-    CHECK(split(&vk, vk.rescaleframe_begin(commands), 0, 4, 5, 6, &next) != 0);
-    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 5, 5, 6, &next) != 0);
-    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 5, &next) != 0);
-    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, nullptr) != 0);
-    vk.fail_allocate = true;
-    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, &next) != 0);
-    vk.fail_allocate = false; vk.fail_semaphore = true;
-    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, &next) != 0);
-    vk.fail_semaphore = false; vk.fail_begin = true;
-    CHECK(split(&vk, vk.rescaleframe_begin(commands), 77, 4, 5, 6, &next) != 0);
-    CHECK(!next && commands.id == 1 && pool.buffers_used == 0 && vk.splits == 0 && !labels_changed);
-}
-}
+
+extern "C" int rsf_fixture_graph_main();
+
 int main() {
-    exercise(false); exercise(true); refusals();
-    if (!failed) std::puts("Godot graph recording handoff passed (synthetic, no GPU).");
-    return failed ? 1 : 0;
+    return rsf_fixture_graph_main();
 }

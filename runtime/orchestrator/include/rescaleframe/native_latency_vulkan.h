@@ -39,8 +39,8 @@ RSF_RUNTIME_API void rsf_latencyvk_render(uint64_t frame);
 RSF_RUNTIME_API void rsf_latencyvk_present(uint32_t begin);
 /* Versioned game render facts at actual Vulkan submission/Present boundaries.
    Supports SUBMISSION and PRESENT roles with explicit session/source identity.
-   Many submissions may belong to one source; the core closes their render marker
-   at that source's Present begin. No latest-frame association is inferred. */
+   The core records one submission interval per source and requires its reported
+   end before Present begins. No latest-frame association is inferred. */
 RSF_RUNTIME_API rsf_backend_result rsf_latencyvk_execution(const rsf_game_render_pass*, uint32_t begin);
 /* Serialize the immediate WSI call with LL2 markers/sleep on the SDK's lock.
    The callback and borrowed queue/info remain valid through this call. */
@@ -49,6 +49,7 @@ typedef int32_t (*rsf_vk_wsi_call)(void*);
 /* Synchronous native WSI callback lease, also used for acquire/image queries.
    Do not reenter PCL/Reflex from the callback. No user data is retained. */
 RSF_RUNTIME_API int32_t rsf_latencyvk_wsi_call(rsf_vk_wsi_call, void* user);
+/* Under XeLL, pacing and marker counters and the result describe its bound provider. */
 RSF_RUNTIME_API rsf_backend_result rsf_latencyvk_get_status(rsf_latencyvk_status*);
 /* Caller first retires provider work. Dispatch code remains mapped for device
    and instance destruction after this call. */

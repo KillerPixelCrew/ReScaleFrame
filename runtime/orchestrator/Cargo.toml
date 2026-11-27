@@ -1,0 +1,117 @@
+[package]
+name = "rsf-orchestrator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+# rlib so the test crates and the standalone fixtures can use the bindings this crate owns, and for
+# the unit tests of adapters whose CMake binaries link the Runtime.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+rsf-fsr4-compat = { path = "../backends/fsr/compat" }
+rsf-game-sys = { path = "../../sdk/game" }
+rsf-streamline-vk = { path = "../vulkan/streamline/lifecycle" }
+rsf-graphics = { path = "../graphics/rust" }
+rsf-minhook-sys = { path = "../../third_party/minhook" }
+rsf-runtime-submission = { path = "../graphics/submission" }
+serde = "1"
+# Shader-pack metadata and rules. The reader bounds nesting itself (shader_patch/pack.rs).
+serde_json = { version = "=1.0.154", features = ["unbounded_depth"] }
+
+[features]
+# Fixture exports called only by the ctest executables; the shipping archive is built without them.
+test-fixtures = ["dep:rsf-test-support"]
+# The state fixtures' CPU doubles in place of the FSR4 FG bridge, FSR4 FG and SR Vulkan, D3D12-Vulkan
+# interop, D3D12 XeSS FG and FG CPU leaves. CMake builds a third archive with it for the four
+# state-fixture executables only, so the fixture archive's device fixtures keep the real leaves.
+fixture-leaves = ["test-fixtures"]
+# CMake's vendor-header detection (runtime/orchestrator/CMakeLists.txt): the D3D12 FidelityFX SR and
+# legacy FG, FidelityFX FG, XeSS SR and legacy FG, and XeSS-FG providers. Without one, its provider
+# reports NOT_COMPILED.
+ffx = []
+ffx-fg = []
+xess = []
+xess-fg = []
+# The XeSS Vulkan SR table, built with the Vulkan and XeSS Vulkan headers.
+xess-vk = []
+# Streamline Vulkan Reflex/PCL through rsf-streamline-vk, set when CMake verified the corrected runtime.
+streamline-vk = []
+# AMD Anti-Lag 2 for Vulkan, built with the Vulkan headers.
+antilag-vk = []
+# The Vulkan SR platform table (vulkan_sr.rs), built with the FidelityFX Vulkan headers; without it
+# rsf_srvk_* report NOT_COMPILED.
+ffx-vk = []
+# The Vulkan FSR 4 and XeSS frame-generation providers of vulkan_fg.rs, built with the FidelityFX
+# DX12 FG and XeSS-FG SDKs (XeSS also links the C bridge); without them those backends report
+# NOT_COMPILED.
+fsr4-fg-vk = []
+xess-fg-vk = []
+# The Vulkan FSR 4 SR provider (vulkan_fsr4_sr.rs); without it rsf_srvk_fsr4_* report NOT_COMPILED.
+fsr4-vk = []
+
+[dev-dependencies]
+rsf-graphics = { path = "../graphics/rust", features = ["test-support"] }
+# Unit tests link the common helpers the Runtime DLL gets from its CMake archive.
+rsf-runtime-common = { path = "../common" }
+
+[build-dependencies]
+cc.workspace = true
+rsf-bindgen = { path = "../../tools/bindgen" }
+
+[lints]
+workspace = true
+
+[target."cfg(windows)".dependencies]
+rsf-vk-fsr3 = { path = "../vulkan/fsr3" }
+rsf-vk-xess-fg = { path = "../vulkan/xess-fg" }
+# The fixture exports call its WARP helpers; absent from the shipping build.
+rsf-test-support = { path = "../../tests/support", optional = true }
+ash = { workspace = true }
+rsf-shader-compiler = { path = "../shader_patch/compiler" }
+windows = { workspace = true, features = [
+  "std",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D_Fxc",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Direct3D11on12",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Imaging",
+  "Win32_Security",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_LibraryLoader",
+  "Win32_System_WindowsProgramming",
+  "Win32_UI_WindowsAndMessaging",
+] }
+windows-sys = { workspace = true, features = [
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_OpenGL",
+  "Win32_Security",
+  "Win32_Security_Cryptography",
+  "Win32_Security_WinTrust",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Environment",
+  "Win32_System_DataExchange",
+  "Win32_System_Kernel",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Performance",
+  "Win32_System_ProcessStatus",
+  "Win32_System_SystemInformation",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+  "Win32_System_WindowsProgramming",
+  "Win32_UI_Input",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Input_Pointer",
+  "Win32_UI_Input_Touch",
+  "Win32_UI_WindowsAndMessaging",
+] }

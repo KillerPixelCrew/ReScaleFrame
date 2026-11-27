@@ -8,8 +8,9 @@ frame on RTX 40 without replacing its presentation owner or requiring game resta
 Source inspected on 18 October 2026: [MFG-Unlocker](https://github.com/dashdogy/MFG-Unlocker)
 revision `2b52823e3769c31cf52d3b368c6963cff8fc5344`, specifically `midpoint_fix.cpp`,
 `ngx_mfg_gate.h`, `universal_wrapper_profile.h` and the wrapper publication in `patcher.cpp`.
-The MIT notice and selected sources are retained in
-`runtime/backends/dlss/third_party/mfg_unlocker`. Optional experimental kernels,
+The MIT notice is retained in `runtime/backends/dlss/third_party/mfg_unlocker`. The
+selected sources are adapted in the orchestrator's `mfg_state.rs`, `mfg_provider.rs`,
+`mfg_midpoint.rs` and `mfg_gate.rs`. Optional experimental kernels,
 RTX 30 ports, external shader caches, loaders, overlays and OptiScaler are excluded.
 
 Increasing the reported maximum alone is insufficient. The RTX 40 temporal kernel uses

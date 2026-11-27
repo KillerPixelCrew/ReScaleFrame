@@ -5,9 +5,10 @@ The 14 October beam/trail producer hooks are `0x190e740`, `0x1904d40`, `0x190798
 complete expected bytes, matched layouts, lifetime and proof limits are in
 [the current velocity research](ac7-velocity-20261013.md#beam-ribbon-and-animated-trail-producers-14-october).
 
-Research history: findings, hook addresses and pending statuses below apply to their recorded
-experiments. Later increments can supersede earlier conclusions. See
-[current implementation and validation](../current-status.md) before using this as a feature list.
+Code location, 21 November: the hooked entry sites, helper sites, enlarged UI depth/view gates,
+scene-precision site and temporal velocity group listed here are now tables in the Rust crate
+`rsf-ac7` (`games/ac7/src/sites.rs`, `patches.rs`), unchanged; TrueSky plugin sites stay in
+`native_renderer.cpp`. See [the migration note](rust-ac7-native-sites.md).
 
 Current status, 2 October: the user accepted the corrected native SR/UI and TrueSky wing/cloud
 path. Historical build-only notes below retain the discovery trail; latest activation and
@@ -916,3 +917,89 @@ the exact fingerprinted directional DXBC, and calls the original factory synchro
 owned temporary code. Shader recognition, inserted operands, checksum and acceptance evidence
 are in [the lighting research](ac7-lighting-shadow-20261004.md). The hook is applied during
 prepared shader creation so early global shaders are covered before renderer activation.
+
+## Site discovery instead of build 9855922, 24 November 2026
+
+Question: can the carrier and the adapter find every Ace7Game.exe and TrueSky site without
+accepting only Steam build 9855922 (SHA-256 `c7da97f5...58f4f`), so an update that moves code
+keeps working and a real change still refuses (AGENTS.md Rule 4)?
+
+Approach: `games/ac7/src/discovery.rs` holds one byte pattern per site, unique in the executable
+sections, with rel32 branches and RIP displacements as `??`, and resolves all of them in one pass
+with the shared `rsf_game_sys::signature` scanner (`resolve_each` gives every site its own result,
+so a refusal stops only the features that need that site). Two owners discover, each once per
+process: the carrier after the entropy wait reports decrypted code and before its first patch, and
+the adapter DLL at prepare. Both copy the executable sections of the loaded image (the decrypted
+code; unreadable pages stay zero). The adapter runs after the carrier patched its gates, so the
+depth gates' patched opcode is a wildcard and no other adapter pattern covers a byte the carrier
+writes. Every code site is matched again in live memory before it is hooked, patched or called;
+patch sites whose native bytes carry a displacement keep the live bytes read at the found site as
+what they expect and restore. The executable SHA-256 is logged by the proxy and gates nothing;
+detection matches `Ace7Game.exe` by name. A missing, ambiguous or changed site refuses only its
+feature and names the site, for example `AC7 native renderer refused: site 'descriptor HUD' was
+not found` or `jitter refused: site 'jitter gate' matched more than once`.
+
+How the patterns were found: the shipped `.text` is encrypted (SteamStub 3.1, `.bind` entry). No
+decrypted dump was retained under `dumps/`. The image the patterns were derived from and tested
+against was reconstructed read-only from the installed executable: the stub header before the
+entry point carries the code section's AES key and IV, and every pattern matches the decrypted
+code at its recorded RVA (for example `4c 8b dc 55 49 8d ab e8 fc ff ff` at +FFB900 and
+`0f 85 dd 03 00 00` at +112B1F3). The image and the script stay outside the repository; a runtime
+dump (`RSF_DUMP_MODULE=1`) serves the same test. `tools/derive-site-patterns.py --mapped` then grew
+the shortest unique pattern from each recorded RVA, or for a global from an instruction that
+addresses it. Where it found none, the site was traced by hand with Capstone:
+
+| Kind | Sites | How found |
+| --- | --- | --- |
+| Hooked entries | 50 of the 65 hooks | pattern at the entry |
+| Through a call | Slate allocate, pixel View uniform, four pixel enqueues, RHI frame begin/end, widget static class | rel32 target of a distinctive call, entry pattern checked |
+| Through a vtable | ComputeOutputDesc of the AA, composite and HUD passes (slot 14); D3D11 RHI pixel uniform and CreatePixelShader (slots 424 and 179 of the vtable the RHI constructor stores at +10) | vtable from its constructor's `lea`, the HUD one through the HUD pass constructor's second `lea` at +38; the slot is a documented offset and the function's entry is checked |
+| BeginFrame task | construct and execute | the dispatch called from the engine tick (`lea rcx,[rbp-78]; mov r8d,FF; call`), its call at +107 to construct, construct's vtable `lea` at +21, execute in slot 1 |
+| Helpers | 16 called or layout-checked functions | pattern at the entry |
+| Globals | GEngine, GDynamicRHI, view uniform layout, frame end sync object, current RHI command | RIP-relative operand of a using instruction |
+| Class caches | eight UClass caches | operand of the `mov rax,[rip+cache]` that ends the GetPrivateStaticClass tail registering the class (its size and flags fixed in the pattern) |
+| Patch sites | five depth gates, jitter, translucent velocity, separate translucency, velocity render/size/moved, scene precision | pattern at the site |
+| Shader depth gates | six | one group, see below |
+| Motion capture | RHI command write, ShouldRenderVelocity, HasVelocity, velocity history, four root entries | pattern at the site |
+| TrueSky plugin | divisor, depth dispatch, depth pass selector (+4), depth format, composite_tile draw (+16) | pattern in the loaded TrueSkyPluginRender_MT.dll, discovered once per module base before the first patch |
+
+The three ComputeOutputDesc functions and the two RHI methods are byte-identical to their
+siblings except for call targets and are only referenced from vtables. The BeginFrame task
+construct and execute are template instantiations whose only caller is template code too; no
+pattern up to 200 bytes before the construct call is unique. Eight StaticClass functions that the
+old table checked are not called; their caches are now found directly, so only the called widget
+static class remains a helper.
+
+The shader depth gates: `comiss xmm0,[rsi+220]; jbe` sits at +182 of six base pass pixel shader
+parameter instantiations whose masked instruction streams are identical over their first 0x380
+bytes, each called only from another identical instantiation. No pattern tells them apart (none is
+unique up to 600 bytes before the gate). They are one group instead: every match of the gate and
+its next 22 bytes (patched opcode wildcarded) is a member, none refuses the group, and the count is
+logged. In build 9855922 the pattern matches exactly the six recorded gates. This is the one
+deviation from "a signature must match exactly once".
+
+Not discovered: the TrueSky depth route also requires `mixed_resolution.fxo` of exactly 45,263
+bytes with CRC-32 78881ef3, because the first-party x1 kernel stands in for that effect's x2/x3/x4
+permutations. That is a data-file fingerprint gating the full cloud grid, not an executable site;
+a structural check would need the effect format.
+
+Evidence: `discovery::tests::every_site_resolves_in_the_decrypted_executable` (image from
+`RSF_AC7_DUMP` or `dumps/ac7/Ace7Game.exe.dump`, skipped without one) resolves all 122 sites and
+the six gates to the build 9855922 RVAs, checks every entry and check pattern at its site,
+resolves them again after applying the carrier's writes (jitter and translucent velocity NOPs, the
+separate translucency constant, every depth gate), and reports when the installed executable is not
+the image's build (PE timestamp 6362748e). `truesky_sites_resolve_in_the_installed_plugin` finds
++87F6D, +C003F, +BFF0B, +BFC05 and +ABC6B in the installed plugin. No pattern's fixed byte lies on a
+base relocation of either module (checked against both `.reloc` tables). The WARP fixtures stand in
+for the recorded build and use the recorded RVAs.
+
+Cost: in a release build the image test, which resolves the image twice, takes 0.26 s, so one
+discovery is about 0.1 s. The carrier's runs on its startup worker thread after the decryption wait,
+not under the loader lock; the adapter's runs once in the first prepare, from the presentation
+host's window acceptance.
+
+Uncertainty: discovery has not run in the game. The live copy of the decrypted sections in the
+carrier and at prepare, the vtable slots read from the relocated image, every hook and patch at a
+discovered address and the logged refusals need a game run. Patterns derived from one build are
+untested across an update until one ships. AGENTS.md still describes fingerprints and fixed RVAs
+in places; for AC7 that is the old design.

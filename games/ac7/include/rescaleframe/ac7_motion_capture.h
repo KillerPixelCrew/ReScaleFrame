@@ -15,9 +15,11 @@ typedef void (*rsf_ac7_capture_log_fn)(void* user, const char* message);
    The capture forwards engine decisions unchanged. F9 arms 60 present intervals; pipeline
    samples are taken in intervals 0, 30 and 59. Guarded post-process and widget producer scopes
    are saved to native.jsonl. GPU and CPU timelines remain separately labelled. */
+/* Shared C entry points used by the carrier and the fixture. Rust owns capture state and records. */
 void rsf_ac7_motion_capture_configure(const char* directory, rsf_ac7_capture_log_fn log, void* user);
 int rsf_ac7_motion_capture_install(void);
 void rsf_ac7_motion_capture_shutdown(void);
+// The carrier's shader creation callback feeds both F9 and translucent velocity.
 void rsf_ac7_motion_capture_shader(void* shader, uint32_t stage, const void* bytes, uint32_t size);
 void rsf_ac7_motion_capture_buffer(void* user, void* buffer, const void* initial,
                                   uint32_t bytes, uint32_t bind_flags);
@@ -31,17 +33,9 @@ void rsf_ac7_motion_capture_request(void);
 /* Native controller supplies queued execution identity; capture must not detour its owner again. */
 void rsf_ac7_motion_capture_native_owner(uint32_t enabled);
 void rsf_ac7_motion_capture_native_pass(const rsf_game_render_pass* pass, uint32_t begin);
-/* Returns a sample prefix when paired backend images should be requested for the next evaluation. */
+/* The caller lends capacity writable bytes for the narrow sample prefix. A nonzero result
+   requests paired backend images for the next evaluation. */
 int rsf_ac7_motion_capture_present(void* swapchain, char* prefix, uint32_t capacity);
-
-typedef struct rsf_ac7_velocity_facts {
-    uint32_t fields_valid, accepted, visible, mobility, relevance, has_velocity_called;
-    uint32_t has_velocity, camera_cut, always_velocity, history_checked, history_found;
-    float radius, distance_squared, lod_factor, minimum_size;
-} rsf_ac7_velocity_facts;
-
-/* Pure interpretation of observed native facts. Unknown reasons stay unknown. */
-const char* rsf_ac7_velocity_reason(const rsf_ac7_velocity_facts* facts);
 
 #ifdef __cplusplus
 }

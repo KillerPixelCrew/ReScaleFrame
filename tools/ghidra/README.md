@@ -24,6 +24,17 @@ Replay is idempotent. The default command checks evidence without changing names
 renames matching functions and saves the program; a save failure is reported and must be retried.
 These names document static research and do not enable runtime hooks.
 
+## Recovering an executable from a project
+
+`file-bytes.py` reads a saved program database (`<project>.rep/idata/NN/~XXXXXXXX.db/db.N.gbf`)
+without Ghidra and writes the file the program was imported from, which the import keeps whole.
+Compare the printed SHA-256 with the researched build before using the copy, for example to prove
+an adapter's signatures after the game was uninstalled. It only reads the database.
+
+```powershell
+py -3 -I tools/ghidra/file-bytes.py "$env:USERPROFILE\ProjectWingman.rep\idata\00\~00000000.db\db.1.gbf" 159688704 D:\scratch\ProjectWingman-Win64-Shipping.exe
+```
+
 ## Prerequisites
 
 - Ghidra 12 or newer. Set `GHIDRA_INSTALL_DIR`, or pass `--ghidra-home`.

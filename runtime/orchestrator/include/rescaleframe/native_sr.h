@@ -17,12 +17,7 @@ RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void* d3d11_cont
    Currently requires camera-inclusive motion and explicit canonical UV scales. */
 RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* context,
     const rsf_game_render_pass*, const rsf_motion_decode_params*);
-/* Frontends set intent; the engine reads one runtime-owned configuration snapshot. */
-RSF_RUNTIME_API void rsf_native_sr_set_enabled(uint32_t enabled);
-/* Publish the whole engine surface after output/quality selection, independently of a cropped
-   backend evaluation extent. Called by the graphics owner; engine readers never query a crop. */
-RSF_RUNTIME_API int rsf_native_sr_set_surface(uint32_t width, uint32_t height);
-RSF_RUNTIME_API int rsf_native_sr_render_config(void* user, rsf_game_render_config* config);
+
 /* Called on the graphics owner before releasing the pipeline device. */
 RSF_RUNTIME_API void rsf_native_sr_release_resources(void);
 #ifdef __cplusplus

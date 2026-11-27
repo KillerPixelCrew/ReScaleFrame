@@ -6,7 +6,27 @@
     "version": "1.11.240.0",
     "size_bytes": 55343016,
     "sha256": "fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8",
-    "graphics_api": "D3D11"
+    "graphics_api": "D3D11",
+    "role": "Researched build whose RVAs are recorded below; evidence only, the adapter recognizes Fallout4.exe by name and discovers its sites"
+  },
+  "site_discovery": {
+    "status": "Every Fallout4.exe site the adapter hooks, patches, calls or reads is found at preparation; the file SHA-256 and version are logged and passed to the host setup, and gate nothing",
+    "implementation": "games/fallout4/src/discovery.rs with the rsf-game-sys signature scanner; patterns from tools/derive-site-patterns.py and docs/research/evidence/fallout4-sites-1.11.240.spec",
+    "method": "114 patterns unique in the executable sections (rel32 branches and RIP displacements wildcarded): hooked entries and the old guards' instructions at the site, callback-selecting call sites resolved to their return address, imagespace through its first call with its entry checked, and 26 globals decoded from the RIP-relative operand of an instruction that uses them (the viewport unit and jitter scale constants value-checked)",
+    "derived": {
+      "vtables": "ServingThread@JobListManager, PlayerControls, ImageSpaceEffectTemporalAA and PlayerCamera from their RTTI type names; worker destructor/entry are slots 0/1 and the TAA active query slot 8, entries checked",
+      "job_descriptor": "the only data slot holding the JobListEnd job; its name slot must point at \"JobListEnd\"",
+      "imports": "PeekMessageA, WaitForSingleObjectEx, XInputGetState (XINPUT1_3 ordinal 2) and D3D11CreateDeviceAndSwapChain from the import directory; the creation thunk is the only FF 25 through its slot",
+      "scoped_calls": "the wrapper call in the JobListEnd job and the Effects(0,13,1,1) and HUDless viewport calls in imagespace, each the only call of its discovered callee in the caller's first 0x200 bytes",
+      "menus": "the six menu-name queries by the literal each one names; each name object is the operand the query returns"
+    },
+    "links": "73 operand relations the old guards fixed (callers reach their hooks, argument loads address Main and the input manager, PeekMessageA and XInput calls go through their import slots, render reads address the discovered globals and fields), checked at discovery and again in live memory with the vtable and job slots",
+    "structural_checks": "renderer +48/+50/+58 and render-context block +B18 by the code after the creation call, +B20 by the context reads, manager polling +35, worker mode +68/completion +60, queue sequence +1490 and cursor +8, render target fields +DF4/+FE4/+FE5/+FE8, UI freeze counters +1EC/+1F0, PlayerCamera +28/+E0 and world graph camera +140 by the patterns that address them; the renderer chain +70 and the other Main, worker and imagespace manager fields stay documented constants",
+    "refusal": "a site that is missing, ambiguous, unlinked or whose live bytes changed refuses preparation and is named in the prepare log; the game keeps running natively",
+    "third_party": "The Steam overlay forwarding (integrations/steam, shared with Skyrim SE) discovers the gameoverlayrenderer64.dll loads and Present entries it patches by signature and logs the overlay hash only; a missing site refuses naming it (docs/research/steam-overlay-site-discovery.md). F4SE and ENB are not matched",
+    "verified": "2026-11-24: all 143 sites resolved uniquely, every pattern, check and link held, and each matched the recorded RVA in the installed 1.11.240.0 Fallout4.exe (discovery::tests::every_site_resolves_in_the_installed_executable)",
+    "needs_game_run": "live-memory discovery, preparation and hook installation have not yet run in the game",
+    "research": "docs/research/fallout4-site-discovery.md"
   },
   "source_reference": {
     "community_shaders": "e0e711594291c1a8e447ac758099492514810fbb",
@@ -23,7 +43,7 @@
     "user_address_library_validation": "652306 sorted unique AE240 ID/RVA pairs;16 applicable anchor symbols resolved plus1 OG-only ID0;12 AE E8 call targets match installed executable. Static research only, no game installation or production offset changes. docs/research/fallout4-address-library-20261116.md"
   },
   "creation_instructions": {
-    "authority": "Coordinator independent objdump receipt, not complete ownership proof",
+    "authority": "Coordinator independent objdump receipt, not complete ownership proof; RVAs and bytes are those of the researched build, the adapter discovers the call, thunk and import slot (site_discovery)",
     "function_rva": "0x1824930",
     "call_rva": "0x1824d40",
     "call_bytes": "e894ffa900",
@@ -842,6 +862,12 @@
         "tests/fallout4_worker_handoff.cpp": "322951815d3171102fa3b188c4f9dbb3aaf122445ac364b17c695f5fb2536bf0"
       },
       "live": "not yet deployed"
+    },
+    "worker_handoff_contract_relocation": {
+      "commit": "644547f",
+      "change": "The worker successor contract moved from tests/fallout4_worker_handoff.cpp (ctest fallout4_worker_handoff_contract) and games/fallout4/src/worker_handoff.h to Rust unit tests in games/fallout4/src/cpu_events/handoff/tests.rs (cargo test -p rsf-fallout4); the ticket lives in games/fallout4/src/cpu_events/handoff.rs and the CPU owner in games/fallout4/src/cpu_events.rs.",
+      "historical_references": "worker_handoff_contract, worker_handoff_contract_seconds, worker_handoff_seconds and the prepoll_intention_gate source_hashes record the retired C++ files as built and tested at those gates; they are not current paths.",
+      "status": "Source review only; the Rust tests are not yet run."
     },
     "reduced_recovery_built": {
       "authority": ".local/fallout4-research/reduced-recovery-built-20261116.json",

@@ -62,19 +62,22 @@ internal static class Program
             new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(UnityEngine.PlayerLoop.EarlyUpdate), subSystemList = new[] {
                 new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(UpdateInputManager), updateDelegate = () => seen.Add(2) },
                 new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(NewInputUpdate), updateDelegate = () => seen.Add(3) } } },
-            new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(UnityEngine.PlayerLoop.PreLateUpdate), updateDelegate = () => seen.Add(5) } } };
-        UnityEngine.LowLevel.PlayerLoopSystem.UpdateFunction begin = () => seen.Add(1), received = () => seen.Add(4), end = () => seen.Add(6);
-        loop = ReScaleFrame.Engine.InputLoop.Plan(loop, begin, received, end);
-        loop = ReScaleFrame.Engine.InputLoop.Plan(loop, begin, received, end);
+            new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(UnityEngine.PlayerLoop.PreLateUpdate), updateDelegate = () => seen.Add(5) },
+            // PostLateUpdate records and queues the frame's rendering; the frame ends after it.
+            new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(UnityEngine.PlayerLoop.PostLateUpdate), updateDelegate = () => seen.Add(7) } } };
+        UnityEngine.LowLevel.PlayerLoopSystem.UpdateFunction begin = () => seen.Add(1), received = () => seen.Add(4),
+            simulated = () => seen.Add(6), finished = () => seen.Add(8);
+        loop = ReScaleFrame.Engine.InputLoop.Plan(loop, begin, received, simulated, finished);
+        loop = ReScaleFrame.Engine.InputLoop.Plan(loop, begin, received, simulated, finished);
         if (!ReScaleFrame.Engine.InputLoop.PollBoundaryAvailable) throw new InvalidOperationException("Real input phases were not found.");
         Action<UnityEngine.LowLevel.PlayerLoopSystem> run = null;
         run = node => { node.updateDelegate?.Invoke(); foreach (var child in node.subSystemList ?? Array.Empty<UnityEngine.LowLevel.PlayerLoopSystem>()) run(child); };
         run(loop);
-        if (string.Join(",",seen) != "1,2,3,4,5,6") throw new InvalidOperationException("Input loop duplicated or misplaced a boundary.");
+        if (string.Join(",",seen) != "1,2,3,4,5,6,7,8") throw new InvalidOperationException("Input loop duplicated or misplaced a boundary.");
         seen.Clear(); run(ReScaleFrame.Engine.InputLoop.Remove(loop));
-        if (string.Join(",",seen) != "2,3,5") throw new InvalidOperationException("Input cleanup removed engine delegates.");
+        if (string.Join(",",seen) != "2,3,5,7") throw new InvalidOperationException("Input cleanup removed engine delegates.");
         var missing = new UnityEngine.LowLevel.PlayerLoopSystem { subSystemList = new[] { new UnityEngine.LowLevel.PlayerLoopSystem { type = typeof(UnityEngine.PlayerLoop.EarlyUpdate) } } };
-        ReScaleFrame.Engine.InputLoop.Plan(missing, begin, received, end);
+        ReScaleFrame.Engine.InputLoop.Plan(missing, begin, received, simulated, finished);
         if (ReScaleFrame.Engine.InputLoop.PollBoundaryAvailable) throw new InvalidOperationException("Missing input phase was reported as measured.");
         Console.WriteLine("PASS: real input phase insertion, idempotence, cleanup and missing-phase reporting.");
     }

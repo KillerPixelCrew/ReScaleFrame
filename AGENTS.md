@@ -10,7 +10,7 @@ Use natural, concise language in documentation, code comments, issues, commits, 
 The orchestrator and shared runtime are general infrastructure. They must not contain game or
 engine integration policy. This boundary is mandatory for every adapter, including existing ones.
 
-- Keep executable detection, fingerprints, RVAs, expected patch bytes, native engine symbols and
+- Keep executable detection, site signatures, expected patch bytes, native engine symbols and
   layouts, engine startup, window-class selection, game settings translation, input conventions,
   and game-specific quality or lifecycle policy in `games/<id>/` or the relevant engine
   integration under `integrations/`. Frame timing, pacing and latency are not integration policy:
@@ -69,46 +69,62 @@ One implementation serves every game and every vendor.
   game. Latency or vendor policy found in an adapter or host is a Rule 1 violation: move it into the
   orchestrator and leave the integration with the calls that report its engine's events.
 
+## Rule 4: discover, do not pin
+
+An integration finds what it hooks in the game that is actually running. It must not depend on one
+executable build.
+
+- Locate functions, patch sites and globals by discovery: byte signatures with wildcards for
+  relocations and displacements, exported or managed names, strings, and operands decoded from the
+  code that references a global or a structure field. Resolve them at start-up.
+- Verify at the found site. A signature must match exactly once, and the expected bytes are still
+  checked there before a hook or patch is written, so a wrong match refuses and names the site.
+- A whole-file hash, build id or version string is evidence to log. It never gates detection,
+  start-up, packaging or deployment. No exact-build allow lists and no fixed address tables.
+- Structure offsets that no code reference reveals may stay as documented constants, validated by a
+  structural check where one exists.
+- When a site is not found, refuse that feature, say which site, and keep the game running.
+
+## Rule 5: one integration, every feature; inputs and output in the integration, the technique in the core
+
+A game integrated once gets everything ReScaleFrame can do. The integration prepares the inputs
+and presents the output. Everything between the two is the core, shared by every game.
+
+- The integration owns the inputs: finding the engine's colour, depth, motion vectors, camera,
+  jitter, exposure, masks, UI and HUD-less frames; making the engine produce the ones it does not
+  produce by default; correcting them at the source (missing object or camera motion, a wrong depth
+  domain, a jittered or stale buffer, a shader pass the engine lacks); reporting when the engine's
+  events really happen (Rule 3); and tagging every optional vendor hint it can supply. It also owns
+  putting the result back: the engine's output target, presentation hand-off, UI composition and
+  the engine's own settings and resolution plumbing.
+- The core owns every technique: each upscaler, frame generator, sharpening mode, latency and
+  pacing technology, their vendor SDKs, sequencing, history and resets, fallbacks, presentation
+  mechanisms, the overlay and every option in it.
+- Where a fix goes follows from that. A defect in what reaches ReScaleFrame (an input is missing,
+  wrong, late, or reported at the wrong moment) is fixed in the integration, at the source. A
+  defect in how a technique works (marker order, frame-end and pacing rules, history resets, a
+  provider switch, a present fallback, device creation timing) is fundamental: fix it in the core
+  or the shared loader so every game inherits it. Ask whether another engine with the same property
+  would hit it; if so it is core. Do not compensate in the core for one game's bad input, and do
+  not patch around a core defect inside one adapter.
+- Every integrated game offers the same feature set. What the overlay offers comes from the
+  Runtime, one source for every host, never from a list an adapter or a host keeps for itself.
+  "This host cannot do it" and "nobody wired it" are defects to fix, not reasons to hide or grey out
+  an option. The only value that may be shown disabled is one the hardware or the vendor makes
+  impossible on this machine, decided by a capability query at run time, and it says why.
+- A feature added for one game is added to the shared path, and is not done until every integrated
+  game has it.
 ## Research and tool setup
 
 ### Reference completeness and shader coverage
 
-Before designing a render integration from a working reference, inventory its full relevant
-implementation, not selected hook or SDK snippets. Pin the revision and consumed dependencies;
-account for every subsystem, feature and shader family, including shared code, settings,
-lifecycle, failure recovery, compatibility restrictions and tests. Trace the complete frame
-from native producers through reconstruction and final presentation. Maintain a comparison of
-reference mechanisms against RSF: implemented, deliberately different with evidence, missing,
-or unverified. A file list alone is not a semantic inventory. Reuse a recorded inventory while
-its revision and assumptions remain valid; reopen it when new evidence contradicts them.
-
-For shipped games, inspect the matching executable and native shader bytecode as well as
-reference source. Use REA when executable semantics require it, retaining actual tool evidence
-and failed approaches. An unavailable decompiler does not turn reference names into native
-proof. Shared engine ancestry, a nearby release, Address Library entries and matching strings
-are leads, not permission to reuse layouts, ABI, shader conventions or hook ordering.
-
-Every SR/FG integration requires a full shader and buffer coverage audit. Account for graphics
-and compute stages, permutations, actual resource bindings and formats, depth/motion writes,
-previous object/instance/bone/deformation history, transparent and forward paths, particles,
-water, volumes, UI and downstream consumers. Distinguish shader declarations from active draw
-bindings and valid zero motion from missing writes. Determine and implement verified required
-shader, buffer or producer repairs at their owner. Listing a missing input is not completing
-that repair; fabricated vectors or substituted current history do not close the gap.
-
-Native, reduced-resolution and failure paths all need valid output. Once a reduced frame is
-rendered, returning to native code is not proof that it will reconstruct the active rectangle.
-Verify recovery and every later consumer. SDK success, a green build, a stationary image or a
-single quality setting cannot establish visual or temporal correctness. Retain user-rejected
-images as failed acceptance evidence and test all required qualities, motion and transitions.
-Capture actual evaluation frames with matching source/view/resource identity; preparation-only
-or partial captures cannot prove the failing frame. Keep unresolved required coverage and
-repairs as completion blockers, without shrinking the user's goal or adopting a reference's
-unsupported-mod policy as RSF's delivery policy.
+The full procedure and its rules live in [the reference and shader audit](.agents/skills/game-render-analysis/references/reference-and-shader-audit.md).
+Before any SR/FG integration or render change, follow it: a semantic inventory of the working reference, a complete shader and buffer coverage audit,
+and valid output on native, reduced-resolution and failure paths. Unresolved required coverage is a completion blocker.
 
 Repository skills use the open [Agent Skills format](https://agentskills.io/specification) under `.agents/skills/<name>/SKILL.md`. Keep one shared skill source with standard YAML metadata. Clients with different discovery paths can load the linked file explicitly; do not fork its instructions per agent.
 
-Every reverse-engineering result must explain the question, why the approach was chosen, how it was found, the evidence, and where and when the runtime uses it. Record relevant fingerprints, source revisions, units, frame/view identity, resource lifetime, failed approaches, and uncertainty. Keep `games/<id>/engine.json`, research notes, and the implementation tracker consistent.
+Every reverse-engineering result must explain the question, why the approach was chosen, how it was found, the evidence, and where and when the runtime uses it. Record the builds the signatures were derived and verified on (their hashes as evidence only), source revisions, units, frame/view identity, resource lifetime, failed approaches, and uncertainty. Keep `games/<id>/engine.json`, research notes, and the implementation tracker consistent.
 
 Every commit and PR includes its research or links to the relevant notes. For changes without a new experiment, give the rationale and checks performed. Never invent research or describe a source review as a runtime test. When evidence corrects an earlier conclusion, retain a concise account of what changed and why.
 
@@ -116,11 +132,11 @@ Check the environment before recommending installation. [docs/tooling.md](docs/t
 
 ## Project boundaries
 
-- Keep all first-party code in this monorepo. Do not split the loader, orchestrator, SDK, UI, or game plugins into separate repositories or submodules.
+- Keep all first-party code in this monorepo. Do not split the loader, orchestrator, SDK, UI, or game plugins into separate repositories or submodules. The rule is about first-party code: vendor SDK sources are pinned shallow submodules under `vendor/` (see Out-of-tree material).
 - The orchestrator owns plugin lifecycle, vendor SDKs, graphics interoperability, settings, and presentation. A game plugin owns its game detection, hooks, renderer preparation, input conventions, and output reinsertion.
 - Loading the orchestrator is distinct from activating a graphics pipeline. It selects/prepares the plugin first.
 - Keep public native interfaces as C ABI contracts. Do not pass STL containers, Rust types, ownership-ambiguous allocations, or exceptions across DLL boundaries.
-- A recognized executable fingerprint is not proof of working hooks or rendering support. Report capability and validation status honestly.
+- A recognized game is not proof of working hooks or rendering support. Report capability and validation status honestly.
 - Keep standalone use independent of WSGM. The initial complete AC7 goal includes SR, MFG, and latency integration.
 
 ## Delivery
@@ -145,7 +161,7 @@ Check the environment before recommending installation. [docs/tooling.md](docs/t
 
 ## Build and verify
 
-`eng/verify.ps1` is the final pre-release native/lint gate and matches CI. Run it at the end of a work session before releasing, not mid-work where its fixtures can disrupt the user’s computer work. It compares `VERSION` against the Cargo workspace
+`eng/verify.ps1` is the final pre-release native/lint gate and matches CI. Run it at the end of a work session before releasing, not mid-work where its fixtures can disrupt the userï¿½s computer work. It compares `VERSION` against the Cargo workspace
 version, configures, builds, and tests the native tree, then runs `cargo fmt --check` and
 `cargo clippy -D warnings`. Run `cargo test --workspace --locked` separately when Rust behaviour is affected; the script does not execute those tests.
 
@@ -198,16 +214,14 @@ remain scaffolds. AC7 links runtime objects into its proxy, while Unity loads th
 
 | Target | Output name | Role |
 | --- | --- | --- |
-| `rsf_bootstrap` | `ReScaleFrame.Bootstrap.dll` | version-only scaffold for the intended injected entry |
 | `rsf_orchestrator` | `ReScaleFrame.Runtime.dll` | vendor SDKs, plugin lifecycle, GPU resources, presentation |
 | `rsf_game_ac7` | `ReScaleFrame.Game.AC7.dll` | native AC7 detection, hooks and engine data |
-| `rsf_game_project_wingman` | `ReScaleFrame.Game.ProjectWingman.dll` | exact-build detection scaffold, rendering refused |
-| `rsf_game_rdr2` | `ReScaleFrame.Game.RDR2.dll` | exact-build detection scaffold, rendering refused |
+| `rsf_game_project_wingman` | `ReScaleFrame.Game.ProjectWingman.dll` | detection scaffold (sites found by signature), rendering refused |
+| `rsf_game_rdr2` | `ReScaleFrame.Game.RDR2.dll` | detection scaffold (sites found by signature), rendering refused |
 | `rsf_asi_rdr2` | `ReScaleFrame.RDR2.asi` in `rdr2/bin/<Config>` | RDR2 entry loaded by the game's ASI loader |
 | `rsf_game_unity_mono` | `ReScaleFrame.Game.UnityMono.dll` | shared Mono/Harmony URP DX12 adapter |
 | `rsf_proxy_ac7` | `dinput8.dll` in `ac7/bin/<Config>` | dedicated AC7 carrier |
 | `rsf_proxy_dinput8` | `ReScaleFrame.Loader.dll`, `carriers/version.dll` aliases | shared Windows shim; Unity drop-in carrier |
-| `rsf_launcher` | `ReScaleFrame.exe` | help/version scaffold; launching and profiles pending |
 | `rsf_game_sdk` | `ReScaleFrame::GameSDK` (INTERFACE) | the C header both sides compile against |
 
 Working consequences of the ownership split above:
@@ -238,12 +252,14 @@ has cost a run of the game to find that out. The jitter gate, the velocity blend
 separate-translucency halving were all settled this way after other approaches were not.
 
 The rule that makes it safe is the expected bytes. Every patch names what it expects to find and
-writes only where it finds it, so a game update moves the code and the patch refuses instead of
-corrupting an instruction. It is announced either way, because a patch that silently did nothing is
+writes only where it finds it. The site itself is found by signature (Rule 4), so a game update that
+moves the code is followed, and one that changes it makes the patch refuse instead of corrupting an
+instruction. It is announced either way, because a patch that silently did nothing is
 indistinguishable from one that worked until something downstream fails.
 
 Patch after decryption, next to the others in `apply_*_patch`, and record the site in
-`docs/research/ue418-hook-map.md` with its RVA, its bytes and the source it corresponds to. Name the
+`docs/research/ue418-hook-map.md` with its signature, its bytes, the RVA in the researched build as
+evidence, and the source it corresponds to. Name the
 function in the Ghidra project while the evidence is in front of you.
 
 ## Native ABI
@@ -257,14 +273,14 @@ ReScaleFrame is MIT. Never copy GPL or other copyleft code into it, including po
 or algorithms; write first-party code from permissive sources or from behaviour. The existing
 exceptions keep their upstream terms and are listed in `docs/dependencies.md`.
 
-Mechanics that the header and `tests/plugin_contract.cpp` jointly enforce:
+Mechanics that the header and `tests/game-sdk/src/contract.rs` jointly enforce:
 
 - Size-checked call structures lead with `struct_size`; embedded metadata is part of its enclosing ABI. Entry points reject a short call structure with
   `RSF_ERROR_INVALID_ARGUMENT` and a mismatched `abi_version` with `RSF_ERROR_ABI_MISMATCH`.
 - Extend structs by appending fields and bumping `RSF_GAME_ABI_VERSION`, never by reordering.
 - Plugin-returned strings are immutable, plugin-owned, and valid until the DLL unloads. Probe strings
   are borrowed for the duration of the call.
-- Current game ABI is 24. `game_renderer.h` defines leased rendering passes, CPU events and host
+- Current game ABI is 26. `game_renderer.h` defines leased rendering passes, CPU events and host
   services; `game_frame.h` defines frame/camera ABI 1. The older ABI 2 sketches in the representation
   plan are historical design, not the current contract. Native resource pointers cross under explicit
   callback leases; frame identity alone does not establish final Present ownership.
@@ -287,10 +303,19 @@ lower latency. Do not soften README or status wording ahead of the code.
 
 ## Out-of-tree material
 
-Game binaries, Epic engine source, vendor SDKs, reference checkouts, captures, and Ghidra projects
-stay untracked. `.local/`, `references/`, `vendor/`, `captures/`, and `dumps/` are gitignored. Only
-the executable name and hash appear in published research. See `docs/dependencies.md` before adding
-any third-party code or binary.
+Game binaries, Epic engine source, vendor runtime binaries, reference checkouts, captures, and Ghidra
+projects stay untracked. `.local/`, `references/`, `captures/`, `dumps/` and everything under `vendor/`
+except the SDK submodules are gitignored. Only the executable name and hash appear in published research.
+See `docs/dependencies.md` before adding any third-party code or binary.
+
+The vendor SDK sources the build compiles against are shallow submodules pinned in `eng/dependencies.json`:
+`vendor/streamline`, `vendor/fidelityfx` (SDK 2.4.0), `vendor/fidelityfx-vulkan` (SDK 1.1.4, the Vulkan FSR
+source build), `vendor/xess` and `vendor/minhook` (MinHook v1.3.4, which Cargo and CMake build from there
+without a network fetch). After cloning, run `git submodule update --init --depth 1` and
+`./eng/fetch-vendor.ps1`; the second fetches the signed Streamline runtime from the pinned release zip into
+`vendor/streamline-sdk` and the package layout into `vendor/runtimes`, verifying every hash. Change a vendor
+pin in `eng/dependencies.json` and the submodule commit together; `eng/fetch-vendor.ps1` refuses a mismatch.
+Never edit inside a submodule: patches to vendor source are applied to copies by the scripts that need them.
 
 The procedure this project uses to analyse a game is written down in
 [docs/research/methodology.md](docs/research/methodology.md), with the operational version as a

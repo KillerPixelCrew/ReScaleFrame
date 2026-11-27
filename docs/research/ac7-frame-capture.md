@@ -1,9 +1,5 @@
 # AC7 frame capture
 
-Research history: findings, hook addresses and pending statuses below apply to their recorded
-experiments. Later increments can supersede earlier conclusions. See
-[current implementation and validation](../current-status.md) before using this as a feature list.
-
 Evidence from 6–7 September 2026: 22 RenderDoc captures under Proton, Windows replay, live buffer dumps, and subsequent reduced-scale DLSS runs. Scenes included aircraft selection, camera pans, flight over ground/water, clouds, and screen droplets. Resource numbers below identify these captures, not objects that can be looked up by that number at runtime.
 
 ## Current result
@@ -273,7 +269,7 @@ Captured projections use reversed Z, near 1.0, and infinite far; `(0, 0, 1, 0)` 
 
 Secondary viewports included 1016×1016, 128×93, and 128×111 within larger buffers. Do not select the camera merely by buffer size or creation order. The current main-view heuristic compares view and buffer extents; it still needs explicit frame/view association.
 
-The Python layout check recorded 11 perspective views and no failures. The C++ reader's recorded run recognized 50 buffers, accepted ten perspective views, and marked secondary views separately. These are different checks, not interchangeable pass counts. [verify-view-layout.py](../../tools/verify-view-layout.py) reruns the offline relationships; [the review](../review.md) records validation gaps.
+The Python layout check recorded 11 perspective views and no failures. The C++ reader's recorded run recognized 50 buffers, accepted ten perspective views, and marked secondary views separately. These are different checks, not interchangeable pass counts. [verify-view-layout.py](../../tools/verify-view-layout.py) reruns the offline relationships.
 
 ## Corrections retained from earlier analysis
 

@@ -1,0 +1,209 @@
+// SPDX-License-Identifier: MIT
+use super::*;
+use crate::sr_session::has_capacity;
+use crate::streamline_sr::preset_valid;
+
+const ULTRA_PERFORMANCE: u32 = 4;
+
+unsafe fn validate_setup(device: Handle, setup: *const Setup) -> Result<(), i32> {
+    if device.is_null() || !unsafe { has_capacity(setup) } {
+        return Err(INVALID_ARGUMENT);
+    }
+    let setup = unsafe { &*setup };
+    if setup.interposer_path_utf8.is_null()
+        || setup.plugin_directory_utf8.is_null()
+        || setup.engine_version_utf8.is_null()
+        || (setup.application_id == 0 && setup.project_id_utf8.is_null())
+        || !preset_valid(setup.preset)
+    {
+        return Err(INVALID_ARGUMENT);
+    }
+    if setup.abi_version != RSF_DLSS_ABI_VERSION {
+        return Err(ABI_MISMATCH);
+    }
+    Ok(())
+}
+
+unsafe fn register(
+    device: Handle,
+    setup: *const Setup,
+    module: Handle,
+    out: *mut *mut Registration,
+) -> i32 {
+    let Some(out) = (unsafe { out.as_mut() }) else {
+        return INVALID_ARGUMENT;
+    };
+    *out = null_mut();
+    if let Err(result) = unsafe { validate_setup(device, setup) } {
+        return result;
+    }
+    match unsafe { DeviceRegistration::open(device, &*setup, null_mut(), module) } {
+        Ok(registration) => {
+            *out = crate::allocate_handle(Registration(registration));
+            if (*out).is_null() { INIT_FAILED } else { OK }
+        }
+        Err(result) => result,
+    }
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_registration_create(
+    device: Handle,
+    setup: *const Setup,
+    out: *mut *mut Registration,
+) -> i32 {
+    unsafe { register(device, setup, null_mut(), out) }
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_registration_borrow(
+    device: Handle,
+    module: Handle,
+    setup: *const Setup,
+    out: *mut *mut Registration,
+) -> i32 {
+    if module.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { register(device, setup, module, out) }
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_create_registered(
+    device: Handle,
+    setup: *const Setup,
+    registration: *mut Registration,
+    out: *mut *mut Context,
+) -> i32 {
+    let Some(out) = (unsafe { out.as_mut() }) else {
+        return INVALID_ARGUMENT;
+    };
+    *out = null_mut();
+    if !unsafe { has_capacity(setup) } || registration.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let setup = unsafe { &*setup };
+    if !preset_valid(setup.preset) {
+        return INVALID_ARGUMENT;
+    }
+    rsf_core_dlss_native12_create_registered(device, setup, unsafe { &*registration }, out)
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_registration_present(
+    registration: *mut Registration,
+    swapchain: Handle,
+    interval: u32,
+    flags: u32,
+    begin: u32,
+) -> i32 {
+    if registration.is_null() || swapchain.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { (*registration).0.present(swapchain, interval, flags, begin) }
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_create(
+    device: Handle,
+    setup: *const Setup,
+    out: *mut *mut Context,
+) -> i32 {
+    unsafe { rsf_dlss_native12_create_shared(device, setup, null_mut(), out) }
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_create_shared(
+    device: Handle,
+    setup: *const Setup,
+    host: Handle,
+    out: *mut *mut Context,
+) -> i32 {
+    let Some(out) = (unsafe { out.as_mut() }) else {
+        return INVALID_ARGUMENT;
+    };
+    *out = null_mut();
+    if let Err(result) = unsafe { validate_setup(device, setup) } {
+        return result;
+    }
+    let setup = unsafe { &*setup };
+    match unsafe { DeviceRegistration::open(device, setup, host, null_mut()) } {
+        Ok(registration) => publish_context(registration, setup.preset, out),
+        Err(result) => result,
+    }
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_plan(
+    context: *mut Context,
+    width: u32,
+    height: u32,
+    quality: u32,
+    render_width: *mut u32,
+    render_height: *mut u32,
+) -> i32 {
+    if context.is_null()
+        || width == 0
+        || height == 0
+        || render_width.is_null()
+        || render_height.is_null()
+        || quality > ULTRA_PERFORMANCE
+    {
+        return INVALID_ARGUMENT;
+    }
+    unsafe {
+        rsf_core_dlss_native12_plan(
+            &*context,
+            width,
+            height,
+            quality,
+            render_width,
+            render_height,
+        )
+    }
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_evaluate(
+    context: *mut Context,
+    list: Handle,
+    frame: *const Frame,
+) -> i32 {
+    if context.is_null() || list.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { rsf_core_dlss_native12_evaluate(&*context, list, frame, null_mut()) }
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_evaluate_borrowed(
+    context: *mut Context,
+    list: Handle,
+    frame: *const Frame,
+    token: Handle,
+) -> i32 {
+    if context.is_null() || list.is_null() || token.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { rsf_core_dlss_native12_evaluate(&*context, list, frame, token) }
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_destroy(context: *mut Context) {
+    if !context.is_null() {
+        drop(unsafe { Box::from_raw(context) });
+    }
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_set_sdr(context: *mut Context, sdr: u32) {
+    if !context.is_null() {
+        unsafe { &*context }.sdr.store(sdr != 0, Ordering::Relaxed);
+    }
+}
+
+pub(crate) unsafe fn rsf_dlss_native12_present(
+    context: *mut Context,
+    swapchain: Handle,
+    interval: u32,
+    flags: u32,
+    begin: u32,
+) -> i32 {
+    if context.is_null() || swapchain.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe {
+        (*context)
+            .registration
+            .present(swapchain, interval, flags, begin)
+    }
+}

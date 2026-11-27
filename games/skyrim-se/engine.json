@@ -15,7 +15,7 @@
   "engine": {
     "family": "Creation Engine",
     "version": null,
-    "evidence": "Exact installed fingerprint, native shader and jitter instruction matching, and bounded live jitter observation"
+    "evidence": "Recorded installed build, native shader and jitter instruction matching, and bounded live jitter observation"
   },
   "plugin": {
     "status": "Experimental reduced-resolution SR, FSR FG and bounded INPUT_TIMELINE DLSS FG/Reflex observed; broad timing and general readiness incomplete",
@@ -43,6 +43,25 @@
     "community_shaders_latest_audit": "038a0a04ce9db5b84707ec662ddfe7824cdac3dd"
   },
   "research": "../../docs/research/skyrim-se-integration.md",
+  "site_discovery": {
+    "status": "Every SkyrimSE.exe site the adapter hooks, patches, calls or reads is found at admission by signature; the file SHA-256 and build are evidence only and gate nothing",
+    "implementation": "games/skyrim-se/src/discovery.rs with the rsf-game-sys signature scanner; patterns from tools/derive-site-patterns.py",
+    "method": "56 patterns unique in the executable sections (rel32 branches and RIP displacements wildcarded): 28 code sites matched at the site (four are call sites whose return address is checked), the CPU dispatch found through its only call with its prologue checked, and 27 globals decoded from the RIP-relative operand of an instruction that uses them",
+    "derived": {
+      "create_thunk": "the only FF 25 jump through the D3D11CreateDeviceAndSwapChain import address table slot, which is read from the import directory",
+      "named_poll": "the function stored before the pointer to the \"Poll controls\" name in the engine's named callback table; its thunk must forward the discovered main global",
+      "target_slots": "renderer + 0xa58, a documented field offset: no instruction addresses it directly"
+    },
+    "structural_checks": "UI pattern fixes the pause counter at +0x160, UI names pattern the loading-menu name at +0xe8; observer, CPU and creation sites re-match their pattern in live memory before any hook is created or enabled",
+    "refusal": "a site that is missing, ambiguous or whose live bytes changed refuses admission and is named in the prepare log",
+    "verified": "2026-11-24: all 60 sites resolved uniquely to the recorded RVAs in the installed 1.7.104.0 SkyrimSE.exe (discovery::tests::every_site_resolves_in_the_installed_executable)",
+    "needs_game_run": "live-memory discovery, admission and hook installation have not yet run in the game",
+    "third_party": {
+      "display_tweaks": "SSEDisplayTweaks.dll's creation wrapper and its call of the retained game thunk are patterns unique in the loaded module and the retained slot is that call's RIP operand; the relay must land on the discovered wrapper, both patterns re-match in live memory and the slot must hold the game thunk; a missing or ambiguous site refuses the Display route naming it with the module hash, which is otherwise only logged. Verified 2026-11-24 against the installed 0.5.25 (wrapper 0x27250, call 0x272e9, return 0x27334, slot 0x5e168; discovery::tests::display_tweaks_sites_resolve_in_the_installed_plugin); patterns from docs/research/evidence/skyrim-display-tweaks-sites-0.5.25.spec",
+      "steam_overlay": "The shared forwarding in integrations/steam discovers the ten saved-method loads and two Present entries of gameoverlayrenderer64.dll by signature; see docs/research/steam-overlay-site-discovery.md",
+      "community_shaders": "Still the exact 1.9.1 profile (file SHA-256, timestamp, image size and module RVAs): no copy of that build is installed or available here to derive and prove patterns from"
+    }
+  },
   "native_preflight": {
     "status": "Guarded jitter/pre-HDR and CPU hooks; synchronous main-camera D3D11 leases evaluated at native resolution",
     "table_sha256": "a75879011dce7f810992a86acf811daed2ed75813ecee9a3903aec1242c272ce",
@@ -538,6 +557,7 @@
     "display_sha256": "df7f352a3f13736709c5f9d265ebf311d9d77d373a9a1b8cbe2aee7fdd8ba9f4",
     "address_library": "Format5 runtime1.7.104.0 SHA8aab3dd251d135b849bd983f86a4a205c920fa3e81f8e30c0e63ccfef9423842 verified against public Enderal commit c9ea2a850dd2bac1b90f02a32a00929f6e6a62d5 Git LFS",
     "observed": "PID29080 startup-20261116-074039 loaded SKSE and Display, RSF prepare0/start-5; close requested and process exited, exit code unavailable",
+    "discovery": "Since 2026-11-24 the Display RVAs below are discovered in the loaded module and its SHA-256 is logged only (site_discovery.third_party.display_tweaks)",
     "source_change": "Exact Display profile validates game1012320 E8 relay to DLL27250, retained slot5e168->game15b9412 and DLL27334 return before existing single thunk scope admission; direct native route retained, no Display/settings/runtime policy edits",
     "validation": "Baseline909e17e plus uncommitted trial: Windows Release VS2026 gate exit0 220passed14skipped fmt/Clippy clean; PID60008 input-acceptance-20261116-080226 via SKSE completed observation with prepare0/start0, exact Display route and canonical outer/inner verified, fresh mod logs and module paths retained",
     "telemetry": "DLSS SR effective1 1280x720->1920x1080; DLSS FG requested/effective/active/generated1,693tags at source4196,4368applicationPresents1389outputPresents, outputFPSvalid1 base116/output232 reasonActive; latency requested/effective1 and renderer/FG/SR/vendor results0; matching late flags6 valid1 submitted/render_complete/paced/prospective1 failed0 cpu_mask15 marker-order0",

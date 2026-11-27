@@ -1,7 +1,8 @@
-set(RSF_JAVA_HOME "$ENV{JAVA_HOME}" CACHE PATH "JDK providing JNI headers for Minecraft")
-if(EXISTS "${RSF_JAVA_HOME}/include/jni.h")
-    add_library(rsf_minecraft SHARED native/jni.cpp)
-    target_include_directories(rsf_minecraft PRIVATE "${RSF_JAVA_HOME}/include" "${RSF_JAVA_HOME}/include/win32")
-    target_link_libraries(rsf_minecraft PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
-    set_target_properties(rsf_minecraft PROPERTIES OUTPUT_NAME "ReScaleFrame.Minecraft")
-endif()
+# The Rust archive owns the JNI bridge and the observer used by the GL interop fixture. It carries the
+# embedded Runtime, built with the Runtime archive's features, so the DLL takes the Runtime's C leaves
+# without that archive (CARRIES, cmake/rust_static.cmake).
+rsf_add_rust_static(rsf_minecraft_rust rsf_rust_minecraft rsf-minecraft rsf_minecraft
+    CARRIES "rsf_orchestrator_rust;rsf_common_rust;rsf_graphics_rust")
+add_library(rsf_minecraft SHARED native/jni.def)
+target_link_libraries(rsf_minecraft PRIVATE rsf_minecraft_rust ReScaleFrame::OrchestratorCore rsf_build_options)
+set_target_properties(rsf_minecraft PROPERTIES OUTPUT_NAME "ReScaleFrame.Minecraft" LINKER_LANGUAGE CXX)

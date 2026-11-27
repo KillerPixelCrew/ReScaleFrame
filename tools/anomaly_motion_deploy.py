@@ -18,7 +18,6 @@ Production uses motion.rsfpatch and the engine source provider instead of these 
 Run: py -3 tools/anomaly_motion_deploy.py --source .local/anomaly/vanilla/shaders/r3 --output .local/anomaly/motion-deploy
 """
 import argparse
-import hashlib
 import importlib.util
 import json
 import re
@@ -27,6 +26,8 @@ import sys
 import uuid
 from pathlib import Path
 
+from anomaly_corpus import Refusal, corpus_hash, digest, tree
+
 REPO = Path(__file__).resolve().parents[1]
 LOCAL = REPO / '.local/anomaly'
 CORPUS = 'fdc260e0608f259d876c4ae0f11a6f2d8c03c001cf1fe82548794af1c6826a67'
@@ -34,29 +35,11 @@ ABI = 1
 BLOCKED = 'deffer_tree_s_bump_d.vs'   # recursively includes itself (foliage README)
 
 
-class Refusal(ValueError):
-    """The input or output boundary did not match the reviewed conditions."""
-
-
 def load(name):
     spec = importlib.util.spec_from_file_location(name, REPO / 'tools' / (name + '.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def digest(data):
-    return hashlib.sha256(data).hexdigest()
-
-
-def tree(root):
-    result = {}
-    for path in sorted(root.rglob('*')):
-        if path.is_symlink() or path.is_junction():
-            raise Refusal('linked path: ' + str(path))
-        if path.is_file():
-            result[path.relative_to(root).as_posix()] = path.read_bytes()
-    return result
 
 
 INCLUDE = re.compile(rb'^[ \t]*#[ \t]*include[ \t]*"([^"]+)"', re.M)
@@ -111,7 +94,7 @@ def build(source, output):
         raise Refusal('output already exists')
     core_tool, foliage_tool = load('anomaly_temporal_shader'), load('anomaly_foliage_shader')
     original = tree(source)
-    if len(original) != 449 or core_tool.corpus_hash(original) != CORPUS:
+    if len(original) != 449 or corpus_hash(original) != CORPUS:
         raise Refusal('unreviewed source corpus')
     # The core tool only stages beneath .local/anomaly/core*; use a fresh private name and remove it afterwards.
     scratch = LOCAL / ('core-motion-deploy-' + uuid.uuid4().hex)

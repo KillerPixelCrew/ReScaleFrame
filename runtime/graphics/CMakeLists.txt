@@ -1,41 +1,16 @@
-add_library(rsf_graphics STATIC
-    src/texture_dump_raw.cpp
-    src/texture_dump.cpp
-    src/motion_decode.cpp
-    src/motion_resolve.cpp
-    src/sharpening/d3d11.cpp
-    src/sharpening/d3d12.cpp
-    src/colour_fidelity.cpp
-    src/colour_transport.cpp
-    src/resource_roles.cpp
-    src/constant_buffer_read.cpp
-    src/resource_ref.cpp
-    src/frame_tap.cpp
-    src/depth_replay.cpp
-    src/depth_scale.cpp
-    src/d3d11_state.cpp
-    src/scene_promote.cpp
-    src/present_blit.cpp
-    src/fullscreen_pass.cpp
-    src/ui_layer.cpp
-    src/overlay_renderer.cpp
-    src/overlay_input.cpp
-    src/ui_identify.cpp
-    src/constant_twin.cpp
-    src/d3d11_observer.cpp)
-target_sources(rsf_graphics PRIVATE src/d3d12_observer.cpp)
+# The D3D11 headers and the system libraries the Rust leaves (rsf-graphics, or the Runtime archive
+# that embeds it) need; the code itself is Rust.
+add_library(rsf_graphics INTERFACE)
 # The overlay's C ABI lives with the Rust crate that implements it, because that crate is the side
 # the contract exists to constrain. The renderer and the input capture only consume it.
-target_include_directories(rsf_graphics PUBLIC "${CMAKE_SOURCE_DIR}/ui/overlay/include")
-target_include_directories(rsf_graphics PUBLIC include)
-target_link_libraries(rsf_graphics PRIVATE rsf_build_options)
-target_link_libraries(rsf_graphics PUBLIC d3d11 d3d12 dxgi)
-target_link_libraries(rsf_graphics PRIVATE windowscodecs ole32)
-target_link_libraries(rsf_graphics PRIVATE minhook)
-# Public: shader_compile.h includes log.h, and presentation and the orchestrator reach it through here.
-target_link_libraries(rsf_graphics PUBLIC ReScaleFrame::RuntimeCommon)
-# MinHook's length disassembler, for building a trampoline over a function's bytes as the file has
-# them rather than as memory has them. It is compiled into the library but not exported by its
-# public header.
-target_include_directories(rsf_graphics PRIVATE "${minhook_SOURCE_DIR}/src/hde")
+target_include_directories(rsf_graphics INTERFACE "${CMAKE_SOURCE_DIR}/ui/overlay/include")
+target_include_directories(rsf_graphics INTERFACE include
+    "${CMAKE_SOURCE_DIR}/runtime/shader_patch/include")
+target_link_libraries(rsf_graphics INTERFACE d3d11 d3d12 dxgi windowscodecs ole32 psapi minhook
+    ReScaleFrame::RuntimeCommon)
 add_library(ReScaleFrame::Graphics ALIAS rsf_graphics)
+# The Rust D3D11 leaves (rsf-graphics). The Runtime embeds them through its own archive, so only
+# targets that do not link the Runtime archive (game adapters and their fixtures) link this one.
+rsf_add_rust_static(rsf_graphics_rust rsf_rust_graphics rsf-graphics rsf_graphics)
+target_link_libraries(rsf_graphics_rust INTERFACE rsf_graphics minhook)
+add_library(ReScaleFrame::GraphicsLeaves ALIAS rsf_graphics_rust)

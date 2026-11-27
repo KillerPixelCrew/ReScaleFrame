@@ -70,37 +70,37 @@
     {
       "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
       "before": "vkCreateSwapchainKHR(device, &realSwapchainCreateInfo.swapchain, pAllocator, &presentInfo.realSwapchain)",
-      "after": "rsf_ffx_wsi::create(device, &realSwapchainCreateInfo.swapchain, pAllocator, &presentInfo.realSwapchain)"
+      "after": "rsf_ffx_wsi_create(device, &realSwapchainCreateInfo.swapchain, pAllocator, &presentInfo.realSwapchain)"
     },
     {
       "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
       "before": "vkDestroySwapchainKHR(frameInterpolationInfo->device, gameSwapchain, pAllocator)",
-      "after": "rsf_ffx_wsi::destroy(frameInterpolationInfo->device, gameSwapchain, pAllocator)"
+      "after": "rsf_ffx_wsi_destroy(frameInterpolationInfo->device, gameSwapchain, pAllocator)"
     },
     {
       "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
       "before": "vkDestroySwapchainKHR(device, presentInfo.realSwapchain, pAllocator)",
-      "after": "rsf_ffx_wsi::destroy(device, presentInfo.realSwapchain, pAllocator)"
+      "after": "rsf_ffx_wsi_destroy(device, presentInfo.realSwapchain, pAllocator)"
     },
     {
       "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
       "before": "vkQueuePresentKHR(pPresenter->presentQueue.queue, &presentInfoKHR)",
-      "after": "rsf_ffx_wsi::present(pPresenter->device, pPresenter->presentQueue.queue, &presentInfoKHR)"
+      "after": "rsf_ffx_wsi_present(pPresenter->device, pPresenter->presentQueue.queue, &presentInfoKHR)"
     },
     {
       "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
       "before": "vkGetSwapchainImagesKHR(device, presentInfo.realSwapchain, &presentInfo.realSwapchainImageCount, nullptr)",
-      "after": "rsf_ffx_wsi::images(device, presentInfo.realSwapchain, &presentInfo.realSwapchainImageCount, nullptr)"
+      "after": "rsf_ffx_wsi_images(device, presentInfo.realSwapchain, &presentInfo.realSwapchainImageCount, nullptr)"
     },
     {
       "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
       "before": "vkGetSwapchainImagesKHR(device, presentInfo.realSwapchain, &presentInfo.realSwapchainImageCount, presentInfo.realSwapchainImages)",
-      "after": "rsf_ffx_wsi::images(device, presentInfo.realSwapchain, &presentInfo.realSwapchainImageCount, presentInfo.realSwapchainImages)"
+      "after": "rsf_ffx_wsi_images(device, presentInfo.realSwapchain, &presentInfo.realSwapchainImageCount, presentInfo.realSwapchainImages)"
     },
     {
       "file": "sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp",
       "before": "vkAcquireNextImageKHR(device, realSwapchain, UINT64_MAX, acquireSemaphore, VK_NULL_HANDLE, &imageIndex)",
-      "after": "rsf_ffx_wsi::acquire(device, realSwapchain, UINT64_MAX, acquireSemaphore, VK_NULL_HANDLE, &imageIndex)"
+      "after": "rsf_ffx_wsi_acquire(device, realSwapchain, UINT64_MAX, acquireSemaphore, VK_NULL_HANDLE, &imageIndex)"
     }
   ]
 }

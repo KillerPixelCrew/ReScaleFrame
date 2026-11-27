@@ -1,0 +1,261 @@
+// SPDX-License-Identifier: MIT
+//! D3D11 resource and replay calls, which the engine and the fixtures share.
+use super::Raw;
+use super::replay::{CLASS_INTERFACES, Depth, Pixel, RENDER_TARGETS};
+use std::ptr::null_mut;
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::core::Interface;
+
+const _: () = {
+    assert!(RENDER_TARGETS == D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT as usize);
+    assert!(CLASS_INTERFACES == D3D11_SHADER_MAX_INTERFACES as usize);
+};
+
+fn owned<T: Interface>(value: Option<T>) -> Raw {
+    value.map_or(null_mut(), Interface::into_raw)
+}
+
+/// The device resource leaves motion_device calls (its tests' fakes under test).
+#[cfg(not(test))]
+pub(super) mod device {
+    use super::{Raw, owned};
+    use crate::host_log::Log as HostLog;
+    use crate::motion_device::Log;
+    use rsf_shader_compiler::{Request, compile_system_checked};
+    use std::ptr::{copy_nonoverlapping, null_mut};
+    use windows::Win32::Graphics::Direct3D11::*;
+    use windows::Win32::Graphics::Dxgi::Common::{
+        DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC,
+    };
+    use windows::core::Interface;
+
+    pub(in crate::motion_device) use crate::com::{release, retain};
+
+    pub(in crate::motion_device) unsafe fn buffer(raw: Raw, size: u32) -> Raw {
+        let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
+        let desc = D3D11_BUFFER_DESC {
+            ByteWidth: size,
+            Usage: D3D11_USAGE_DYNAMIC,
+            BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+            ..Default::default()
+        };
+        let mut result = None;
+        if unsafe { device.CreateBuffer(&desc, None, Some(&mut result)) }.is_err() {
+            return null_mut();
+        }
+        owned(result)
+    }
+
+    pub(in crate::motion_device) unsafe fn zero_shader(raw: Raw, callback: Log, user: Raw) -> Raw {
+        let log = HostLog {
+            callback,
+            user: user as usize,
+        };
+        let compiled = compile_system_checked(Request {
+            source: b"float4 main() : SV_Target2 { return float4(0, 0, 0, 0); }",
+            name: c"rsf_anomaly_zero_motion",
+            entry: c"main",
+            target: c"ps_5_0",
+            flags: 1 << 11, // D3DCOMPILE_ENABLE_STRICTNESS
+        });
+        let code = match compiled {
+            Ok(code) => code,
+            Err(reason) => {
+                log.say(format!("shader rsf_anomaly_zero_motion (main): {reason}"));
+                return null_mut();
+            }
+        };
+        let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
+        let mut result = None;
+        if unsafe {
+            device.CreatePixelShader(&code, None::<&ID3D11ClassLinkage>, Some(&mut result))
+        }
+        .is_err()
+        {
+            return null_mut();
+        }
+        owned(result)
+    }
+
+    pub(in crate::motion_device) unsafe fn depth_state(raw: Raw, equal: u32) -> Raw {
+        let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
+        let desc = D3D11_DEPTH_STENCIL_DESC {
+            DepthEnable: (equal != 0).into(),
+            DepthWriteMask: D3D11_DEPTH_WRITE_MASK_ZERO,
+            DepthFunc: if equal != 0 {
+                D3D11_COMPARISON_EQUAL
+            } else {
+                D3D11_COMPARISON_ALWAYS
+            },
+            ..Default::default()
+        };
+        let mut result = None;
+        if unsafe { device.CreateDepthStencilState(&desc, Some(&mut result)) }.is_err() {
+            return null_mut();
+        }
+        owned(result)
+    }
+
+    pub(in crate::motion_device) unsafe fn texture(raw: Raw, width: u32, height: u32) -> Raw {
+        let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            ..Default::default()
+        };
+        let mut result = None;
+        if unsafe { device.CreateTexture2D(&desc, None, Some(&mut result)) }.is_err() {
+            return null_mut();
+        }
+        owned(result)
+    }
+
+    pub(in crate::motion_device) unsafe fn view(raw: Raw, texture: Raw) -> Raw {
+        let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap();
+        // ID3D11Texture2D inherits ID3D11Resource.
+        let texture = unsafe { ID3D11Resource::from_raw_borrowed(&texture) }.unwrap();
+        let mut result = None;
+        if unsafe { device.CreateRenderTargetView(texture, None, Some(&mut result)) }.is_err() {
+            return null_mut();
+        }
+        owned(result)
+    }
+
+    pub(in crate::motion_device) unsafe fn upload(
+        raw: Raw,
+        buffer: Raw,
+        data: *const std::ffi::c_void,
+        size: usize,
+    ) -> u32 {
+        let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
+        let buffer = unsafe { ID3D11Resource::from_raw_borrowed(&buffer) }.unwrap();
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        if unsafe { context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped)) }.is_err()
+        {
+            return 0;
+        }
+        let valid = !mapped.pData.is_null();
+        unsafe {
+            if valid {
+                copy_nonoverlapping(data.cast::<u8>(), mapped.pData.cast(), size);
+            }
+            context.Unmap(buffer, 0);
+        }
+        valid.into()
+    }
+
+    pub(in crate::motion_device) unsafe fn bind(
+        raw: Raw,
+        buffer: Raw,
+        stage: std::ffi::c_char,
+    ) -> u32 {
+        let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
+        let vtable = context.vtable();
+        let bind = match stage as u8 {
+            b'v' => vtable.VSSetConstantBuffers,
+            b'p' => vtable.PSSetConstantBuffers,
+            b'd' => vtable.DSSetConstantBuffers,
+            _ => return 0,
+        };
+        unsafe { bind(raw, 13, 1, &buffer) };
+        1
+    }
+}
+
+pub(super) unsafe fn read_depth(raw: Raw, out: &mut Depth) {
+    let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
+    let vtable = context.vtable();
+    let mut state = None;
+    unsafe {
+        (vtable.OMGetRenderTargets)(
+            raw,
+            out.targets.len() as u32,
+            out.targets.as_mut_ptr(),
+            &mut out.view,
+        );
+        context.OMGetDepthStencilState(Some(&mut state), Some(&mut out.reference));
+    }
+    (out.enabled, out.writable) = state.as_ref().map_or((true, true), |state| {
+        let mut desc = D3D11_DEPTH_STENCIL_DESC::default();
+        unsafe { state.GetDesc(&mut desc) };
+        (
+            desc.DepthEnable.as_bool(),
+            desc.DepthWriteMask != D3D11_DEPTH_WRITE_MASK_ZERO,
+        )
+    });
+    out.state = owned(state);
+}
+
+pub(super) unsafe fn read_pixel(raw: Raw, out: &mut Pixel) {
+    let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
+    let mut blend = None;
+    out.count = out.classes.len() as u32;
+    unsafe {
+        context.OMGetBlendState(Some(&mut blend), Some(&mut out.factor), Some(&mut out.mask));
+        (context.vtable().PSGetShader)(
+            raw,
+            &mut out.shader,
+            out.classes.as_mut_ptr(),
+            &mut out.count,
+        );
+    }
+    out.blend = owned(blend);
+}
+
+pub(crate) unsafe fn clear_target(raw: Raw, target: Raw) {
+    let (Some(context), Some(target)) = (unsafe {
+        (
+            ID3D11DeviceContext::from_raw_borrowed(&raw),
+            ID3D11RenderTargetView::from_raw_borrowed(&target),
+        )
+    }) else {
+        return;
+    };
+    unsafe { context.ClearRenderTargetView(target, &[0.0; 4]) };
+}
+
+pub(crate) unsafe extern "C" fn rsf_anomaly_motion_bind_targets(
+    raw: Raw,
+    views: *const Raw,
+    depth: Raw,
+) {
+    if !raw.is_null() {
+        unsafe { targets(raw, 4, views, depth) };
+    }
+}
+
+pub(crate) unsafe extern "C" fn rsf_anomaly_motion_clear_targets(raw: Raw) {
+    if !raw.is_null() {
+        unsafe { targets(raw, 0, std::ptr::null(), null_mut()) };
+    }
+}
+
+pub(super) unsafe fn targets(raw: Raw, count: u32, views: *const Raw, depth: Raw) {
+    let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
+    unsafe { (context.vtable().OMSetRenderTargets)(raw, count, views, depth) };
+}
+
+pub(super) unsafe fn depth(raw: Raw, state: Raw, reference: u32) {
+    let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
+    unsafe { (context.vtable().OMSetDepthStencilState)(raw, state, reference) };
+}
+
+pub(super) unsafe fn blend(raw: Raw, state: Raw, factor: *const f32, mask: u32) {
+    let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
+    unsafe { (context.vtable().OMSetBlendState)(raw, state, factor, mask) };
+}
+
+pub(super) unsafe fn shader(raw: Raw, pixel: Raw, classes: *const Raw, count: u32) {
+    let context = unsafe { ID3D11DeviceContext::from_raw_borrowed(&raw) }.unwrap();
+    unsafe { (context.vtable().PSSetShader)(raw, pixel, classes, count) };
+}

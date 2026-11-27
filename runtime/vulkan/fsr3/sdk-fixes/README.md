@@ -44,12 +44,12 @@ limited to four jobs and each shader compiler to one worker by default. Only
 staged build scheduling is adjusted; shader flags/permutations remain unchanged.
 It does not edit the
 vendor submodule or launch the game. A failed build produces no runtime receipt.
-The host's ordinary Windows `scripts/build-runtime.ps1` invokes this build. A cached
+The VulkanStory host repository's ordinary Windows `scripts/build-runtime.ps1` invokes this build. A cached
 runtime is reused only when its pinned source, correction, build recipe and binary
 hashes match the receipt.
 
 The default output is `artifacts/rescaleframe/fsr3-sdk/Release/win-x64/runtime`.
-`scripts/prepare-native-bundle.ps1` requires that corrected runtime by default.
+The host's `scripts/prepare-native-bundle.ps1` requires that corrected runtime by default.
 For another fresh build directory, pass its `runtime/` subdirectory explicitly
 with `-Fsr3RuntimeDirectory`. Every selected runtime requires the build
 receipt, pinned source identity, correction identity and matching runtime hash;

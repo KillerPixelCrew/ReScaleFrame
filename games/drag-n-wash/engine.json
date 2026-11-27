@@ -1,4 +1,25 @@
 {
+  "discovery_20261124": {
+    "reported": "Steam build 26443382 changed DragNWash.exe; plugin detection, start-up and deployment refused on the old SHA-256",
+    "change": "Hash gates replaced by discovery: UnityPlayer.dll, MonoBleedingEdge mono-2.0-bdwgc.dll, Managed CoreModule/URP Core/URP Runtime beside the running executable, Unity version from the globalgamemanagers header; URP methods and fields resolved by name in the managed helper; executable hash logged and recorded as evidence only",
+    "unchanged_sha256": [
+      "UnityPlayer.dll",
+      "mono-2.0-bdwgc.dll",
+      "Unity.RenderPipelines.Universal.Runtime.dll",
+      "Unity.RenderPipelines.Core.Runtime.dll",
+      "UnityEngine.CoreModule.dll"
+    ],
+    "changed": [
+      "DragNWash.exe",
+      "Assembly-CSharp.dll",
+      "Naelstrof.UnityScriptableSettings.dll",
+      "globalgamemanagers.assets (character-motion shader patch replaced)"
+    ],
+    "checked": "CoreCLR URP contract fixture against the updated Managed directory matched all 13 sites; adapter unit tests; read-only deploy discovery dry run",
+    "game_acceptance": false,
+    "limits": "Live start-up on build 26443382, in-player managed contract and Mono Harmony fixture not run; character motion needs the shader patch rebuilt from the new asset",
+    "research": "../../docs/research/unity-mono-plugin.md#discovery-instead-of-a-pinned-build-24-november-2026"
+  },
   "character_motion_20261020": {
     "reported": "Moving character and texture trails with XeSS SR plus FG on MSI Claw 8 A2VM Arc",
     "finding": "WalkNWashLit has 127 skinned-material references and no native MotionVectors pass",
@@ -27,7 +48,6 @@
     "audited": "2026-10-07",
     "source_commit": "fda5fd0f2730b40e5b96f419bc0a05cb0b73932b",
     "scope": "Source/documentation review of recorded evidence; no new game or device test. Earlier dated observations below retain their original scope.",
-    "game_abi": 13,
     "plugin_rendering_ready": false,
     "current_status": "../../docs/current-status.md",
     "sr": "Live DX12 SR execution and improved pre-DoF order recorded.",
@@ -52,7 +72,17 @@
     "bytes": 667648,
     "pe_machine": "0x8664",
     "platform": "windows-x64",
-    "examined": "2026-10-03"
+    "examined": "2026-10-03",
+    "identity_role": "Evidence of the examined build; detection discovers the player and gates on no hash",
+    "later_builds": [
+      {
+        "build": "26443382",
+        "sha256": "cdf21fdc8f4c7f64702f77c5a745480f65a160a4aa7c4fefe0f90a489e2b1d94",
+        "bytes": 667648,
+        "unity_version": "6000.3.14f1",
+        "examined": "2026-11-24"
+      }
+    ]
   },
   "plugin": {
     "id": "unity-mono",

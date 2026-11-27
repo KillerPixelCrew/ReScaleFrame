@@ -14,7 +14,8 @@ function Add-Payload([string]$Source,[string]$Relative) {
     $copies.Add(@{source=(Resolve-Path -LiteralPath $Source).Path;relative=$Relative})
 }
 Add-Payload "$repo/build/windows-x64/bin/$Configuration/ReScaleFrame.Minecraft.dll" 'ReScaleFrame.Minecraft.dll'
-$sl="$sdk/.local/streamline/sdk"
+Add-Payload "$repo/build/windows-x64/bin/$Configuration/rescaleframe_overlay.dll" 'rescaleframe_overlay.dll'
+$sl="$sdk/vendor/streamline-sdk"
 foreach($leaf in @('sl.interposer.dll','sl.common.dll','sl.dlss.dll','sl.dlss_g.dll','sl.reflex.dll','sl.pcl.dll','nvngx_dlss.dll','nvngx_dlssg.dll','nvngx_dlss.license.txt','reflex.license.txt')) {
     Add-Payload "$sl/bin/x64/$leaf" "streamline/$leaf"
 }
@@ -30,7 +31,8 @@ foreach($leaf in @('LICENSE.txt','third-party-programs.txt')) {Add-Payload "$sdk
 Add-Payload "$repo/runtime/orchestrator/ANTILAG2-LICENSE.txt" 'AMD-Anti-Lag-2-MIT.txt'
 Add-Payload "$repo/LICENSE" 'ReScaleFrame-LICENSE.txt'
 Add-Payload "$repo/runtime/backends/dlss/third_party/mfg_unlocker/LICENSE" 'MFG-Unlocker-LICENSE.txt'
-Add-Payload "$repo/build/windows-x64/_deps/minhook-src/LICENSE.txt" 'MinHook-LICENSE.txt'
+$minhook = if (Test-Path -LiteralPath "$repo/vendor/minhook/src/hook.c") { "$repo/vendor/minhook" } else { "$repo/build/windows-x64/_deps/minhook-src" }
+Add-Payload "$minhook/LICENSE.txt" 'MinHook-LICENSE.txt'
 $manifest=[Collections.Generic.List[string]]::new()
 foreach($copy in $copies) {
     $destination=Join-Path $stage $copy.relative

@@ -43,27 +43,10 @@ uint32_t rsf_d3d11_state_save(void* context, rsf_d3d11_state* state);
    counters are preserved, not reset. */
 void rsf_d3d11_state_restore(void* context, rsf_d3d11_state* state);
 
-/* Narrow scope for immediate depth replay. Saves only OM targets/depth state and the pixel
-   shader (including linkage). Caller must refuse OM UAVs before entering this scope. No input,
-   rasterizer, predicate, or stream-output binding is touched. */
-uint32_t rsf_d3d11_depth_state_save(void* context, rsf_d3d11_state* state);
-void rsf_d3d11_depth_state_restore(void* context, rsf_d3d11_state* state);
 
-/* Narrow scope for one fullscreen draw. Saves the output merger (render targets, depth view, blend,
-   depth stencil), the vertex and pixel shaders, the input layout and topology, pixel slot 0 of
-   resources, samplers and constant buffers, and the rasteriser with its viewports and scissors.
-   That is everything a pass drawing a triangle from the vertex id touches. Shader linkage, other
-   stages and UAVs are not saved; a caller that binds more than this uses the full scope above.
-   Works on any context, deferred included, and does not take part in the nesting of the full scope. */
-uint32_t rsf_d3d11_draw_state_save(void* context, rsf_d3d11_state* state);
-void rsf_d3d11_draw_state_restore(void* context, rsf_d3d11_state* state);
-
-/* Two small device calls for a C caller. `rsf_d3d11_copy_resource` is CopyResource on `context`
-   (`ID3D11DeviceContext*`) from `source` to `destination`, both `ID3D11Resource*` of one size and
-   format. `rsf_d3d11_create_shader_view` makes a default shader resource view on `texture`
-   (`ID3D11Texture2D*`) with `device` (`ID3D11Device*`), returned as `ID3D11ShaderResourceView*`
-   with one reference the caller releases, or null. */
-void rsf_d3d11_copy_resource(void* context, void* destination, void* source);
+/* A device call for a C caller: `rsf_d3d11_create_shader_view` makes a default shader resource
+   view on `texture` (`ID3D11Texture2D*`) with `device` (`ID3D11Device*`), returned as
+   `ID3D11ShaderResourceView*` with one reference the caller releases, or null. */
 void* rsf_d3d11_create_shader_view(void* device, void* texture);
 
 #ifdef __cplusplus

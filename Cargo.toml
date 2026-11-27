@@ -1,5 +1,50 @@
 [workspace]
-members = ["ui/overlay", "runtime/backends/rsf-upscaler"]
+members = [
+  "ui/overlay",
+  "tests/overlay",
+  "tests/process",
+  "tests/ac7-render-scope",
+  "tests/overlay-panel",
+  "tests/overlay-service",
+  "tests/support",
+  "tests/capture",
+  "tests/presentation",
+  "tests/presentation/api",
+  "tests/translucency",
+  "tests/game-sdk",
+  "tests/ac7-capture",
+  "tests/generation",
+  "tests/vulkan-fg",
+  "runtime/backends/fsr/compat",
+  "runtime/vulkan/fsr3",
+  "runtime/vulkan/ngx",
+  "runtime/vulkan/streamline/lifecycle",
+  "runtime/vulkan/xess-fg",
+  "runtime/common",
+  "runtime/graphics/rust",
+  "runtime/graphics/submission",
+  "runtime/orchestrator",
+  "runtime/shader_patch/compiler",
+  "loader",
+  "tests/loader",
+  "sdk/game",
+  "games/ac7",
+  "games/ac7/plugin",
+  "games/anomaly",
+  "games/fallout4",
+  "games/minecraft",
+  "games/project-wingman",
+  "games/rdr2",
+  "games/skyrim-se",
+  "games/unity-mono",
+  "integrations/unity",
+  "integrations/godot",
+  "integrations/steam",
+  "integrations/windows",
+  "third_party/minhook",
+  "tools/exposure_probe",
+  "tools/bindgen",
+]
 resolver = "3"
 
 [workspace.package]
@@ -11,6 +56,10 @@ publish = false
 license = "MIT"
 
 [workspace.dependencies]
+ash = { version = "=0.38.0", default-features = false, features = ["std"] }
+cc = "1"
+windows = { version = "0.62.2", default-features = false }
+windows-sys = "0.61"
 egui = "=0.35.0"
 
 [workspace.lints.rust]

@@ -13,7 +13,13 @@ __pycache__/
 *.pyc
 /.local/
 /references/
-/vendor/
+# Vendor SDK sources are pinned submodules (eng/dependencies.json); everything else under vendor/ is local.
+/vendor/*
+!/vendor/streamline
+!/vendor/fidelityfx
+!/vendor/fidelityfx-vulkan
+!/vendor/xess
+!/vendor/minhook
 /integrations/unity/com.kpc.rescaleframe/Runtime~/
 /integrations/unity/com.kpc.rescaleframe/Plugins/x86_64/*.dll
 /captures/
@@ -21,3 +27,4 @@ __pycache__/
 /ghidra_projects/
 /tools/rea/node_modules/
 /.claude/skills/reverse-engineer-anything/
+tests/**/bin/

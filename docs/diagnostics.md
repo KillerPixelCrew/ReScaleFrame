@@ -42,6 +42,11 @@ camera data, and checks final-image/Present evidence separately. It never labels
 image quality accepted. Real retained temporal and spatial bundles were checked;
 GPU automation-content validation is still pending.
 
+An integration that knows the projection but not the camera matrices records it with
+`rsf_input_dump_projection` (input dump ABI 2) as `projection.json`: near and far planes,
+vertical field of view, aspect ratio, and depth inversion and an infinite far plane when known.
+It does not make `camera_available` true; the analyzer's camera requirement is unchanged.
+
 ## Programmatic harness
 
 `tools/runtime-action.py` is the maintained bounded runtime helper. Callers supply

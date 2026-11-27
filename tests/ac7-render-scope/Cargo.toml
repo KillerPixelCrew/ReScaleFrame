@@ -1,0 +1,19 @@
+[package]
+name = "rsf-ac7-render-scope-fixture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Drives real exceptions through the render scope leaves; the C launcher links this archive with
+# the AC7 render scope library.
+[lib]
+name = "rsf_ac7_render_scope_fixture"
+path = "../ac7_render_scope.rs"
+crate-type = ["staticlib"]
+# Its unit-test harness would need the C launcher's symbols, which only the CMake link supplies.
+test = false
+
+[lints]
+workspace = true

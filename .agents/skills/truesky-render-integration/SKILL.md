@@ -10,6 +10,8 @@ Read [AGENTS.md](../../../AGENTS.md), relevant
 [render analysis](../game-render-analysis/SKILL.md) and
 [the AC7 depth reference](references/ac7-depth.md). TrueSky versions differ; these sites and
 the x1 kernel are specific to the fingerprinted AC7 DLL/effect. Preserve the user's testing scope.
+Cloud depth, motion and resolution are inputs: repairing them is integration work and stays with the
+game (AGENTS.md Rule 5). Do not add cloud-specific handling to the core to hide a bad input.
 
 ## Trace the complete cloud producer
 

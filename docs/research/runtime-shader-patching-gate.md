@@ -101,12 +101,12 @@ Ignored local logs:
 - `games/anomaly/patches/motion/`, `src/runtime_shaders.*`, `src/shader_loader.*`,
   `src/motion_stage.*`, `src/motion_d3d11.*`, `src/bootstrap.cpp`,
   `src/native_observer.cpp`, `src/overlay_service.cpp`, `src/adapter_options.h`,
-  `CMakeLists.txt`, `engine.json` and `PROGRESS.md`: rules/source provider and
+  `CMakeLists.txt`, `engine.json` and the former `PROGRESS.md`: rules/source provider and
   production adapter migration, live controls and evidence/readiness scope.
 - `tools/rsf_shader_pack.py`, `tools/package-anomaly.py`,
   `tools/anomaly_motion_deploy.py`: build/inspect CLI, explicit rules-only
   release membership and development-only offline tool description.
-- `tests/shader_patch*.cpp`, `tests/anomaly_shader_provider_evidence.py`,
+- `tests/shader_patch*.cpp`, `tools/anomaly_shader_provider_evidence.py`,
   `tests/package_anomaly_test.py`, `tests/anomaly_motion_contract.cpp`,
   `tests/overlay_dll_api_device.cpp`,
   `tests/anomaly_overlay_visibility.cpp`, `tests/CMakeLists.txt` and

@@ -1,0 +1,20 @@
+EXPORTS
+    VulkanStoryXessFgCreate=rsf_vk_xess_fg_create
+    VulkanStoryXessFgCreateFromVulkan=rsf_vk_xess_fg_create_from_vulkan
+    VulkanStoryXessFgCreateSharedFence=rsf_vk_xess_fg_create_shared_fence
+    VulkanStoryXessFgCreateSharedImage=rsf_vk_xess_fg_create_shared_image
+    VulkanStoryXessFgDestroy=rsf_vk_xess_fg_destroy
+    VulkanStoryXessFgDestroyChecked=rsf_vk_xess_fg_destroy_checked
+    VulkanStoryXessFgLastCreateStage=rsf_vk_xess_fg_last_create_stage
+    VulkanStoryXessFgMarker=rsf_vk_xess_fg_marker
+    VulkanStoryXessFgPrepareDestroy=rsf_vk_xess_fg_prepare_destroy
+    VulkanStoryXessFgPresent=rsf_vk_xess_fg_present
+    VulkanStoryXessFgReleaseImage=rsf_vk_xess_fg_release_image
+    VulkanStoryXessFgSetEnabled=rsf_vk_xess_fg_set_enabled
+    VulkanStoryXessFgSetGeneratedFrames=rsf_vk_xess_fg_set_generated_frames
+    VulkanStoryXessFgSetLatencyMode=rsf_vk_xess_fg_set_latency_mode
+    VulkanStoryXessFgSignalSharedFence=rsf_vk_xess_fg_signal_shared_fence
+    VulkanStoryXessFgSleep=rsf_vk_xess_fg_sleep
+    VulkanStoryXessFgStart=rsf_vk_xess_fg_start
+    VulkanStoryXessFgWaitIdle=rsf_vk_xess_fg_wait_idle
+    VulkanStoryXessFgWaitSharedFence=rsf_vk_xess_fg_wait_shared_fence

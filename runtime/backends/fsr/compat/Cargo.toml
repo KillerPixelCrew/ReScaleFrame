@@ -1,0 +1,38 @@
+[package]
+name = "rsf-fsr4-compat"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+rsf-game-sys = { path = "../../../../sdk/game" }
+
+[dev-dependencies]
+# The C guard the Runtime calls the bridge through; the throwing-SDK test uses it.
+rsf-streamline-vk = { path = "../../../vulkan/streamline/lifecycle" }
+
+[build-dependencies]
+rsf-bindgen = { path = "../../../../tools/bindgen" }
+
+[lints]
+workspace = true
+
+[target."cfg(windows)".dependencies]
+rsf-minhook-sys = { path = "../../../../third_party/minhook" }
+rsf-runtime-common = { path = "../../../common" }
+ash = { workspace = true }
+windows = { workspace = true, features = [
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+] }

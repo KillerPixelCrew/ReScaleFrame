@@ -1,0 +1,1171 @@
+// SPDX-License-Identifier: MIT
+#[cfg(all(feature = "test-fixtures", not(test)))]
+#[path = "../../../tests/auxiliary_sr.rs"]
+mod fixture;
+// Production calls the D3D11 leaves in platform.rs; unit tests call same-named fakes. Successful COM
+// outputs transfer one reference.
+#[cfg(not(test))]
+mod platform;
+#[cfg(not(test))]
+use platform as leaf;
+#[cfg(test)]
+use tests as leaf;
+
+use crate::com_ref;
+use crate::d3d11_output::SavedBindings;
+use crate::depth_scale::{DepthScale, jitter_valid, rect_valid};
+use crate::sys::*;
+use rsf_game_sys::rsf_d3d11_auxiliary_surface;
+use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
+use std::ffi::c_void;
+use std::ptr;
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R11G11B10_FLOAT,
+    DXGI_FORMAT_R16_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT,
+    DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT,
+};
+use windows::core::{IUnknown, Interface};
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+
+const MAX_AUXILIARIES: usize = 8;
+const MAX_SURFACES: usize = MAX_AUXILIARIES + 2;
+type Texture = *mut c_void;
+
+const AUX_FORMAT_RGBA32_FLOAT: u32 = DXGI_FORMAT_R32G32B32A32_FLOAT.0 as u32;
+const AUX_FORMAT_RGBA16_FLOAT: u32 = DXGI_FORMAT_R16G16B16A16_FLOAT.0 as u32;
+const AUX_FORMAT_R11G11B10_FLOAT: u32 = DXGI_FORMAT_R11G11B10_FLOAT.0 as u32;
+const AUX_FORMAT_RGBA8_UNORM: u32 = DXGI_FORMAT_R8G8B8A8_UNORM.0 as u32;
+const AUX_FORMAT_RG16_FLOAT: u32 = DXGI_FORMAT_R16G16_FLOAT.0 as u32;
+const AUX_FORMAT_R32_FLOAT: u32 = DXGI_FORMAT_R32_FLOAT.0 as u32;
+const AUX_FORMAT_R24G8_TYPELESS: u32 = DXGI_FORMAT_R24G8_TYPELESS.0 as u32;
+const AUX_FORMAT_R16_FLOAT: u32 = DXGI_FORMAT_R16_FLOAT.0 as u32;
+const AUX_FORMAT_R8_UNORM: u32 = DXGI_FORMAT_R8_UNORM.0 as u32;
+// Formats whose packed-colour support bit the device must report.
+const AUX_PACKED_SUPPORT_MASK: u32 = 0x4120;
+const AUX_TEXTURE_BACKUP: u32 = 0;
+const AUX_TEXTURE_SOURCE: u32 = 1;
+const AUX_TEXTURE_OUTPUT: u32 = 2;
+const AUX_USAGE_DEFAULT: u32 = 0;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AuxTextureInfo {
+    width: u32,
+    height: u32,
+    format: u32,
+    sample_quality: u32,
+    depth_stencil: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AuxTextureFacts {
+    info: AuxTextureInfo,
+    same_device: u32,
+    array_size: u32,
+    mip_levels: u32,
+    sample_count: u32,
+    usage: u32,
+}
+
+/// The colour pass's 64-byte constant buffer.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct AuxDrawConstants {
+    source: [f32; 4],
+    output: [f32; 4],
+    valid: [f32; 4],
+    jitter: [f32; 2],
+    padding: [f32; 2],
+}
+
+#[repr(C)]
+pub(crate) struct AuxColourPipeline {
+    vertex: *mut c_void,
+    pixel: *mut c_void,
+    raster: *mut c_void,
+    constants: *mut c_void,
+}
+
+impl Default for AuxColourPipeline {
+    fn default() -> Self {
+        Self {
+            vertex: ptr::null_mut(),
+            pixel: ptr::null_mut(),
+            raster: ptr::null_mut(),
+            constants: ptr::null_mut(),
+        }
+    }
+}
+
+struct Owner {
+    context: IUnknown,
+    device: IUnknown,
+    thread: u32,
+}
+
+fn current_thread() -> u32 {
+    unsafe { GetCurrentThreadId() }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TextureKey {
+    width: u32,
+    height: u32,
+    format: u32,
+    sample_quality: u32,
+}
+
+impl From<AuxTextureInfo> for TextureKey {
+    fn from(desc: AuxTextureInfo) -> Self {
+        Self {
+            width: desc.width,
+            height: desc.height,
+            format: desc.format,
+            sample_quality: desc.sample_quality,
+        }
+    }
+}
+
+struct Snapshot {
+    key: TextureKey,
+    texture: IUnknown,
+}
+
+struct ColourProducts {
+    target: IUnknown,
+    view: IUnknown,
+    output: IUnknown,
+    source: Snapshot,
+    destination: TextureKey,
+}
+
+struct Pipeline {
+    vertex: IUnknown,
+    pixel: IUnknown,
+    raster: IUnknown,
+    constants: IUnknown,
+}
+
+impl Pipeline {
+    fn borrow(&self) -> AuxColourPipeline {
+        AuxColourPipeline {
+            vertex: self.vertex.as_raw(),
+            pixel: self.pixel.as_raw(),
+            raster: self.raster.as_raw(),
+            constants: self.constants.as_raw(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Mapping {
+    source: [f32; 4],
+    output: [i32; 4],
+    jitter: [f32; 2],
+}
+
+impl From<&rsf_d3d11_auxiliary_surface> for Mapping {
+    fn from(surface: &rsf_d3d11_auxiliary_surface) -> Self {
+        Self {
+            source: surface.source_rect,
+            output: surface.output_rect,
+            jitter: surface.jitter_pixels,
+        }
+    }
+}
+
+impl Mapping {
+    fn source_fits(&self, key: TextureKey) -> bool {
+        let [left, top, right, bottom] = self.source;
+        self.source.into_iter().all(f32::is_finite)
+            && left >= 0.0
+            && top >= 0.0
+            && right <= key.width as f32
+            && bottom <= key.height as f32
+            && right - left >= 1.0
+            && bottom - top >= 1.0
+    }
+
+    fn output_fits(&self, key: TextureKey) -> bool {
+        rect_valid(&self.output, [key.width, key.height])
+    }
+
+    fn integral(&self) -> bool {
+        self.source.into_iter().all(|bound| bound.floor() == bound)
+    }
+
+    fn jitter_valid(&self) -> bool {
+        jitter_valid(self.jitter)
+    }
+
+    fn colour_constants(&self) -> AuxDrawConstants {
+        let [left, top, right, bottom] = self.source.map(|edge| (edge - 0.5).ceil());
+        AuxDrawConstants {
+            source: self.source,
+            output: self.output.map(|edge| edge as f32),
+            valid: [left, top, left.max(right - 1.0), top.max(bottom - 1.0)],
+            jitter: self.jitter,
+            padding: [0.0; 2],
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct SurfaceKey {
+    texture: Texture,
+    kind: u32,
+    flags: u32,
+    output: [i32; 4],
+}
+
+impl From<&rsf_d3d11_auxiliary_surface> for SurfaceKey {
+    fn from(input: &rsf_d3d11_auxiliary_surface) -> Self {
+        Self {
+            texture: input.texture,
+            kind: input.kind,
+            flags: input.flags,
+            output: input.output_rect,
+        }
+    }
+}
+
+impl SurfaceKey {
+    pub(crate) fn matches(self, input: &rsf_d3d11_auxiliary_surface) -> bool {
+        surface_size_valid(input) && self == Self::from(input)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SurfacePlan {
+    original: Texture,
+    source: Texture,
+    original_desc: AuxTextureInfo,
+    source_desc: AuxTextureInfo,
+    kind: u32,
+    flags: u32,
+    mapping: Mapping,
+}
+
+impl SurfacePlan {
+    fn depth(&self) -> bool {
+        self.kind == RSF_D3D11_AUXILIARY_DEPTH_STENCIL
+    }
+
+    fn restore_contents(&self) -> bool {
+        self.flags & RSF_D3D11_AUXILIARY_RESTORE_CONTENTS != 0
+    }
+
+    fn accepts(&self, request: &rsf_d3d11_auxiliary_surface, spatial: bool) -> bool {
+        let mapping = Mapping::from(request);
+        SurfaceKey {
+            texture: self.original,
+            kind: self.kind,
+            flags: self.flags,
+            output: self.mapping.output,
+        }
+        .matches(request)
+            && mapping.source_fits(self.original_desc.into())
+            && mapping.source_fits(self.source_desc.into())
+            && (!(spatial || self.depth()) || mapping.integral())
+            && if spatial {
+                mapping.jitter == [0.0; 2]
+            } else {
+                mapping.jitter_valid()
+            }
+    }
+}
+
+struct Surface {
+    plan: SurfacePlan,
+    _original: IUnknown,
+    _distinct_source: Option<IUnknown>,
+}
+
+impl Surface {
+    fn retain(plan: SurfacePlan) -> Self {
+        // Reservation holds all the borrowed resources through allocation.
+        Self {
+            _original: unsafe { com_ref::retain(plan.original) },
+            _distinct_source: (plan.source != plan.original)
+                .then(|| unsafe { com_ref::retain(plan.source) }),
+            plan,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Reserved,
+    Capturing,
+    Sealed,
+    Prepared(usize),
+    Publishing,
+    Accepted,
+}
+
+struct Frame {
+    scope: [u64; 3],
+    surfaces: [Option<Surface>; MAX_SURFACES],
+    count: usize,
+    main_begin: usize,
+    originals: [Option<IUnknown>; 2],
+    backups_captured: bool,
+    depth_restore: Option<bool>,
+    published_colours: usize,
+    phase: Phase,
+}
+
+struct Bindings {
+    context: *mut c_void,
+    _saved: SavedBindings,
+}
+
+impl Bindings {
+    fn new(context: *mut c_void) -> Option<Self> {
+        let saved = unsafe { SavedBindings::new(context, leaf::save, leaf::restore) }?;
+        let bindings = Self {
+            context,
+            _saved: saved,
+        };
+        bindings.clear();
+        Some(bindings)
+    }
+
+    fn clear(&self) {
+        unsafe { leaf::clear(self.context) };
+    }
+
+    fn copy(&self, destination: Texture, source: Texture) {
+        unsafe { leaf::copy(self.context, destination, source) };
+    }
+}
+
+fn device_ready(device: *mut c_void) -> bool {
+    unsafe { leaf::device_ready(device) != 0 }
+}
+
+pub(crate) struct AuxiliarySr {
+    // Drop native leases and private products while the context and device are still retained.
+    frame: Option<Frame>,
+    backups: [Option<Snapshot>; 2],
+    colours: [Option<ColourProducts>; MAX_SURFACES],
+    pipeline: Option<Pipeline>,
+    owner: Option<Owner>,
+    depth: Option<Box<DepthScale>>,
+}
+
+impl AuxiliarySr {
+    pub(crate) fn new() -> Self {
+        Self {
+            owner: None,
+            pipeline: None,
+            depth: None,
+            colours: [const { None }; MAX_SURFACES],
+            backups: [None, None],
+            frame: None,
+        }
+    }
+
+    fn on_owner_thread(&self) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|owner| owner.thread == current_thread())
+    }
+
+    fn bind_owner(&mut self, context: *mut c_void) -> Option<*mut c_void> {
+        if context.is_null() {
+            return None;
+        }
+        let thread = current_thread();
+        if let Some(owner) = &self.owner {
+            return (owner.context.as_raw() == context && owner.thread == thread)
+                .then_some(owner.device.as_raw());
+        }
+        let device = unsafe { com_ref::owned(leaf::immediate_device(context)) }?;
+        let device_ptr = device.as_raw();
+        self.owner = Some(Owner {
+            context: unsafe { com_ref::retain(context) },
+            device,
+            thread,
+        });
+        Some(device_ptr)
+    }
+
+    fn texture_info(&self, device: *mut c_void, texture: Texture) -> Option<AuxTextureInfo> {
+        let mut facts = AuxTextureFacts::default();
+        if texture.is_null()
+            || unsafe { leaf::describe_texture(texture, device, &mut facts) } == 0
+            || facts.same_device == 0
+            || facts.array_size != 1
+            || facts.mip_levels != 1
+            || facts.sample_count != 1
+            || facts.usage != AUX_USAGE_DEFAULT
+        {
+            return None;
+        }
+        Some(facts.info)
+    }
+
+    fn colour_supported(&self, device: *mut c_void, format: u32) -> bool {
+        match format {
+            AUX_FORMAT_R11G11B10_FLOAT => {
+                // Numeric nearest loads through an SRV and draws into an RTV.
+                let mut flags = 0;
+                (unsafe { leaf::packed_colour_support(device, &mut flags) } != 0)
+                    && flags & AUX_PACKED_SUPPORT_MASK == AUX_PACKED_SUPPORT_MASK
+            }
+            AUX_FORMAT_RGBA32_FLOAT
+            | AUX_FORMAT_RGBA16_FLOAT
+            | AUX_FORMAT_RGBA8_UNORM
+            | AUX_FORMAT_RG16_FLOAT
+            | AUX_FORMAT_R32_FLOAT
+            | AUX_FORMAT_R16_FLOAT
+            | AUX_FORMAT_R8_UNORM => true,
+            _ => false,
+        }
+    }
+
+    fn plan_surfaces(
+        &self,
+        device: *mut c_void,
+        pass: &rsf_game_render_pass,
+        inputs: &[rsf_d3d11_auxiliary_surface],
+        recovery: bool,
+    ) -> Option<([Option<SurfacePlan>; MAX_SURFACES], usize)> {
+        let mut plans = [None; MAX_SURFACES];
+        let mut main_begin = inputs.len();
+        let mut depth_seen = false;
+        for (index, input) in inputs.iter().enumerate() {
+            let main =
+                input.texture == pass.color_output || input.texture == pass.color_output_readable;
+            if !surface_size_valid(input)
+                || input.kind > RSF_D3D11_AUXILIARY_COLOUR
+                || (!recovery && main)
+                || input.flags & !RSF_D3D11_AUXILIARY_RESTORE_CONTENTS != 0
+                || inputs[..index]
+                    .iter()
+                    .any(|seen| seen.texture == input.texture)
+            {
+                return None;
+            }
+
+            let original_desc = self.texture_info(device, input.texture)?;
+            let mapping = Mapping::from(input);
+            if !mapping.source_fits(original_desc.into())
+                || !mapping.output_fits(original_desc.into())
+                || !mapping.jitter_valid()
+                || (recovery && (!mapping.integral() || mapping.jitter != [0.0; 2]))
+            {
+                return None;
+            }
+            let (source, source_desc) = match input.kind {
+                RSF_D3D11_AUXILIARY_DEPTH_STENCIL => {
+                    if depth_seen
+                        || original_desc.format != AUX_FORMAT_R24G8_TYPELESS
+                        || original_desc.depth_stencil == 0
+                        || !mapping.integral()
+                    {
+                        return None;
+                    }
+                    depth_seen = true;
+                    (input.texture, original_desc)
+                }
+                RSF_D3D11_AUXILIARY_COLOUR => {
+                    if !self.colour_supported(device, original_desc.format) {
+                        return None;
+                    }
+                    if main {
+                        let source_desc = self.texture_info(device, pass.color_input)?;
+                        if !self.colour_supported(device, source_desc.format)
+                            || !mapping.source_fits(source_desc.into())
+                        {
+                            return None;
+                        }
+                        (pass.color_input, source_desc)
+                    } else {
+                        (input.texture, original_desc)
+                    }
+                }
+                _ => return None,
+            };
+            if recovery && input.texture == pass.color_output {
+                main_begin = index;
+            }
+            plans[index] = Some(SurfacePlan {
+                original: input.texture,
+                source,
+                original_desc,
+                source_desc,
+                kind: input.kind,
+                flags: input.flags,
+                mapping,
+            });
+        }
+        Some((plans, main_begin))
+    }
+
+    fn create_texture(
+        &self,
+        device: *mut c_void,
+        desc: &AuxTextureInfo,
+        usage: u32,
+    ) -> Option<IUnknown> {
+        unsafe { com_ref::owned(leaf::create_texture(device, desc, usage)) }
+    }
+
+    fn reserve_backup(
+        &mut self,
+        device: *mut c_void,
+        index: usize,
+        original: Texture,
+    ) -> Option<()> {
+        let desc = self.texture_info(device, original)?;
+        let key = desc.into();
+        if self.backups[index]
+            .as_ref()
+            .is_none_or(|backup| backup.key != key)
+        {
+            self.backups[index] = Some(Snapshot {
+                key,
+                texture: self.create_texture(device, &desc, AUX_TEXTURE_BACKUP)?,
+            });
+        }
+        Some(())
+    }
+
+    fn reserve_colour(
+        &mut self,
+        device: *mut c_void,
+        index: usize,
+        plan: &SurfacePlan,
+    ) -> Option<()> {
+        let source_key = plan.source_desc.into();
+        let destination = plan.original_desc.into();
+        if self.colours[index].as_ref().is_some_and(|cached| {
+            cached.source.key == source_key && cached.destination == destination
+        }) {
+            return Some(());
+        }
+        let snapshot = self.create_texture(device, &plan.source_desc, AUX_TEXTURE_SOURCE)?;
+        let output = self.create_texture(device, &plan.original_desc, AUX_TEXTURE_OUTPUT)?;
+        let view = unsafe { com_ref::owned(leaf::create_source_view(device, snapshot.as_raw())) }?;
+        let target = unsafe { com_ref::owned(leaf::create_output_view(device, output.as_raw())) }?;
+        self.colours[index] = Some(ColourProducts {
+            source: Snapshot {
+                key: source_key,
+                texture: snapshot,
+            },
+            destination,
+            output,
+            view,
+            target,
+        });
+        Some(())
+    }
+
+    fn reserve_frame(
+        &mut self,
+        context: *mut c_void,
+        pass: &rsf_game_render_pass,
+        inputs: &[rsf_d3d11_auxiliary_surface],
+        log: rsf_game_log_fn,
+        user: *mut c_void,
+        recovery: bool,
+    ) -> Option<()> {
+        if self.frame.is_some() || inputs.is_empty() {
+            return None;
+        }
+        let device = self.bind_owner(context)?;
+        let (plans, main_begin) = self.plan_surfaces(device, pass, inputs, recovery)?;
+        if !device_ready(device) {
+            return None;
+        }
+        if self.pipeline.is_none() {
+            let mut pipeline = AuxColourPipeline::default();
+            if unsafe { leaf::create_pipeline(device, log, user, &mut pipeline) } == 0 {
+                return None;
+            }
+            let (Some(vertex), Some(pixel), Some(raster), Some(constants)) = (unsafe {
+                (
+                    com_ref::owned(pipeline.vertex),
+                    com_ref::owned(pipeline.pixel),
+                    com_ref::owned(pipeline.raster),
+                    com_ref::owned(pipeline.constants),
+                )
+            }) else {
+                return None;
+            };
+            self.pipeline = Some(Pipeline {
+                vertex,
+                pixel,
+                raster,
+                constants,
+            });
+        }
+
+        // Cache private allocations independently of any in-flight native leases.
+        let readable = (!pass.color_output_readable.is_null()
+            && pass.color_output_readable != pass.color_output)
+            .then_some(pass.color_output_readable);
+        self.reserve_backup(device, 0, pass.color_output)?;
+        if let Some(texture) = readable {
+            self.reserve_backup(device, 1, texture)?;
+        }
+        for (index, plan) in plans[..inputs.len()].iter().flatten().enumerate() {
+            if plan.depth() {
+                let setup = rsf_depth_scale_setup {
+                    struct_size: size_of::<rsf_depth_scale_setup>() as u32,
+                    abi_version: RSF_DEPTH_SCALE_ABI_VERSION,
+                    log,
+                    log_user: user,
+                };
+                if self.depth.is_none() {
+                    self.depth = Some(unsafe { DepthScale::new(context, &setup) }.ok()?);
+                }
+                if !self.depth.as_ref()?.reserve(plan.original) {
+                    return None;
+                }
+            } else {
+                self.reserve_colour(device, index, plan)?;
+            }
+        }
+
+        // The borrowed originals survive this call only after every allocation has succeeded.
+        self.frame = Some(Frame {
+            scope: [pass.session_id, pass.native_frame, pass.view_key],
+            surfaces: plans.map(|plan| plan.map(Surface::retain)),
+            count: inputs.len(),
+            main_begin,
+            originals: [
+                Some(unsafe { com_ref::retain(pass.color_output) }),
+                readable.map(|texture| unsafe { com_ref::retain(texture) }),
+            ],
+            backups_captured: false,
+            depth_restore: None,
+            published_colours: 0,
+            phase: Phase::Reserved,
+        });
+        Some(())
+    }
+
+    // Host-only, like the transaction block below.
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn refine(&mut self, inputs: &[rsf_d3d11_auxiliary_surface]) -> bool {
+        if inputs.len() > MAX_SURFACES || !self.on_owner_thread() {
+            return false;
+        }
+        let Some(frame) = &mut self.frame else {
+            return false;
+        };
+        if frame.phase != Phase::Reserved
+            || inputs.len() != frame.count
+            || !frame
+                .surfaces
+                .iter()
+                .flatten()
+                .zip(inputs)
+                .all(|(surface, input)| surface.plan.accepts(input, true))
+        {
+            return false;
+        }
+        for (surface, input) in frame.surfaces.iter_mut().flatten().zip(inputs) {
+            surface.plan.mapping = Mapping::from(input);
+        }
+        true
+    }
+
+    // Host-only, like the transaction block below.
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn original_colour(&self) -> Texture {
+        let Some(frame) = &self.frame else {
+            return ptr::null_mut();
+        };
+        if !self.on_owner_thread()
+            || matches!(frame.phase, Phase::Reserved | Phase::Capturing)
+            || frame.main_begin == frame.count
+        {
+            return ptr::null_mut();
+        }
+        self.colours[frame.main_begin]
+            .as_ref()
+            .map_or(ptr::null_mut(), |colour| colour.source.texture.as_raw())
+    }
+
+    fn render(&mut self, capture: bool, temporal: Option<&[rsf_d3d11_auxiliary_surface]>) -> bool {
+        if !self.on_owner_thread() {
+            return false;
+        }
+        let owner = self.owner.as_ref().unwrap();
+        let device = owner.device.as_raw();
+        let Some(frame) = &mut self.frame else {
+            return false;
+        };
+        if (capture && frame.phase != Phase::Reserved)
+            || (!capture && !matches!(frame.phase, Phase::Prepared(_) | Phase::Sealed))
+            || temporal.is_some_and(|inputs| {
+                inputs.len() != frame.main_begin
+                    || !frame
+                        .surfaces
+                        .iter()
+                        .flatten()
+                        .zip(inputs)
+                        .all(|(surface, input)| surface.plan.accepts(input, false))
+            })
+            || !device_ready(device)
+        {
+            return false;
+        }
+
+        // An incomplete redraw invalidates the products, but the sealed originals still
+        // support a spatial retry. An incomplete capture is only safe to roll back.
+        if !capture {
+            frame.phase = Phase::Sealed;
+        }
+        let Some(bindings) = Bindings::new(owner.context.as_raw()) else {
+            return false;
+        };
+        if capture {
+            frame.phase = Phase::Capturing;
+            for (index, original) in frame.originals.iter().enumerate() {
+                if let Some(original) = original {
+                    bindings.copy(
+                        self.backups[index].as_ref().unwrap().texture.as_raw(),
+                        original.as_raw(),
+                    );
+                }
+            }
+            frame.backups_captured = true;
+        }
+
+        let pipeline = self.pipeline.as_ref().unwrap().borrow();
+        let count = temporal.map_or(frame.count, <[_]>::len);
+        for (index, surface) in frame.surfaces[..count].iter().flatten().enumerate() {
+            let plan = &surface.plan;
+            let mapping = temporal.map_or(plan.mapping, |inputs| Mapping::from(&inputs[index]));
+            if plan.depth() {
+                let depth_frame = rsf_depth_scale_frame {
+                    struct_size: size_of::<rsf_depth_scale_frame>() as u32,
+                    abi_version: RSF_DEPTH_SCALE_ABI_VERSION,
+                    texture: plan.original,
+                    source_rect: mapping.source.map(|edge| edge as i32),
+                    output_rect: mapping.output,
+                    jitter_pixels: mapping.jitter,
+                };
+                let Some(depth) = &self.depth else {
+                    return false;
+                };
+                if depth.render(&depth_frame, capture) != RSF_DEPTH_SCALE_OK as i32 {
+                    return false;
+                }
+                frame.depth_restore = Some(plan.restore_contents());
+            } else {
+                let colour = self.colours[index].as_ref().unwrap();
+                let source = colour.source.texture.as_raw();
+                if capture {
+                    bindings.copy(source, plan.source);
+                }
+                let mut baseline = source;
+                if index >= frame.main_begin {
+                    // Main may read a different allocation. Keep the destination's margins.
+                    if let Some(backup) = frame.originals.iter().position(|original| {
+                        original
+                            .as_ref()
+                            .is_some_and(|original| original.as_raw() == plan.original)
+                    }) {
+                        baseline = self.backups[backup].as_ref().unwrap().texture.as_raw();
+                    }
+                }
+                bindings.copy(colour.output.as_raw(), baseline);
+                unsafe {
+                    leaf::draw(
+                        bindings.context,
+                        &pipeline,
+                        colour.view.as_raw(),
+                        colour.target.as_raw(),
+                        &mapping.colour_constants(),
+                    )
+                };
+            }
+            bindings.clear();
+        }
+        if !device_ready(device) {
+            return false;
+        }
+        frame.phase = Phase::Prepared(count);
+        true
+    }
+
+    pub(crate) fn cancel(&mut self) -> bool {
+        if !self.on_owner_thread()
+            || self
+                .frame
+                .as_ref()
+                .is_none_or(|frame| frame.phase != Phase::Reserved)
+        {
+            return false;
+        }
+        self.frame = None;
+        true
+    }
+
+    // Host-only, like the transaction block below.
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn commit(&mut self, temporal: bool) -> bool {
+        if !self.on_owner_thread() {
+            return false;
+        }
+        let owner = self.owner.as_ref().unwrap();
+        let Some(frame) = &mut self.frame else {
+            return false;
+        };
+        let Phase::Prepared(prepared) = frame.phase else {
+            return false;
+        };
+        let count = if temporal {
+            frame.main_begin
+        } else {
+            frame.count
+        };
+        if count > prepared {
+            return false;
+        }
+        let Some(bindings) = Bindings::new(owner.context.as_raw()) else {
+            return false;
+        };
+        frame.phase = Phase::Publishing;
+        if frame.depth_restore.is_some()
+            && self
+                .depth
+                .as_ref()
+                .is_none_or(|depth| depth.commit() != RSF_DEPTH_SCALE_OK as i32)
+        {
+            return false;
+        }
+        for (index, surface) in frame.surfaces[..count].iter().flatten().enumerate() {
+            if !surface.plan.depth() {
+                bindings.copy(
+                    surface.plan.original,
+                    self.colours[index].as_ref().unwrap().output.as_raw(),
+                );
+            }
+        }
+        frame.published_colours = count;
+        if !device_ready(owner.device.as_raw()) {
+            return false;
+        }
+        frame.phase = Phase::Accepted;
+        frame.originals = [None, None];
+        true
+    }
+
+    pub(crate) fn restore(&mut self) -> bool {
+        let Some(frame) = &mut self.frame else {
+            return true;
+        };
+        if frame.phase == Phase::Reserved {
+            return self.cancel();
+        }
+        let owner = self.owner.as_ref().unwrap();
+        if owner.thread != current_thread() {
+            return false;
+        }
+        let Some(bindings) = Bindings::new(owner.context.as_raw()) else {
+            return false;
+        };
+        let accepted = frame.phase == Phase::Accepted;
+        if let Some(restore) = frame.depth_restore {
+            let Some(depth) = &self.depth else {
+                return false;
+            };
+            let status = if accepted && !restore {
+                depth.discard()
+            } else {
+                depth.restore()
+            };
+            if status != RSF_DEPTH_SCALE_OK as i32 {
+                return false;
+            }
+            frame.depth_restore = None;
+        }
+        for (index, surface) in frame.surfaces[..frame.published_colours.min(frame.main_begin)]
+            .iter()
+            .flatten()
+            .enumerate()
+        {
+            if !surface.plan.depth() && (!accepted || surface.plan.restore_contents()) {
+                bindings.copy(
+                    surface.plan.original,
+                    self.colours[index]
+                        .as_ref()
+                        .unwrap()
+                        .source
+                        .texture
+                        .as_raw(),
+                );
+            }
+        }
+        if frame.backups_captured {
+            for (index, original) in frame.originals.iter().enumerate() {
+                if let Some(original) = original {
+                    bindings.copy(
+                        original.as_raw(),
+                        self.backups[index].as_ref().unwrap().texture.as_raw(),
+                    );
+                }
+            }
+        }
+        if !device_ready(owner.device.as_raw()) {
+            return false;
+        }
+        // Release frame references after the game's bindings are back.
+        // Leaving this scope also restores them on every failure.
+        drop(bindings);
+        self.frame = None;
+        true
+    }
+}
+
+/// The auxiliary SR transaction the D3D11 host drives (`d3d11_host_reduced::Products`): the bool
+/// contract over the owner, with the surface limits of each step. Under test the host calls its
+/// fake instead, so only this module's tests reach these.
+#[cfg_attr(test, allow(dead_code))]
+impl AuxiliarySr {
+    pub(crate) fn pending(&self) -> bool {
+        self.frame.is_some()
+    }
+
+    pub(crate) fn matches(&self, scope: [u64; 3]) -> bool {
+        self.on_owner_thread()
+            && self
+                .frame
+                .as_ref()
+                .is_some_and(|frame| frame.scope == scope)
+    }
+
+    pub(crate) fn reserve(
+        &mut self,
+        context: *mut c_void,
+        pass: &rsf_game_render_pass,
+        inputs: &[rsf_d3d11_auxiliary_surface],
+        log: rsf_game_log_fn,
+        user: *mut c_void,
+        recovery: bool,
+    ) -> bool {
+        let limit = if recovery {
+            MAX_SURFACES
+        } else {
+            MAX_AUXILIARIES
+        };
+        inputs.len() <= limit
+            && self
+                .reserve_frame(context, pass, inputs, log, user, recovery)
+                .is_some()
+    }
+
+    pub(crate) fn seal(&mut self) -> bool {
+        self.render(true, None)
+    }
+
+    pub(crate) fn temporal_prepare(&mut self, inputs: &[rsf_d3d11_auxiliary_surface]) -> bool {
+        inputs.len() <= MAX_SURFACES && self.render(false, Some(inputs))
+    }
+
+    pub(crate) fn spatial_prepare(&mut self) -> bool {
+        self.render(false, None)
+    }
+
+    pub(crate) fn prepare(
+        &mut self,
+        context: *mut c_void,
+        pass: &rsf_game_render_pass,
+        inputs: &[rsf_d3d11_auxiliary_surface],
+        log: rsf_game_log_fn,
+        user: *mut c_void,
+    ) -> bool {
+        self.reserve(context, pass, inputs, log, user, false) && self.seal()
+    }
+}
+
+impl Drop for AuxiliarySr {
+    fn drop(&mut self) {
+        let _ = self.restore();
+        if let Some(depth) = self.depth.take() {
+            depth.retire();
+        }
+    }
+}
+
+fn surface_size_valid(input: &rsf_d3d11_auxiliary_surface) -> bool {
+    input.struct_size >= size_of::<rsf_d3d11_auxiliary_surface>() as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::com_ref::test::{Fake, add_ref};
+
+    #[repr(C)]
+    struct FakeCom {
+        com: Fake,
+        width: u32,
+    }
+
+    impl FakeCom {
+        fn new(width: u32) -> Self {
+            Self {
+                com: Fake::new(),
+                width,
+            }
+        }
+
+        fn raw(&self) -> *mut c_void {
+            ptr::from_ref(self).cast_mut().cast()
+        }
+    }
+
+    // The owner calls these fakes by the production leaf names.
+    pub(super) use self::{
+        create_view as create_output_view, create_view as create_source_view,
+        describe as describe_texture, ready as device_ready, retain as immediate_device,
+        unused_clear as clear, unused_copy as copy, unused_create_pipeline as create_pipeline,
+        unused_draw as draw, unused_packed_colour_support as packed_colour_support,
+        unused_restore as restore, unused_save as save,
+    };
+
+    pub(super) unsafe extern "C" fn retain(object: *mut c_void) -> *mut c_void {
+        unsafe { add_ref(object.cast()) };
+        object
+    }
+
+    pub(super) unsafe extern "C" fn ready(_: *mut c_void) -> i32 {
+        1
+    }
+
+    pub(super) unsafe extern "C" fn describe(
+        raw: Texture,
+        _: *mut c_void,
+        out: *mut AuxTextureFacts,
+    ) -> i32 {
+        let texture = unsafe { &*raw.cast::<FakeCom>() };
+        if texture.width == 0 {
+            return 0;
+        }
+        unsafe {
+            out.write(AuxTextureFacts {
+                info: AuxTextureInfo {
+                    width: texture.width,
+                    height: texture.width,
+                    format: AUX_FORMAT_RGBA8_UNORM,
+                    ..Default::default()
+                },
+                same_device: 1,
+                array_size: 1,
+                mip_levels: 1,
+                sample_count: 1,
+                usage: AUX_USAGE_DEFAULT,
+            })
+        };
+        1
+    }
+
+    pub(super) unsafe extern "C" fn create_texture(
+        device: *mut c_void,
+        _: *const AuxTextureInfo,
+        _: u32,
+    ) -> Texture {
+        unsafe { retain(device) }
+    }
+
+    pub(super) unsafe extern "C" fn create_view(device: *mut c_void, _: Texture) -> *mut c_void {
+        unsafe { retain(device) }
+    }
+
+    pub(super) unsafe extern "C" fn unused_packed_colour_support(
+        _: *mut c_void,
+        _: *mut u32,
+    ) -> i32 {
+        unreachable!("fixture does not call packed_colour_support")
+    }
+
+    pub(super) unsafe extern "C" fn unused_create_pipeline(
+        _: *mut c_void,
+        _: rsf_game_log_fn,
+        _: *mut c_void,
+        _: *mut AuxColourPipeline,
+    ) -> i32 {
+        unreachable!("fixture does not call create_pipeline")
+    }
+
+    pub(super) unsafe extern "C" fn unused_save(_: *mut c_void, _: *mut rsf_d3d11_state) -> u32 {
+        unreachable!("fixture does not call save")
+    }
+
+    pub(super) unsafe extern "C" fn unused_restore(_: *mut c_void, _: *mut rsf_d3d11_state) {
+        unreachable!("fixture does not call restore")
+    }
+
+    pub(super) unsafe extern "C" fn unused_clear(_: *mut c_void) {
+        unreachable!("fixture does not call clear")
+    }
+
+    pub(super) unsafe extern "C" fn unused_copy(_: *mut c_void, _: *mut c_void, _: *mut c_void) {
+        unreachable!("fixture does not call copy")
+    }
+
+    pub(super) unsafe extern "C" fn unused_draw(
+        _: *mut c_void,
+        _: *const AuxColourPipeline,
+        _: *mut c_void,
+        _: *mut c_void,
+        _: *const AuxDrawConstants,
+    ) {
+        unreachable!("fixture does not call draw")
+    }
+
+    #[test]
+    fn failed_readable_backup_leaves_no_native_surface_leases() {
+        // Reuse the fake context interface as the device and every private resource.
+        // Only COM reference counts and the reservation logic run in this test.
+        let context = FakeCom::new(0);
+        let main = FakeCom::new(8);
+        let unreadable = FakeCom::new(0);
+        let auxiliary = FakeCom::new(8);
+        let mut owner = AuxiliarySr::new();
+        owner.pipeline = Some(Pipeline {
+            vertex: unsafe { com_ref::retain(context.raw()) },
+            pixel: unsafe { com_ref::retain(context.raw()) },
+            raster: unsafe { com_ref::retain(context.raw()) },
+            constants: unsafe { com_ref::retain(context.raw()) },
+        });
+        // All fields in the generated pass are numeric values or raw pointers.
+        let mut pass: rsf_game_render_pass = unsafe { std::mem::zeroed() };
+        pass.color_output = main.raw();
+        pass.color_output_readable = unreadable.raw();
+        let inputs = [rsf_d3d11_auxiliary_surface {
+            struct_size: size_of::<rsf_d3d11_auxiliary_surface>() as u32,
+            kind: RSF_D3D11_AUXILIARY_COLOUR,
+            texture: auxiliary.raw(),
+            source_rect: [0.0, 0.0, 4.0, 4.0],
+            output_rect: [0, 0, 8, 8],
+            ..Default::default()
+        }];
+
+        assert!(!owner.reserve(context.raw(), &pass, &inputs, None, ptr::null_mut(), false));
+        assert!(owner.backups[0].is_some());
+        assert!(owner.frame.is_none());
+        assert_eq!(main.com.refs.get(), 1);
+        assert_eq!(unreadable.com.refs.get(), 1);
+        assert_eq!(auxiliary.com.refs.get(), 1);
+
+        pass.color_output_readable = ptr::null_mut();
+        assert!(owner.reserve(context.raw(), &pass, &inputs, None, ptr::null_mut(), false));
+        assert_eq!(main.com.refs.get(), 2);
+        assert_eq!(auxiliary.com.refs.get(), 2);
+        assert!(owner.cancel());
+        assert_eq!(main.com.refs.get(), 1);
+        assert_eq!(auxiliary.com.refs.get(), 1);
+        drop(owner);
+        assert_eq!(context.com.refs.get(), 1);
+    }
+}

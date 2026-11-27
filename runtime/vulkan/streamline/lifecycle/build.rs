@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: MIT
+//! Compiles the C leaf of the Streamline call leaves: SEH containment and the
+//! sl::FrameToken virtual call.
+fn main() {
+    let bindings = rsf_bindgen::owner(
+        &[
+            "runtime/vulkan/streamline/sdk_records.h",
+            "runtime/vulkan/streamline/sdk_fg_options.h",
+            "runtime/vulkan/streamline/sdk_sr_options.h",
+            "runtime/vulkan/streamline/present-capture.h",
+        ],
+        &[],
+        &["runtime/vulkan/streamline"],
+        &[],
+        &[],
+    );
+    rsf_bindgen::write(bindings, "sys.rs");
+
+    // The corrected interposer digest verify-receipt.cmake hands the build (admission.rs).
+    println!("cargo:rerun-if-env-changed=RSF_CORRECTED_STREAMLINE_SHA256");
+    println!("cargo:rerun-if-changed=../sdk_guard.c");
+    println!("cargo:rerun-if-changed=../../../../sdk/game/include/rescaleframe/foreign_guard.h");
+    let mut build = cc::Build::new();
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        // The final CMake binary selects its CRT, including Debug.
+        build.flags(["/Zl", "/std:c11"]);
+    } else {
+        build.std("c11");
+    }
+    build
+        .warnings_into_errors(true)
+        .include("../../../../sdk/game/include")
+        .file("../sdk_guard.c")
+        .compile("rsf_slvk_guard");
+}

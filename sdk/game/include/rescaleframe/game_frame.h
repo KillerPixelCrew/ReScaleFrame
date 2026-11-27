@@ -53,17 +53,22 @@ typedef uint32_t rsf_frame_phase;
    a smeared menu, and reconstructing a video produces a soft one.
  *
  * UNKNOWN is not a failure and not a default to act on. A policy that treats unknown as flight will
- * eventually interpolate a cutscene, so the safe reading of unknown is the conservative one. */
+ * eventually interpolate a cutscene, so the safe reading of unknown is the conservative one.
+ *
+ * FLIGHT and GAMEPLAY are the same fact, interactive in-game rendering; FLIGHT keeps the name of the
+ * first game that reported it. The core treats them identically and new integrations report
+ * GAMEPLAY. BRIEFING, HANGAR and REPLAY are likewise one game's names: a game may report them, the
+ * core gives them no meaning beyond not being MENU, VIDEO, LOADING or UNKNOWN. */
 typedef uint32_t rsf_screen_class;
-#define RSF_SCREEN_UNKNOWN ((rsf_screen_class)0)
-#define RSF_SCREEN_MENU ((rsf_screen_class)1)
-#define RSF_SCREEN_BRIEFING ((rsf_screen_class)2)
-#define RSF_SCREEN_HANGAR ((rsf_screen_class)3)
-#define RSF_SCREEN_FLIGHT ((rsf_screen_class)4)
-#define RSF_SCREEN_REPLAY ((rsf_screen_class)5)
-#define RSF_SCREEN_VIDEO ((rsf_screen_class)6)
-#define RSF_SCREEN_LOADING ((rsf_screen_class)7)
-#define RSF_SCREEN_GAMEPLAY ((rsf_screen_class)8)
+#define RSF_SCREEN_UNKNOWN 0u
+#define RSF_SCREEN_MENU 1u
+#define RSF_SCREEN_BRIEFING 2u
+#define RSF_SCREEN_HANGAR 3u
+#define RSF_SCREEN_FLIGHT 4u
+#define RSF_SCREEN_REPLAY 5u
+#define RSF_SCREEN_VIDEO 6u
+#define RSF_SCREEN_LOADING 7u
+#define RSF_SCREEN_GAMEPLAY 8u
 
 /* Latency markers, numbered as XeLL numbers them so the common case is a pass-through. Streamline's
    PCL uses different values and the backend maps them; putting the mapping there rather than here
@@ -180,53 +185,11 @@ typedef struct rsf_frame_record {
 } rsf_frame_record;
 #define RSF_FRAME_SOURCE_INPUT 0u
 #define RSF_FRAME_SOURCE_RENDERED 1u
-static inline int rsf_frame_has_rendered_source(const rsf_frame_record* record)
-{
-    return record && record->struct_size >= sizeof(*record) &&
-        record->source_provenance == RSF_FRAME_SOURCE_RENDERED && !record->input_qpc &&
-        record->source_qpc && record->source_qpc_frequency;
-}
-
-/* Whether a frame may be reconstructed or generated around, given its record.
- *
- * A function rather than a rule each caller repeats: this is asked in at least four places and the
- * answer has to be the same in all of them, or the counters disagree with the picture. */
-static inline int rsf_frame_allows_sr(const rsf_frame_record* record)
-{
-    if (!record || record->struct_size < sizeof(rsf_frame_record)) {
-        return 0;
-    }
-    if ((record->flags & RSF_FRAME_FLAG_NO_SR) != 0) {
-        return 0;
-    }
-    switch (record->screen) {
-    case RSF_SCREEN_VIDEO:
-    case RSF_SCREEN_LOADING:
-        return 0;
-    default:
-        return 1;
-    }
-}
-
-static inline int rsf_frame_allows_fg(const rsf_frame_record* record)
-{
-    if (!rsf_frame_allows_sr(record)) {
-        return 0;
-    }
-    if ((record->flags & RSF_FRAME_FLAG_NO_FG) != 0) {
-        return 0;
-    }
-    /* A menu holds still and then jumps, which is the worst case for an interpolator: there is no
-       motion to interpolate and then a discontinuity to smear. Unknown is refused for the same
-       reason it is never treated as flight. */
-    switch (record->screen) {
-    case RSF_SCREEN_MENU:
-    case RSF_SCREEN_UNKNOWN:
-        return 0;
-    default:
-        return 1;
-    }
-}
+/* Link these predicates from a GameSDK archive consumer or the Runtime. A null pointer
+   or a record with a short struct_size returns false. */
+int rsf_frame_has_rendered_source(const rsf_frame_record* record);
+int rsf_frame_allows_sr(const rsf_frame_record* record);
+int rsf_frame_allows_fg(const rsf_frame_record* record);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -1,0 +1,39 @@
+/* SPDX-License-Identifier: MIT */
+/* Native leaves of the SR D3D11 calls. Rust owns every typed COM call; this file keeps the pipeline-state snapshot
+   (sr_d3d11/native.rs calls it) and checks the SDK values the Rust owners hard-code. */
+#include "native_memory.h"
+#include "sr_d3d11_platform.h"
+#include "sr_swap_platform.h"
+#include <rescaleframe/d3d11_state.h>
+#include <windows.h>
+#include <d3d11.h>
+#include <stdlib.h>
+
+_Static_assert(sizeof(D3D11_TEXTURE2D_DESC) == RSF_ANOMALY_SWAP_DESC_SIZE, "D3D11_TEXTURE2D_DESC size");
+_Static_assert(DXGI_FORMAT_UNKNOWN == 0 && DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && DXGI_FORMAT_R32_FLOAT == 41 &&
+    DXGI_FORMAT_R24G8_TYPELESS == 44 && DXGI_FORMAT_D24_UNORM_S8_UINT == 45, "DXGI formats used by the twins");
+_Static_assert(DXGI_FORMAT_R8G8B8A8_TYPELESS == 27 && DXGI_FORMAT_R8G8B8A8_UNORM == 28 &&
+    DXGI_FORMAT_B8G8R8A8_UNORM == 87 && DXGI_FORMAT_B8G8R8A8_TYPELESS == 90, "DXGI UNORM8 formats");
+_Static_assert(D3D11_USAGE_DEFAULT == 0 && D3D11_USAGE_IMMUTABLE == 1, "D3D11 usages");
+_Static_assert(D3D11_BIND_SHADER_RESOURCE == 0x08 && D3D11_BIND_RENDER_TARGET == 0x20 &&
+    D3D11_BIND_DEPTH_STENCIL == 0x40 && D3D11_BIND_UNORDERED_ACCESS == 0x80, "D3D11 bind flags");
+_Static_assert((D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_SHADER_LOAD | D3D11_FORMAT_SUPPORT_SHADER_SAMPLE |
+    D3D11_FORMAT_SUPPORT_RENDER_TARGET | D3D11_FORMAT_SUPPORT_BLENDABLE) == 0xc320 &&
+    D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW == 0x02000000, "D3D11 format support bits");
+
+void* rsf_anomaly_sr_save_state(void* context)
+{
+    rsf_d3d11_state* state = (rsf_d3d11_state*)calloc(1, sizeof(*state));
+    if (!state) return NULL;
+    if (!rsf_d3d11_state_save(context, state)) {
+        free(state);
+        return NULL;
+    }
+    return state;
+}
+
+void rsf_anomaly_sr_restore_state(void* context, void* snapshot)
+{
+    rsf_d3d11_state_restore(context, (rsf_d3d11_state*)snapshot);
+    free(snapshot);
+}
